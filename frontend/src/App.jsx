@@ -3,10 +3,12 @@ import Home from "./pages/Home";
 import NovelDetail from "./pages/NovelDetail";
 import NewNovel from "./pages/NewNovel";
 import NewEpisode from "./pages/NewEpisode";
+import EditNovel from "./pages/EditNovel";
+import EditEpisode from "./pages/EditEpisode";
 
 export default function App() {
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto", padding: "16px" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px" }}>
       <header>
         <h1>
           <Link to="/" style={{ textDecoration: "none", color: "inherit" }}>
@@ -26,7 +28,9 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/novels/new" element={<NewNovel />} />
         <Route path="/novels/:id" element={<NovelDetail />} />
+        <Route path="/novels/:id/edit" element={<EditNovel />} />
         <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
+        <Route path="/episodes/:episodeId/edit" element={<EditEpisode />} />
       </Routes>
     </div>
   );

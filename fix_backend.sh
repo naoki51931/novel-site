@@ -1,13 +1,77 @@
+#!/usr/bin/env bash
+set -e
+
+cd ~/novel-site
+
+echo "🧠 Fixing backend/app/schemas.py ..."
+cat <<'PYEOF' > backend/app/schemas.py
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel
+
+# ===== Episode =====
+
+class EpisodeBase(BaseModel):
+    episode_number: int
+    title: str
+    body: str
+
+
+class EpisodeCreate(EpisodeBase):
+    pass
+
+
+class EpisodeUpdate(BaseModel):
+    episode_number: Optional[int] = None
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
+class Episode(EpisodeBase):
+    id: int
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Novel =====
+
+class NovelBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+
+
+class NovelCreate(NovelBase):
+    pass
+
+
+class NovelUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
+class Novel(NovelBase):
+    id: int
+    created_at: Optional[datetime] = None
+    episodes: List[Episode] = []
+
+    class Config:
+        from_attributes = True
+PYEOF
+
+echo "🧠 Fixing backend/app/main.py ..."
+cat <<'PYEOF' > backend/app/main.py
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
 
-from .database import get_db, engine
+from .database import get_db
 from . import models, schemas
 
 # DB 初期化（models に Base がある前提）
-models.Base.metadata.create_all(bind=engine)
+models.Base.metadata.create_all(bind=models.engine)
 
 app = FastAPI(title="Novel Site API")
 
@@ -157,3 +221,10 @@ def delete_episode(episode_id: int, db: Session = Depends(get_db)):
     db.delete(ep)
     db.commit()
     return
+PYEOF
+
+echo "✅ backend fixed. Now rebuild containers:"
+echo "  cd ~/novel-site"
+echo "  docker compose down"
+echo "  docker compose up --build -d"
+

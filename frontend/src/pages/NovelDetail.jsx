@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function NovelDetail() {
   const { id } = useParams();
@@ -50,7 +50,7 @@ export default function NovelDetail() {
         <div>作成日時: {formatDateTime(novel.created_at)}</div>
       </div>
 
-      <button
+      <button className="btn btn-border" 
         onClick={() => navigate(`/novels/${id}/episodes/new`)}
         style={{ marginBottom: 16 }}
       >

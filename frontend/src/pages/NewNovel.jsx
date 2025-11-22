@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function NewNovel() {
   const [title, setTitle] = useState("");
@@ -75,7 +75,7 @@ export default function NewNovel() {
           </label>
         </div>
         {error && <p style={{ color: "red" }}>{error}</p>}
-        <button type="submit" disabled={loading}>
+        <button className="btn btn-border" type="submit" disabled={loading}>
           {loading ? "投稿中..." : "投稿する"}
         </button>
       </form>

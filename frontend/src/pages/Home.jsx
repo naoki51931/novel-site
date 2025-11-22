@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function Home() {
   const [novels, setNovels] = useState([]);
