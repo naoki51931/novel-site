@@ -14,6 +14,12 @@ services:
       - "3307:3306"          # ホストから触りたいとき用（本番では消してOK）
     volumes:
       - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   backend:
     build:
@@ -27,7 +33,8 @@ services:
       DB_PASS: novel_pass
       DB_NAME: novel_db
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   nginx:
     image: nginx:1.27-alpine

@@ -143,7 +143,7 @@ cat <<'JSEOF' > frontend/src/pages/Home.jsx
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function Home() {
   const [novels, setNovels] = useState([]);
@@ -204,7 +204,7 @@ cat <<'JSEOF' > frontend/src/pages/NovelDetail.jsx
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function NovelDetail() {
   const { id } = useParams();
@@ -293,7 +293,7 @@ cat <<'JSEOF' > frontend/src/pages/NewNovel.jsx
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function NewNovel() {
   const [title, setTitle] = useState("");
@@ -381,7 +381,7 @@ cat <<'JSEOF' > frontend/src/pages/NewEpisode.jsx
 import { useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id

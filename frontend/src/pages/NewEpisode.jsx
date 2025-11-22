@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 
-const API_BASE = "http://35.179.170.65";
+const API_BASE = "http://18.169.218.56";
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
@@ -102,7 +102,7 @@ export default function NewEpisode() {
           </label>
         </div>
         {error && <p style={{ color: "red" }}>{error}</p>}
-        <button type="submit" disabled={loading}>
+        <button className="btn btn-border" type="submit" disabled={loading}>
           {loading ? "投稿中..." : "投稿する"}
         </button>
       </form>
