@@ -1,9 +1,35 @@
-from datetime import datetime
-from typing import List, Optional
 from pydantic import BaseModel
+from typing import Optional, List
 
-# ===== Episode =====
 
+# =========================
+# Novel
+# =========================
+class NovelBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+
+
+class NovelCreate(NovelBase):
+    pass
+
+
+class NovelUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
+class Novel(NovelBase):
+    id: int
+    author_id: int
+
+    class Config:
+        orm_mode = True
+
+
+# =========================
+# Episode
+# =========================
 class EpisodeBase(BaseModel):
     episode_number: int
     title: str
@@ -22,32 +48,7 @@ class EpisodeUpdate(BaseModel):
 
 class Episode(EpisodeBase):
     id: int
-    created_at: Optional[datetime] = None
+    novel_id: int
 
     class Config:
-        from_attributes = True
-
-
-# ===== Novel =====
-
-class NovelBase(BaseModel):
-    title: str
-    description: Optional[str] = None
-
-
-class NovelCreate(NovelBase):
-    pass
-
-
-class NovelUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-
-
-class Novel(NovelBase):
-    id: int
-    created_at: Optional[datetime] = None
-    episodes: List[Episode] = []
-
-    class Config:
-        from_attributes = True
+        orm_mode = True

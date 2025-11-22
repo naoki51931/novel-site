@@ -50,7 +50,7 @@ export default function NovelDetail() {
         <div>作成日時: {formatDateTime(novel.created_at)}</div>
       </div>
 
-      <button className="btn btn-border" 
+      <button
         onClick={() => navigate(`/novels/${id}/episodes/new`)}
         style={{ marginBottom: 16 }}
       >

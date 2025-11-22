@@ -5,3 +5,35 @@
 button.btn.btn-border { background: #fff; border: 2px solid #000; }
 button.btn.btn-border:hover { background: #000; color: #fff; }
 
+
+/* ============================
+   共通ボタンスタイル
+============================ */
+
+.btn {
+  display: inline-block;
+  cursor: pointer;
+  padding: 8px 16px;
+  text-decoration: none;
+  font-weight: bold;
+  transition: 0.2s;
+}
+
+.btn-border {
+  border: 2px solid #000;
+  border-radius: 0;
+  background: #fff;
+  color: #000;
+}
+
+.btn-border:hover {
+  background: #000;
+  color: #fff;
+}
+
+.site-title-link {
+  text-decoration: none;
+  color: inherit;
+  font-size: 20px;
+  font-weight: bold;
+}

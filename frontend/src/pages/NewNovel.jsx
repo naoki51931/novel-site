@@ -13,10 +13,18 @@ export default function NewNovel() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
     if (!title.trim()) {
       setError("タイトルは必須です。");
       return;
     }
+
+    const payload = {
+      title,
+      description: description ?? "",
+    };
+
+    console.log("📥 POST /api/novels payload:", payload);
 
     setLoading(true);
     try {
@@ -25,21 +33,26 @@ export default function NewNovel() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          title,
-          description: description || null,
-        }),
+        body: JSON.stringify(payload),
       });
 
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {}
+
+      console.log("📤 /api/novels response:", res.status, data);
+
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "投稿に失敗しました");
+        throw new Error(
+          (data && data.detail) || `投稿に失敗しました (status=${res.status})`
+        );
       }
 
-      const novel = await res.json();
+      const novel = data;
       navigate(`/novels/${novel.id}`);
     } catch (err) {
-      console.error(err);
+      console.error("❌ NewNovel error:", err);
       setError(err.message);
     } finally {
       setLoading(false);

@@ -3,23 +3,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
 
-from .database import get_db, engine
+from .database import Base, engine, get_db
 from . import models, schemas
 
-# DB 初期化（models に Base がある前提）
-models.Base.metadata.create_all(bind=engine)
+# テーブル作成
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Novel Site API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 本番では絞る
+    allow_origins=["*"],  # 本番ではドメインを絞る
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ===== Novel 一覧・作成・取得・更新・削除 =====
+
+# ===== 小説一覧・作成・取得 =====
 
 @app.get("/api/novels", response_model=List[schemas.Novel])
 def list_novels(db: Session = Depends(get_db)):
@@ -28,12 +29,12 @@ def list_novels(db: Session = Depends(get_db)):
 
 
 @app.post("/api/novels", response_model=schemas.Novel)
-def create_novel(novel_in: schemas.NovelCreate, db: Session = Depends(get_db)):
-    # 認証未実装なので author_id=1 で仮固定
+def create_novel(novel: schemas.NovelCreate, db: Session = Depends(get_db)):
+    # TODO: JWTからuser_idを取る。暫定で1固定
     author_id = 1
     db_novel = models.Novel(
-        title=novel_in.title,
-        description=novel_in.description,
+        title=novel.title,
+        description=novel.description,
         author_id=author_id,
     )
     db.add(db_novel)
@@ -47,64 +48,38 @@ def get_novel(novel_id: int, db: Session = Depends(get_db)):
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
+    # relationship で episodes も一緒に返る
     return novel
 
 
-@app.put("/api/novels/{novel_id}", response_model=schemas.Novel)
-def update_novel(
-    novel_id: int,
-    novel_in: schemas.NovelUpdate,
-    db: Session = Depends(get_db),
-):
-    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
-    if not novel:
-        raise HTTPException(status_code=404, detail="Novel not found")
-
-    if novel_in.title is not None:
-        novel.title = novel_in.title
-    if novel_in.description is not None:
-        novel.description = novel_in.description
-
-    db.commit()
-    db.refresh(novel)
-    return novel
-
-
-@app.delete("/api/novels/{novel_id}", status_code=204)
-def delete_novel(novel_id: int, db: Session = Depends(get_db)):
-    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
-    if not novel:
-        raise HTTPException(status_code=404, detail="Novel not found")
-    db.delete(novel)
-    db.commit()
-    return
-
-
-# ===== Episode 作成・一覧・取得・更新・削除 =====
+# ===== エピソード作成・一覧 =====
 
 @app.post("/api/novels/{novel_id}/episodes", response_model=schemas.Episode)
 def create_episode(
     novel_id: int,
-    ep_in: schemas.EpisodeCreate,
+    episode: schemas.EpisodeCreate,
     db: Session = Depends(get_db),
 ):
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
 
-    ep = models.Episode(
+    db_ep = models.Episode(
         novel_id=novel_id,
-        episode_number=ep_in.episode_number,
-        title=ep_in.title,
-        body=ep_in.body,
+        title=episode.title,
+        body=episode.body,
+        episode_number=episode.episode_number,
     )
-    db.add(ep)
+    db.add(db_ep)
     db.commit()
-    db.refresh(ep)
-    return ep
+    db.refresh(db_ep)
+    return db_ep
 
 
-@app.get("/api/novels/{novel_id}/episodes", response_model=List[schemas.Episode])
+@app.get(
+    "/api/novels/{novel_id}/episodes",
+    response_model=List[schemas.Episode],
+)
 def list_episodes(novel_id: int, db: Session = Depends(get_db)):
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
     if not novel:
@@ -118,42 +93,54 @@ def list_episodes(novel_id: int, db: Session = Depends(get_db)):
     )
     return episodes
 
+# =========================================
+# Request / Response Logging Middleware
+# =========================================
+from fastapi import Request
+import json
 
-@app.get("/api/episodes/{episode_id}", response_model=schemas.Episode)
-def get_episode(episode_id: int, db: Session = Depends(get_db)):
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
-    if not ep:
-        raise HTTPException(status_code=404, detail="Episode not found")
-    return ep
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    try:
+        body = await request.json()
+    except:
+        body = None
 
+    print("📥 REQUEST:", request.method, request.url.path)
+    if body is not None:
+        print("   BODY:", json.dumps(body, ensure_ascii=False))
 
-@app.put("/api/episodes/{episode_id}", response_model=schemas.Episode)
-def update_episode(
-    episode_id: int,
-    ep_in: schemas.EpisodeUpdate,
-    db: Session = Depends(get_db),
-):
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
-    if not ep:
-        raise HTTPException(status_code=404, detail="Episode not found")
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        print("❌ ERROR during request:", repr(e))
+        raise
 
-    if ep_in.episode_number is not None:
-        ep.episode_number = ep_in.episode_number
-    if ep_in.title is not None:
-        ep.title = ep_in.title
-    if ep_in.body is not None:
-        ep.body = ep_in.body
+    print("📤 RESPONSE STATUS:", response.status_code)
 
-    db.commit()
-    db.refresh(ep)
-    return ep
+    return response
 
 
-@app.delete("/api/episodes/{episode_id}", status_code=204)
-def delete_episode(episode_id: int, db: Session = Depends(get_db)):
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
-    if not ep:
-        raise HTTPException(status_code=404, detail="Episode not found")
-    db.delete(ep)
-    db.commit()
-    return
+# =========================================
+# Request Logging Middleware
+# =========================================
+from fastapi import Request
+import json
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+
+    print("📥 REQUEST:", request.method, request.url.path)
+    if body is not None:
+        print("   BODY:", json.dumps(body, ensure_ascii=False))
+
+    response = await call_next(request)
+
+    print("📤 RESPONSE:", response.status_code, request.url.path)
+
+    return response
+
