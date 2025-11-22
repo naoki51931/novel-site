@@ -1,25 +1,22 @@
 import { useState } from "react";
-import { useNavigate, useParams, Link } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 const API_BASE = "http://18.169.218.56";
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
-  const [episodeNumber, setEpisodeNumber] = useState("");
+  const navigate = useNavigate();
+
+  const [episodeNumber, setEpisodeNumber] = useState(1);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
 
-    if (!episodeNumber || isNaN(Number(episodeNumber))) {
-      setError("話数は数字で入力してください。");
-      return;
-    }
     if (!title.trim()) {
       setError("タイトルは必須です。");
       return;
@@ -29,6 +26,14 @@ export default function NewEpisode() {
       return;
     }
 
+    const payload = {
+      episode_number: Number(episodeNumber),
+      title,
+      body,
+    };
+
+    console.log("📥 POST /api/novels/:id/episodes payload:", payload);
+
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/novels/${id}/episodes`, {
@@ -36,22 +41,27 @@ export default function NewEpisode() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          episode_number: Number(episodeNumber),
-          title,
-          body,
-        }),
+        body: JSON.stringify(payload),
       });
 
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {}
+
+      console.log("📤 /api/novels/:id/episodes response:", res.status, data);
+
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "エピソード投稿に失敗しました");
+        throw new Error(
+          (data && data.detail) ||
+            `エピソードの投稿に失敗しました (status=${res.status})`
+        );
       }
 
-      await res.json();
+      // 成功したら小説詳細へ戻る
       navigate(`/novels/${id}`);
     } catch (err) {
-      console.error(err);
+      console.error("❌ NewEpisode error:", err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -60,14 +70,11 @@ export default function NewEpisode() {
 
   return (
     <div>
-      <div style={{ marginBottom: 12 }}>
-        <Link to={`/novels/${id}`}>← 小説詳細に戻る</Link>
-      </div>
-      <h2>エピソードを追加</h2>
+      <h2>新しいエピソードを投稿</h2>
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
-            話数（例: 1, 2, 3）
+            話数
             <br />
             <input
               type="number"
