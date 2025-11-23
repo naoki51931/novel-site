@@ -1,131 +1,152 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "http://18.169.218.56/api";
+const API_BASE = "http://18.169.218.56";
 
-function EditNovel() {
+export default function EditNovel() {
   const { id } = useParams();
   const navigate = useNavigate();
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
     const fetchNovel = async () => {
       try {
-        const res = await fetch(`${API_BASE}/novels/${id}`);
+        setLoading(true);
+        setError("");
+
+        const res = await fetch(`${API_BASE}/api/novels/${id}`);
         if (!res.ok) {
-          throw new Error("小説情報の取得に失敗しました (" + res.status + ")");
+          throw new Error(`小説情報の取得に失敗しました (${res.status})`);
         }
+
         const data = await res.json();
-        setTitle(data.title);
-        setDescription(data.description);
+        setTitle(data.title || "");
+        setDescription(data.description || "");
       } catch (err) {
         console.error(err);
-        setError(err.message || "小説情報の取得に失敗しました");
+        setError(err.message || "小説情報の取得中にエラーが発生しました");
       } finally {
         setLoading(false);
       }
     };
 
     fetchNovel();
-  }, [id]);
+  }, [id, navigate]);
 
-  const handleUpdate = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
 
+    if (!title.trim()) {
+      setError("タイトルは必須です。");
+      return;
+    }
+
+    setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/novels/${id}`, {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error("ログインが必要です。");
+      }
+
+      const res = await fetch(`${API_BASE}/api/novels/${id}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
+          Authorization: "Bearer " + token,
         },
-        body: JSON.stringify({ title, description }),
+        body: JSON.stringify({
+          title,
+          description,
+        }),
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        throw new Error("小説情報の取得に失敗しました (" + res.status + ")");
+        throw new Error(data.detail || "小説の更新に失敗しました");
       }
 
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error(err);
-      setError(err.message || "更新に失敗しました");
+      setError(err.message || "小説の更新中にエラーが発生しました");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (!window.confirm("この小説を削除しますか？（エピソードも削除されます）")) return;
-
-    try {
-      const res = await fetch(`${API_BASE}/novels/${id}`, {
-        method: "DELETE",
-      });
-
-      if (!res.ok && res.status !== 204) {
-        throw new Error("小説情報の取得に失敗しました (" + res.status + ")");
-      }
-
-      navigate("/");
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "削除に失敗しました");
-    }
-  };
-
-  if (loading) return <div>読み込み中...</div>;
+  if (loading) {
+    return <p>読み込み中...</p>;
+  }
 
   return (
-    <div className="edit-novel-container">
-      <h1>小説を編集</h1>
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <Link to={`/novels/${id}`}>← 小説詳細に戻る</Link>
+      </div>
 
-      {error && <p style={{ color: "red" }}>{error}</p>}
+      <h2>小説を編集</h2>
 
-      <form onSubmit={handleUpdate}>
-        <div>
-          <label>タイトル</label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
+      <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            タイトル
+            <br />
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+            />
+          </label>
         </div>
 
-        <div>
-          <label>あらすじ</label>
-          <textarea
-            rows={6}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            説明（あらすじ）
+            <br />
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={6}
+              style={{ width: "100%", padding: 4 }}
+            />
+          </label>
         </div>
 
-        <div className="edit-novel-actions">
-          <button className="btn btn-border" type="submit">
-            更新
+        {error && (
+          <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>
+        )}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="btn btn-border"
+            type="submit"
+            disabled={saving}
+          >
+            {saving ? "更新中..." : "更新する"}
           </button>
           <button
             className="btn btn-border"
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate(`/novels/${id}`)}
           >
-            戻る
-          </button>
-          <button
-            className="btn btn-border"
-            type="button"
-            onClick={handleDelete}
-          >
-            削除
+            キャンセル
           </button>
         </div>
       </form>
     </div>
   );
 }
-
-export default EditNovel;

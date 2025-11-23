@@ -16,9 +16,9 @@ export default function EpisodeDetail() {
         setLoading(true);
         setError("");
 
-        const res = await fetch(`${API_BASE}/api/episodes/${id}`);
+        const res = await fetch(API_BASE + "/api/episodes/" + id);
         if (!res.ok) {
-          throw new Error(`エピソードの取得に失敗しました (${res.status})`);
+          throw new Error("エピソードの取得に失敗しました (" + res.status + ")");
         }
 
         const data = await res.json();
@@ -60,6 +60,11 @@ export default function EpisodeDetail() {
     );
   }
 
+  const formatDateTime = (isoString) => {
+    if (!isoString) return "";
+    return new Date(isoString).toLocaleString("ja-JP");
+  };
+
   return (
     <div>
       <button className="btn btn-border" onClick={() => navigate(-1)}>
@@ -67,14 +72,14 @@ export default function EpisodeDetail() {
       </button>
 
       <h2 style={{ marginTop: 12 }}>
-        第{episode.number}話 {episode.title}
+        第{episode.number || episode.episode_number}話 {episode.title}
       </h2>
 
       <p style={{ color: "#666", marginBottom: 4 }}>小説ID: {episode.novel_id}</p>
 
       {episode.created_at && (
         <p style={{ color: "#999", fontSize: "0.9rem", marginBottom: 8 }}>
-          作成日時: {new Date(episode.created_at).toLocaleString()}
+          作成日時: {formatDateTime(episode.created_at)}
         </p>
       )}
 
@@ -91,7 +96,10 @@ export default function EpisodeDetail() {
       </div>
 
       <div style={{ marginTop: 24 }}>
-        <Link to={`/novels/${episode.novel_id}`} className="btn btn-border">
+        <Link
+          to={"/novels/" + episode.novel_id}
+          className="btn btn-border"
+        >
           小説詳細へ戻る
         </Link>
       </div>
