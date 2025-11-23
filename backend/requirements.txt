@@ -4,3 +4,5 @@ SQLAlchemy
 pymysql
 python-multipart
 cryptography
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4
