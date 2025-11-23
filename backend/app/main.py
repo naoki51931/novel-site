@@ -488,26 +488,16 @@ def update_novel(
 
 
 @app.delete("/api/novels/{novel_id}")
-def delete_novel(
-    novel_id: int,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    novel = (
-        db.query(models.Novel)
-        .filter(models.Novel.id == novel_id)
-        .first()
-    )
+def delete_novel(novel_id: int, request: Request = None, db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    user = require_current_user_from_request(request, db) if request else None
+    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
-
-    if novel.author_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="この小説を削除する権限がありません。",
-        )
-
-    db.delete(novel)
+    if user and novel.author_id != user.id:
+        raise HTTPException(status_code=403, detail="この小説を削除する権限がありません。")
+    db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM novels WHERE id = :nid"), {"nid": novel_id})
     db.commit()
     return {"ok": True}
 
@@ -680,24 +670,18 @@ def update_novel_v2(
 
 # --- 小説削除: 作者本人のみ ---
 @app.delete("/api/novels/{novel_id}")
-user = require_current_user_from_request(request, db)
-
+def delete_novel(novel_id: int, request: Request = None, db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    user = require_current_user_from_request(request, db) if request else None
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
-
-    if novel.author_id != user.id:
+    if user and novel.author_id != user.id:
         raise HTTPException(status_code=403, detail="この小説を削除する権限がありません。")
-
-    # 🔻 先に全エピソード削除
-    db.query(models.Episode).filter(models.Episode.novel_id == novel_id).delete(synchronize_session=False)
-
-    # 🔻 小説本体削除
-    db.delete(novel)
+    db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM novels WHERE id = :nid"), {"nid": novel_id})
     db.commit()
-
     return {"ok": True}
-
 
 # --- エピソード作成: 作者本人のみ ---
 @app.post("/api/novels/{novel_id}/episodes", response_model=schemas.Episode)
