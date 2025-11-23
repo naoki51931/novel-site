@@ -15,7 +15,7 @@ export default function NovelDetail() {
       try {
         setLoading(true);
 
-        // 小説本体
+        // 小説本体（author_username 付き）
         const novelRes = await fetch(`${API_BASE}/api/novels/${id}`);
         if (!novelRes.ok) {
           throw new Error("小説情報の取得に失敗しました");
@@ -81,7 +81,14 @@ export default function NovelDetail() {
       )}
 
       <div style={{ fontSize: 12, color: "#555", marginBottom: 16 }}>
-        <div>作者: demo</div>
+        <div>
+          作者:{" "}
+          {novel.author_username
+            ? novel.author_username
+            : novel.author_id
+            ? `ユーザーID: ${novel.author_id}`
+            : "不明"}
+        </div>
         <div>作成日時: {formatDateTime(novel.created_at)}</div>
       </div>
 
@@ -135,21 +142,15 @@ export default function NovelDetail() {
                 marginBottom: 8,
               }}
             >
-                {shorten(ep.body, 160)}
+              {shorten(ep.body, 160)}
             </div>
 
             <div style={{ display: "flex", gap: 8 }}>
-              <Link
-                to={`/episodes/${ep.id}`}
-                className="btn btn-border"
-              >
+              <Link to={`/episodes/${ep.id}`} className="btn btn-border">
                 このエピソードを読む
               </Link>
 
-              <Link
-                to={`/episodes/${ep.id}/edit`}
-                className="btn btn-border"
-              >
+              <Link to={`/episodes/${ep.id}/edit`} className="btn btn-border">
                 編集
               </Link>
             </div>

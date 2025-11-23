@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "http://18.169.218.56";
 
@@ -19,12 +19,12 @@ export default function NewNovel() {
       return;
     }
 
-    const payload = {
-      title,
-      description: description ?? "",
-    };
-
-    console.log("📥 POST /api/novels payload:", payload);
+    const token = localStorage.getItem("token");
+    if (!token) {
+      setError("小説を投稿するにはログインが必要です。");
+      navigate("/login");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -32,29 +32,24 @@ export default function NewNovel() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "Bearer " + localStorage.getItem("token"),
+          Authorization: "Bearer " + token,
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          title,
+          description,
+        }),
       });
 
-      let data = null;
-      try {
-        data = await res.json();
-      } catch (_) {}
-
-      console.log("📤 /api/novels response:", res.status, data);
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(
-          (data && data.detail) || `投稿に失敗しました (status=${res.status})`
-        );
+        throw new Error(data.detail || `投稿に失敗しました (status=${res.status})`);
       }
 
-      const novel = data;
-      navigate(`/novels/${novel.id}`);
+      navigate(`/novels/${data.id}`);
     } catch (err) {
-      console.error("❌ NewNovel error:", err);
-      setError(err.message);
+      console.error(err);
+      setError(err.message || "投稿に失敗しました。");
     } finally {
       setLoading(false);
     }
@@ -62,11 +57,14 @@ export default function NewNovel() {
 
   return (
     <div>
-      <h2>新しい小説を投稿</h2>
+      <div style={{ marginBottom: 12 }}>
+        <Link to="/">← 一覧に戻る</Link>
+      </div>
+      <h2>新規小説投稿</h2>
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
-            タイトル（必須）
+            タイトル
             <br />
             <input
               type="text"
@@ -78,17 +76,19 @@ export default function NewNovel() {
         </div>
         <div style={{ marginBottom: 8 }}>
           <label>
-            説明・あらすじ（任意）
+            説明（あらすじ）
             <br />
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              rows={5}
+              rows={6}
               style={{ width: "100%", padding: 4 }}
             />
           </label>
         </div>
-        {error && <p style={{ color: "red" }}>{error}</p>}
+        {error && (
+          <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>
+        )}
         <button className="btn btn-border" type="submit" disabled={loading}>
           {loading ? "投稿中..." : "投稿する"}
         </button>

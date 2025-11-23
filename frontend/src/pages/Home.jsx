@@ -18,7 +18,6 @@ export default function Home() {
         }
         const data = await res.json();
 
-        // 新しい順に並べる（created_at があればそれで）
         const sorted = (data || []).slice().sort((a, b) => {
           const ad = a.created_at ? new Date(a.created_at).getTime() : 0;
           const bd = b.created_at ? new Date(b.created_at).getTime() : 0;
@@ -47,21 +46,11 @@ export default function Home() {
     return text.slice(0, max) + "…";
   };
 
-  if (loading) {
-    return <p>読み込み中...</p>;
-  }
+  if (loading) return <p>読み込み中...</p>;
 
   return (
     <div>
-      <div style={{ marginBottom: 16, textAlign: "right" }}>
-        <button
-          className="btn btn-border"
-          onClick={() => navigate("/novels/new")}
-        >
-          新規小説投稿
-        </button>
-      </div>
-
+      {/* 小説一覧のみを表示 */}
       {novels.length === 0 && <p>まだ小説がありません。</p>}
 
       <div
@@ -80,38 +69,38 @@ export default function Home() {
               padding: 12,
               boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
               backgroundColor: "#fff",
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "space-between",
             }}
           >
-            <div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
-                <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
-              </h3>
-              <p
-                style={{
-                  whiteSpace: "pre-wrap",
-                  fontSize: 14,
-                  color: "#444",
-                  marginBottom: 8,
-                  minHeight: "3.5em",
-                }}
-              >
-                {shorten(novel.description, 120) || "説明がありません。"}
-              </p>
-            </div>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
+              <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
+            </h3>
+
+            <p
+              style={{
+                whiteSpace: "pre-wrap",
+                fontSize: 14,
+                color: "#444",
+                marginBottom: 8,
+                minHeight: "3.5em",
+              }}
+            >
+              {shorten(novel.description, 120) || "説明がありません。"}
+            </p>
 
             <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-              <div>作者: demo</div>
+              <div>
+                作者:{" "}
+                {novel.author_username
+                  ? novel.author_username
+                  : novel.author_id
+                  ? `ユーザーID: ${novel.author_id}`
+                  : "不明"}
+              </div>
               <div>作成日時: {formatDateTime(novel.created_at)}</div>
             </div>
 
             <div style={{ textAlign: "right" }}>
-              <Link
-                to={`/novels/${novel.id}`}
-                className="btn btn-border"
-              >
+              <Link to={`/novels/${novel.id}`} className="btn btn-border">
                 続きを読む
               </Link>
             </div>

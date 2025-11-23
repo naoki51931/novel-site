@@ -7,14 +7,13 @@ import EditNovel from "./pages/EditNovel";
 import EditEpisode from "./pages/EditEpisode";
 import EpisodeDetail from "./pages/EpisodeDetail";
 import Login from "./pages/Login";
+import Mypage from "./pages/Mypage";
 
 export default function App() {
-  const username = typeof window !== "undefined"
-    ? localStorage.getItem("username")
-    : null;
-  const hasToken = typeof window !== "undefined"
-    ? !!localStorage.getItem("token")
-    : false;
+  const username =
+    typeof window !== "undefined" ? localStorage.getItem("username") : null;
+  const hasToken =
+    typeof window !== "undefined" ? !!localStorage.getItem("token") : false;
 
   return (
     <div>
@@ -31,13 +30,10 @@ export default function App() {
       >
         <div>
           <h1 style={{ margin: 0, fontSize: 24 }}>小説投稿サイト</h1>
-          <nav style={{ marginTop: 8 }}>
-            <Link to="/" style={{ marginRight: 12 }}>
-              トップ
-            </Link>
-            <Link to="/novels/new" style={{ marginRight: 12 }}>
-              新規小説投稿
-            </Link>
+          <nav style={{ marginTop: 8, display: "flex", gap: 12 }}>
+            <Link to="/">トップ</Link>
+            <Link to="/novels/new">新規小説投稿</Link>
+            <Link to="/mypage">マイページ</Link>
             <Link to="/login">ログイン</Link>
           </nav>
         </div>
@@ -54,6 +50,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/mypage" element={<Mypage />} />
           <Route path="/novels/new" element={<NewNovel />} />
           <Route path="/novels/:id" element={<NovelDetail />} />
           <Route path="/novels/:id/edit" element={<EditNovel />} />
