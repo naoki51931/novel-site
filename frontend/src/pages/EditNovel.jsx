@@ -17,7 +17,7 @@ function EditNovel() {
       try {
         const res = await fetch(`${API_BASE}/novels/${id}`);
         if (!res.ok) {
-          throw new Error(\`小説情報の取得に失敗しました (\${res.status})\`);
+          throw new Error("小説情報の取得に失敗しました (" + res.status + ")");
         }
         const data = await res.json();
         setTitle(data.title);
@@ -47,7 +47,7 @@ function EditNovel() {
       });
 
       if (!res.ok) {
-        throw new Error(\`更新に失敗しました (\${res.status})\`);
+        throw new Error("小説情報の取得に失敗しました (" + res.status + ")");
       }
 
       navigate(`/novels/${id}`);
@@ -66,7 +66,7 @@ function EditNovel() {
       });
 
       if (!res.ok && res.status !== 204) {
-        throw new Error(\`削除に失敗しました (\${res.status})\`);
+        throw new Error("小説情報の取得に失敗しました (" + res.status + ")");
       }
 
       navigate("/");

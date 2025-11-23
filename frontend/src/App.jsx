@@ -1,3 +1,4 @@
+import EpisodeDetail from "./pages/EpisodeDetail";
 import React from "react";
 import { useRoutes, Link } from "react-router-dom";
 
