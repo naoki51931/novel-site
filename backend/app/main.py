@@ -813,9 +813,19 @@ def delete_episode_v2(
 # =========================================
 # 小説詳細（author_username 付き・エピソード一覧）
 # =========================================
+def truncate_for_free_user(text: str, ratio: float = 0.3) -> str:
+    if not text:
+        return text
+    length = len(text)
+    keep = max(1, int(length * ratio))
+    return text[:keep]
+
 @app.get("/api/novels/{novel_id}")
-def get_novel_detail_with_author(novel_id: int, db: Session = Depends(get_db)):
-    # 小説本体
+def get_novel_detail_with_author(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     novel = (
         db.query(models.Novel)
         .filter(models.Novel.id == novel_id)
@@ -824,12 +834,16 @@ def get_novel_detail_with_author(novel_id: int, db: Session = Depends(get_db)):
     if novel is None:
         raise HTTPException(status_code=404, detail="Novel not found")
 
-    # 作者名
-    author_name = None
-    if hasattr(novel, "author") and novel.author is not None:
-        author_name = getattr(novel.author, "username", None)
+    # ログインしていない場合は無料扱い
+    try:
+        user = require_current_user_from_request(request, db)
+    except Exception:
+        user = None
 
-    # Episode テーブルを直接取得（novel_id で絞り込み）
+    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+
+    author_name = getattr(novel.author, "username", None) if hasattr(novel, "author") and novel.author else None
+
     if hasattr(models.Episode, "number"):
         order_column = models.Episode.number
     elif hasattr(models.Episode, "episode_number"):
@@ -847,10 +861,11 @@ def get_novel_detail_with_author(novel_id: int, db: Session = Depends(get_db)):
     return {
         "id": novel.id,
         "title": novel.title,
-        "description": novel.description,
+        "description": novel.description if is_premium else truncate_for_free_user(novel.description or ""),
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": author_name,
+        "is_premium_user": is_premium,
         "episodes": [
             {
                 "id": ep.id,
@@ -858,13 +873,12 @@ def get_novel_detail_with_author(novel_id: int, db: Session = Depends(get_db)):
                 "number": getattr(ep, "number", None) or getattr(ep, "episode_number", None),
                 "episode_number": getattr(ep, "episode_number", None) or getattr(ep, "number", None),
                 "title": ep.title,
-                "body": ep.body,
+                "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes
         ],
     }
-
 # =========================================
 # 公開: 小説一覧（認証不要版・author_username付き）
 # =========================================
