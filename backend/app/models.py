@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, func
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, func
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -8,6 +8,8 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    is_premium = Column(Integer, default=0)
+    is_premium = Column(Boolean, nullable=False, server_default="0")
 
     novels = relationship("Novel", back_populates="author")
 
