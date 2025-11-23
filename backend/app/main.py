@@ -198,7 +198,7 @@ def set_episode_number(ep: models.Episode, value: int) -> None:
 # 小説一覧・作成・取得
 # =========================================
 
-@app.get("/api/novels", response_model=List[schemas.Novel])
+@app.get("/api/novels_orig", response_model=List[schemas.Novel])
 def list_novels(
     mine: bool = False,
     current_user: Optional[models.User] = Depends(
@@ -240,7 +240,7 @@ def create_novel(
     return db_novel
 
 
-@app.get("/api/novels/{novel_id}")
+@app.get("/api/novels/{novel_id}/basic")
 def get_novel_detail(
     novel_id: int,
     db: Session = Depends(get_db),
@@ -893,7 +893,7 @@ def get_novel_detail_with_author(novel_id: int, db: Session = Depends(get_db)):
 # =========================================
 from typing import List as _ListForNovels2
 
-@app.get("/api/novels", tags=["novels"])
+@app.get("/api/novels/public", tags=["novels"])
 def list_novels_public_override(db: Session = Depends(get_db)) -> _ListForNovels2[dict]:
     """
     誰でも見られる小説一覧API。
@@ -922,4 +922,70 @@ def list_novels_public_override(db: Session = Depends(get_db)) -> _ListForNovels
             }
         )
 
+    return results
+
+# =========================================
+# 公開: 小説一覧（JOINで author_username を必ず付ける版）
+# =========================================
+from typing import List as _ListForNovelsPublic
+from sqlalchemy import join
+from . import models
+
+@app.get("/api/novels/public", tags=["novels"])
+def list_novels_public_join(db: Session = Depends(get_db)) -> _ListForNovelsPublic[dict]:
+    """
+    誰でも見られる小説一覧API（UserとJOINして必ずauthor_usernameを返す）。
+    """
+    rows = (
+        db.query(models.Novel, models.User.username)
+        .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
+        .order_by(models.Novel.created_at.desc())
+        .all()
+    )
+
+    results = []
+    for novel, username in rows:
+        results.append(
+            {
+                "id": novel.id,
+                "title": novel.title,
+                "description": novel.description,
+                "created_at": novel.created_at,
+                "author_id": novel.author_id,
+                "author_username": username,
+            }
+        )
+    return results
+
+# =========================================
+# 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
+# =========================================
+from typing import List as _ListPublicNovels
+from sqlalchemy import join as _join_for_public
+
+@app.get("/api/public/novels", tags=["novels"])
+def list_public_novels(db: Session = Depends(get_db)) -> _ListPublicNovels[dict]:
+    """
+    誰でも見られる小説一覧API。
+    UserとJOINして author_username を必ず付ける。
+    """
+    rows = (
+        db.query(models.Novel, models.User.username)
+        .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
+        .order_by(models.Novel.created_at.desc())
+        .all()
+    )
+
+    results = []
+    for novel, username in rows:
+        results.append(
+            {
+                "id": novel.id,
+                "title": novel.title,
+                "description": novel.description,
+                "created_at": novel.created_at,
+                "author_id": novel.author_id,
+                "author_username": username,
+            }
+        )
     return results
