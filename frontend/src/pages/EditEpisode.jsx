@@ -20,7 +20,7 @@ function EditEpisode() {
       try {
         const res = await fetch(`${API_BASE}/episodes/${id}`);
         if (!res.ok) {
-          throw new Error(\`エピソード情報の取得に失敗しました (\${res.status})\`);
+          throw new Error("エピソード情報の取得に失敗しました (" + res.status + ")");
         }
         const data = await res.json();
         setNovelId(data.novel_id);
@@ -56,7 +56,7 @@ function EditEpisode() {
       });
 
       if (!res.ok) {
-        throw new Error(\`更新に失敗しました (\${res.status})\`);
+        throw new Error("エピソード情報の取得に失敗しました (" + res.status + ")");
       }
 
       if (novelId) {
@@ -79,7 +79,7 @@ function EditEpisode() {
       });
 
       if (!res.ok && res.status !== 204) {
-        throw new Error(\`削除に失敗しました (\${res.status})\`);
+        throw new Error("エピソード情報の取得に失敗しました (" + res.status + ")");
       }
 
       if (novelId) {
