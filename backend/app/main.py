@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
 import jwt
+import os
+import stripe
 from fastapi import (
     FastAPI,
     Depends,
@@ -9,6 +11,7 @@ from fastapi import (
     Request,
     Body,
     status,
+    Header,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -20,13 +23,25 @@ from .database import Base, engine, get_db
 from . import models, schemas
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # DB 初期化
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 Base.metadata.create_all(bind=engine)
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # FastAPI 本体
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -42,8 +57,14 @@ app.add_middleware(
 )
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # Request Logging Middleware（1つだけ）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 import json
 
 
@@ -65,11 +86,20 @@ async def log_requests(request: Request, call_next):
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # JWT 認証 & ユーザー関連
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 SECRET_KEY = "change_this_to_a_secure_random_value"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+stripe.api_key = STRIPE_SECRET_KEY
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -177,8 +207,14 @@ def get_current_user(
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 共通ヘルパー: Episode の episode_number / number 両対応
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 def get_episode_number(ep: models.Episode) -> Optional[int]:
     if hasattr(ep, "episode_number"):
         return getattr(ep, "episode_number")
@@ -195,8 +231,14 @@ def set_episode_number(ep: models.Episode, value: int) -> None:
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 小説一覧・作成・取得
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 
 @app.get("/api/novels_orig", response_model=List[schemas.Novel])
 def list_novels(
@@ -271,7 +313,7 @@ def get_novel_detail(
     return {
         "id": novel.id,
         "title": novel.title,
-        "description": novel.description,
+        "description": truncate_for_free_user(novel.description or ""),
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": getattr(getattr(novel, "author", None), "username", None),
@@ -282,7 +324,7 @@ def get_novel_detail(
                 "number": get_episode_number(ep),
                 "episode_number": get_episode_number(ep),
                 "title": ep.title,
-                "body": ep.body,
+                "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes_sorted
@@ -291,8 +333,14 @@ def get_novel_detail(
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # エピソード作成・一覧
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 
 @app.post("/api/novels/{novel_id}/episodes", response_model=schemas.Episode)
 def create_episode(
@@ -333,10 +381,12 @@ def create_episode(
 @app.get("/api/novels/{novel_id}/episodes")
 def list_episodes_for_novel(
     novel_id: int,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """
     指定小説のエピソード一覧。
+    無料ユーザは本文の30%だけ。
     """
     novel = (
         db.query(models.Novel)
@@ -345,6 +395,13 @@ def list_episodes_for_novel(
     )
     if novel is None:
         raise HTTPException(status_code=404, detail="Novel not found")
+
+    # ログインユーザ取得（失敗したら無料扱い）
+    try:
+        user = require_current_user_from_request(request, db)
+    except Exception:
+        user = None
+    is_premium = bool(getattr(user, "is_premium", False)) if user else False
 
     episodes = (
         db.query(models.Episode)
@@ -364,7 +421,7 @@ def list_episodes_for_novel(
             "number": get_episode_number(ep),
             "episode_number": get_episode_number(ep),
             "title": ep.title,
-            "body": ep.body,
+            "body": ep.body if is_premium else truncate_for_free_user(ep.body or "") if is_premium else truncate_for_free_user(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes_sorted
@@ -372,12 +429,19 @@ def list_episodes_for_novel(
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # エピソード単体取得・更新
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 
 @app.get("/api/episodes/{episode_id}")
 def get_episode_detail(
     episode_id: int,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     episode = (
@@ -388,13 +452,20 @@ def get_episode_detail(
     if episode is None:
         raise HTTPException(status_code=404, detail="Episode not found")
 
+    # ログインユーザ取得（失敗したら無料扱い）
+    try:
+        user = require_current_user_from_request(request, db)
+    except Exception:
+        user = None
+    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+
     return {
         "id": episode.id,
         "novel_id": episode.novel_id,
         "number": get_episode_number(episode),
         "episode_number": get_episode_number(episode),
         "title": episode.title,
-        "body": episode.body,
+        "body": episode.body if is_premium else truncate_for_free_user(episode.body or ""),
         "created_at": episode.created_at,
     }
 
@@ -453,8 +524,14 @@ def update_episode(
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 小説編集・削除（作者本人のみ）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 
 @app.put("/api/novels/{novel_id}", response_model=schemas.Novel)
 def update_novel(
@@ -533,11 +610,18 @@ def delete_episode(
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 旧パス互換用 (公開エピソードページ /episodes/{id})
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 @app.get("/episodes/{episode_id}")
 def read_episode_public(
     episode_id: int,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     episode = (
@@ -548,18 +632,31 @@ def read_episode_public(
     if episode is None:
         raise HTTPException(status_code=404, detail="Episode not found")
 
+    # ログインユーザ取得（失敗したら無料扱い）
+    try:
+        user = require_current_user_from_request(request, db)
+    except Exception:
+        user = None
+    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+
     return {
         "id": episode.id,
         "novel_id": episode.novel_id,
         "number": get_episode_number(episode),
         "title": episode.title,
-        "body": episode.body,
+        "body": episode.body if is_premium else truncate_for_free_user(episode.body or ""),
         "created_at": episode.created_at,
     }
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # Authorization ヘッダから現在ユーザーを取得する共通ヘルパー
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 from fastapi import Request
 
 def require_current_user_from_request(request: Request, db: Session) -> models.User:
@@ -597,8 +694,14 @@ def require_current_user_from_request(request: Request, db: Session) -> models.U
 
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 🔁 v2: 手動 JWT 認証版エンドポイント（既存を上書き）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 
 # --- 小説作成: ログインユーザーを author_id に紐づけ ---
 @app.post("/api/novels", response_model=schemas.Novel)
@@ -811,8 +914,14 @@ def delete_episode_v2(
     return {"ok": True}
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 小説詳細（author_username 付き・エピソード一覧）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 def truncate_for_free_user(text: str, ratio: float = 0.3) -> str:
     if not text:
         return text
@@ -861,10 +970,11 @@ def get_novel_detail_with_author(
     return {
         "id": novel.id,
         "title": novel.title,
-        "description": novel.description if is_premium else truncate_for_free_user(novel.description or ""),
+        "description": truncate_for_free_user(novel.description or "") if is_premium else truncate_for_free_user(novel.description or ""),
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": author_name,
+        "is_premium_user": is_premium,
         "is_premium_user": is_premium,
         "episodes": [
             {
@@ -873,15 +983,21 @@ def get_novel_detail_with_author(
                 "number": getattr(ep, "number", None) or getattr(ep, "episode_number", None),
                 "episode_number": getattr(ep, "episode_number", None) or getattr(ep, "number", None),
                 "title": ep.title,
-                "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
+                "body": ep.body if is_premium else truncate_for_free_user(ep.body or "") if is_premium else truncate_for_free_user(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes
         ],
     }
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 公開: 小説一覧（認証不要版・author_username付き）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 from typing import List as _ListForNovels2
 
 @app.get("/api/novels/public", tags=["novels"])
@@ -910,14 +1026,21 @@ def list_novels_public_override(db: Session = Depends(get_db)) -> _ListForNovels
                 "created_at": nv.created_at,
                 "author_id": nv.author_id,
                 "author_username": author_name,
+        "is_premium_user": is_premium,
             }
         )
 
     return results
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 公開: 小説一覧（JOINで author_username を必ず付ける版）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 from typing import List as _ListForNovelsPublic
 from sqlalchemy import join
 from . import models
@@ -940,7 +1063,7 @@ def list_novels_public_join(db: Session = Depends(get_db)) -> _ListForNovelsPubl
             {
                 "id": novel.id,
                 "title": novel.title,
-                "description": novel.description,
+                "description": truncate_for_free_user(novel.description or ""),
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": username,
@@ -949,8 +1072,14 @@ def list_novels_public_join(db: Session = Depends(get_db)) -> _ListForNovelsPubl
     return results
 
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 # 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
 # =========================================
+def truncate_for_free_user(text, ratio=0.3):
+    return text if not text else text[:max(1, int(len(text) * ratio))]
+
 from typing import List as _ListPublicNovels
 from sqlalchemy import join as _join_for_public
 
@@ -973,10 +1102,37 @@ def list_public_novels(db: Session = Depends(get_db)) -> _ListPublicNovels[dict]
             {
                 "id": novel.id,
                 "title": novel.title,
-                "description": novel.description,
+                "description": truncate_for_free_user(novel.description or ""),
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": username,
             }
         )
     return results
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str = Header(None, alias="Stripe-Signature"),
+    db: Session = Depends(get_db),
+):
+    payload = await request.body()
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=stripe_signature,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except Exception as e:
+        print("Stripe webhook error:", e)
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    if event.get("type") == "checkout.session.completed":
+        session = event["data"]["object"]
+        user_id = session.get("client_reference_id")
+        if user_id:
+            user = db.query(models.User).get(int(user_id))
+            if user:
+                user.is_premium = True
+                db.add(user)
+                db.commit()
+    return {"ok": True}
+
