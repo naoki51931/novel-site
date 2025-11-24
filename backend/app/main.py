@@ -313,7 +313,7 @@ def get_novel_detail(
     return {
         "id": novel.id,
         "title": novel.title,
-        "description": truncate_for_free_user(novel.description or ""),
+        "description": novel.description,
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": getattr(getattr(novel, "author", None), "username", None),
@@ -970,7 +970,7 @@ def get_novel_detail_with_author(
     return {
         "id": novel.id,
         "title": novel.title,
-        "description": truncate_for_free_user(novel.description or "") if is_premium else truncate_for_free_user(novel.description or ""),
+        "description": novel.description,
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": author_name,
@@ -1022,7 +1022,7 @@ def list_novels_public_override(db: Session = Depends(get_db)) -> _ListForNovels
             {
                 "id": nv.id,
                 "title": nv.title,
-                "description": nv.description,
+                "description": novel.description,
                 "created_at": nv.created_at,
                 "author_id": nv.author_id,
                 "author_username": author_name,
@@ -1063,7 +1063,7 @@ def list_novels_public_join(db: Session = Depends(get_db)) -> _ListForNovelsPubl
             {
                 "id": novel.id,
                 "title": novel.title,
-                "description": truncate_for_free_user(novel.description or ""),
+                "description": novel.description,
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": username,
@@ -1102,7 +1102,7 @@ def list_public_novels(db: Session = Depends(get_db)) -> _ListPublicNovels[dict]
             {
                 "id": novel.id,
                 "title": novel.title,
-                "description": truncate_for_free_user(novel.description or ""),
+                "description": novel.description,
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": username,
