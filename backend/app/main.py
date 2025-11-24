@@ -18,18 +18,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from .database import Base, engine, get_db
 from . import models, schemas
-
 
 # =========================================
 # DB 初期化
 # =========================================
 Base.metadata.create_all(bind=engine)
-
 
 # =========================================
 # FastAPI 本体
@@ -47,7 +45,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # =========================================
 # 共通ヘルパー
@@ -334,10 +331,10 @@ def create_novel(
     return db_novel
 
 
-@app.get("/api/novels")
+@app.get("/api/novels", response_model=List[schemas.Novel])
 def list_novels(
     mine: bool = False,
-    request: Optional[Request] = None,
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(models.Novel)
@@ -473,7 +470,7 @@ def get_novel_detail_with_author(
 
 # 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
 @app.get("/api/public/novels", tags=["novels"])
-def list_public_novels(db: Session = Depends(get_db)) -> List[dict]:
+def list_public_novels(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
     rows = (
         db.query(models.Novel, models.User.username)
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
@@ -481,7 +478,7 @@ def list_public_novels(db: Session = Depends(get_db)) -> List[dict]:
         .all()
     )
 
-    results: List[dict] = []
+    results: List[Dict[str, Any]] = []
     for novel, username in rows:
         results.append(
             {
@@ -528,11 +525,6 @@ def create_episode(
         body=episode.body,
         episode_number=episode.episode_number,
     )
-
-    # 🔥 タグ保存（tag_names が EpisodeCreate にある前提）
-    tag_names = getattr(episode, "tag_names", None) or []
-    db_ep.tags = get_or_create_episode_tags(db, tag_names)
-
     db.add(db_ep)
     db.commit()
     db.refresh(db_ep)
@@ -669,7 +661,7 @@ def update_episode(
     if body is not None:
         episode.body = body
 
-    # 🔥 タグの更新
+    # タグの更新
     tag_names = payload.get("tag_names")
     if tag_names is not None:
         episode.tags = get_or_create_episode_tags(db, tag_names)
@@ -678,7 +670,6 @@ def update_episode(
     db.commit()
     db.refresh(episode)
 
-    # 🔥 無条件で全文返す
     return {
         "id": episode.id,
         "novel_id": episode.novel_id,
