@@ -254,7 +254,10 @@ async def stripe_webhook(
     request: Request,
     stripe_signature: str = Header(None, alias="Stripe-Signature"),
     db: Session = Depends(get_db),
+):
+    # 👇 関数の「中」で await する
     payload = await request.body()
+
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
@@ -315,6 +318,7 @@ def create_novel(
     novel: schemas.NovelCreate,
     request: Request,
     db: Session = Depends(get_db),
+):
     user = require_current_user_from_request(request, db)
 
     db_novel = models.Novel(
@@ -333,6 +337,7 @@ def list_novels(
     mine: bool = False,
     request: Request = None,
     db: Session = Depends(get_db),
+):
     query = db.query(models.Novel)
     if mine and request is not None:
         user = require_current_user_from_request(request, db)
@@ -346,6 +351,7 @@ def update_novel(
     payload: schemas.NovelUpdate,
     request: Request,
     db: Session = Depends(get_db),
+):
     user = require_current_user_from_request(request, db)
 
     novel = (
@@ -377,7 +383,7 @@ def delete_novel(
     novel_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    from sqlalchemy import text
+):
 
     user = require_current_user_from_request(request, db)
 
