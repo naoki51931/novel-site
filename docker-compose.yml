@@ -34,6 +34,7 @@ services:
       DB_NAME: novel_db
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRICE_ID: price_1SWnhCHU7WtsFgpUI8MMHTFx
     depends_on:
       db:
         condition: service_healthy
