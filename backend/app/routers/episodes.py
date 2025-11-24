@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
+from ..crud_novel import get_or_create_tags
 
 router = APIRouter(
     prefix="/episodes",
@@ -33,6 +34,8 @@ def update_episode(
     if payload.title is not None:
         ep.title = payload.title
     if payload.body is not None:
+    if payload.tag_names is not None:
+        ep.tags = get_or_create_tags(db, payload.tag_names)
         ep.body = payload.body
 
     db.commit()

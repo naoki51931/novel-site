@@ -23,7 +23,7 @@ class NovelBase(BaseModel):
 
 
 class NovelCreate(NovelBase):
-    tag_names: list[str] = []
+
     pass
 
 
@@ -50,20 +50,21 @@ class EpisodeBase(BaseModel):
 
 
 class EpisodeCreate(EpisodeBase):
-    tag_names: list[str] = []
-    tag_names: list[str] = []
+
+
     pass
 
 
 class EpisodeUpdate(BaseModel):
-    tag_names: list[str] | None = None
-    tag_names: list[str] | None = None
+
+
     episode_number: Optional[int] = None
     title: Optional[str] = None
     body: Optional[str] = None
 
 
 class Episode(EpisodeBase):
+    tags: list[TagRead] = []
     id: int
     novel_id: int
 

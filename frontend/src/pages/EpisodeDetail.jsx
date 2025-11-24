@@ -91,6 +91,9 @@ export default function EpisodeDetail() {
     );
   }
 
+  // ★ タグ配列を安全に用意（undefined / null 対策）
+  const tags = Array.isArray(episode.tags) ? episode.tags : [];
+
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
     return new Date(isoString).toLocaleString("ja-JP");
@@ -105,6 +108,27 @@ export default function EpisodeDetail() {
       <h2 style={{ marginTop: 12 }}>
         第{episode.number || episode.episode_number}話 {episode.title}
       </h2>
+
+      {/* ★ タグ表示 */}
+      {tags.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {tags.map((t) => (
+            <span
+              key={t.id}
+              style={{
+                display: "inline-block",
+                marginRight: 4,
+                padding: "2px 8px",
+                borderRadius: 12,
+                border: "1px solid #ccc",
+                fontSize: "0.85rem",
+              }}
+            >
+              #{t.name}
+            </span>
+          ))}
+        </div>
+      )}
 
       <p style={{ color: "#666", marginBottom: 4 }}>小説ID: {episode.novel_id}</p>
 

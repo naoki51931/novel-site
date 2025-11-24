@@ -16,7 +16,7 @@ function parseJwt(token) {
 
 export default function NovelDetail() {
   const { id } = useParams();
-  const [novel, setNovel] = useState(null);
+  const [novel, setNovel] = useState({ tags: [] });
   const [episodes, setEpisodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
@@ -162,6 +162,8 @@ export default function NovelDetail() {
 
   if (loading) return <p>読み込み中...</p>;
   if (!novel) return <p>小説が見つかりませんでした。</p>;
+  const tags = Array.isArray(novel.tags) ? novel.tags : [];
+
 
   return (
     <div>
@@ -171,7 +173,23 @@ export default function NovelDetail() {
 
       <h2 style={{ marginBottom: 8 }}>{novel.title}</h2>
 
-      {novel.description && (
+	{tags.map((t) => (
+          <span
+            key={t.id}
+              style={{
+              display: "inline-block",
+              marginRight: 4,
+              padding: "2px 8px",
+              borderRadius: 12,
+              border: "1px solid #ccc",
+              fontSize: "0.85rem",
+             }}
+           >
+            #{t.name}
+          </span>
+         ))}
+
+        {novel.description && (
         <p
           style={{
             whiteSpace: "pre-wrap",
