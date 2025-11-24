@@ -254,7 +254,6 @@ async def stripe_webhook(
     request: Request,
     stripe_signature: str = Header(None, alias="Stripe-Signature"),
     db: Session = Depends(get_db),
-):
     payload = await request.body()
     try:
         event = stripe.Webhook.construct_event(
@@ -316,7 +315,6 @@ def create_novel(
     novel: schemas.NovelCreate,
     request: Request,
     db: Session = Depends(get_db),
-):
     user = require_current_user_from_request(request, db)
 
     db_novel = models.Novel(
@@ -335,7 +333,6 @@ def list_novels(
     mine: bool = False,
     request: Request = None,
     db: Session = Depends(get_db),
-):
     query = db.query(models.Novel)
     if mine and request is not None:
         user = require_current_user_from_request(request, db)
@@ -349,7 +346,6 @@ def update_novel(
     payload: schemas.NovelUpdate,
     request: Request,
     db: Session = Depends(get_db),
-):
     user = require_current_user_from_request(request, db)
 
     novel = (
@@ -381,7 +377,6 @@ def delete_novel(
     novel_id: int,
     request: Request,
     db: Session = Depends(get_db),
-):
     from sqlalchemy import text
 
     user = require_current_user_from_request(request, db)
@@ -409,7 +404,6 @@ def get_novel_detail_with_author(
     novel_id: int,
     request: Request,
     db: Session = Depends(get_db),
-):
     novel = (
         db.query(models.Novel)
         .filter(models.Novel.id == novel_id)
@@ -503,7 +497,6 @@ def create_episode(
     episode: schemas.EpisodeCreate,
     request: Request,
     db: Session = Depends(get_db),
-):
     user = require_current_user_from_request(request, db)
 
     novel = (
@@ -537,7 +530,6 @@ def list_episodes_for_novel(
     novel_id: int,
     request: Request,
     db: Session = Depends(get_db),
-):
     novel = (
         db.query(models.Novel)
         .filter(models.Novel.id == novel_id)
@@ -585,7 +577,6 @@ def get_episode_detail(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
-):
     episode = (
         db.query(models.Episode)
         .filter(models.Episode.id == episode_id)
@@ -620,15 +611,12 @@ def get_episode_detail(
 
 
 @app.put("/api/episodes/{episode_id}", response_model=schemas.Episode)
-@app.put("/api/episodes/{episode_id}")
+
 def update_episode(
     episode_id: int,
     request: Request,
     payload: dict = Body(...),
     db: Session = Depends(get_db),
-):
-):
-):
     user = require_current_user_from_request(request, db)
 
     episode = (
@@ -692,7 +680,6 @@ def delete_episode(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
-):
     user = require_current_user_from_request(request, db)
 
     episode = (
@@ -725,7 +712,6 @@ def read_episode_public(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
-):
     episode = (
         db.query(models.Episode)
         .filter(models.Episode.id == episode_id)
