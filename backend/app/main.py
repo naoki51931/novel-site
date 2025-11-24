@@ -19,6 +19,7 @@ from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from .database import Base, engine, get_db
 from . import models, schemas
@@ -255,7 +256,6 @@ async def stripe_webhook(
     stripe_signature: str = Header(None, alias="Stripe-Signature"),
     db: Session = Depends(get_db),
 ):
-    # 👇 関数の「中」で await する
     payload = await request.body()
 
     try:
@@ -335,7 +335,7 @@ def create_novel(
 @app.get("/api/novels", response_model=List[schemas.Novel])
 def list_novels(
     mine: bool = False,
-    request: Request = None,
+    request: Request | None = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(models.Novel)
@@ -384,7 +384,6 @@ def delete_novel(
     request: Request,
     db: Session = Depends(get_db),
 ):
-
     user = require_current_user_from_request(request, db)
 
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
@@ -397,7 +396,6 @@ def delete_novel(
             detail="この小説を削除する権限がありません。",
         )
 
-    # 素直に episodes / novels を削除
     db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
     db.execute(text("DELETE FROM novels WHERE id = :nid"), {"nid": novel_id})
     db.commit()
@@ -410,6 +408,7 @@ def get_novel_detail_with_author(
     novel_id: int,
     request: Request,
     db: Session = Depends(get_db),
+):
     novel = (
         db.query(models.Novel)
         .filter(models.Novel.id == novel_id)
@@ -461,7 +460,9 @@ def get_novel_detail_with_author(
                 "number": get_episode_number(ep),
                 "episode_number": get_episode_number(ep),
                 "title": ep.title,
-                "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
+                "body": ep.body
+                if is_premium
+                else truncate_for_free_user(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes
@@ -503,6 +504,7 @@ def create_episode(
     episode: schemas.EpisodeCreate,
     request: Request,
     db: Session = Depends(get_db),
+):
     user = require_current_user_from_request(request, db)
 
     novel = (
@@ -525,6 +527,12 @@ def create_episode(
         body=episode.body,
         episode_number=episode.episode_number,
     )
+
+    # Episode 作成時タグ（あれば）
+    tag_names = getattr(episode, "tag_names", [])
+    if tag_names:
+        db_ep.tags = get_or_create_episode_tags(db, tag_names)
+
     db.add(db_ep)
     db.commit()
     db.refresh(db_ep)
@@ -536,6 +544,7 @@ def list_episodes_for_novel(
     novel_id: int,
     request: Request,
     db: Session = Depends(get_db),
+):
     novel = (
         db.query(models.Novel)
         .filter(models.Novel.id == novel_id)
@@ -571,7 +580,9 @@ def list_episodes_for_novel(
             "number": get_episode_number(ep),
             "episode_number": get_episode_number(ep),
             "title": ep.title,
-            "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
+            "body": ep.body
+            if is_premium
+            else truncate_for_free_user(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes_sorted
@@ -583,6 +594,7 @@ def get_episode_detail(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
+):
     episode = (
         db.query(models.Episode)
         .filter(models.Episode.id == episode_id)
@@ -617,12 +629,12 @@ def get_episode_detail(
 
 
 @app.put("/api/episodes/{episode_id}", response_model=schemas.Episode)
-
 def update_episode(
     episode_id: int,
-    request: Request,
-    payload: dict = Body(...),
+    payload: Dict[str, Any] = Body(...),
+    request: Request = None,
     db: Session = Depends(get_db),
+):
     user = require_current_user_from_request(request, db)
 
     episode = (
@@ -659,7 +671,7 @@ def update_episode(
     if body is not None:
         episode.body = body
 
-    # 🔥 タグの更新（タグは別途作っている関数を呼ぶ想定）
+    # タグの更新
     tag_names = payload.get("tag_names")
     if tag_names is not None:
         episode.tags = get_or_create_episode_tags(db, tag_names)
@@ -668,17 +680,15 @@ def update_episode(
     db.commit()
     db.refresh(episode)
 
-    # 🔥 ここで「無条件で全文返す」に変更
-    return {
-        "id": episode.id,
-        "novel_id": episode.novel_id,
-        "number": get_episode_number(episode),
-        "episode_number": get_episode_number(episode),
-        "title": episode.title,
-        "body": episode.body,   # ← truncate しない
-        "created_at": episode.created_at,
-        "tags": [ {"id": t.id, "name": t.name} for t in episode.tags ],
-    }
+    # 編集時は本文フル返却
+    return schemas.Episode(
+        id=episode.id,
+        novel_id=episode.novel_id,
+        episode_number=get_episode_number(episode) or 0,
+        title=episode.title,
+        body=episode.body,
+        tags=[schemas.TagRead(id=t.id, name=t.name) for t in getattr(episode, "tags", [])],
+    )
 
 
 @app.delete("/api/episodes/{episode_id}")
@@ -686,6 +696,7 @@ def delete_episode(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
+):
     user = require_current_user_from_request(request, db)
 
     episode = (
@@ -718,6 +729,7 @@ def read_episode_public(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
+):
     episode = (
         db.query(models.Episode)
         .filter(models.Episode.id == episode_id)
@@ -739,7 +751,9 @@ def read_episode_public(
         "novel_id": episode.novel_id,
         "number": get_episode_number(episode),
         "title": episode.title,
-        "body": episode.body if is_premium else truncate_for_free_user(episode.body or ""),
+        "body": episode.body
+        if is_premium
+        else truncate_for_free_user(episode.body or ""),
         "created_at": episode.created_at,
     }
 
