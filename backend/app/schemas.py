@@ -5,12 +5,18 @@ from typing import Optional, List
 # =========================
 # Novel
 # =========================
+class TagRead(BaseModel): 
+    id: int 
+    name: str 
+    class Config: orm_mode = True 
+
 class NovelBase(BaseModel):
     title: str
     description: Optional[str] = None
 
 
 class NovelCreate(NovelBase):
+    tag_names: list[str] = []
     pass
 
 
@@ -37,10 +43,12 @@ class EpisodeBase(BaseModel):
 
 
 class EpisodeCreate(EpisodeBase):
+    tag_names: list[str] = []
     pass
 
 
 class EpisodeUpdate(BaseModel):
+    tag_names: list[str] | None = None
     episode_number: Optional[int] = None
     title: Optional[str] = None
     body: Optional[str] = None

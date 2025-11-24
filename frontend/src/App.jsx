@@ -1,3 +1,4 @@
+import Register from "./pages/Register.jsx";
 import { Routes, Route, Link } from "react-router-dom";
 import Home from "./pages/Home";
 import NewNovel from "./pages/NewNovel";
@@ -36,6 +37,7 @@ export default function App() {
             <Link to="/novels/new">新規小説投稿</Link>
             <Link to="/mypage">マイページ</Link>
             <Link to="/login">ログイン</Link>
+        <Link to="/register" className="btn btn-border" style={{ marginLeft: 8 }}>Register</Link>
           </nav>
         </div>
         <div style={{ fontSize: 12, color: "#555", textAlign: "right" }}>
@@ -51,6 +53,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/novels/new" element={<NewNovel />} />
           <Route path="/novels/:id" element={<NovelDetail />} />

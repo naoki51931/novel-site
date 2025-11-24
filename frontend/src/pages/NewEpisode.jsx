@@ -10,6 +10,7 @@ export default function NewEpisode() {
   const [episodeNumber, setEpisodeNumber] = useState(1);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+const [tags, setTags] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -23,6 +24,10 @@ export default function NewEpisode() {
     }
     if (!body.trim()) {
       setError("本文は必須です。");
+<div>
+        <label>タグ (カンマ区切り)</label>
+        <input value={tags} onChange={e => setTags(e.target.value)} placeholder="例: バトル, 日常, 百合" />
+      </div>
       return;
     }
 
@@ -100,6 +105,10 @@ export default function NewEpisode() {
         <div style={{ marginBottom: 8 }}>
           <label>
             本文
+<div>
+        <label>タグ (カンマ区切り)</label>
+        <input value={tags} onChange={e => setTags(e.target.value)} placeholder="例: バトル, 日常, 百合" />
+      </div>
             <br />
             <textarea
               value={body}

@@ -34,6 +34,7 @@ def truncate_for_free_user(text, ratio=0.3):
 def truncate_for_free_user(text, ratio=0.3):
     return text if not text else text[:max(1, int(len(text) * ratio))]
 
+from . import models
 Base.metadata.create_all(bind=engine)
 
 # =========================================
@@ -455,6 +456,29 @@ def get_episode_detail(
     )
     if episode is None:
         raise HTTPException(status_code=404, detail="Episode not found")
+
+    # ユーザー取得（失敗＝未ログイン扱い）
+    try:
+        user = require_current_user_from_request(request, db)
+    except Exception:
+        user = None
+
+    import os
+    force_all_premium = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
+    is_premium = force_all_premium or (bool(getattr(user, "is_premium", False)) if user else False)
+
+    body = episode.body if is_premium else truncate_for_free_user(episode.body or "")
+
+    return {
+        "id": episode.id,
+        "novel_id": episode.novel_id,
+        "number": get_episode_number(episode),
+        "episode_number": get_episode_number(episode),
+        "title": episode.title,
+        "body": body,
+        "created_at": episode.created_at,
+        "is_premium_user": is_premium,
+    }
 
     # ログインユーザ取得（失敗したら無料扱い）
     try:
