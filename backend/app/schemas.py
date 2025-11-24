@@ -1,5 +1,5 @@
-from pydantic import BaseModel
 from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
 
 # =========================
 # Tag
@@ -8,8 +8,8 @@ class TagRead(BaseModel):
     id: int
     name: str
 
-    class Config:
-        orm_mode = True
+    # Pydantic v2: orm_mode → from_attributes
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =========================
@@ -38,8 +38,8 @@ class Novel(NovelBase):
     # 小説に紐付くタグ
     tags: List[TagRead] = []
 
-    class Config:
-        orm_mode = True
+    # SQLAlchemy モデルからの変換用
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =========================
@@ -70,6 +70,5 @@ class Episode(EpisodeBase):
     # エピソードに紐付くタグ
     tags: List[TagRead] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
