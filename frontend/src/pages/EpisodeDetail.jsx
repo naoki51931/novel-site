@@ -10,13 +10,43 @@ export default function EpisodeDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const handleSubscribe = async () => {
+    try {
+      const res = await fetch(API_BASE + "/api/stripe/create-checkout-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        throw new Error("決済セッションの作成に失敗しました");
+      }
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert("決済URLを取得できませんでした。");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("決済処理中にエラーが発生しました");
+    }
+  };
+
+
   useEffect(() => {
     const fetchEpisode = async () => {
       try {
         setLoading(true);
         setError("");
 
-        const res = await fetch(API_BASE + "/api/episodes/" + id);
+        const token = localStorage.getItem("token");
+        const res = await fetch(API_BASE + "/api/episodes/" + id, {
+          headers: token
+            ? { Authorization: `Bearer ${token}` }
+            : {},
+        });
         if (!res.ok) {
           throw new Error("エピソードの取得に失敗しました (" + res.status + ")");
         }
@@ -94,6 +124,17 @@ export default function EpisodeDetail() {
       >
         {episode.body}
       </div>
+
+      {!episode.is_premium_user && (
+        <div style={{ marginTop: 16, padding: 12, border: "1px dashed #f0a" }}>
+          <p style={{ marginBottom: 8 }}>
+            全文を読むには月額1000円のプレミアム購読が必要です。
+          </p>
+          <button className="btn btn-border" onClick={handleSubscribe}>
+            課金して続きを読む
+          </button>
+        </div>
+      )}
 
       <div style={{ marginTop: 24 }}>
         <Link
