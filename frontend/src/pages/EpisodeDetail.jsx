@@ -11,11 +11,13 @@ export default function EpisodeDetail() {
   const [error, setError] = useState("");
 
   const handleSubscribe = async () => {
+    const token = localStorage.getItem("token");
     try {
       const res = await fetch(API_BASE + "/api/stripe/create-checkout-session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({}),
       });
@@ -24,6 +26,8 @@ export default function EpisodeDetail() {
       }
       const data = await res.json();
       if (data.url) {
+        const returnTo = window.location.pathname + window.location.search;
+        sessionStorage.setItem("stripe_return_to", returnTo);
         window.location.href = data.url;
       } else {
         alert("決済URLを取得できませんでした。");

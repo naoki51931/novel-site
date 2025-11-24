@@ -6,6 +6,7 @@ import NewEpisode from "./pages/NewEpisode";
 import EditNovel from "./pages/EditNovel";
 import EditEpisode from "./pages/EditEpisode";
 import EpisodeDetail from "./pages/EpisodeDetail";
+import StripeReturn from "./pages/StripeReturn";
 import Login from "./pages/Login";
 import Mypage from "./pages/Mypage";
 
@@ -57,6 +58,8 @@ export default function App() {
           <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
           <Route path="/episodes/:id/edit" element={<EditEpisode />} />
           <Route path="/episodes/:id" element={<EpisodeDetail />} />
+          <Route path="/stripe/cancel" element={<StripeReturn mode="cancel" />} />
+          <Route path="/stripe/success" element={<StripeReturn mode="success" />} />
         </Routes>
       </main>
     </div>
