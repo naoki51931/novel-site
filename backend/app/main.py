@@ -4,6 +4,8 @@ from typing import List, Optional, Dict, Any
 import jwt
 import os
 import stripe
+import os
+import stripe
 from fastapi import (
     FastAPI,
     Depends,
@@ -1136,3 +1138,32 @@ async def stripe_webhook(
                 db.commit()
     return {"ok": True}
 
+
+# =========================================
+# Stripe: 月額1000円サブスク用 Checkout セッション作成
+# =========================================
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://18.169.218.56")
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")  # Stripe ダッシュボードで作った月額1000円の price ID
+
+@app.post("/api/stripe/create-checkout-session")
+def create_checkout_session(request: Request):
+    try:
+        if not STRIPE_PRICE_ID:
+            raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID が未設定です。")
+
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[
+                {
+                    "price": STRIPE_PRICE_ID,
+                    "quantity": 1,
+                }
+            ],
+            success_url=f"{FRONTEND_ORIGIN}/stripe/success",
+            cancel_url=f"{FRONTEND_ORIGIN}/stripe/cancel",
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
