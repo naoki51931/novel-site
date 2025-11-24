@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -99,6 +100,7 @@ def truncate_for_free_user(text, ratio=0.3):
 SECRET_KEY = "change_this_to_a_secure_random_value"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 stripe.api_key = STRIPE_SECRET_KEY
@@ -403,7 +405,7 @@ def list_episodes_for_novel(
         user = require_current_user_from_request(request, db)
     except Exception:
         user = None
-    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+    is_premium = FORCE_ALL_PREMIUM or (bool(getattr(user, "is_premium", False)) if user else False)
 
     episodes = (
         db.query(models.Episode)
@@ -459,7 +461,7 @@ def get_episode_detail(
         user = require_current_user_from_request(request, db)
     except Exception:
         user = None
-    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+    is_premium = FORCE_ALL_PREMIUM or (bool(getattr(user, "is_premium", False)) if user else False)
 
     return {
         "id": episode.id,
@@ -639,7 +641,7 @@ def read_episode_public(
         user = require_current_user_from_request(request, db)
     except Exception:
         user = None
-    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+    is_premium = FORCE_ALL_PREMIUM or (bool(getattr(user, "is_premium", False)) if user else False)
 
     return {
         "id": episode.id,
@@ -951,7 +953,7 @@ def get_novel_detail_with_author(
     except Exception:
         user = None
 
-    is_premium = bool(getattr(user, "is_premium", False)) if user else False
+    is_premium = FORCE_ALL_PREMIUM or (bool(getattr(user, "is_premium", False)) if user else False)
 
     author_name = getattr(novel.author, "username", None) if hasattr(novel, "author") and novel.author else None
 
@@ -1148,22 +1150,52 @@ FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://18.169.218.56")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")  # Stripe ダッシュボードで作った月額1000円の price ID
 
 @app.post("/api/stripe/create-checkout-session")
-def create_checkout_session(request: Request):
+@app.post("/api/stripe/create-checkout-session")
+
+def create_checkout_session(request: Request, db: Session = Depends(get_db)):
+
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+
+    if not stripe.api_key:
+
+        raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY が未設定です。")
+
+    if not STRIPE_PRICE_ID:
+
+        raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID が未設定です。")
+
     try:
-        if not STRIPE_PRICE_ID:
-            raise HTTPException(status_code=500, detail="STRIPE_PRICE_ID が未設定です。")
+
+        user = require_current_user_from_request(request, db)
+
+        client_ref = str(user.id)
+
+    except Exception:
+
+        client_ref = None
+
+    try:
 
         session = stripe.checkout.Session.create(
+
             mode="subscription",
-            line_items=[
-                {
-                    "price": STRIPE_PRICE_ID,
-                    "quantity": 1,
-                }
-            ],
+
+            line_items=[{ "price": STRIPE_PRICE_ID, "quantity": 1 }],
+
+            client_reference_id=client_ref,
+
             success_url=f"{FRONTEND_ORIGIN}/stripe/success",
+
             cancel_url=f"{FRONTEND_ORIGIN}/stripe/cancel",
+
         )
+
         return {"url": session.url}
+
+    except Exception as e:
+
+        print("Stripe error:", repr(e))
+
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,0 +1,7 @@
+services:
+  backend:
+    environment:
+      FORCE_ALL_PREMIUM: "1"
+      STRIPE_SECRET_KEY: ""
+      STRIPE_WEBHOOK_SECRET: ""
+      STRIPE_PRICE_ID: ""
