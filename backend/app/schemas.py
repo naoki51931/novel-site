@@ -1,36 +1,42 @@
 from pydantic import BaseModel
 from typing import Optional, List
 
+# =========================
+# Tag
+# =========================
+class TagRead(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        orm_mode = True
+
 
 # =========================
 # Novel
 # =========================
-class TagRead(BaseModel): 
-    id: int 
-    name: str 
-    class Config: orm_mode = True 
-
 class NovelBase(BaseModel):
     title: str
     description: Optional[str] = None
 
 
 class NovelCreate(NovelBase):
-    tag_names: list[str] = []
-
-    pass
+    # 小説作成時につけるタグ名
+    tag_names: List[str] = []
 
 
 class NovelUpdate(BaseModel):
-    tag_names: list[str] | None = None
     title: Optional[str] = None
     description: Optional[str] = None
+    # タグ更新用（None のときは「変更なし」扱い）
+    tag_names: Optional[List[str]] = None
 
 
 class Novel(NovelBase):
-    tags: list[TagRead] = []
     id: int
     author_id: int
+    # 小説に紐付くタグ
+    tags: List[TagRead] = []
 
     class Config:
         orm_mode = True
@@ -46,25 +52,24 @@ class EpisodeBase(BaseModel):
 
 
 class EpisodeCreate(EpisodeBase):
-    tag_names: list[str] = []
-
-
-    pass
+    # エピソード作成時につけるタグ名
+    tag_names: List[str] = []
 
 
 class EpisodeUpdate(BaseModel):
-    tag_names: list[str] | None = None
-
-
     episode_number: Optional[int] = None
     title: Optional[str] = None
     body: Optional[str] = None
+    # タグ更新用
+    tag_names: Optional[List[str]] = None
 
 
 class Episode(EpisodeBase):
-    tags: list[TagRead] = []
     id: int
     novel_id: int
+    # エピソードに紐付くタグ
+    tags: List[TagRead] = []
 
     class Config:
         orm_mode = True
+
