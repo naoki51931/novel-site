@@ -10,7 +10,7 @@ export default function NewEpisode() {
   const [episodeNumber, setEpisodeNumber] = useState(1);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-const [tags, setTags] = useState('');
+  const [tags, setTags] = useState("");          // ★ タグ用 state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -24,10 +24,6 @@ const [tags, setTags] = useState('');
     }
     if (!body.trim()) {
       setError("本文は必須です。");
-<div>
-        <label>タグ (カンマ区切り)</label>
-        <input value={tags} onChange={e => setTags(e.target.value)} placeholder="例: バトル, 日常, 百合" />
-      </div>
       return;
     }
 
@@ -35,6 +31,11 @@ const [tags, setTags] = useState('');
       episode_number: Number(episodeNumber),
       title,
       body,
+      // ★ カンマ区切りの文字列 → 配列に変換
+      tag_names: tags
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
     };
 
     console.log("📥 POST /api/novels/:id/episodes payload:", payload);
@@ -45,7 +46,7 @@ const [tags, setTags] = useState('');
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "Bearer " + localStorage.getItem("token"),
+          Authorization: "Bearer " + localStorage.getItem("token"),
         },
         body: JSON.stringify(payload),
       });
@@ -90,6 +91,7 @@ const [tags, setTags] = useState('');
             />
           </label>
         </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             タイトル
@@ -102,13 +104,25 @@ const [tags, setTags] = useState('');
             />
           </label>
         </div>
+
+        {/* ★ タグ入力欄 */}
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            タグ (カンマ区切り)
+            <br />
+            <input
+              type="text"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="例: バトル, 日常, 百合"
+              style={{ width: "100%", padding: 4 }}
+            />
+          </label>
+        </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             本文
-<div>
-        <label>タグ (カンマ区切り)</label>
-        <input value={tags} onChange={e => setTags(e.target.value)} placeholder="例: バトル, 日常, 百合" />
-      </div>
             <br />
             <textarea
               value={body}
@@ -118,7 +132,9 @@ const [tags, setTags] = useState('');
             />
           </label>
         </div>
+
         {error && <p style={{ color: "red" }}>{error}</p>}
+
         <button className="btn btn-border" type="submit" disabled={loading}>
           {loading ? "投稿中..." : "投稿する"}
         </button>
@@ -126,3 +142,4 @@ const [tags, setTags] = useState('');
     </div>
   );
 }
+
