@@ -1,10 +1,4 @@
 from pydantic import BaseModel
-
-    id: int
-    name: str
-    class Config:
-        orm_mode = True
-
 from typing import Optional, List
 
 
