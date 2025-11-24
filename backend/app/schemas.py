@@ -1,4 +1,11 @@
 from pydantic import BaseModel
+
+class TagRead(BaseModel):
+    id: int
+    name: str
+    class Config:
+        orm_mode = True
+
 from typing import Optional, List
 
 
@@ -44,10 +51,12 @@ class EpisodeBase(BaseModel):
 
 class EpisodeCreate(EpisodeBase):
     tag_names: list[str] = []
+    tag_names: list[str] = []
     pass
 
 
 class EpisodeUpdate(BaseModel):
+    tag_names: list[str] | None = None
     tag_names: list[str] | None = None
     episode_number: Optional[int] = None
     title: Optional[str] = None

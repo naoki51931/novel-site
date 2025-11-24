@@ -11,6 +11,7 @@ export default function EditEpisode() {
   const [episodeNumber, setEpisodeNumber] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [tags, setTags] = useState("");             // ★ タグ state
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -45,6 +46,13 @@ export default function EditEpisode() {
         );
         setTitle(data.title || "");
         setBody(data.body || "");
+
+        // ★ 既存タグを "A, B, C" の形に変換
+        if (Array.isArray(data.tags)) {
+          setTags(data.tags.map((t) => t.name).join(", "));
+        } else {
+          setTags("");
+        }
       } catch (err) {
         console.error(err);
         setError(err.message || "エピソード情報の取得中にエラーが発生しました");
@@ -90,6 +98,11 @@ export default function EditEpisode() {
           episode_number: Number(episodeNumber),
           title,
           body,
+          // ★ 編集時も tag_names を送る
+          tag_names: tags
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
         }),
       });
 
@@ -171,6 +184,21 @@ export default function EditEpisode() {
           </label>
         </div>
 
+        {/* ★ タグ編集欄 */}
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            タグ (カンマ区切り)
+            <br />
+            <input
+              type="text"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="例: バトル, 日常, 百合"
+              style={{ width: "100%", padding: 4 }}
+            />
+          </label>
+        </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             本文
@@ -185,15 +213,13 @@ export default function EditEpisode() {
         </div>
 
         {error && (
-          <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>
+          <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>
+            {error}
+          </p>
         )}
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button
-            className="btn btn-border"
-            type="submit"
-            disabled={saving}
-          >
+          <button className="btn btn-border" type="submit" disabled={saving}>
             {saving ? "更新中..." : "更新する"}
           </button>
           <button
@@ -208,3 +234,4 @@ export default function EditEpisode() {
     </div>
   );
 }
+
