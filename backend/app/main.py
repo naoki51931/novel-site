@@ -18,16 +18,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
 from . import models, schemas
+
 
 # =========================================
 # DB 初期化
 # =========================================
 Base.metadata.create_all(bind=engine)
+
 
 # =========================================
 # FastAPI 本体
@@ -45,6 +47,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # =========================================
 # 共通ヘルパー
@@ -257,7 +260,6 @@ async def stripe_webhook(
     db: Session = Depends(get_db),
 ):
     payload = await request.body()
-
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
@@ -332,10 +334,10 @@ def create_novel(
     return db_novel
 
 
-@app.get("/api/novels", response_model=List[schemas.Novel])
+@app.get("/api/novels")
 def list_novels(
     mine: bool = False,
-    request: Request | None = None,
+    request: Optional[Request] = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(models.Novel)
@@ -396,6 +398,7 @@ def delete_novel(
             detail="この小説を削除する権限がありません。",
         )
 
+    # 素直に episodes / novels を削除
     db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
     db.execute(text("DELETE FROM novels WHERE id = :nid"), {"nid": novel_id})
     db.commit()
@@ -460,9 +463,7 @@ def get_novel_detail_with_author(
                 "number": get_episode_number(ep),
                 "episode_number": get_episode_number(ep),
                 "title": ep.title,
-                "body": ep.body
-                if is_premium
-                else truncate_for_free_user(ep.body or ""),
+                "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes
@@ -528,10 +529,9 @@ def create_episode(
         episode_number=episode.episode_number,
     )
 
-    # Episode 作成時タグ（あれば）
-    tag_names = getattr(episode, "tag_names", [])
-    if tag_names:
-        db_ep.tags = get_or_create_episode_tags(db, tag_names)
+    # 🔥 タグ保存（tag_names が EpisodeCreate にある前提）
+    tag_names = getattr(episode, "tag_names", None) or []
+    db_ep.tags = get_or_create_episode_tags(db, tag_names)
 
     db.add(db_ep)
     db.commit()
@@ -580,9 +580,7 @@ def list_episodes_for_novel(
             "number": get_episode_number(ep),
             "episode_number": get_episode_number(ep),
             "title": ep.title,
-            "body": ep.body
-            if is_premium
-            else truncate_for_free_user(ep.body or ""),
+            "body": ep.body if is_premium else truncate_for_free_user(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes_sorted
@@ -631,8 +629,8 @@ def get_episode_detail(
 @app.put("/api/episodes/{episode_id}", response_model=schemas.Episode)
 def update_episode(
     episode_id: int,
-    payload: Dict[str, Any] = Body(...),
-    request: Request = None,
+    request: Request,
+    payload: dict = Body(...),
     db: Session = Depends(get_db),
 ):
     user = require_current_user_from_request(request, db)
@@ -671,7 +669,7 @@ def update_episode(
     if body is not None:
         episode.body = body
 
-    # タグの更新
+    # 🔥 タグの更新
     tag_names = payload.get("tag_names")
     if tag_names is not None:
         episode.tags = get_or_create_episode_tags(db, tag_names)
@@ -680,15 +678,17 @@ def update_episode(
     db.commit()
     db.refresh(episode)
 
-    # 編集時は本文フル返却
-    return schemas.Episode(
-        id=episode.id,
-        novel_id=episode.novel_id,
-        episode_number=get_episode_number(episode) or 0,
-        title=episode.title,
-        body=episode.body,
-        tags=[schemas.TagRead(id=t.id, name=t.name) for t in getattr(episode, "tags", [])],
-    )
+    # 🔥 無条件で全文返す
+    return {
+        "id": episode.id,
+        "novel_id": episode.novel_id,
+        "number": get_episode_number(episode),
+        "episode_number": get_episode_number(episode),
+        "title": episode.title,
+        "body": episode.body,
+        "created_at": episode.created_at,
+        "tags": [{"id": t.id, "name": t.name} for t in episode.tags],
+    }
 
 
 @app.delete("/api/episodes/{episode_id}")
@@ -751,9 +751,7 @@ def read_episode_public(
         "novel_id": episode.novel_id,
         "number": get_episode_number(episode),
         "title": episode.title,
-        "body": episode.body
-        if is_premium
-        else truncate_for_free_user(episode.body or ""),
+        "body": episode.body if is_premium else truncate_for_free_user(episode.body or ""),
         "created_at": episode.created_at,
     }
 
