@@ -38,7 +38,6 @@ export default function EpisodeDetail() {
     }
   };
 
-
   useEffect(() => {
     const fetchEpisode = async () => {
       try {
@@ -47,9 +46,7 @@ export default function EpisodeDetail() {
 
         const token = localStorage.getItem("token");
         const res = await fetch(API_BASE + "/api/episodes/" + id, {
-          headers: token
-            ? { Authorization: `Bearer ${token}` }
-            : {},
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) {
           throw new Error("エピソードの取得に失敗しました (" + res.status + ")");
@@ -127,10 +124,37 @@ export default function EpisodeDetail() {
         }}
       >
         {episode.body}
+
+{episode.is_premium_user ? (<div style={{ marginTop: 16, padding: 12, border: "1px solid #0a0", background: "#efe", borderRadius: 6 }}><p style={{ marginBottom: 0, color: "#060", fontWeight: "bold" }}>★ あなたは課金済みユーザーです（PREMIUM）</p></div>) : (<div style={{ marginTop: 16, padding: 12, border: "1px dashed #f0a", borderRadius: 6 }}><p style={{ marginBottom: 8 }}>全文を読むには月額1000円のプレミアム購読が必要です。</p><button class="btn btn-border" onClick={handleSubscribe}>課金して続きを読む</button></div>)}
       </div>
 
-      {!episode.is_premium_user && (
-        <div style={{ marginTop: 16, padding: 12, border: "1px dashed #f0a" }}>
+      {episode.is_premium_user ? (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 12,
+            border: "1px solid #0a0",
+            background: "#efe",
+          }}
+        >
+          <p
+            style={{
+              marginBottom: 0,
+              color: "#060",
+              fontWeight: "bold",
+            }}
+          >
+            ★ 課金しています（PREMIUM）
+          </p>
+        </div>
+      ) : (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 12,
+            border: "1px dashed #f0a",
+          }}
+        >
           <p style={{ marginBottom: 8 }}>
             全文を読むには月額1000円のプレミアム購読が必要です。
           </p>
