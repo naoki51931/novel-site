@@ -1,4 +1,6 @@
 import Register from "./pages/Register.jsx";
+import { useState } from "react";
+import SearchBar from "./components/SearchBar.jsx";
 import { Routes, Route, Link } from "react-router-dom";
 import Home from "./pages/Home";
 import NewNovel from "./pages/NewNovel";
@@ -12,6 +14,8 @@ import Login from "./pages/Login";
 import Mypage from "./pages/Mypage";
 
 export default function App() {
+  const [q, setQ] = useState("");
+  const [tag, setTag] = useState("");
   const username =
     typeof window !== "undefined" ? localStorage.getItem("username") : null;
   const hasToken =
@@ -48,10 +52,11 @@ export default function App() {
           )}
         </div>
       </header>
+<SearchBar q={q} tag={tag} onChangeQ={setQ} onChangeTag={setTag} />
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<Home q={q} tag={tag} />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
