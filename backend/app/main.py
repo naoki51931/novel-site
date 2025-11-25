@@ -470,15 +470,37 @@ def get_novel_detail_with_author(
 
 # 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
 @app.get("/api/public/novels", tags=["novels"])
-def list_public_novels(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
-    rows = (
+# 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
+@app.get("/api/public/novels", tags=["novels"])
+def list_public_novels(
+    q: Optional[str] = None,
+    tag: Optional[str] = None,
+    db: Session = Depends(get_db),
+) -> List[dict]:
+    # ベースクエリ（作者名 JOIN）
+    query = (
         db.query(models.Novel, models.User.username)
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
-        .order_by(models.Novel.created_at.desc())
-        .all()
     )
 
-    results: List[Dict[str, Any]] = []
+    # キーワード検索（タイトル or 説明）
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Novel.title.like(like),
+                models.Novel.description.like(like),
+            )
+        )
+
+    # タグ絞り込み
+    if tag:
+        # Novel.tags リレーション経由で Tag.name をフィルタ
+        query = query.join(models.Novel.tags).filter(models.Tag.name == tag)
+
+    rows = query.order_by(models.Novel.created_at.desc()).all()
+
+    results: List[dict] = []
     for novel, username in rows:
         results.append(
             {
@@ -488,6 +510,11 @@ def list_public_novels(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": username,
+                # 🔥 ここでタグも一緒に返す
+                "tags": [
+                    {"id": t.id, "name": t.name}
+                    for t in getattr(novel, "tags", [])
+                ],
             }
         )
     return results
@@ -599,11 +626,28 @@ def get_episode_detail(
     except Exception:
         user = None
 
+    # 作者かどうか判定（作者なら必ず全文返す）
+    is_author = False
+    if user is not None:
+        novel = (
+            db.query(models.Novel)
+            .filter(models.Novel.id == episode.novel_id)
+            .first()
+        )
+        if novel and novel.author_id == user.id:
+            is_author = True
+
+    # 通常のプレミアム判定
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
 
-    body = episode.body if is_premium else truncate_for_free_user(episode.body or "")
+    if is_author:
+        # 編集用：作者には常に100％本文を返す
+        body = episode.body
+    else:
+        # 読者向け：従来どおりプレミアム以外は30％
+        body = episode.body if is_premium else truncate_for_free_user(episode.body or "")
 
     return {
         "id": episode.id,
