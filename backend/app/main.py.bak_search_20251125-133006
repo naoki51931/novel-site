@@ -470,52 +470,18 @@ def get_novel_detail_with_author(
 
 # 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
 @app.get("/api/public/novels", tags=["novels"])
+# 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
+@app.get("/api/public/novels", tags=["novels"])
 def list_public_novels(
-    q: str | None = None,
-    tag: str | None = None,
+    q: Optional[str] = None,
+    tag: Optional[str] = None,
     db: Session = Depends(get_db),
-):
-    # ベースクエリ: Novel + author名
+) -> List[dict]:
+    # ベースクエリ（作者名 JOIN）
     query = (
         db.query(models.Novel, models.User.username)
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
     )
-
-    # タグ指定がある場合: NovelTag / Tag 経由で絞り込み
-    if tag:
-        query = (
-            query.join(models.NovelTag, models.Novel.id == models.NovelTag.novel_id)
-                 .join(models.Tag, models.NovelTag.tag_id == models.Tag.id)
-                 .filter(models.Tag.name == tag)
-        )
-
-    # フリーワード検索（タイトル or 説明）
-    if q:
-        like = f"%{q}%"
-        from sqlalchemy import or_
-        query = query.filter(
-            or_(
-                models.Novel.title.ilike(like),
-                models.Novel.description.ilike(like),
-            )
-        )
-
-    # 作成日時の新しい順に並べる
-    rows = query.order_by(models.Novel.created_at.desc()).all()
-
-    results: list[dict[str, Any]] = []
-    for novel, username in rows:
-        results.append(
-            {
-                "id": novel.id,
-                "title": novel.title,
-                "description": novel.description,
-                "created_at": novel.created_at,
-                "author_id": novel.author_id,
-                "author_username": username,
-            }
-        )
-    return results
 
     # キーワード検索（タイトル or 説明）
     if q:

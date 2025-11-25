@@ -42,27 +42,19 @@ services:
         condition: service_healthy
 
   nginx:
-    image: nginx:1.27-alpine
-    container_name: novel-nginx
+  certbot:
+    image: certbot/certbot
+    entrypoint: /bin/sh -c "sleep infinity"
+    container_name: novel-certbot
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
     depends_on:
       - backend
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./frontend/dist:/usr/share/nginx/html:ro
-      - ./nginx/ssl/www:/var/www/certbot
-      - ./nginx/ssl/letsencrypt:/etc/letsencrypt
-
-  certbot:
-    image: certbot/certbot
-    container_name: novel-certbot
-    volumes:
-      - ./nginx/ssl/letsencrypt:/etc/letsencrypt
-    entrypoint: /bin/sh -c "sleep infinity"
 
 volumes:
   db-data:
+

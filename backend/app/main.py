@@ -470,18 +470,49 @@ def get_novel_detail_with_author(
 
 # 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
 @app.get("/api/public/novels", tags=["novels"])
-# 公開: 小説一覧（/api/public/novels, JOINでauthor_username付き）
-@app.get("/api/public/novels", tags=["novels"])
 def list_public_novels(
-    q: Optional[str] = None,
-    tag: Optional[str] = None,
+    q: str | None = None,
+    tag: str | None = None,
     db: Session = Depends(get_db),
 ) -> List[dict]:
-    # ベースクエリ（作者名 JOIN）
+    from sqlalchemy import or_
+
     query = (
         db.query(models.Novel, models.User.username)
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
     )
+
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Novel.title.ilike(like),
+                models.Novel.description.ilike(like),
+            )
+        )
+
+    if tag:
+        like_tag = f"%{tag}%"
+        query = (
+            query
+            .join(models.Novel.episodes, isouter=True)
+            .join(models.Episode.tags, isouter=True)
+            .filter(models.Tag.name.ilike(like_tag))
+        )
+
+    rows = query.order_by(models.Novel.created_at.desc()).all()
+
+    results: List[dict] = []
+    for novel, username in rows:
+        results.append({
+            "id": novel.id,
+            "title": novel.title,
+            "description": novel.description,
+            "created_at": novel.created_at,
+            "author_id": novel.author_id,
+            "author_username": username,
+        })
+    return results
 
     # キーワード検索（タイトル or 説明）
     if q:
