@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 const API_BASE = "http://18.169.218.56";
 
-export default function Home() {
+export default function Home({ q = "", tag = "" }) {
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -12,7 +12,14 @@ export default function Home() {
       try {
         setLoading(true);
         // 🔹 認証不要の公開APIを叩く
-        const res = await fetch(`${API_BASE}/api/public/novels`);
+        let url = `${API_BASE}/api/public/novels`;
+        const params = [];
+        if (q) params.push(`q=${encodeURIComponent(q)}`);
+        if (tag) params.push(`tag=${encodeURIComponent(tag)}`);
+        if (params.length > 0) {
+          url += `?${params.join("\        const res = await fetch(`${API_BASE}/api/public/novels`);")}`;
+        }
+        const res = await fetch(url);
         if (!res.ok) {
           throw new Error("小説一覧の取得に失敗しました");
         }
@@ -33,7 +40,7 @@ export default function Home() {
     };
 
     fetchNovels();
-  }, []);
+  }, [q, tag]);
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
