@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-const API_BASE = "http://18.169.218.56";
+const API_BASE = "";
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id

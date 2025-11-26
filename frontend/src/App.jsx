@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import Register from "./pages/Register.jsx";
 import { useState } from "react";
 import SearchBar from "./components/SearchBar.jsx";
@@ -16,6 +17,8 @@ import Mypage from "./pages/Mypage";
 export default function App() {
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+
   const username =
     typeof window !== "undefined" ? localStorage.getItem("username") : null;
   const hasToken =
@@ -23,28 +26,59 @@ export default function App() {
 
   return (
     <div>
-      <header
-        style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid #ddd",
-          marginBottom: 16,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <div>
-          <h1 style={{ margin: 0, fontSize: 24 }}>小説投稿サイト</h1>
-          <nav style={{ marginTop: 8, display: "flex", gap: 12 }}>
-            <Link to="/">トップ</Link>
-            <Link to="/novels/new">新規小説投稿</Link>
-            <Link to="/mypage">マイページ</Link>
-            <Link to="/login">ログイン</Link>
-        <Link to="/register" className="btn btn-border" style={{ marginLeft: 8 }}>Register</Link>
-          </nav>
+      <header className="site-header">
+        <div className="site-header-left">
+          <h1 className="site-title">小説投稿サイト</h1>
         </div>
-        <div style={{ fontSize: 12, color: "#555", textAlign: "right" }}>
+
+        {/* スマホ用ハンバーガー */}
+        <button
+          type="button"
+          className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""}`}
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-label="メニューを開く"
+        >
+          <span />
+          <span />
+          <span />
+        </button>
+
+        {/* ナビゲーション */}
+        <nav className={`nav-links ${menuOpen ? "nav-open" : ""}`}>
+          <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
+            トップ
+          </Link>
+          <Link
+            to="/novels/new"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            新規小説投稿
+          </Link>
+          <Link
+            to="/mypage"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            マイページ
+          </Link>
+          <Link
+            to="/login"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            ログイン
+          </Link>
+          <Link
+            to="/register"
+            className="nav-link nav-link-accent"
+            onClick={() => setMenuOpen(false)}
+          >
+            Register
+          </Link>
+        </nav>
+
+        <div className="login-status">
           {hasToken ? (
             <span>ログイン中: {username || "ユーザー"}</span>
           ) : (
@@ -52,7 +86,9 @@ export default function App() {
           )}
         </div>
       </header>
-<SearchBar q={q} tag={tag} onChangeQ={setQ} onChangeTag={setTag} />
+
+      {/* 検索バーはヘッダーの下に固定 */}
+      <SearchBar q={q} tag={tag} onChangeQ={setQ} onChangeTag={setTag} />
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
@@ -67,9 +103,13 @@ export default function App() {
           <Route path="/episodes/:id/edit" element={<EditEpisode />} />
           <Route path="/episodes/:id" element={<EpisodeDetail />} />
           <Route path="/stripe/cancel" element={<StripeReturn mode="cancel" />} />
-          <Route path="/stripe/success" element={<StripeReturn mode="success" />} />
+          <Route
+            path="/stripe/success"
+            element={<StripeReturn mode="success" />}
+          />
         </Routes>
       </main>
     </div>
   );
 }
+

@@ -43,23 +43,20 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    depends_on:
-      - backend
     container_name: novel-nginx
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
+    depends_on:
+      - backend
     volumes:
-      # ✅ フロントのビルド成果物を公開ディレクトリにマウント
-      - ./frontend/dist:/usr/share/nginx/html
-
-      # ✅ さっき確認した nginx/nginx.conf をメイン設定としてマウント
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-
-      # ✅ Certbot / SSL 関連
-      - ./nginx/ssl/letsencrypt:/etc/letsencrypt
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
       - ./nginx/ssl/www:/var/www/certbot
+      - ./nginx/ssl/letsencrypt:/etc/letsencrypt
 
   certbot:
     image: certbot/certbot
