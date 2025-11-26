@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-const API_BASE = "http://18.169.218.56";
+const API_BASE = "";
 
 export default function Mypage() {
   const [novels, setNovels] = useState([]);

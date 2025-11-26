@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
-const API_BASE = "http://18.169.218.56";
+const API_BASE = "";
 
 export default function EpisodeDetail() {
   const { id } = useParams(); // episode_id

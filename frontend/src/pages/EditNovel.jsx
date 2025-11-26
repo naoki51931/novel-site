@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 
-const API_BASE = "http://18.169.218.56";
+const API_BASE = "";
 
 export default function EditNovel() {
   const { id } = useParams();
