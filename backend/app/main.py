@@ -1,5 +1,8 @@
 import os
 import json
+import secrets
+import smtplib
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -33,6 +36,7 @@ Base.metadata.create_all(bind=engine)
 # FastAPI 本体
 # =========================================
 app = FastAPI(
+    app.include_router(two_factor.router)
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
@@ -126,6 +130,11 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://18.169.218.56")
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "no-reply@example.com")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -152,14 +161,28 @@ def create_access_token(
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+    username: str
+    password: str
+
+
 class UserCreate(BaseModel):
     username: str
+    email: str
     password: str
 
 
 class UserLogin(BaseModel):
     username: str
     password: str
+
+
+class LoginStart(BaseModel):
+    username: str
+    password: str
+
+class LoginVerify(BaseModel):
+    username: str
+    code: str
 
 
 class Token(BaseModel):
@@ -211,6 +234,14 @@ def require_current_user_from_request(request: Request, db: Session) -> models.U
 @app.post("/api/auth/register", response_model=Token)
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
     existing = get_user_by_username(db, user.username)
+    # メールアドレス重複チェック
+    email_existing = db.query(models.User).filter(models.User.email == user.email).first()
+    if email_existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="このメールアドレスはすでに使われています。",
+        )
+
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -225,7 +256,7 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
         )
 
     hashed = get_password_hash(user.password)
-    db_user = models.User(username=user.username, password_hash=hashed)
+    db_user = models.User(username=user.username, email=user.email, password_hash=hashed)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
@@ -820,4 +851,213 @@ def read_episode_public(
         "body": episode.body if is_premium else truncate_for_free_user(episode.body or ""),
         "created_at": episode.created_at,
     }
+
+
+# =========================================
+# メール二段階認証 (2FA) API
+# =========================================
+
+class TwoFactorRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TwoFactorVerify(BaseModel):
+    username: str
+    code: str
+
+
+def generate_2fa_code() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+def send_2fa_email(to_email: str, code: str) -> None:
+    # SMTP_HOST が設定されていなければログ出力のみ
+    if not SMTP_HOST:
+        print(f"[2FA] send to {to_email}: {code}")
+        return
+
+    msg = MIMEText(f"ログイン用認証コード: {code}", "plain", "utf-8")
+    msg["Subject"] = "ログイン認証コード"
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        if SMTP_USER:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+        s.sendmail(SMTP_FROM, [to_email], msg.as_string())
+
+
+@app.post("/api/auth/request-2fa")
+def request_two_factor(payload: TwoFactorRequest, db: Session = Depends(get_db)):
+    """
+    1段階目: ユーザー名 + パスワードをチェックして、メールに 6桁コード送信
+    """
+    user = get_user_by_username(db, payload.username)
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="ユーザー名またはパスワードが正しくありません。",
+        )
+
+    code = generate_2fa_code()
+    user.two_factor_code = code
+    user.two_factor_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    db.add(user)
+    db.commit()
+
+    send_2fa_email(user.email, code)
+    return {"ok": True}
+
+
+@app.post("/api/auth/verify-2fa", response_model=Token)
+def verify_two_factor(payload: TwoFactorVerify, db: Session = Depends(get_db)):
+    """
+    2段階目: メールで届いた 6桁コードを検証し、OKなら JWT を発行
+    """
+    user = get_user_by_username(db, payload.username)
+    if not user or not user.two_factor_code:
+        raise HTTPException(status_code=400, detail="認証コードが見つかりません。")
+
+    if user.two_factor_expires_at is None or user.two_factor_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="認証コードの有効期限が切れています。")
+
+    if payload.code != user.two_factor_code:
+        raise HTTPException(status_code=400, detail="認証コードが正しくありません。")
+
+    # 一度使ったらクリア
+    user.two_factor_code = None
+    user.two_factor_expires_at = None
+    db.add(user)
+    db.commit()
+
+    access_token = create_access_token({"sub": str(user.id)})
+    return Token(access_token=access_token)
+
+# =========================================
+# 二段階認証用ヘルパー
+# =========================================
+def generate_two_factor_code(length: int = 6) -> str:
+    # 0〜9 のランダムな数字を length 桁つくる
+    import secrets
+    return "".join(str(secrets.randbelow(10)) for _ in range(length))
+
+
+def send_two_factor_email(to_email: str, code: str) -> None:
+    """
+    シンプルなテキストメールで認証コードを送るヘルパー
+    SMTP_* が未設定でもアプリは落とさずログだけ出す
+    """
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        print("SMTP 設定不足のため、二段階認証メール送信をスキップします")
+        return
+
+    subject = "小説投稿サイト ログイン確認コード"
+    body = f"ログイン確認コード: {code}\n有効期限は10分間です。"
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM or SMTP_USER
+    msg["To"] = to_email
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        print(f"二段階認証コードを {to_email} に送信しました")
+    except Exception as e:
+        print("二段階認証メール送信エラー:", repr(e))
+
+
+# =========================================
+# 二段階認証 API 用スキーマ
+# =========================================
+class TwoFactorStartRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    username: str
+    code: str
+
+
+# =========================================
+# 二段階認証 API
+# =========================================
+@app.post("/api/auth/login/start")
+def login_start(payload: TwoFactorStartRequest, db: Session = Depends(get_db)):
+    """
+    1段階目: ユーザー名＋パスワードだけチェックして、
+    正しければ 6 桁コードを発行してメール送信する。
+    JWT はまだ返さない。
+    """
+    user = get_user_by_username(db, payload.username)
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="ユーザー名またはパスワードが正しくありません。",
+        )
+
+    # 6桁コード生成 & 有効期限10分
+    code = generate_two_factor_code()
+    user.two_factor_code = code
+    user.two_factor_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    db.add(user)
+    db.commit()
+
+    # メール送信（失敗してもアプリは落とさない）
+    try:
+        send_two_factor_email(user.email, code)
+    except Exception as e:
+        print("two-factor email send error:", repr(e))
+
+    return {"ok": True, "message": "確認コードをメールで送信しました。"}
+
+
+@app.post("/api/auth/login/verify", response_model=Token)
+def login_verify(payload: TwoFactorVerifyRequest, db: Session = Depends(get_db)):
+    """
+    2段階目: username + code を受け取って検証し、
+    OK なら JWT を返す。
+    """
+    user = get_user_by_username(db, payload.username)
+    if not user or not user.two_factor_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="認証コードを先に発行してください。",
+        )
+
+    # コード不一致
+    if user.two_factor_code != payload.code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="認証コードが正しくありません。",
+        )
+
+    # 有効期限チェック
+    if (
+        user.two_factor_expires_at is None
+        or datetime.utcnow() > user.two_factor_expires_at
+    ):
+        # 一度失効させておく
+        user.two_factor_code = None
+        user.two_factor_expires_at = None
+        db.add(user)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="認証コードの有効期限が切れています。もう一度ログインを開始してください。",
+        )
+
+    # コード＆期限がOK → 使い捨てにして JWT 発行
+    user.two_factor_code = None
+    user.two_factor_expires_at = None
+    db.add(user)
+    db.commit()
+
+    access_token = create_access_token({"sub": str(user.id)})
+    return Token(access_token=access_token)
 
