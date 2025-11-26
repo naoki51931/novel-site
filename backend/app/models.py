@@ -23,8 +23,11 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
     # 課金フラグ（Stripe で使う）
     is_premium = Column(Boolean, nullable=False, server_default="0")
+    two_factor_code = Column(String(6), nullable=True)
+    two_factor_expires_at = Column(DateTime, nullable=True)
 
     novels = relationship("Novel", back_populates="author")
 
