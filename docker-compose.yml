@@ -34,8 +34,8 @@ services:
       DB_NAME: novel_db
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
-      STRIPE_PRICE_ID: price_1SWnhCHU7WtsFgpUI8MMHTFx
-      FRONTEND_ORIGIN: http://18.169.218.56
+      STRIPE_PRICE_ID: price_1SXaBqH73ayvlTXVlWYu3veB
+      FRONTEND_ORIGIN: https://www.shosetsu-toukou-site.org/
       FORCE_ALL_PREMIUM: "0"   # 課金環境では 0（通常判定）
     depends_on:
       db:
