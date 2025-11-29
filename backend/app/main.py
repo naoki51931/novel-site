@@ -14,7 +14,8 @@ from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, or_
+from sqlalchemy.orm import selectinload
 
 from .database import Base, engine, get_db
 from . import models, schemas
@@ -175,14 +176,15 @@ def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     return Token(access_token=token)
 
 
-@app.post("/api/auth/login", response_model=Token)
-def login(payload: UserLogin, db: Session = Depends(get_db)):
-    user = get_user_by_username(db, payload.username)
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
+# @app.post("/api/auth/login", response_model=Token)
+# def login(payload: UserLogin, db: Session = Depends(get_db)):
+#     user = get_user_by_username(db, payload.username)
+#     if not user or not verify_password(payload.password, user.password_hash):
+#         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
+#
+#     token = create_access_token({"sub": str(user.id)})
+#     return Token(access_token=token)
 
-    token = create_access_token({"sub": str(user.id)})
-    return Token(access_token=token)
 
 # =========================================
 # Stripe Checkout
@@ -330,53 +332,10 @@ def delete_novel(
     return {"ok": True}
 
 
-@app.get("/api/novels/{novel_id}")
-def get_novel_detail(
-    novel_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
 
-    try:
-        user = require_current_user(request, db)
-    except Exception:
-        user = None
 
-    is_premium = FORCE_ALL_PREMIUM or (
-        bool(getattr(user, "is_premium", False)) if user else False
-    )
 
-    episodes = (
-        db.query(models.Episode)
-        .filter(models.Episode.novel_id == novel_id)
-        .order_by(models.Episode.episode_number)
-        .all()
-    )
 
-    return {
-        "id": novel.id,
-        "title": novel.title,
-        "description": novel.description,
-        "created_at": novel.created_at,
-        "author_id": novel.author_id,
-        "author_username": novel.author.username if novel.author else None,
-        "is_premium_user": is_premium,
-        "episodes": [
-            {
-                "id": ep.id,
-                "title": ep.title,
-                "number": get_episode_number(ep),
-                "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
-                "created_at": ep.created_at,
-            }
-            for ep in episodes
-        ],
-    }
-
-# =========================================
 # Episode API
 # =========================================
 
@@ -465,6 +424,232 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
     }
 
 
+@app.post("/api/novels", response_model=schemas.Novel)
+def create_novel(payload: schemas.NovelCreate, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+
+    novel = models.Novel(
+        title=payload.title,
+        description=payload.description,
+        author_id=user.id,
+    )
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
+
+    # --------------★ タグ処理復活 ★----------------
+    for tag_name in payload.tag_names:
+        tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
+        if not tag:
+            tag = models.Tag(name=tag_name)
+            db.add(tag)
+            db.commit()
+            db.refresh(tag)
+
+        nt = models.NovelTag(novel_id=novel.id, tag_id=tag.id)
+        db.add(nt)
+
+    db.commit()
+    # ---------------------------------------------
+
+    db.refresh(novel)
+    return novel
+
+@app.put("/api/novels/{novel_id}", response_model=schemas.Novel)
+def update_novel(novel_id: int, payload: schemas.NovelUpdate, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if novel.author_id != user.id:
+        raise HTTPException(403, "編集権限がありません")
+
+    # update title / description
+    if payload.title is not None:
+        novel.title = payload.title
+    if payload.description is not None:
+        novel.description = payload.description
+
+    # --------------★ タグ更新処理 ★----------------
+    if payload.tag_names is not None:
+        # 現タグ削除
+        db.query(models.NovelTag).filter(models.NovelTag.novel_id == novel_id).delete()
+
+        # 新タグ追加
+        for tag_name in payload.tag_names:
+            tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
+            if not tag:
+                tag = models.Tag(name=tag_name)
+                db.add(tag)
+                db.commit()
+                db.refresh(tag)
+
+            nt = models.NovelTag(novel_id=novel_id, tag_id=tag.id)
+            db.add(nt)
+    # ---------------------------------------------
+
+    db.commit()
+    db.refresh(novel)
+    return novel
+
+
+@app.get("/api/novels/{novel_id}")
+def get_novel_detail(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+
+    # ログインユーザー（プレミアム判定用）
+    try:
+        user = require_current_user(request, db)
+    except Exception:
+        user = None
+
+    is_premium = FORCE_ALL_PREMIUM or (
+        bool(getattr(user, "is_premium", False)) if user else False
+    )
+
+    # この小説のタグ＝エピソードのタグのユニオン
+    tag_rows = (
+        db.query(models.Tag.name)
+        .join(models.EpisodeTag, models.EpisodeTag.tag_id == models.Tag.id)
+        .join(models.Episode, models.Episode.id == models.EpisodeTag.episode_id)
+        .filter(models.Episode.novel_id == novel_id)
+        .distinct()
+        .all()
+    )
+    tag_names = [t[0] for t in tag_rows]
+
+    # エピソード一覧（プレミアムで冒頭切り替え）
+    episodes = (
+        db.query(models.Episode)
+        .filter(models.Episode.novel_id == novel_id)
+        .order_by(models.Episode.episode_number)
+        .all()
+    )
+
+    return {
+        "id": novel.id,
+        "title": novel.title,
+        "description": novel.description,
+        "created_at": novel.created_at,
+        "author_id": novel.author_id,
+        "author_username": novel.author.username if novel.author else None,
+        "tag_names": tag_names,
+        "is_premium_user": is_premium,
+        "episodes": [
+            {
+                "id": ep.id,
+                "title": ep.title,
+                "number": get_episode_number(ep),
+                "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
+                "created_at": ep.created_at,
+            }
+            for ep in episodes
+        ],
+    }
+
+
+
+@app.get("/api/public/novels")
+def list_public_novels(
+    q: str | None = None,
+    tag: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    小説一覧 API（トップページ用）
+    - 小説ごとに「エピソードに付いているタグのユニオン」を tag_names として返す
+    - tag パラメータが指定された場合、そのタグを持つエピソードが1つでもある小説だけに絞る
+    """
+
+    # 小説 + 作者名
+    query = (
+        db.query(models.Novel, models.User.username)
+        .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
+    )
+
+    # タイトル・説明であいまい検索
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Novel.title.ilike(like),
+                models.Novel.description.ilike(like),
+            )
+        )
+
+    # タグで絞り込み（エピソードに付いたタグを見て絞る）
+    if tag:
+        query = (
+            query
+            .join(models.Episode, models.Episode.novel_id == models.Novel.id)
+            .join(models.EpisodeTag, models.EpisodeTag.episode_id == models.Episode.id)
+            .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+            .filter(models.Tag.name == tag)
+        )
+
+    rows = query.order_by(models.Novel.created_at.desc()).all()
+
+    result = []
+
+    for novel, username in rows:
+        # この小説に属するエピソードのタグを全部集約
+        tag_rows = (
+            db.query(models.Tag.name)
+            .join(models.EpisodeTag, models.EpisodeTag.tag_id == models.Tag.id)
+            .join(models.Episode, models.Episode.id == models.EpisodeTag.episode_id)
+            .filter(models.Episode.novel_id == novel.id)
+            .distinct()
+            .all()
+        )
+        tag_names = [t[0] for t in tag_rows]
+
+        result.append(
+            {
+                "id": novel.id,
+                "title": novel.title,
+                "description": novel.description,
+                "created_at": novel.created_at,
+                "author_id": novel.author_id,
+                "author_username": username,
+                "tag_names": tag_names,
+            }
+        )
+
+    return result
+
+@app.get("/api/tags")
+def list_tags(db: Session = Depends(get_db)):
+    tags = db.query(models.Tag).order_by(models.Tag.name).all()
+    return [{"id": t.id, "name": t.name} for t in tags]
+
+
+@app.post("/api/tags")
+def create_tag(payload: dict, db: Session = Depends(get_db)):
+    name = payload.get("name")
+    if not name:
+        raise HTTPException(400, "タグ名が必要です")
+
+    exists = db.query(models.Tag).filter(models.Tag.name == name).first()
+    if exists:
+        return {"id": exists.id, "name": exists.name}
+
+    tag = models.Tag(name=name)
+    db.add(tag)
+    db.commit()
+    db.refresh(tag)
+    return {"id": tag.id, "name": tag.name}
+
+
+
+
+
 
 # =========================================
 # 二段階認証 (2FA) 用スキーマ
@@ -495,6 +680,7 @@ def generate_two_factor_code(length: int = 6) -> str:
 # メール送信（SMTP 未設定ならログだけ）
 # =========================================
 def send_two_factor_email(to_email: str, code: str) -> None:
+    if not SMTP_HOST:
         print(f"[2FA] SMTP 未設定のためメール送信省略: code={code}")
         return
 
@@ -506,12 +692,18 @@ def send_two_factor_email(to_email: str, code: str) -> None:
     )
     msg["Subject"] = "ログイン認証コード"
     msg["To"] = to_email
+    msg["From"] = SMTP_FROM
+
 
     try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
+            if SMTP_USER:
+                server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
 
         print(f"[2FA] 認証コード送信成功 to={to_email}, code={code}")
-
+        
     except Exception as e:
         print("send_two_factor_email error:", repr(e))
 
@@ -591,4 +783,283 @@ def login_verify(payload: TwoFactorVerifyRequest, db: Session = Depends(get_db))
     # JWT 発行
     access_token = create_access_token({"sub": str(user.id)})
     return Token(access_token=access_token)
+
+
+# =========================================
+# Novel 作成・更新（タグ対応版）
+# =========================================
+
+@app.post("/api/novels", response_model=schemas.Novel)
+def create_novel(
+    payload: schemas.NovelCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+
+    novel = models.Novel(
+        title=payload.title,
+        description=payload.description,
+        author_id=user.id,
+    )
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
+
+    # ★ タグ保存
+    for tag_name in payload.tag_names:
+        tag_name = tag_name.strip()
+        if not tag_name:
+            continue
+        tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
+        if not tag:
+            tag = models.Tag(name=tag_name)
+            db.add(tag)
+            db.commit()
+            db.refresh(tag)
+
+        nt = models.NovelTag(novel_id=novel.id, tag_id=tag.id)
+        db.add(nt)
+
+    db.commit()
+    db.refresh(novel)
+    return novel
+
+
+@app.put("/api/novels/{novel_id}", response_model=schemas.Novel)
+def update_novel(
+    novel_id: int,
+    payload: schemas.NovelUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+
+    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if novel.author_id != user.id:
+        raise HTTPException(403, "編集権限がありません")
+
+    if payload.title is not None:
+        novel.title = payload.title
+    if payload.description is not None:
+        novel.description = payload.description
+
+    # ★ タグ差し替え
+    if payload.tag_names is not None:
+        db.query(models.NovelTag).filter(models.NovelTag.novel_id == novel_id).delete()
+
+        for tag_name in payload.tag_names:
+            tag_name = tag_name.strip()
+            if not tag_name:
+                continue
+            tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
+            if not tag:
+                tag = models.Tag(name=tag_name)
+                db.add(tag)
+                db.commit()
+                db.refresh(tag)
+
+            nt = models.NovelTag(novel_id=novel.id, tag_id=tag.id)
+            db.add(nt)
+
+    db.commit()
+    db.refresh(novel)
+    return novel
+
+
+# =========================================
+# 小説詳細（tags を返す版）
+# =========================================
+
+@app.get("/api/novels/{novel_id}")
+def get_novel_detail(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    novel = (
+        db.query(models.Novel)
+        .options(selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag))
+        .get(novel_id)
+    )
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+
+    try:
+        user = require_current_user(request, db)
+    except Exception:
+        user = None
+
+    is_premium = FORCE_ALL_PREMIUM or (
+        bool(getattr(user, "is_premium", False)) if user else False
+    )
+
+    episodes = (
+        db.query(models.Episode)
+        .filter(models.Episode.novel_id == novel_id)
+        .order_by(models.Episode.episode_number)
+        .all()
+    )
+
+    tag_objs = novel.tags
+    tags = [{"id": t.id, "name": t.name} for t in tag_objs]
+
+    return {
+        "id": novel.id,
+        "title": novel.title,
+        "description": novel.description,
+        "created_at": novel.created_at,
+        "author_id": novel.author_id,
+        "author_username": novel.author.username if novel.author else None,
+        "is_premium_user": is_premium,
+        "tags": tags,
+        "episodes": [
+            {
+                "id": ep.id,
+                "title": ep.title,
+                "number": get_episode_number(ep),
+                "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
+                "created_at": ep.created_at,
+            }
+            for ep in episodes
+        ],
+    }
+
+
+# =========================================
+# 公開: 小説一覧（トップ用）タグ付き
+# =========================================
+
+@app.get("/api/public/novels")
+def list_public_novels(
+    q: str | None = None,
+    tag: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = (
+        db.query(models.Novel)
+        .options(selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag))
+        .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
+    )
+
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Novel.title.ilike(like),
+                models.Novel.description.ilike(like),
+            )
+        )
+
+    # タグで絞り込み
+    if tag:
+        query = (
+            query
+            .join(models.NovelTag, models.Novel.id == models.NovelTag.novel_id)
+            .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+            .filter(models.Tag.name == tag)
+        )
+
+    novels = query.order_by(models.Novel.created_at.desc()).all()
+
+    result = []
+    for novel in novels:
+        tag_names = [t.name for t in novel.tags]
+        result.append(
+            {
+                "id": novel.id,
+                "title": novel.title,
+                "description": novel.description,
+                "created_at": novel.created_at,
+                "author_id": novel.author_id,
+                "author_username": novel.author.username if novel.author else None,
+                "tag_names": tag_names,
+            }
+        )
+    return result
+
+
+# =========================================
+# Episode 作成（タグ対応）
+# =========================================
+
+@app.post("/api/novels/{novel_id}/episodes", response_model=schemas.Episode)
+def create_episode(
+    novel_id: int,
+    payload: schemas.EpisodeCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if novel.author_id != user.id:
+        raise HTTPException(403, "追加権限がありません")
+
+    ep = models.Episode(
+        novel_id=novel_id,
+        title=payload.title,
+        body=payload.body,
+        episode_number=payload.episode_number,
+    )
+    db.add(ep)
+    db.commit()
+    db.refresh(ep)
+
+    # ★ エピソードタグ保存
+    for tag_name in payload.tag_names:
+        tag_name = tag_name.strip()
+        if not tag_name:
+            continue
+        tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
+        if not tag:
+            tag = models.Tag(name=tag_name)
+            db.add(tag)
+            db.commit()
+            db.refresh(tag)
+
+        et = models.EpisodeTag(episode_id=ep.id, tag_id=tag.id)
+        db.add(et)
+
+    db.commit()
+    db.refresh(ep)
+    return ep
+
+
+# =========================================
+# Episode 詳細（tags 付き）
+# =========================================
+
+@app.get("/api/episodes/{episode_id}")
+def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    ep = (
+        db.query(models.Episode)
+        .options(selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag))
+        .get(episode_id)
+    )
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    try:
+        user = require_current_user(request, db)
+    except Exception:
+        user = None
+
+    is_premium = FORCE_ALL_PREMIUM or (
+        bool(getattr(user, "is_premium", False)) if user else False
+    )
+
+    tags = [{"id": t.id, "name": t.name} for t in ep.tags]
+
+    return {
+        "id": ep.id,
+        "title": ep.title,
+        "number": get_episode_number(ep),
+        "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
+        "created_at": ep.created_at,
+        "tags": tags,
+    }
 

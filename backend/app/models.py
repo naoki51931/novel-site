@@ -1,5 +1,4 @@
 from sqlalchemy import (
-    Table,
     Column,
     Integer,
     String,
@@ -33,56 +32,6 @@ class User(Base):
 
 
 # =========================
-# Tag 関連（中間テーブル）
-# =========================
-novel_tag_table = Table(
-    "novel_tags",
-    Base.metadata,
-    Column(
-        "novel_id",
-        Integer,
-        ForeignKey("novels.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "tag_id",
-        Integer,
-        ForeignKey("tags.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-)
-
-episode_tag_table = Table(
-    "episode_tags",
-    Base.metadata,
-    Column(
-        "episode_id",
-        Integer,
-        ForeignKey("episodes.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "tag_id",
-        Integer,
-        ForeignKey("tags.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-)
-
-
-class Tag(Base):
-    __tablename__ = "tags"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50), unique=True, index=True, nullable=False)
-
-    novels = relationship("Novel", secondary=novel_tag_table, back_populates="tags")
-    episodes = relationship(
-        "Episode", secondary=episode_tag_table, back_populates="tags"
-    )
-
-
-# =========================
 # Novel
 # =========================
 class Novel(Base):
@@ -97,7 +46,17 @@ class Novel(Base):
     author = relationship("User", back_populates="novels")
     episodes = relationship("Episode", back_populates="novel")
 
-    tags = relationship("Tag", secondary=novel_tag_table, back_populates="novels")
+    # Novel <-> Tag の中間
+    novel_tags = relationship(
+        "NovelTag",
+        back_populates="novel",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def tags(self):
+        """NovelTag 経由で Tag オブジェクトのリストを返す"""
+        return [nt.tag for nt in self.novel_tags]
 
 
 # =========================
@@ -114,5 +73,65 @@ class Episode(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     novel = relationship("Novel", back_populates="episodes")
-    tags = relationship("Tag", secondary=episode_tag_table, back_populates="episodes")
 
+    # Episode <-> Tag の中間
+    episode_tags = relationship(
+        "EpisodeTag",
+        back_populates="episode",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def tags(self):
+        """EpisodeTag 経由で Tag オブジェクトのリストを返す"""
+        return [et.tag for et in self.episode_tags]
+
+
+# =========================
+# Tag
+# =========================
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, index=True, nullable=False)
+
+    # 中間テーブル側からたどる
+    novel_tags = relationship(
+        "NovelTag",
+        back_populates="tag",
+        cascade="all, delete-orphan",
+    )
+    episode_tags = relationship(
+        "EpisodeTag",
+        back_populates="tag",
+        cascade="all, delete-orphan",
+    )
+
+
+# =========================
+# NovelTag （novels ↔ tags）
+# =========================
+class NovelTag(Base):
+    __tablename__ = "novel_tags"
+
+    # 既存テーブルに合わせて複合主キー形式
+    novel_id = Column(Integer, ForeignKey("novels.id"), primary_key=True)
+    tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
+
+    novel = relationship("Novel", back_populates="novel_tags")
+    tag = relationship("Tag", back_populates="novel_tags")
+
+
+# =========================
+# EpisodeTag （episodes ↔ tags）
+# =========================
+class EpisodeTag(Base):
+    __tablename__ = "episode_tags"
+
+    # 既存テーブルに合わせて複合主キー形式
+    episode_id = Column(Integer, ForeignKey("episodes.id"), primary_key=True)
+    tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
+
+    episode = relationship("Episode", back_populates="episode_tags")
+    tag = relationship("Tag", back_populates="episode_tags")

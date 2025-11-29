@@ -132,6 +132,92 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
   transform: translateY(-6px) rotate(-45deg);
 }
 
+/* 検索バー全体 */
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;         /* 画面が狭いときは自動で折り返し */
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+/* 入力欄（タイトル／タグ） */
+.search-input,
+.search-tag-input {
+  padding: 6px 8px;
+  flex: 1 1 140px;         /* grow:1 shrink:1 basis:140px 相当 */
+  min-width: 0;            /* はみ出し防止 */
+}
+
+/* ボタン（flex-shrink:0 相当 & 折り返し防止） */
+.search-button {
+  padding: 6px 12px;
+  background: #333;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+
+  flex: 0 0 auto;          /* flex-shrink:0 と同じイメージ */
+  white-space: nowrap;     /* 「検索」文字を縦にさせない */
+}
+.register-container {
+  max-width: 420px;
+  margin: 40px auto;
+  padding: 24px;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 0 8px rgba(0,0,0,0.1);
+}
+
+.register-title {
+  font-size: 22px;
+  font-weight: bold;
+  margin-bottom: 16px;
+}
+
+.register-error {
+  color: red;
+  margin-bottom: 12px;
+}
+
+.register-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.btn-primary {
+  background: #333;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: #000;
+}
+
+.register-footer {
+  margin-top: 16px;
+}
+
+
+
+
 /* ====== スマホ用レイアウト ====== */
 @media (max-width: 640px) {
   .site-header {
@@ -178,6 +264,20 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
     background: #333;
     color: #fff;
   }
+
+  .search-bar {
+    flex-direction: column;    /* スマホ時だけ縦積み */
+    align-items: stretch;
+  }
+
+  .search-input,
+  .search-tag-input,
+  .search-button {
+    width: 100%;
+    flex: 0 0 auto;           /* 幅100%で段ごとに並べる */
+    box-sizing: border-box;
+  }
+
 }
 
 .nav-link-accent:hover { background: #333; color: #fff; }
