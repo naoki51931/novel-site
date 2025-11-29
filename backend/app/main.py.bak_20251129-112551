@@ -259,7 +259,7 @@ async def stripe_webhook(
 # =========================================
 # Novel API（タグ対応）
 # =========================================
-@app.post("/api/novels")
+@app.post("/api/novels", response_model=schemas.Novel)
 def create_novel(
     payload: schemas.NovelCreate,
     request: Request,
@@ -298,13 +298,13 @@ def create_novel(
 
 @app.get("/api/novels")
 def list_novels(
-    request: Request,
     mine: bool = False,
+    request: Request | None = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(models.Novel)
 
-    if mine:
+    if mine and request is not None:
         user = require_current_user(request, db)
         q = q.filter(models.Novel.author_id == user.id)
 
@@ -316,7 +316,7 @@ def list_novels(
     return q.all()
 
 
-@app.put("/api/novels/{novel_id}")
+@app.put("/api/novels/{novel_id}", response_model=schemas.Novel)
 def update_novel(
     novel_id: int,
     payload: schemas.NovelUpdate,
@@ -503,7 +503,7 @@ def list_public_novels(
 # =========================================
 # Episode 作成（タグ対応）
 # =========================================
-@app.post("/api/novels/{novel_id}/episodes")
+@app.post("/api/novels/{novel_id}/episodes", response_model=schemas.Episode)
 def create_episode(
     novel_id: int,
     payload: schemas.EpisodeCreate,
@@ -591,7 +591,7 @@ def list_episodes(
 # =========================================
 # Episode 詳細（tags 付き）
 # =========================================
-@app.get("/api/episodes/{episode_id}")
+@app.get("/api/episodes/{episode_id}", response_model=schemas.Episode)
 def get_episode(
     episode_id: int,
     request: Request,
@@ -631,7 +631,6 @@ def get_episode(
             "episode_number": ep.episode_number,
             "created_at": ep.created_at,
             "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
-            "is_premium_user": is_premium,  # ★ これを追加
         }
     )
 
