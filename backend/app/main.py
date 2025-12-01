@@ -1,5 +1,3 @@
-from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import text, or_
 import os
 import json
 from datetime import datetime, timedelta
@@ -20,12 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
-<<<<<<< HEAD
-=======
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from sqlalchemy.orm import selectinload
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 
 from .database import Base, engine, get_db
 from . import models, schemas
@@ -169,11 +164,7 @@ class Token(BaseModel):
 # =========================================
 # 認証 API（通常ログイン）
 # =========================================
-<<<<<<< HEAD
 @app.post("/api/auth/register")
-=======
-@app.post("/api/auth/register", response_model=Token)
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     # username 重複
     if get_user_by_username(db, payload.username):
@@ -318,11 +309,7 @@ def list_novels(
 ):
     q = db.query(models.Novel)
 
-<<<<<<< HEAD
-    if mine and request is not None:
-=======
     if mine:
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
         user = require_current_user(request, db)
         q = q.filter(models.Novel.author_id == user.id)
 
@@ -609,32 +596,23 @@ def list_episodes(
 # =========================================
 # Episode 詳細（tags 付き）
 # =========================================
-@app.get("/api/episodes/{episode_id}")
+@app.get("/api/episodes/{episode_id}", response_model=None)
 def get_episode(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
 ):
-<<<<<<< HEAD
-    ep = (
-        db.query(models.Episode)
-        .options(
-            selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag)
-=======
-    # Episode + episode_tags + Tag の読み込み
     ep = (
         db.query(models.Episode)
         .options(
             selectinload(models.Episode.episode_tags)
             .selectinload(models.EpisodeTag.tag)
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
         )
         .get(episode_id)
     )
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
 
-    # ログイン情報（プレミアム判定）
     try:
         user = require_current_user(request, db)
     except Exception:
@@ -644,61 +622,18 @@ def get_episode(
         bool(getattr(user, "is_premium", False)) if user else False
     )
 
-<<<<<<< HEAD
-    tags = [{"id": t.id, "name": t.name} for t in ep.tags]
+    body_converted = ep.body if is_premium else truncate_for_free(ep.body or "")
 
     return {
         "id": ep.id,
         "title": ep.title,
-        "number": get_episode_number(ep),
-        "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
+        "body": body_converted,
+        "episode_number": ep.episode_number,
         "created_at": ep.created_at,
-        "tags": tags,
-        "is_premium_user": is_premium,  # ★ これが入っていること
+        "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
+        "is_premium_user": is_premium,
     }
-=======
-    # プレミアムで制御：本文変換
-    body_converted = ep.body if is_premium else truncate_for_free(ep.body or "")
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 
-    # Pydantic v2 なので、from_orm → model_validate
-    return schemas.Episode.model_validate(
-        {
-            "id": ep.id,
-            "title": ep.title,
-            "body": body_converted,
-            "episode_number": ep.episode_number,
-            "created_at": ep.created_at,
-            "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
-            "is_premium_user": is_premium,  # ★ これを追加
-        }
-    )
-
-
-# =========================================
-# タグ一覧 / 作成
-# =========================================
-@app.get("/api/tags")
-def list_tags(db: Session = Depends(get_db)):
-    tags = db.query(models.Tag).order_by(models.Tag.name).all()
-    return [{"id": t.id, "name": t.name} for t in tags]
-
-
-@app.post("/api/tags")
-def create_tag(payload: dict, db: Session = Depends(get_db)):
-    name = payload.get("name")
-    if not name:
-        raise HTTPException(400, "タグ名が必要です")
-
-    exists = db.query(models.Tag).filter(models.Tag.name == name).first()
-    if exists:
-        return {"id": exists.id, "name": exists.name}
-
-    tag = models.Tag(name=name)
-    db.add(tag)
-    db.commit()
-    db.refresh(tag)
-    return {"id": tag.id, "name": tag.name}
 
 # =========================================
 # タグ一覧 / 作成
@@ -809,11 +744,7 @@ def login_start(payload: TwoFactorStartRequest, db: Session = Depends(get_db)):
 # =========================================
 # 2段階目: /api/auth/login/verify
 # =========================================
-<<<<<<< HEAD
-@app.post("/api/auth/login/verify")
-=======
 @app.post("/api/auth/login/verify", response_model=Token)
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 def login_verify(payload: TwoFactorVerifyRequest, db: Session = Depends(get_db)):
     """
     2段階目:
