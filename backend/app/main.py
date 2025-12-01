@@ -626,6 +626,7 @@ def get_episode(
 
     return {
         "id": ep.id,
+        "novel_id": ep.novel_id,  # ★ ここで小説IDを返す
         "title": ep.title,
         "body": body_converted,
         "episode_number": ep.episode_number,
