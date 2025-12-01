@@ -1,5 +1,3 @@
-from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import text, or_
 import os
 import json
 from datetime import datetime, timedelta
@@ -8,30 +6,22 @@ from typing import Optional, List
 import jwt
 import stripe
 from fastapi import (
-    FastAPI,
-    Depends,
-    HTTPException,
-    Request,
-    Body,
-    status,
-    Header,
+    FastAPI, Depends, HTTPException, Request,
+    Body, status, Header
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
-<<<<<<< HEAD
-=======
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from sqlalchemy.orm import selectinload
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 
 from .database import Base, engine, get_db
 from . import models, schemas
 
 import smtplib
-from email.mime.text import MIMEText  # type: ignore
+from email.mime.text import MIMEText
 
 import secrets
 
@@ -169,11 +159,7 @@ class Token(BaseModel):
 # =========================================
 # 認証 API（通常ログイン）
 # =========================================
-<<<<<<< HEAD
-@app.post("/api/auth/register")
-=======
 @app.post("/api/auth/register", response_model=Token)
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     # username 重複
     if get_user_by_username(db, payload.username):
@@ -202,7 +188,7 @@ def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     return Token(access_token=token)
 
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/login", response_model=Token)
 def login(payload: UserLogin, db: Session = Depends(get_db)):
     user = get_user_by_username(db, payload.username)
     if not user or not verify_password(payload.password, user.password_hash):
@@ -273,7 +259,7 @@ async def stripe_webhook(
 # =========================================
 # Novel API（タグ対応）
 # =========================================
-@app.post("/api/novels")
+@app.post("/api/novels", response_model=schemas.Novel)
 def create_novel(
     payload: schemas.NovelCreate,
     request: Request,
@@ -312,17 +298,13 @@ def create_novel(
 
 @app.get("/api/novels")
 def list_novels(
-    request: Request,
     mine: bool = False,
+    request: Request | None = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(models.Novel)
 
-<<<<<<< HEAD
     if mine and request is not None:
-=======
-    if mine:
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
         user = require_current_user(request, db)
         q = q.filter(models.Novel.author_id == user.id)
 
@@ -334,7 +316,7 @@ def list_novels(
     return q.all()
 
 
-@app.put("/api/novels/{novel_id}")
+@app.put("/api/novels/{novel_id}", response_model=schemas.Novel)
 def update_novel(
     novel_id: int,
     payload: schemas.NovelUpdate,
@@ -521,7 +503,7 @@ def list_public_novels(
 # =========================================
 # Episode 作成（タグ対応）
 # =========================================
-@app.post("/api/novels/{novel_id}/episodes")
+@app.post("/api/novels/{novel_id}/episodes", response_model=schemas.Episode)
 def create_episode(
     novel_id: int,
     payload: schemas.EpisodeCreate,
@@ -609,25 +591,18 @@ def list_episodes(
 # =========================================
 # Episode 詳細（tags 付き）
 # =========================================
-@app.get("/api/episodes/{episode_id}")
+@app.get("/api/episodes/{episode_id}", response_model=schemas.Episode)
 def get_episode(
     episode_id: int,
     request: Request,
     db: Session = Depends(get_db),
 ):
-<<<<<<< HEAD
-    ep = (
-        db.query(models.Episode)
-        .options(
-            selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag)
-=======
     # Episode + episode_tags + Tag の読み込み
     ep = (
         db.query(models.Episode)
         .options(
             selectinload(models.Episode.episode_tags)
             .selectinload(models.EpisodeTag.tag)
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
         )
         .get(episode_id)
     )
@@ -644,22 +619,8 @@ def get_episode(
         bool(getattr(user, "is_premium", False)) if user else False
     )
 
-<<<<<<< HEAD
-    tags = [{"id": t.id, "name": t.name} for t in ep.tags]
-
-    return {
-        "id": ep.id,
-        "title": ep.title,
-        "number": get_episode_number(ep),
-        "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
-        "created_at": ep.created_at,
-        "tags": tags,
-        "is_premium_user": is_premium,  # ★ これが入っていること
-    }
-=======
     # プレミアムで制御：本文変換
     body_converted = ep.body if is_premium else truncate_for_free(ep.body or "")
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 
     # Pydantic v2 なので、from_orm → model_validate
     return schemas.Episode.model_validate(
@@ -670,35 +631,9 @@ def get_episode(
             "episode_number": ep.episode_number,
             "created_at": ep.created_at,
             "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
-            "is_premium_user": is_premium,  # ★ これを追加
         }
     )
 
-
-# =========================================
-# タグ一覧 / 作成
-# =========================================
-@app.get("/api/tags")
-def list_tags(db: Session = Depends(get_db)):
-    tags = db.query(models.Tag).order_by(models.Tag.name).all()
-    return [{"id": t.id, "name": t.name} for t in tags]
-
-
-@app.post("/api/tags")
-def create_tag(payload: dict, db: Session = Depends(get_db)):
-    name = payload.get("name")
-    if not name:
-        raise HTTPException(400, "タグ名が必要です")
-
-    exists = db.query(models.Tag).filter(models.Tag.name == name).first()
-    if exists:
-        return {"id": exists.id, "name": exists.name}
-
-    tag = models.Tag(name=name)
-    db.add(tag)
-    db.commit()
-    db.refresh(tag)
-    return {"id": tag.id, "name": tag.name}
 
 # =========================================
 # タグ一覧 / 作成
@@ -809,11 +744,7 @@ def login_start(payload: TwoFactorStartRequest, db: Session = Depends(get_db)):
 # =========================================
 # 2段階目: /api/auth/login/verify
 # =========================================
-<<<<<<< HEAD
-@app.post("/api/auth/login/verify")
-=======
 @app.post("/api/auth/login/verify", response_model=Token)
->>>>>>> e4b60b1e70e73451c6082358d20d7823b53f895c
 def login_verify(payload: TwoFactorVerifyRequest, db: Session = Depends(get_db)):
     """
     2段階目:
