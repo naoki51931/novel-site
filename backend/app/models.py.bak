@@ -128,52 +128,20 @@ class Tag(Base):
 # Novel <-> Tag 中間テーブル
 # =========================================
 class NovelTag(Base):
-
     __tablename__ = "novel_tags"
 
-
-
-    novel_id = Column(Integer, ForeignKey("novels.id"), primary_key=True)
-
-    tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
-
-
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
+    tag_id = Column(Integer, ForeignKey("tags.id"), nullable=False)
 
     novel = relationship("Novel", back_populates="novel_tags")
-
     tag = relationship("Tag", back_populates="novel_tags")
 
 
-
-
-
+# =========================================
+# EpisodeTag （episodes ↔ tags）
+# =========================================
 class EpisodeTag(Base):
-
-    __tablename__ = "episode_tags"
-
-
-
-    episode_id = Column(Integer, ForeignKey("episodes.id"), primary_key=True)
-
-    tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
-
-
-
-    episode = relationship(
-
-        "Episode",
-
-        back_populates="episode_tags",
-
-    )
-
-    tag = relationship(
-
-        "Tag",
-
-        back_populates="episode_tags",
-
-    )
     __tablename__ = "episode_tags"
 
     # 既存テーブルに合わせて複合主キー想定

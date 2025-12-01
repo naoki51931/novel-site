@@ -29,6 +29,10 @@ import smtplib
 from email.mime.text import MIMEText  # type: ignore
 
 import secrets
+EPISODE_IMAGE_DIR = "/app/static/episode_images"
+import os
+os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
+from fastapi import UploadFile, File
 
 # =========================================
 # DB 初期化
@@ -441,6 +445,7 @@ def get_novel_detail(
             {
                 "id": ep.id,
                 "title": ep.title,
+        "cover_image_url": ep.cover_image_url,
                 "number": get_episode_number(ep),
                 "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
                 "created_at": ep.created_at,
@@ -522,7 +527,7 @@ def create_episode(
     if novel.author_id != user.id:
         raise HTTPException(403, "追加権限がありません")
 
-    ep = models.Episode(
+    ep = models.Episode(cover_image_url=payload.cover_image_url, 
         novel_id=novel_id,
         title=payload.title,
         body=payload.body,
@@ -533,6 +538,15 @@ def create_episode(
     db.refresh(ep)
 
     # ★ エピソードタグ保存
+    # ★ 押絵保存
+
+    for il in payload.illusts:
+
+        epil = models.EpisodeIllust(episode_id=ep.id, image_url=il.image_url, position=il.position, caption=il.caption)
+
+        db.add(epil)
+
+
     for tag_name in payload.tag_names:
         tag_name = tag_name.strip()
         if not tag_name:
@@ -550,6 +564,63 @@ def create_episode(
     db.commit()
     db.refresh(ep)
     return ep
+
+@app.put("/api/episodes/{episode_id}")
+def update_episode(
+    episode_id: int,
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    # ログインユーザー取得
+    user = require_current_user(request, db)
+
+    # 対象エピソード取得
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    # 自分の小説かチェック
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if not novel or novel.author_id != user.id:
+        raise HTTPException(403, "編集権限がありません")
+
+    # 基本項目を更新
+    if "episode_number" in payload and payload["episode_number"] is not None:
+        ep.episode_number = int(payload["episode_number"])
+    if "title" in payload and payload["title"] is not None:
+        ep.title = payload["title"]
+    if "body" in payload and payload["body"] is not None:
+        ep.body = payload["body"]
+
+    # タグ更新（差し替え）
+    tag_names = payload.get("tag_names")
+    if tag_names is not None:
+        # 既存タグの関連を削除
+        db.query(models.EpisodeTag).filter(
+            models.EpisodeTag.episode_id == episode_id
+        ).delete()
+
+        # 送り直された tag_names を登録し直す
+        for tag_name in tag_names:
+            name = (tag_name or "").strip()
+            if not name:
+                continue
+
+            tag = db.query(models.Tag).filter(models.Tag.name == name).first()
+            if not tag:
+                tag = models.Tag(name=name)
+                db.add(tag)
+                db.commit()
+                db.refresh(tag)
+
+            et = models.EpisodeTag(episode_id=ep.id, tag_id=tag.id)
+            db.add(et)
+
+    db.commit()
+    db.refresh(ep)
+    return ep
+
 
 
 # =========================================
@@ -585,6 +656,7 @@ def list_episodes(
         {
             "id": ep.id,
             "title": ep.title,
+        "cover_image_url": ep.cover_image_url,
             "number": get_episode_number(ep),
             "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
             "created_at": ep.created_at,
@@ -594,6 +666,97 @@ def list_episodes(
 
 
 # =========================================
+# =========================================
+
+# Episode 画像削除（表紙・押絵）
+
+# =========================================
+
+@app.delete("/api/episodes/{episode_id}/cover-image")
+
+def delete_episode_cover_image(episode_id: int, request: Request, db: Session = Depends(get_db)):
+
+    user = require_current_user(request, db)
+
+    ep = db.query(models.Episode).get(episode_id)
+
+    if not ep:
+
+        raise HTTPException(404, "エピソードが存在しません")
+
+    novel = db.query(models.Novel).get(ep.novel_id)
+
+    if not novel or novel.author_id != user.id:
+
+        raise HTTPException(403, "このエピソードを編集する権限がありません")
+
+    if ep.cover_image_url:
+
+        rel_path = ep.cover_image_url.lstrip("/")
+
+        file_path = os.path.join("/app", rel_path)
+
+        try:
+
+            if os.path.exists(file_path): os.remove(file_path)
+
+        except Exception as e:
+
+            print("delete cover file error:", repr(e))
+
+        ep.cover_image_url = None
+
+        db.add(ep)
+
+        db.commit()
+
+    return {"ok": True, "message": "表紙画像を削除しました"}
+
+
+
+@app.delete("/api/episodes/{episode_id}/illusts/{illust_id}")
+
+def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db: Session = Depends(get_db)):
+
+    user = require_current_user(request, db)
+
+    ill = db.query(models.EpisodeIllust).filter(models.EpisodeIllust.id==illust_id, models.EpisodeIllust.episode_id==episode_id).first()
+
+    if not ill:
+
+        raise HTTPException(404, "押絵が存在しません")
+
+    ep = db.query(models.Episode).get(episode_id)
+
+    if not ep:
+
+        raise HTTPException(404, "エピソードが存在しません")
+
+    novel = db.query(models.Novel).get(ep.novel_id)
+
+    if not novel or novel.author_id != user.id:
+
+        raise HTTPException(403, "この押絵を編集する権限がありません")
+
+    rel_path = ill.image_url.lstrip("/")
+
+    file_path = os.path.join("/app", rel_path)
+
+    try:
+
+        if os.path.exists(file_path): os.remove(file_path)
+
+    except Exception as e:
+
+        print("delete illust file error:", repr(e))
+
+    db.delete(ill)
+
+    db.commit()
+
+    return {"ok": True, "message": "押絵を削除しました"}
+
+
 # Episode 詳細（tags 付き）
 # =========================================
 @app.get("/api/episodes/{episode_id}", response_model=None)
@@ -605,8 +768,8 @@ def get_episode(
     ep = (
         db.query(models.Episode)
         .options(
-            selectinload(models.Episode.episode_tags)
-            .selectinload(models.EpisodeTag.tag)
+            selectinload(models.Episode.episode_tags), selectinload(models.Episode.illusts)
+            
         )
         .get(episode_id)
     )
@@ -628,10 +791,12 @@ def get_episode(
         "id": ep.id,
         "novel_id": ep.novel_id,  # ★ ここで小説IDを返す
         "title": ep.title,
+        "cover_image_url": ep.cover_image_url,
         "body": body_converted,
         "episode_number": ep.episode_number,
         "created_at": ep.created_at,
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
+        "illusts": [{"id": il.id, "image_url": il.image_url, "position": il.position, "caption": il.caption} for il in ep.illusts],
         "is_premium_user": is_premium,
     }
 
@@ -783,3 +948,81 @@ def login_verify(payload: TwoFactorVerifyRequest, db: Session = Depends(get_db))
     # JWT 発行
     access_token = create_access_token({"sub": str(user.id)})
     return Token(access_token=access_token)
+@app.post("/api/episodes/{episode_id}/cover-image")
+
+async def upload_cover_image(episode_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
+
+    user = require_current_user(request, db)
+
+    ep = db.query(models.Episode).get(episode_id)
+
+    if not ep:
+
+        raise HTTPException(404, "エピソードが存在しません")
+
+    if ep.novel.author_id != user.id:
+
+        raise HTTPException(403, "編集権限がありません")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+
+    filename = f"episode_{episode_id}_cover{ext}"
+
+    save_path = os.path.join(EPISODE_IMAGE_DIR, filename)
+
+    with open(save_path, "wb") as f:
+
+        f.write(await file.read())
+
+    public_url = f"/static/episode_images/{filename}"
+
+    ep.cover_image_url = public_url
+
+    db.add(ep)
+
+    db.commit()
+
+    return { "cover_image_url": public_url }
+
+
+@app.post("/api/episodes/{episode_id}/illusts")
+
+async def upload_episode_illust(episode_id: int, request: Request, file: UploadFile = File(...), caption: str | None = None, db: Session = Depends(get_db)):
+
+    user = require_current_user(request, db)
+
+    ep = db.query(models.Episode).get(episode_id)
+
+    if not ep:
+
+        raise HTTPException(404, "エピソードが存在しません")
+
+    if ep.novel.author_id != user.id:
+
+        raise HTTPException(403, "編集権限がありません")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+
+    filename = f"episode_{episode_id}_illust_{int(datetime.utcnow().timestamp())}{ext}"
+
+    save_path = os.path.join(EPISODE_IMAGE_DIR, filename)
+
+    with open(save_path, "wb") as f:
+
+        f.write(await file.read())
+
+    public_url = f"/static/episode_images/{filename}"
+
+    position = db.query(models.EpisodeIllust).filter(models.EpisodeIllust.episode_id == episode_id).count() + 1
+
+    illust = models.EpisodeIllust(episode_id=episode_id, image_url=public_url, caption=caption, position=position)
+
+    db.add(illust)
+
+    db.commit()
+
+    db.refresh(illust)
+
+    return { "id": illust.id, "image_url": illust.image_url, "caption": illust.caption, "position": illust.position }
+
+
