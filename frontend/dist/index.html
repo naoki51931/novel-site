@@ -2,12 +2,80 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <title>小説投稿サイト</title>
+
+    <!-- ページタイトル（検索結果に表示） -->
+    <title>小説投稿サイト | 誰でも小説が読めて投稿できる無料サイト</title>
+
+    <!-- スマホ最適化 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script type="module" crossorigin src="/assets/index-D4iNjeSB.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CNKicXXO.css">
+
+    <!-- サイト説明（検索結果に最重要） -->
+    <meta
+      name="description"
+      content="小説投稿サイト。誰でも小説を読めて、作品を投稿できます。恋愛・ファンタジー・SF・ホラーなど幅広いジャンルの作品を公開中。"
+    />
+
+    <!-- 検索キーワード（影響は弱いが補助として） -->
+    <meta
+      name="keywords"
+      content="小説, 小説投稿, 小説サイト, web小説, 無料小説, 執筆, 読書, ライトノベル"
+    />
+
+    <!-- 正規 URL（Google が重複ページを避ける） -->
+    <link rel="canonical" href="https://shosetsu-toukou-site.org/" />
+
+    <!-- robots → Google / Yahoo / Bing に完全許可 -->
+    <meta name="robots" content="index, follow" />
+    <meta name="googlebot" content="index, follow" />
+    <meta name="bingbot" content="index, follow" />
+    <!-- 必要なら他の bot も許可 -->
+    <meta name="yahoo-slurp" content="index, follow" />
+
+    <!-- OGP（SNS シェア、LINE / X / Facebook / Discord） -->
+    <meta property="og:title" content="小説投稿サイト" />
+    <meta
+      property="og:description"
+      content="誰でも小説が読めて投稿できる小説投稿サイト。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://shosetsu-toukou-site.org/" />
+    <meta
+      property="og:image"
+      content="https://shosetsu-toukou-site.org/ogp.png"
+    />
+    <meta property="og:site_name" content="小説投稿サイト" />
+
+    <!-- Twitter Cards（X でのシェア）-->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="小説投稿サイト" />
+    <meta
+      name="twitter:description"
+      content="誰でも小説が読めて投稿できる小説投稿サイト。"
+    />
+    <meta
+      name="twitter:image"
+      content="https://shosetsu-toukou-site.org/ogp.png"
+    />
+
+    <!-- Favicon 推奨（png などがあれば差し替え）-->
+    <link rel="icon" href="/favicon.png" />
+
+    <!-- Vite React -->
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-FN5KC9TFR2"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-FN5KC9TFR2');
+    </script>
+    <script type="module" crossorigin src="/assets/index-DGXQVEWv.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BrJXDGcT.css">
   </head>
+
   <body>
     <div id="root"></div>
   </body>
 </html>
+
