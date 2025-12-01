@@ -37,6 +37,13 @@ services:
       STRIPE_PRICE_ID: price_1SXaBqH73ayvlTXVlWYu3veB
       FRONTEND_ORIGIN: https://www.shosetsu-toukou-site.org/
       FORCE_ALL_PREMIUM: "0"   # 課金環境では 0（通常判定）
+
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+
     depends_on:
       db:
         condition: service_healthy

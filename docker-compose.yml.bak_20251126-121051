@@ -1,0 +1,72 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: novel-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: novel_db
+      MYSQL_USER: novel_user
+      MYSQL_PASSWORD: novel_pass
+    ports:
+      - "3307:3306"          # ホストから触りたいとき用（本番では消してOK）
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: novel-backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_USER: novel_user
+      DB_PASS: novel_pass
+      DB_NAME: novel_db
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRICE_ID: price_1SXaBqH73ayvlTXVlWYu3veB
+      FRONTEND_ORIGIN: https://www.shosetsu-toukou-site.org/
+      FORCE_ALL_PREMIUM: "0"   # 課金環境では 0（通常判定）
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+    container_name: novel-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # ✅ フロントのビルド成果物を公開ディレクトリにマウント
+      - ./frontend/dist:/usr/share/nginx/html
+
+      # ✅ さっき確認した nginx/nginx.conf をメイン設定としてマウント
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+
+      # ✅ Certbot / SSL 関連
+      - ./nginx/ssl/letsencrypt:/etc/letsencrypt
+      - ./nginx/ssl/www:/var/www/certbot
+
+  certbot:
+    image: certbot/certbot
+    container_name: novel-certbot
+    volumes:
+      - ./nginx/ssl/letsencrypt:/etc/letsencrypt
+    entrypoint: /bin/sh -c "sleep infinity"
+
+volumes:
+  db-data:
