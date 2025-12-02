@@ -498,6 +498,18 @@ def get_novel_detail(
         user = require_current_user(request, db)
     except Exception:
         user = None
+    # いいね状態
+    is_liked = False
+    if user:
+        is_liked = (
+            db.query(models.NovelLike)
+            .filter(
+                models.NovelLike.novel_id == novel_id,
+                models.NovelLike.user_id == user.id,
+            )
+            .first()
+            is not None
+        )
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
@@ -516,6 +528,8 @@ def get_novel_detail(
         "author_id": novel.author_id,
         "author_username": novel.author.username if novel.author else None,
         "view_count": novel.view_count,
+        "like_count": novel.like_count or 0,
+        "is_liked": is_liked,
         "is_premium_user": is_premium,
         "tags": tags,
         "episodes": [
@@ -733,6 +747,18 @@ def list_episodes(
         user = require_current_user(request, db)
     except Exception:
         user = None
+    # いいね状態
+    is_liked = False
+    if user:
+        is_liked = (
+            db.query(models.NovelLike)
+            .filter(
+                models.NovelLike.novel_id == novel_id,
+                models.NovelLike.user_id == user.id,
+            )
+            .first()
+            is not None
+        )
 
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
@@ -827,6 +853,18 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         user = require_current_user(request, db)
     except Exception:
         user = None
+    # いいね状態
+    is_liked = False
+    if user:
+        is_liked = (
+            db.query(models.NovelLike)
+            .filter(
+                models.NovelLike.novel_id == novel_id,
+                models.NovelLike.user_id == user.id,
+            )
+            .first()
+            is not None
+        )
 
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
@@ -957,3 +995,95 @@ def login_verify(payload: LoginVerify, db: Session = Depends(get_db)):
 
     access_token = create_access_token({"sub": str(user.id)})
     return Token(access_token=access_token)
+
+# =========================================
+# Novel いいね API
+# =========================================
+@app.post("/api/novels/{novel_id}/like")
+def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    小説にいいねを付ける（ログイン必須）。
+    すでにいいね済みの場合はカウントを増やさずにそのまま返す。
+    """
+    user = require_current_user(request, db)
+
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+
+    existing = (
+        db.query(models.NovelLike)
+        .filter(
+            models.NovelLike.novel_id == novel_id,
+            models.NovelLike.user_id == user.id,
+        )
+        .first()
+    )
+    if existing:
+        # 既にいいね済みなら何もしない（冪等）
+        return {
+            "ok": True,
+            "liked": True,
+            "like_count": novel.like_count or 0,
+        }
+
+    like = models.NovelLike(novel_id=novel_id, user_id=user.id)
+    db.add(like)
+
+    novel.like_count = (novel.like_count or 0) + 1
+    db.add(novel)
+
+    db.commit()
+    db.refresh(novel)
+
+    return {
+        "ok": True,
+        "liked": True,
+        "like_count": novel.like_count,
+    }
+
+
+@app.delete("/api/novels/{novel_id}/like")
+def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    小説のいいねを取り消す（ログイン必須）。
+    もともといいねしていない場合は何もせず現在の like_count を返す。
+    """
+    user = require_current_user(request, db)
+
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+
+    existing = (
+        db.query(models.NovelLike)
+        .filter(
+            models.NovelLike.novel_id == novel_id,
+            models.NovelLike.user_id == user.id,
+        )
+        .first()
+    )
+    if not existing:
+        # もともといいねしていなければ何もしない（冪等）
+        return {
+            "ok": True,
+            "liked": False,
+            "like_count": novel.like_count or 0,
+        }
+
+    db.delete(existing)
+
+    if novel.like_count is None:
+        novel.like_count = 0
+    else:
+        novel.like_count = max(0, novel.like_count - 1)
+
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
+
+    return {
+        "ok": True,
+        "liked": False,
+        "like_count": novel.like_count,
+    }
