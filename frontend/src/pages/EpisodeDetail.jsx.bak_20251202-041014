@@ -90,12 +90,13 @@ export default function EpisodeDetail() {
       return;
     }
 
-    const method = isLiked ? "DELETE" : "POST";
-    const endpoint = `/api/episodes/${id}/like`;
+    const endpoint = isLiked
+      ? `/api/episodes/${id}/unlike`
+      : `/api/episodes/${id}/like`;
 
     try {
       const res = await fetch(API_BASE + endpoint, {
-        method,
+        method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
         },
