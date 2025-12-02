@@ -3,107 +3,109 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 
 const API_BASE = "";
 
-// JWT の payload を取り出す簡易デコーダ
-function parseJwt(token) {
-  try {
-    const base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    const json = atob(base64);
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
-
 export default function NovelDetail() {
-  const { id } = useParams();
-  const [novel, setNovel] = useState({ tags: [] });
-  const [episodes, setEpisodes] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { id } = useParams(); // novel_id
   const navigate = useNavigate();
 
-  // ログイン情報
-  const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
-  const currentUsername =
-    typeof window !== "undefined" ? localStorage.getItem("username") || null : null;
-
-  let currentUserId = null;
-  if (token) {
-    const payload = parseJwt(token);
-    if (payload && payload.sub) {
-      currentUserId = Number(payload.sub);
-    }
-  }
-
-  const formatDateTime = (isoString) => {
-    if (!isoString) return "";
-    return new Date(isoString).toLocaleString("ja-JP");
-  };
-
-  const shorten = (text, max = 160) => {
-    if (!text) return "";
-    if (text.length <= max) return text;
-    return text.slice(0, max) + "…";
-  };
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-
-      // 小説本体
-      const novelRes = await fetch(`${API_BASE}/api/novels/${id}`);
-      if (!novelRes.ok) {
-        throw new Error("小説情報の取得に失敗しました");
-      }
-      const novelData = await novelRes.json();
-
-      // エピソード一覧
-      const epRes = await fetch(`${API_BASE}/api/novels/${id}/episodes`);
-      if (!epRes.ok) {
-        throw new Error("エピソード一覧の取得に失敗しました");
-      }
-      const epData = await epRes.json();
-
-      const sortedEpisodes = (epData || []).slice().sort((a, b) => {
-        const an = a.number || a.episode_number || 0;
-        const bn = b.number || b.episode_number || 0;
-        return an - bn;
-      });
-
-      setNovel(novelData);
-      setEpisodes(sortedEpisodes);
-    } catch (err) {
-      console.error(err);
-      alert(err.message || "小説の読み込みに失敗しました。");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [novel, setNovel] = useState(null);
+  const [episodes, setEpisodes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        // 小説本体
+        const novelRes = await fetch(`${API_BASE}/api/novels/${id}`);
+        if (!novelRes.ok) {
+          throw new Error(`小説の取得に失敗しました (${novelRes.status})`);
+        }
+        const novelData = await novelRes.json();
+
+        // エピソード一覧
+        const epRes = await fetch(`${API_BASE}/api/novels/${id}/episodes`);
+        if (!epRes.ok) {
+          throw new Error(`エピソード一覧の取得に失敗しました (${epRes.status})`);
+        }
+        const epData = await epRes.json();
+
+        setNovel(novelData);
+        setEpisodes(Array.isArray(epData) ? epData : []);
+      } catch (e) {
+        console.error(e);
+        setError(e.message || "小説情報の取得中にエラーが発生しました");
+      } finally {
+        setLoading(false);
+      }
+    };
+
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // ✅ 作者判定ロジック（author_id or author_username どちらでも判定）
-  const isOwner =
-    novel &&
-    (
-      (currentUserId != null && novel.author_id != null &&
-        Number(novel.author_id) === Number(currentUserId)) ||
-      (novel.author_username &&
-        currentUsername &&
-        novel.author_username === currentUsername)
-    );
-
-  // 小説削除
-  const handleDeleteNovel = async () => {
-    if (!window.confirm("この小説を削除しますか？\n（全エピソードも削除されます）")) {
+  // いいねトグル
+  const handleToggleLike = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("いいねするにはログインが必要です。");
+      navigate("/login");
       return;
     }
 
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${id}/like`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "いいねの更新に失敗しました");
+      }
+
+      const data = await res.json().catch(() => ({}));
+
+      // バックエンドが { liked, like_count } を返す想定で反映
+      setNovel((prev) => {
+        if (!prev) return prev;
+        const newLikeCount =
+          data.like_count !== undefined
+            ? data.like_count
+            : (prev.like_count || 0) + (prev.liked_by_me ? -1 : 1);
+
+        const newLiked =
+          data.liked !== undefined ? data.liked : !prev.liked_by_me;
+
+        return {
+          ...prev,
+          like_count: newLikeCount,
+          liked_by_me: newLiked,
+        };
+      });
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "いいね処理中にエラーが発生しました");
+    }
+  };
+
+  // 小説削除
+  const handleDeleteNovel = async () => {
+    const token = localStorage.getItem("token");
     if (!token) {
-      alert("削除にはログインが必要です。");
+      alert("小説を削除するにはログインが必要です。");
       navigate("/login");
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `「${novel?.title ?? ""}」を本当に削除しますか？\nこの小説に紐づくエピソードも削除されます。`
+      )
+    ) {
       return;
     }
 
@@ -117,26 +119,31 @@ export default function NovelDetail() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "小説の削除に失敗しました。");
+        throw new Error(data.detail || "小説の削除に失敗しました");
       }
 
       alert("小説を削除しました。");
       navigate("/");
-    } catch (err) {
-      console.error(err);
-      alert(err.message || "削除に失敗しました。");
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "小説の削除中にエラーが発生しました");
     }
   };
 
   // エピソード削除
-  const handleDeleteEpisode = async (episodeId) => {
-    if (!window.confirm("このエピソードを削除しますか？")) {
+  const handleDeleteEpisode = async (episodeId, title) => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("エピソードを削除するにはログインが必要です。");
+      navigate("/login");
       return;
     }
 
-    if (!token) {
-      alert("削除にはログインが必要です。");
-      navigate("/login");
+    if (
+      !window.confirm(
+        `エピソード「${title ?? ""}」を本当に削除しますか？`
+      )
+    ) {
       return;
     }
 
@@ -150,20 +157,47 @@ export default function NovelDetail() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "エピソードの削除に失敗しました。");
+        throw new Error(data.detail || "エピソードの削除に失敗しました");
       }
 
-      await fetchData();
-    } catch (err) {
-      console.error(err);
-      alert(err.message || "削除に失敗しました。");
+      // フロント側の一覧から消す
+      setEpisodes((prev) => prev.filter((ep) => ep.id !== episodeId));
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "エピソードの削除中にエラーが発生しました");
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
-  if (!novel) return <p>小説が見つかりませんでした。</p>;
-  const tags = Array.isArray(novel.tags) ? novel.tags : [];
+  if (loading) {
+    return <p>読み込み中...</p>;
+  }
 
+  if (error) {
+    return (
+      <div>
+        <p style={{ color: "red" }}>{error}</p>
+        <button className="btn btn-border" onClick={() => navigate(-1)}>
+          戻る
+        </button>
+      </div>
+    );
+  }
+
+  if (!novel) {
+    return (
+      <div>
+        <p>小説が見つかりませんでした。</p>
+        <button className="btn btn-border" onClick={() => navigate(-1)}>
+          戻る
+        </button>
+      </div>
+    );
+  }
+
+  const tags =
+    Array.isArray(novel.tag_names) && novel.tag_names.length > 0
+      ? novel.tag_names
+      : [];
 
   return (
     <div>
@@ -171,151 +205,180 @@ export default function NovelDetail() {
         <Link to="/">← 一覧に戻る</Link>
       </div>
 
-      <h2 style={{ marginBottom: 8 }}>{novel.title}</h2>
+      <h2 style={{ marginBottom: 4 }}>{novel.title}</h2>
 
-	{tags.map((t) => (
-          <span
-            key={t.id}
+      {/* 作者・日時など */}
+      <p style={{ margin: 0, color: "#666" }}>
+        作者: {novel.author_username || "名無し"}
+      </p>
+      {novel.created_at && (
+        <p style={{ margin: 0, color: "#999", fontSize: "0.9rem" }}>
+          作成日時:{" "}
+          {new Date(novel.created_at).toLocaleString("ja-JP") || "-"}
+        </p>
+      )}
+
+      {/* タグ表示 */}
+      {tags.length > 0 && (
+        <div style={{ marginTop: 8, marginBottom: 8 }}>
+          {tags.map((name, idx) => (
+            <span
+              key={idx}
               style={{
-              display: "inline-block",
-              marginRight: 4,
-              padding: "2px 8px",
-              borderRadius: 12,
-              border: "1px solid #ccc",
-              fontSize: "0.85rem",
-             }}
-           >
-            #{t.name}
-          </span>
-         ))}
+                display: "inline-block",
+                marginRight: 4,
+                padding: "2px 8px",
+                borderRadius: 12,
+                border: "1px solid #ccc",
+                fontSize: "0.85rem",
+              }}
+            >
+              #{name}
+            </span>
+          ))}
+        </div>
+      )}
 
-        {novel.description && (
+      {/* 説明文 */}
+      {novel.description && (
         <p
           style={{
-            whiteSpace: "pre-wrap",
+            marginTop: 8,
             marginBottom: 12,
+            whiteSpace: "pre-wrap",
+            lineHeight: 1.6,
           }}
         >
           {novel.description}
         </p>
       )}
 
-      <div style={{ fontSize: 12, color: "#555", marginBottom: 16 }}>
-        <div>
-          作者:{" "}
-          {novel.author_username
-            ? novel.author_username
-            : novel.author_id
-            ? `ユーザーID: ${novel.author_id}`
-            : "不明"}
-        </div>
-        <div>作成日時: {formatDateTime(novel.created_at)}</div>
-      </div>
-
+      {/* ビュー数・いいね */}
       <div
         style={{
-          marginBottom: 16,
           display: "flex",
-          gap: 8,
+          alignItems: "center",
+          gap: 12,
+          marginBottom: 16,
           flexWrap: "wrap",
         }}
       >
-        <button
-          className="btn btn-border"
-          onClick={() => navigate(`/novels/${id}/episodes/new`)}
-        >
-          この小説にエピソードを追加
-        </button>
+        <span style={{ color: "#666", fontSize: "0.9rem" }}>
+          👀 閲覧数: {novel.view_count ?? 0}
+        </span>
 
-        {isOwner && (
-          <>
-            <button
-              className="btn btn-border"
-              onClick={() => navigate(`/novels/${id}/edit`)}
-            >
-              この小説を編集
-            </button>
-            <button
-              className="btn btn-border"
-              type="button"
-              onClick={handleDeleteNovel}
-            >
-              この小説を削除
-            </button>
-          </>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleToggleLike}
+        >
+          {novel.liked_by_me ? "♥ いいね済み" : "♡ いいね"}
+          {"　"}
+          ({novel.like_count ?? 0})
+        </button>
+      </div>
+
+      {/* 小説の編集・削除ボタン */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          marginBottom: 16,
+        }}
+      >
+        <Link
+          to={`/novels/${novel.id}/edit`}
+          className="btn btn-border"
+        >
+          小説を編集
+        </Link>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleDeleteNovel}
+        >
+          小説を削除
+        </button>
+      </div>
+
+      <hr />
+
+      {/* エピソード一覧 */}
+      <div style={{ marginTop: 12 }}>
+        <h3>エピソード一覧</h3>
+        {episodes.length === 0 ? (
+          <p>まだエピソードがありません。</p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0 }}>
+            {episodes.map((ep) => (
+              <li
+                key={ep.id}
+                style={{
+                  padding: "8px 0",
+                  borderBottom: "1px solid #eee",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <div>
+                    <Link to={`/episodes/${ep.id}`}>
+                      第{ep.episode_number ?? ep.number}話 {ep.title}
+                    </Link>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 4,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Link
+                      to={`/episodes/${ep.id}/edit`}
+                      className="btn btn-border"
+                      style={{
+                        padding: "2px 6px",
+                        fontSize: "0.8rem",
+                      }}
+                    >
+                      編集
+                    </Link>
+                    <button
+                      type="button"
+                      className="btn btn-border"
+                      style={{
+                        padding: "2px 6px",
+                        fontSize: "0.8rem",
+                      }}
+                      onClick={() =>
+                        handleDeleteEpisode(ep.id, ep.title)
+                      }
+                    >
+                      削除
+                    </button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
-      <h3 style={{ marginBottom: 8 }}>エピソード一覧</h3>
-      {episodes.length === 0 && <p>まだエピソードがありません。</p>}
-
-      <ul style={{ listStyle: "none", paddingLeft: 0, marginTop: 8 }}>
-        {episodes.map((ep) => (
-          <li
-            key={ep.id}
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              padding: 10,
-              marginBottom: 10,
-              boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-              backgroundColor: "#fff",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "baseline",
-                gap: 8,
-                marginBottom: 4,
-              }}
-            >
-              <strong>
-                第{ep.number || ep.episode_number}話 {ep.title}
-              </strong>
-              <span style={{ fontSize: 12, color: "#666" }}>
-                投稿日時: {formatDateTime(ep.created_at)}
-              </span>
-            </div>
-
-            <div
-              style={{
-                whiteSpace: "pre-wrap",
-                fontSize: 14,
-                color: "#444",
-                marginBottom: 8,
-              }}
-            >
-              {shorten(ep.body, 160)}
-            </div>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <Link to={`/episodes/${ep.id}`} className="btn btn-border">
-                このエピソードを読む
-              </Link>
-
-              {isOwner && (
-                <>
-                  <Link
-                    to={`/episodes/${ep.id}/edit`}
-                    className="btn btn-border"
-                  >
-                    編集
-                  </Link>
-                  <button
-                    className="btn btn-border"
-                    type="button"
-                    onClick={() => handleDeleteEpisode(ep.id)}
-                  >
-                    削除
-                  </button>
-                </>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
+      {/* エピソード追加ボタン */}
+      <div style={{ marginTop: 16 }}>
+        <Link
+          to={`/novels/${novel.id}/episodes/new`}
+          className="btn btn-border"
+        >
+          この小説にエピソードを追加
+        </Link>
+      </div>
     </div>
   );
 }
