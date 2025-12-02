@@ -109,9 +109,12 @@ def truncate_for_free(body: str | None, ratio: float = 0.3) -> str | None:
     return body[: max(1, int(n * ratio))]
 
 
-def get_episode_number(ep: models.Episode):
+def get_episode_number(ep):
     if hasattr(ep, "episode_number"):
         return ep.episode_number
+    if hasattr(ep, "number"):
+        return ep.number
+    return None
     if hasattr(ep, "number"):
         return ep.number
     return None
@@ -239,30 +242,80 @@ async def stripe_webhook(
     stripe_signature: str = Header(None, alias="Stripe-Signature"),
     db: Session = Depends(get_db),
 ):
+    """
+    Stripe からの Webhook を受け取ってユーザーの is_premium を更新する。
+
+    - checkout.session.completed
+        → 決済成功: is_premium = True
+
+    - checkout.session.async_payment_failed
+    - checkout.session.expired
+        → 支払い失敗 / セッション期限切れ: is_premium = False
+
+    ⚠ ここでは client_reference_id 経由で User.id を特定しているので、
+       create-checkout-session 側で必ず
+       `client_reference_id = user.id`
+       を設定しておくこと。
+    """
     if not STRIPE_WEBHOOK_SECRET:
         raise HTTPException(500, "STRIPE_WEBHOOK_SECRET 未設定")
 
     payload = await request.body()
+
     try:
         event = stripe.Webhook.construct_event(
-            payload,
-            stripe_signature,
-            STRIPE_WEBHOOK_SECRET,
+            payload=payload,
+            sig_header=stripe_signature,
+            secret=STRIPE_WEBHOOK_SECRET,
         )
-    except Exception:
+    except Exception as e:
+        print("stripe webhook signature error:", repr(e))
         raise HTTPException(400, "Invalid stripe signature")
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        uid = session.get("client_reference_id")
-        if uid:
-            user = db.query(models.User).get(int(uid))
-            if user:
-                user.is_premium = True
-                db.add(user)
-                db.commit()
+    event_type = event.get("type")
+    data_object = event.get("data", {}).get("object", {})
+
+    # どのユーザーかを特定（create-checkout-session 側で設定している想定）
+    raw_uid = data_object.get("client_reference_id")
+    user: models.User | None = None
+    if raw_uid is not None:
+        try:
+            user_id = int(raw_uid)
+            user = db.query(models.User).get(user_id)
+        except Exception as e:
+            print("stripe webhook: invalid client_reference_id:", raw_uid, repr(e))
+
+    # ユーザーが特定できない場合はログだけ出して何もしない
+    if user is None:
+        print(f"stripe webhook: user not found for event_type={event_type}, object={data_object}")
+        return {"ok": True, "skipped": True}
+
+    # ----------------------------
+    # イベントごとの分岐
+    # ----------------------------
+    if event_type == "checkout.session.completed":
+        # 決済完了 → プレミアム ON
+        user.is_premium = True
+        db.add(user)
+        db.commit()
+        print(f"[stripe] checkout.session.completed: user_id={user.id} → is_premium=True")
+
+    elif event_type in (
+        "checkout.session.async_payment_failed",
+        "checkout.session.expired",
+    ):
+        # 支払い失敗 or セッション期限切れ → プレミアム OFF
+        user.is_premium = False
+        db.add(user)
+        db.commit()
+        print(f"[stripe] {event_type}: user_id={user.id} → is_premium=False")
+
+    else:
+        # それ以外はとりあえずログだけ（必要に応じて拡張）
+        print(f"[stripe] unhandled event type: {event_type}")
 
     return {"ok": True}
+
 
 
 # =========================================
@@ -335,8 +388,18 @@ def update_novel(
     user = require_current_user(request, db)
 
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+    db.add(novel)
+    db.refresh(novel)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+        db.commit()  # cleanup old broken code
+        db.add(novel)
+        db.commit()
+        db.refresh(novel)
+    db.commit()  # cleanup old broken code
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
 
     if novel.author_id != user.id:
         raise HTTPException(403, "編集権限がありません")
@@ -380,8 +443,22 @@ def delete_novel(
     user = require_current_user(request, db)
 
     novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+    db.add(novel)
+    db.refresh(novel)
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+        raise HTTPException(404, "小説が存在しません")
+        db.commit()  # cleanup old broken code
+        db.add(novel)
+        db.commit()
+        db.refresh(novel)
+    db.commit()  # cleanup old broken code
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
 
     if novel.author_id != user.id:
         raise HTTPException(403, "削除権限がありません")
@@ -406,32 +483,31 @@ def get_novel_detail(
     novel = (
         db.query(models.Novel)
         .options(
-            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag)
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.author),
         )
-        .get(novel_id)
+        .filter(models.Novel.id == novel_id)
+        .first()
     )
     if not novel:
         raise HTTPException(404, "小説が存在しません")
-
+    novel.view_count = (novel.view_count or 0) + 1
+    db.commit()
+    db.refresh(novel)
     try:
         user = require_current_user(request, db)
     except Exception:
         user = None
-
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
-
     episodes = (
         db.query(models.Episode)
         .filter(models.Episode.novel_id == novel_id)
         .order_by(models.Episode.episode_number)
         .all()
     )
-
-    tag_objs = novel.tags
-    tags = [{"id": t.id, "name": t.name} for t in tag_objs]
-
+    tags = [{"id": nt.tag.id, "name": nt.tag.name} for nt in novel.novel_tags]
     return {
         "id": novel.id,
         "title": novel.title,
@@ -439,13 +515,14 @@ def get_novel_detail(
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": novel.author.username if novel.author else None,
+        "view_count": novel.view_count,
         "is_premium_user": is_premium,
         "tags": tags,
         "episodes": [
             {
                 "id": ep.id,
                 "title": ep.title,
-        "cover_image_url": ep.cover_image_url,
+                "cover_image_url": ep.cover_image_url,
                 "number": get_episode_number(ep),
                 "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
                 "created_at": ep.created_at,
@@ -524,6 +601,14 @@ def create_episode(
     novel = db.query(models.Novel).get(novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+        db.commit()  # cleanup old broken code
+        db.add(novel)
+        db.commit()
+        db.refresh(novel)
+    db.commit()  # cleanup old broken code
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
     if novel.author_id != user.id:
         raise HTTPException(403, "追加権限がありません")
 
@@ -635,6 +720,14 @@ def list_episodes(
     novel = db.query(models.Novel).get(novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+        db.commit()  # cleanup old broken code
+        db.add(novel)
+        db.commit()
+        db.refresh(novel)
+    db.commit()  # cleanup old broken code
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
 
     try:
         user = require_current_user(request, db)
@@ -663,118 +756,72 @@ def list_episodes(
         }
         for ep in episodes
     ]
-
-
 # =========================================
 # =========================================
-
 # Episode 画像削除（表紙・押絵）
-
 # =========================================
-
 @app.delete("/api/episodes/{episode_id}/cover-image")
-
 def delete_episode_cover_image(episode_id: int, request: Request, db: Session = Depends(get_db)):
-
     user = require_current_user(request, db)
-
     ep = db.query(models.Episode).get(episode_id)
-
     if not ep:
-
         raise HTTPException(404, "エピソードが存在しません")
-
     novel = db.query(models.Novel).get(ep.novel_id)
-
     if not novel or novel.author_id != user.id:
-
         raise HTTPException(403, "このエピソードを編集する権限がありません")
-
     if ep.cover_image_url:
-
         rel_path = ep.cover_image_url.lstrip("/")
-
         file_path = os.path.join("/app", rel_path)
-
         try:
-
             if os.path.exists(file_path): os.remove(file_path)
-
         except Exception as e:
-
             print("delete cover file error:", repr(e))
-
         ep.cover_image_url = None
-
         db.add(ep)
-
-        db.commit()
-
     return {"ok": True, "message": "表紙画像を削除しました"}
-
-
-
 @app.delete("/api/episodes/{episode_id}/illusts/{illust_id}")
-
 def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db: Session = Depends(get_db)):
-
     user = require_current_user(request, db)
-
     ill = db.query(models.EpisodeIllust).filter(models.EpisodeIllust.id==illust_id, models.EpisodeIllust.episode_id==episode_id).first()
-
     if not ill:
-
         raise HTTPException(404, "押絵が存在しません")
-
     ep = db.query(models.Episode).get(episode_id)
-
     if not ep:
-
         raise HTTPException(404, "エピソードが存在しません")
-
     novel = db.query(models.Novel).get(ep.novel_id)
-
     if not novel or novel.author_id != user.id:
-
         raise HTTPException(403, "この押絵を編集する権限がありません")
-
     rel_path = ill.image_url.lstrip("/")
-
     file_path = os.path.join("/app", rel_path)
-
     try:
-
         if os.path.exists(file_path): os.remove(file_path)
-
     except Exception as e:
-
         print("delete illust file error:", repr(e))
-
     db.delete(ill)
-
-    db.commit()
-
     return {"ok": True, "message": "押絵を削除しました"}
-
-
 # Episode 詳細（tags 付き）
 # =========================================
+
+# =========================================
+# Episode 詳細（tags / illusts / cover 付き）
+# =========================================
 @app.get("/api/episodes/{episode_id}", response_model=None)
-def get_episode(
-    episode_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-):
+def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
     ep = (
         db.query(models.Episode)
         .options(
-            selectinload(models.Episode.episode_tags), selectinload(models.Episode.illusts)
-            
+            selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag),
+            selectinload(models.Episode.illusts),
         )
         .get(episode_id)
     )
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
+
+    # 閲覧数を誰でもカウント
+    ep.view_count = (ep.view_count or 0) + 1
+    db.add(ep)
+    db.commit()
 
     try:
         user = require_current_user(request, db)
@@ -787,242 +834,126 @@ def get_episode(
 
     body_converted = ep.body if is_premium else truncate_for_free(ep.body or "")
 
+    # いいね情報
+    like_count = db.query(models.EpisodeLike).filter(
+        models.EpisodeLike.episode_id == episode_id
+    ).count()
+
+    is_liked = False
+    if user:
+        is_liked = (
+            db.query(models.EpisodeLike)
+            .filter(models.EpisodeLike.episode_id == episode_id,
+                    models.EpisodeLike.user_id == user.id)
+            .first()
+            is not None
+        )
+
     return {
         "id": ep.id,
-        "novel_id": ep.novel_id,  # ★ ここで小説IDを返す
+        "novel_id": ep.novel_id,
         "title": ep.title,
         "cover_image_url": ep.cover_image_url,
         "body": body_converted,
         "episode_number": ep.episode_number,
         "created_at": ep.created_at,
+        "view_count": ep.view_count,
+        "like_count": like_count,
+        "is_liked": is_liked,
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
-        "illusts": [{"id": il.id, "image_url": il.image_url, "position": il.position, "caption": il.caption} for il in ep.illusts],
+        "illusts": [
+            {
+                "id": il.id,
+                "image_url": il.image_url,
+                "position": il.position,
+                "caption": il.caption,
+            }
+            for il in ep.illusts
+        ],
         "is_premium_user": is_premium,
     }
 
 
-# =========================================
-# タグ一覧 / 作成
-# =========================================
-@app.get("/api/tags")
-def list_tags(db: Session = Depends(get_db)):
-    tags = db.query(models.Tag).order_by(models.Tag.name).all()
-    return [{"id": t.id, "name": t.name} for t in tags]
-
-
-@app.post("/api/tags")
-def create_tag(payload: dict, db: Session = Depends(get_db)):
-    name = payload.get("name")
-    if not name:
-        raise HTTPException(400, "タグ名が必要です")
-
-    exists = db.query(models.Tag).filter(models.Tag.name == name).first()
-    if exists:
-        return {"id": exists.id, "name": exists.name}
-
-    tag = models.Tag(name=name)
-    db.add(tag)
-    db.commit()
-    db.refresh(tag)
-    return {"id": tag.id, "name": tag.name}
-
-
-# =========================================
-# 二段階認証 (2FA) 用スキーマ
-# =========================================
-class TwoFactorStartRequest(BaseModel):
-    username: str
-    password: str
-
-
-class TwoFactorVerifyRequest(BaseModel):
+class LoginVerify(BaseModel):
     username: str
     code: str
 
 
-# =========================================
-# 6桁コード生成
-# =========================================
-def generate_two_factor_code(length: int = 6) -> str:
-    return "".join(str(secrets.randbelow(10)) for _ in range(length))
-
-
-# =========================================
-# メール送信（SMTP 未設定ならログだけ）
-# =========================================
-def send_two_factor_email(to_email: str, code: str) -> None:
-    if not SMTP_HOST:
-        print(f"[2FA] SMTP 未設定のためメール送信省略: code={code}")
+def send_2fa_email(to_email: str, code: str):
+    """
+    シンプルな 2FA コード送信用メール関数。
+    SMTP_* の環境変数が設定されていればメール送信を試みる。
+    （失敗してもログ出すだけで処理は続行）
+    """
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS or not to_email:
+        print(f"[2FA] SMTP設定が不足しているためログにのみ出力: code={code}, to={to_email}")
         return
 
-    msg = MIMEText(
-        f"ログイン確認コード: {code}\n有効期限: 10分",
-        "plain",
-        "utf-8",
-    )
-    msg["Subject"] = "ログイン認証コード"
-    msg["To"] = to_email
+    subject = "小説投稿サイト ログイン認証コード"
+    body = f"ログイン用認証コードは {code} です。\n10分以内に入力してください。"
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
     msg["From"] = SMTP_FROM
+    msg["To"] = to_email
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
-            if SMTP_USER:
-                server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
-
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
         print(f"[2FA] 認証コード送信成功 to={to_email}, code={code}")
     except Exception as e:
-        print("send_two_factor_email error:", repr(e))
+        print(f"[2FA] メール送信失敗 to={to_email}, code={code}, err={e!r}")
 
 
-# =========================================
-# 1段階目: /api/auth/login/start
-# =========================================
 @app.post("/api/auth/login/start")
-def login_start(payload: TwoFactorStartRequest, db: Session = Depends(get_db)):
+def login_start(payload: UserLogin, db: Session = Depends(get_db)):
     """
-    1段階目:
-      - username + password をチェック
-      - OK → 6桁コード生成してメール送信
-      - JWT はまだ返さない
+    1段階目: ユーザー名・パスワードを受け取り、2FAコードをメールで送る。
+    フロント: /api/auth/login/start に {username, password} を送る。
     """
     user = get_user_by_username(db, payload.username)
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
 
-    # 6桁コード
-    code = generate_two_factor_code()
+    # 6桁のランダムコード生成
+    code = f"{secrets.randbelow(1000000):06d}"
+
+    # User モデルに two_factor_code / two_factor_expires_at がある前提
     user.two_factor_code = code
     user.two_factor_expires_at = datetime.utcnow() + timedelta(minutes=10)
     db.add(user)
     db.commit()
 
-    # メール送信
-    try:
-        send_two_factor_email(user.email, code)
-    except Exception as e:
-        print("send_two_factor_email error:", repr(e))
+    # メール送信（＋ログ）
+    send_2fa_email(user.email, code)
 
-    return {"ok": True, "message": "確認コードをメールで送信しました。"}
+    return {"ok": True}
 
 
-# =========================================
-# 2段階目: /api/auth/login/verify
-# =========================================
-@app.post("/api/auth/login/verify", response_model=Token)
-def login_verify(payload: TwoFactorVerifyRequest, db: Session = Depends(get_db)):
+@app.post("/api/auth/login/verify")
+def login_verify(payload: LoginVerify, db: Session = Depends(get_db)):
     """
-    2段階目:
-      - username と code を確認
-      - OK → JWT を返す
+    2段階目: 認証コードを確認し、OKなら JWT を返す。
+    フロント: /api/auth/login/verify に {username, code} を送る。
     """
     user = get_user_by_username(db, payload.username)
     if not user or not user.two_factor_code:
-        raise HTTPException(
-            status_code=400,
-            detail="認証コードが発行されていません。ログインをやり直してください。",
-        )
-
-    # コード一致判定
-    if payload.code != user.two_factor_code:
-        raise HTTPException(status_code=400, detail="認証コードが正しくありません。")
+        raise HTTPException(400, "認証コードが無効です")
 
     # 有効期限チェック
-    if (
-        user.two_factor_expires_at is None
-        or datetime.utcnow() > user.two_factor_expires_at
-    ):
-        user.two_factor_code = None
-        user.two_factor_expires_at = None
-        db.add(user)
-        db.commit()
-        raise HTTPException(status_code=400, detail="認証コードの有効期限が切れています。")
+    if user.two_factor_expires_at and user.two_factor_expires_at < datetime.utcnow():
+        raise HTTPException(400, "認証コードの有効期限が切れています")
 
-    # コードを無効化（使い捨て）
+    if user.two_factor_code != payload.code:
+        raise HTTPException(400, "認証コードが正しくありません")
+
+    # コードを使い捨てにする
     user.two_factor_code = None
     user.two_factor_expires_at = None
     db.add(user)
     db.commit()
 
-    # JWT 発行
     access_token = create_access_token({"sub": str(user.id)})
     return Token(access_token=access_token)
-@app.post("/api/episodes/{episode_id}/cover-image")
-
-async def upload_cover_image(episode_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
-
-    user = require_current_user(request, db)
-
-    ep = db.query(models.Episode).get(episode_id)
-
-    if not ep:
-
-        raise HTTPException(404, "エピソードが存在しません")
-
-    if ep.novel.author_id != user.id:
-
-        raise HTTPException(403, "編集権限がありません")
-
-    ext = os.path.splitext(file.filename)[1].lower()
-
-    filename = f"episode_{episode_id}_cover{ext}"
-
-    save_path = os.path.join(EPISODE_IMAGE_DIR, filename)
-
-    with open(save_path, "wb") as f:
-
-        f.write(await file.read())
-
-    public_url = f"/static/episode_images/{filename}"
-
-    ep.cover_image_url = public_url
-
-    db.add(ep)
-
-    db.commit()
-
-    return { "cover_image_url": public_url }
-
-
-@app.post("/api/episodes/{episode_id}/illusts")
-
-async def upload_episode_illust(episode_id: int, request: Request, file: UploadFile = File(...), caption: str | None = None, db: Session = Depends(get_db)):
-
-    user = require_current_user(request, db)
-
-    ep = db.query(models.Episode).get(episode_id)
-
-    if not ep:
-
-        raise HTTPException(404, "エピソードが存在しません")
-
-    if ep.novel.author_id != user.id:
-
-        raise HTTPException(403, "編集権限がありません")
-
-    ext = os.path.splitext(file.filename)[1].lower()
-
-    filename = f"episode_{episode_id}_illust_{int(datetime.utcnow().timestamp())}{ext}"
-
-    save_path = os.path.join(EPISODE_IMAGE_DIR, filename)
-
-    with open(save_path, "wb") as f:
-
-        f.write(await file.read())
-
-    public_url = f"/static/episode_images/{filename}"
-
-    position = db.query(models.EpisodeIllust).filter(models.EpisodeIllust.episode_id == episode_id).count() + 1
-
-    illust = models.EpisodeIllust(episode_id=episode_id, image_url=public_url, caption=caption, position=position)
-
-    db.add(illust)
-
-    db.commit()
-
-    db.refresh(illust)
-
-    return { "id": illust.id, "image_url": illust.image_url, "caption": illust.caption, "position": illust.position }
-
-

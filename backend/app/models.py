@@ -35,6 +35,7 @@ class User(Base):
 # Novel
 # =========================
 class Novel(Base):
+    view_count = Column(Integer, nullable=False, server_default="0")
     __tablename__ = "novels"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -42,6 +43,7 @@ class Novel(Base):
     description = Column(Text, nullable=True)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+    view_count = Column(Integer, nullable=True, server_default="0")
 
     author = relationship("User", back_populates="novels")
     episodes = relationship(
@@ -88,6 +90,30 @@ class Episode(Base):
     body = Column(Text)
     episode_number = Column(Integer, nullable=True)
     cover_image_url = Column(String(255))
+    view_count = Column(Integer, server_default="0", nullable=False)
+    like_count = Column(Integer, server_default="0", nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    novel = relationship("Novel", back_populates="episodes")
+    episode_tags = relationship("EpisodeTag", back_populates="episode", cascade="all, delete-orphan")
+    illusts = relationship("EpisodeIllust", back_populates="episode", cascade="all, delete-orphan")
+    __tablename__ = "episodes"
+    __tablename__ = "episodes"
+
+
+    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
+    title = Column(String(200), nullable=False)
+    title = Column(String(200), nullable=False)
+    body = Column(Text)
+    body = Column(Text)
+    episode_number = Column(Integer, nullable=True)
+    episode_number = Column(Integer, nullable=True)
+    cover_image_url = Column(String(255))
+    cover_image_url = Column(String(255))
+    created_at = Column(DateTime, server_default=func.now())
     created_at = Column(DateTime, server_default=func.now())
 
     novel = relationship("Novel", back_populates="episodes")
@@ -188,3 +214,11 @@ class EpisodeTag(Base):
         "Tag",
         back_populates="episode_tags",
     )
+
+class EpisodeLike(Base):
+    __tablename__ = "episode_likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())

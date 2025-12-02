@@ -3,35 +3,20 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 
 const API_BASE = "";
 
-// 画像パスを安全に絶対 URL にするヘルパー
-function toImageUrl(path) {
-  if (!path) return "";
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  if (path.startsWith("/")) return path;
-  // 先頭スラッシュが無い "static/..." 形式なら "/static/..." にする
-  return "/" + path.replace(/^\/+/, "");
-}
-
 export default function EpisodeDetail() {
   const { id } = useParams(); // episode_id
   const navigate = useNavigate();
+
   const [episode, setEpisode] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // 画像プレビュー用 state
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewOpen, setPreviewOpen] = useState(false);
+  // ★ いいね / 閲覧数
+  const [likeCount, setLikeCount] = useState(0);
+  const [isLiked, setIsLiked] = useState(false);
 
-  const openPreview = (url) => {
-    setPreviewUrl(url);
-    setPreviewOpen(true);
-  };
-
-  const closePreview = () => {
-    setPreviewOpen(false);
-    setPreviewUrl("");
-  };
+  // ★ 画像モーダル
+  const [modalImageUrl, setModalImageUrl] = useState("");
 
   const handleSubscribe = async () => {
     const token = localStorage.getItem("token");
@@ -76,8 +61,15 @@ export default function EpisodeDetail() {
         }
 
         const data = await res.json();
-        console.log("👀 EpisodeDetail /api/episodes/" + id, data);
         setEpisode(data);
+
+        // ★ いいね / 閲覧数
+        if (typeof data.like_count === "number") {
+          setLikeCount(data.like_count);
+        }
+        if (typeof data.is_liked === "boolean") {
+          setIsLiked(data.is_liked);
+        }
       } catch (err) {
         console.error(err);
         setError(err.message || "エピソードの取得中にエラーが発生しました");
@@ -88,6 +80,45 @@ export default function EpisodeDetail() {
 
     fetchEpisode();
   }, [id]);
+
+  // ★ いいねトグル
+  const handleToggleLike = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("いいねするにはログインが必要です。");
+      navigate("/login");
+      return;
+    }
+
+    const endpoint = isLiked
+      ? `/api/episodes/${id}/unlike`
+      : `/api/episodes/${id}/like`;
+
+    try {
+      const res = await fetch(API_BASE + endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.detail || "いいね操作に失敗しました");
+      }
+
+      if (typeof data.like_count === "number") {
+        setLikeCount(data.like_count);
+      } else {
+        setLikeCount((prev) => prev + (isLiked ? -1 : 1));
+      }
+      setIsLiked((prev) => !prev);
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "いいね操作中にエラーが発生しました");
+    }
+  };
 
   if (loading) {
     return <div>読み込み中...</div>;
@@ -123,7 +154,14 @@ export default function EpisodeDetail() {
     return new Date(isoString).toLocaleString("ja-JP");
   };
 
-  const coverUrl = toImageUrl(episode.cover_image_url);
+  const openModal = (url) => {
+    if (!url) return;
+    setModalImageUrl(url);
+  };
+
+  const closeModal = () => {
+    setModalImageUrl("");
+  };
 
   return (
     <div>
@@ -135,15 +173,7 @@ export default function EpisodeDetail() {
         第{episode.number || episode.episode_number}話 {episode.title}
       </h2>
 
-      {/* デバッグ用: 返ってきてる JSON を確認できるようにしておく */}
-      <details style={{ margin: "8px 0", fontSize: "0.8rem" }}>
-        <summary>APIレスポンス（デバッグ用）</summary>
-        <pre style={{ whiteSpace: "pre-wrap" }}>
-{JSON.stringify(episode, null, 2)}
-        </pre>
-      </details>
-
-      {/* タグ表示 */}
+      {/* タグ */}
       {tags.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           {tags.map((t) => (
@@ -164,36 +194,57 @@ export default function EpisodeDetail() {
         </div>
       )}
 
-      <p style={{ color: "#666", marginBottom: 4 }}>小説ID: {episode.novel_id}</p>
+      {/* メタ情報 + いいね */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          alignItems: "center",
+          marginBottom: 8,
+          fontSize: "0.9rem",
+          color: "#666",
+        }}
+      >
+        <span>小説ID: {episode.novel_id}</span>
+        {episode.created_at && (
+          <span>作成日時: {formatDateTime(episode.created_at)}</span>
+        )}
+        {typeof episode.view_count === "number" && (
+          <span>閲覧数: {episode.view_count}</span>
+        )}
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleToggleLike}
+          style={{ marginLeft: "auto" }}
+        >
+          {isLiked ? "♥ いいね済み" : "♡ いいね"} ({likeCount})
+        </button>
+      </div>
 
-      {episode.created_at && (
-        <p style={{ color: "#999", fontSize: "0.9rem", marginBottom: 8 }}>
-          作成日時: {formatDateTime(episode.created_at)}
-        </p>
-      )}
-
-      {/* 表紙画像（クリックで拡大） */}
-      {coverUrl && (
-        <div style={{ marginTop: 16, marginBottom: 16 }}>
-          <p style={{ marginBottom: 4 }}>表紙</p>
+      {/* 表紙画像 */}
+      {episode.cover_image_url && (
+        <div style={{ margin: "12px 0" }}>
+          <p style={{ marginBottom: 4 }}>表紙:</p>
           <img
-            src={coverUrl}
+            src={API_BASE + episode.cover_image_url}
             alt="表紙画像"
             style={{
-              maxWidth: "220px",
+              maxWidth: "260px",
               borderRadius: 8,
               cursor: "pointer",
-              boxShadow: "0 0 6px rgba(0,0,0,0.2)",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
             }}
-            onClick={() => openPreview(coverUrl)}
+            onClick={() => openModal(API_BASE + episode.cover_image_url)}
           />
         </div>
       )}
 
-      {/* 挿絵一覧（クリックで拡大） */}
+      {/* 挿絵一覧 */}
       {illusts.length > 0 && (
-        <div style={{ marginTop: 16, marginBottom: 16 }}>
-          <p style={{ marginBottom: 4 }}>挿絵</p>
+        <div style={{ margin: "16px 0" }}>
+          <p style={{ marginBottom: 8 }}>挿絵:</p>
           <div
             style={{
               display: "grid",
@@ -201,49 +252,50 @@ export default function EpisodeDetail() {
               gap: 12,
             }}
           >
-            {illusts.map((ill) => {
-              const url = toImageUrl(ill.image_url);
-              return (
-                <div
-                  key={ill.id ?? ill.image_url}
+            {illusts.map((ill) => (
+              <div
+                key={ill.id ?? ill.image_url}
+                style={{
+                  border: "1px solid #eee",
+                  borderRadius: 8,
+                  padding: 8,
+                  textAlign: "center",
+                  background: "#fafafa",
+                }}
+              >
+                <img
+                  src={API_BASE + ill.image_url}
+                  alt={ill.caption || "挿絵"}
                   style={{
-                    textAlign: "center",
-                    padding: 6,
-                    borderRadius: 8,
-                    border: "1px solid #eee",
+                    maxWidth: "100%",
+                    maxHeight: "200px",
+                    objectFit: "contain",
+                    borderRadius: 4,
+                    cursor: "pointer",
                   }}
-                >
-                  <img
-                    src={url}
-                    alt={ill.caption || "挿絵"}
+                  onClick={() => openModal(API_BASE + ill.image_url)}
+                />
+                {ill.caption && (
+                  <div
                     style={{
-                      maxWidth: "100%",
-                      borderRadius: 6,
-                      cursor: "pointer",
+                      marginTop: 4,
+                      fontSize: 12,
+                      color: "#555",
+                      wordBreak: "break-all",
                     }}
-                    onClick={() => openPreview(url)}
-                  />
-                  {ill.caption && (
-                    <div
-                      style={{
-                        marginTop: 4,
-                        fontSize: 12,
-                        color: "#555",
-                        wordBreak: "break-all",
-                      }}
-                    >
-                      {ill.caption}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                  >
+                    {ill.caption}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
 
       <hr />
 
+      {/* 本文 */}
       <div
         style={{
           whiteSpace: "pre-wrap",
@@ -254,6 +306,7 @@ export default function EpisodeDetail() {
         {episode.body}
       </div>
 
+      {/* 課金ブロック */}
       {episode.is_premium_user ? (
         <div
           style={{
@@ -298,14 +351,14 @@ export default function EpisodeDetail() {
         </Link>
       </div>
 
-      {/* 画像プレビューモーダル */}
-      {previewOpen && (
+      {/* 画像ポップアップモーダル */}
+      {modalImageUrl && (
         <div
-          onClick={closePreview}
+          onClick={closeModal}
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.8)",
+            backgroundColor: "rgba(0,0,0,0.7)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -317,18 +370,33 @@ export default function EpisodeDetail() {
             style={{
               maxWidth: "90vw",
               maxHeight: "90vh",
+              background: "#111",
+              padding: 8,
+              borderRadius: 8,
             }}
           >
             <img
-              src={previewUrl}
-              alt="画像プレビュー"
+              src={modalImageUrl}
+              alt="拡大画像"
               style={{
                 maxWidth: "100%",
-                maxHeight: "90vh",
-                borderRadius: 8,
-                boxShadow: "0 0 18px rgba(0,0,0,0.6)",
+                maxHeight: "80vh",
+                display: "block",
+                margin: "0 auto",
               }}
             />
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={closeModal}
+              style={{
+                marginTop: 8,
+                display: "block",
+                marginLeft: "auto",
+              }}
+            >
+              閉じる
+            </button>
           </div>
         </div>
       )}
