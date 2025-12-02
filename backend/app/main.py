@@ -504,7 +504,7 @@ def get_novel_detail(
         is_liked = (
             db.query(models.NovelLike)
             .filter(
-                models.NovelLike.novel_id == novel_id,
+                models.NovelLike.novel_id == novel.id,
                 models.NovelLike.user_id == user.id,
             )
             .first()
@@ -680,7 +680,7 @@ def update_episode(
         raise HTTPException(404, "エピソードが存在しません")
 
     # 自分の小説かチェック
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel.id)
     if not novel or novel.author_id != user.id:
         raise HTTPException(403, "編集権限がありません")
 
@@ -753,7 +753,7 @@ def list_episodes(
         is_liked = (
             db.query(models.NovelLike)
             .filter(
-                models.NovelLike.novel_id == novel_id,
+                models.NovelLike.novel_id == novel.id,
                 models.NovelLike.user_id == user.id,
             )
             .first()
@@ -792,7 +792,7 @@ def delete_episode_cover_image(episode_id: int, request: Request, db: Session = 
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel.id)
     if not novel or novel.author_id != user.id:
         raise HTTPException(403, "このエピソードを編集する権限がありません")
     if ep.cover_image_url:
@@ -814,7 +814,7 @@ def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db:
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel.id)
     if not novel or novel.author_id != user.id:
         raise HTTPException(403, "この押絵を編集する権限がありません")
     rel_path = ill.image_url.lstrip("/")
@@ -859,7 +859,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         is_liked = (
             db.query(models.NovelLike)
             .filter(
-                models.NovelLike.novel_id == novel_id,
+                models.NovelLike.novel_id == ep.novel_id,
                 models.NovelLike.user_id == user.id,
             )
             .first()
@@ -1014,7 +1014,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     existing = (
         db.query(models.NovelLike)
         .filter(
-            models.NovelLike.novel_id == novel_id,
+            models.NovelLike.novel_id == novel.id,
             models.NovelLike.user_id == user.id,
         )
         .first()
@@ -1058,7 +1058,7 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
     existing = (
         db.query(models.NovelLike)
         .filter(
-            models.NovelLike.novel_id == novel_id,
+            models.NovelLike.novel_id == novel.id,
             models.NovelLike.user_id == user.id,
         )
         .first()
@@ -1087,3 +1087,99 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
         "liked": False,
         "like_count": novel.like_count,
     }
+
+# =========================================
+# Episode いいね機能
+# =========================================
+@app.post("/api/episodes/{episode_id}/like")
+def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    エピソードにいいねを付ける（ユーザーごと1回まで）
+    """
+    user = require_current_user(request, db)
+
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    # すでにいいね済みかチェック
+    existing = (
+        db.query(models.EpisodeLike)
+        .filter(
+            models.EpisodeLike.episode_id == episode_id,
+            models.EpisodeLike.user_id == user.id,
+        )
+        .first()
+    )
+    if existing:
+        # 2回目以降は何もしないで今の状態を返す
+        like_count = (
+            db.query(models.EpisodeLike)
+            .filter(models.EpisodeLike.episode_id == episode_id)
+            .count()
+        )
+        return {"ok": True, "liked": True, "like_count": like_count}
+
+    # 新規いいね追加
+    like = models.EpisodeLike(episode_id=episode_id, user_id=user.id)
+    db.add(like)
+
+    # 集計カラムもインクリメント（あれば）
+    if hasattr(ep, "like_count"):
+        ep.like_count = (ep.like_count or 0) + 1
+        db.add(ep)
+
+    db.commit()
+
+    like_count = (
+        db.query(models.EpisodeLike)
+        .filter(models.EpisodeLike.episode_id == episode_id)
+        .count()
+    )
+    return {"ok": True, "liked": True, "like_count": like_count}
+
+
+@app.delete("/api/episodes/{episode_id}/like")
+def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    エピソードのいいねを取り消す
+    """
+    user = require_current_user(request, db)
+
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    like = (
+        db.query(models.EpisodeLike)
+        .filter(
+            models.EpisodeLike.episode_id == episode_id,
+            models.EpisodeLike.user_id == user.id,
+        )
+        .first()
+    )
+    if not like:
+        # 元々いいねしていなければそのまま ok
+        like_count = (
+            db.query(models.EpisodeLike)
+            .filter(models.EpisodeLike.episode_id == episode_id)
+            .count()
+        )
+        return {"ok": True, "liked": False, "like_count": like_count}
+
+    db.delete(like)
+
+    # 集計カラムもデクリメント（0 未満にはしない）
+    if hasattr(ep, "like_count"):
+        ep.like_count = max(0, (ep.like_count or 0) - 1)
+        db.add(ep)
+
+    db.commit()
+
+    like_count = (
+        db.query(models.EpisodeLike)
+        .filter(models.EpisodeLike.episode_id == episode_id)
+        .count()
+    )
+    return {"ok": True, "liked": False, "like_count": like_count}
+
