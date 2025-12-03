@@ -29,7 +29,7 @@ export default function NewNovel() {
         throw new Error("ログインが必要です。");
       }
 
-      const res = await fetch(`${API_BASE}/api/novels/`, {
+      const res = await fetch(`${API_BASE}/api/novels`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -65,7 +65,7 @@ export default function NewNovel() {
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/novels">← 小説一覧に戻る</Link>
+        <Link to="/">← 小説一覧に戻る</Link>
       </div>
 
       <h2>新しい小説を作成</h2>
