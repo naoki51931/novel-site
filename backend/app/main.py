@@ -328,30 +328,42 @@ async def stripe_webhook(
 # =========================================
 # Novel API（タグ対応）
 # =========================================
+@app.post("/api/novels/")
 @app.post("/api/novels")
 def create_novel(
     payload: schemas.NovelCreate,
     request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    小説作成エンドポイント
+    - 必ずログインユーザーを author_id に入れる
+    - is_ai_generated / age_limit / tag_names も扱う
+    """
+    # ★ ログイン必須 → author_id に使う
     user = require_current_user(request, db)
 
     novel = models.Novel(
         title=payload.title,
         description=payload.description,
+        author_id=user.id,
+        is_ai_generated=getattr(payload, "is_ai_generated", False),
+        age_limit=getattr(payload, "age_limit", "all"),
+        like_count=0,
     )
     db.add(novel)
     db.commit()
     db.refresh(novel)
 
-    # ★ タグ保存
-    for tag_name in payload.tag_names:
-        tag_name = tag_name.strip()
-        if not tag_name:
+    # ★ タグ保存（tag_names がなくても動くように防御的に書く）
+    tag_names = getattr(payload, "tag_names", []) or []
+    for raw in tag_names:
+        name = (raw or "").strip()
+        if not name:
             continue
-        tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
+        tag = db.query(models.Tag).filter(models.Tag.name == name).first()
         if not tag:
-            tag = models.Tag(name=tag_name)
+            tag = models.Tag(name=name)
             db.add(tag)
             db.commit()
             db.refresh(tag)
@@ -671,7 +683,7 @@ def create_episode(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
         db.commit()  # cleanup old broken code
