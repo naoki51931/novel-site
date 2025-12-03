@@ -72,8 +72,16 @@ class EpisodeBase(BaseModel):
     episode_number: Optional[int] = None
 
 
+class EpisodeIllustCreate(BaseModel):
+    image_url: str
+    position: int
+    caption: str | None = None
+
+
 class EpisodeCreate(EpisodeBase):
     # エピソード作成時に送るタグ名リスト
+    cover_image_url: Optional[str] = None
+    illusts: list[EpisodeIllustCreate] = []
     tag_names: List[str] = []
 
 
