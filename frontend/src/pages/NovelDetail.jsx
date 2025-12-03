@@ -8,6 +8,8 @@ export default function NovelDetail() {
   const navigate = useNavigate();
 
   const [novel, setNovel] = useState(null);
+  const authorName = novel?.author_username;
+  const [isFavorited, setIsFavorited] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -32,6 +34,42 @@ export default function NovelDetail() {
   };
 
 
+  const toggleFavorite = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("お気に入りにするにはログインが必要です。");
+      navigate("/login");
+      return;
+    }
+    if (!novel) return;
+
+    const method = isFavorited ? "DELETE" : "POST";
+
+    try {
+      const res = await fetch(API_BASE + "/api/novels/" + novel.id + "/favorite", {
+        method,
+        headers: {
+          Authorization: "Bearer " + token,
+        },
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.detail || "お気に入りの操作に失敗しました");
+      }
+
+      if (typeof data.favorited === "boolean") {
+        setIsFavorited(data.favorited);
+      } else {
+        setIsFavorited((prev) => !prev);
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "お気に入り操作中にエラーが発生しました");
+    }
+  };
+
   useEffect(() => {
     const fetchNovel = async () => {
       try {
@@ -39,6 +77,31 @@ export default function NovelDetail() {
         setError("");
 
         const token = localStorage.getItem("token");
+  const toggleFavorite = async () => {
+    if (!token) {
+      alert("ログインが必要です");
+      return;
+    }
+    if (!novel) return;
+    const method = isFavorited ? "DELETE" : "POST";
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        console.error("favorite toggle failed");
+        return;
+      }
+      const data = await res.json();
+      setIsFavorited(!!data.favorited);
+    } catch (e) {
+      console.error(e);
+    }
+  };
         const res = await fetch(`${API_BASE}/api/novels/${id}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
@@ -48,7 +111,9 @@ export default function NovelDetail() {
         }
 
         const data = await res.json();
+        console.log("NOVEL DATA:", data);
         setNovel(data);
+        setIsFavorited(!!data.is_favorited);
 
         // ★ いいね / 閲覧数
         if (typeof data.like_count === "number") {
@@ -71,6 +136,31 @@ export default function NovelDetail() {
   // ★ 小説 いいねトグル
   const handleToggleLike = async () => {
     const token = localStorage.getItem("token");
+  const toggleFavorite = async () => {
+    if (!token) {
+      alert("ログインが必要です");
+      return;
+    }
+    if (!novel) return;
+    const method = isFavorited ? "DELETE" : "POST";
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        console.error("favorite toggle failed");
+        return;
+      }
+      const data = await res.json();
+      setIsFavorited(!!data.favorited);
+    } catch (e) {
+      console.error(e);
+    }
+  };
     if (!token) {
       alert("いいねするにはログインが必要です。");
       navigate("/login");
@@ -117,6 +207,31 @@ export default function NovelDetail() {
       return;
     }
     const token = localStorage.getItem("token");
+  const toggleFavorite = async () => {
+    if (!token) {
+      alert("ログインが必要です");
+      return;
+    }
+    if (!novel) return;
+    const method = isFavorited ? "DELETE" : "POST";
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        console.error("favorite toggle failed");
+        return;
+      }
+      const data = await res.json();
+      setIsFavorited(!!data.favorited);
+    } catch (e) {
+      console.error(e);
+    }
+  };
     if (!token) {
       alert("削除するにはログインが必要です。");
       navigate("/login");
@@ -162,6 +277,31 @@ export default function NovelDetail() {
     }
 
     const token = localStorage.getItem("token");
+  const toggleFavorite = async () => {
+    if (!token) {
+      alert("ログインが必要です");
+      return;
+    }
+    if (!novel) return;
+    const method = isFavorited ? "DELETE" : "POST";
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        console.error("favorite toggle failed");
+        return;
+      }
+      const data = await res.json();
+      setIsFavorited(!!data.favorited);
+    } catch (e) {
+      console.error(e);
+    }
+  };
     if (!token) {
       alert("削除するにはログインが必要です。");
       navigate("/login");
@@ -314,15 +454,23 @@ export default function NovelDetail() {
           color: "#666",
         }}
       >
-        {novel.author_username && (
-          <span>作者: {novel.author_username}</span>
-        )}
-        {novel.created_at && (
+          {authorName && (
+            <span>作者: {authorName}</span>
+          )}
+	{novel.created_at && (
           <span>作成日時: {formatDateTime(novel.created_at)}</span>
         )}
         {typeof novel.view_count === "number" && (
           <span>閲覧数: {novel.view_count}</span>
         )}
+        {/* お気に入りボタン */}
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={toggleFavorite}
+        >
+          {isFavorited ? "★ お気に入り済み" : "☆ お気に入りに追加"}
+        </button>
 
         <button
           type="button"
