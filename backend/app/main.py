@@ -328,6 +328,7 @@ async def stripe_webhook(
 # =========================================
 # Novel API（タグ対応）
 # =========================================
+@app.post("/api/novels/")
 @app.post("/api/novels")
 def create_novel(
     payload: schemas.NovelCreate,
