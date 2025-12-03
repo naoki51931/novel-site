@@ -151,6 +151,11 @@ export default function NovelDetail() {
   };
 
   // ★ エピソード削除ボタン
+  // ★ 新規エピソード作成ボタン
+  const handleCreateEpisode = () => {
+    navigate(`/novels/${id}/episodes/new`);
+  };
+
   const handleDeleteEpisode = async (episodeId) => {
     if (!window.confirm("このエピソードを削除します。よろしいですか？")) {
       return;
@@ -368,6 +373,17 @@ export default function NovelDetail() {
 
       {/* エピソード一覧 */}
       <h3 style={{ marginTop: 16 }}>エピソード一覧</h3>
+
+      {/* エピソード追加ボタン */}
+      <div style={{ marginTop: 8, marginBottom: 8 }}>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleCreateEpisode}
+        >
+          ＋ エピソードを追加
+        </button>
+      </div>
       {episodes.length === 0 ? (
         <p>まだエピソードがありません。</p>
       ) : (
