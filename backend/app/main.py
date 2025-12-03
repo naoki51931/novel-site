@@ -671,7 +671,7 @@ def create_episode(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(novel_id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
         db.commit()  # cleanup old broken code
@@ -739,7 +739,7 @@ def update_episode(
         raise HTTPException(404, "エピソードが存在しません")
 
     # 自分の小説かチェック
-    novel = db.query(models.Novel).get(novel.id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
         raise HTTPException(403, "編集権限がありません")
 
@@ -790,7 +790,7 @@ def list_episodes(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    novel = db.query(models.Novel).get(novel_id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
         db.commit()  # cleanup old broken code
@@ -851,7 +851,7 @@ def delete_episode_cover_image(episode_id: int, request: Request, db: Session = 
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(novel.id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
         raise HTTPException(403, "このエピソードを編集する権限がありません")
     if ep.cover_image_url:
@@ -873,7 +873,7 @@ def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db:
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(novel.id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
         raise HTTPException(403, "この押絵を編集する権限がありません")
     rel_path = ill.image_url.lstrip("/")
@@ -1084,7 +1084,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     """
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).get(novel_id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
 
@@ -1128,7 +1128,7 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
     """
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).get(novel_id)
+    novel = db.query(models.Novel).get(ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
 
