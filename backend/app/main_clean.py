@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Optional, List
 
 import jwt
@@ -148,13 +148,6 @@ def require_current_user(request: Request, db: Session) -> models.User:
         raise HTTPException(401, "ユーザーが存在しません")
     return user
 
-def calc_age(birth_date: date | None) -> int | None:
-    if not birth_date:
-        return None
-    today = date.today()
-    return today.year - birth_date.year - (
-        (today.month, today.day) < (birth_date.month, birth_date.day)
-    )
 
 # =========================================
 # モデル / スキーマ
@@ -339,6 +332,7 @@ def create_novel(
     novel = models.Novel(
         title=payload.title,
         description=payload.description,
+        author_id=user.id,
     )
     db.add(novel)
     db.commit()
@@ -413,10 +407,6 @@ def update_novel(
     if payload.title is not None:
         novel.title = payload.title
     if payload.description is not None:
-        if payload.age_limit is not None:
-            novel.age_limit = payload.age_limit
-        if payload.is_ai_generated is not None:
-            novel.is_ai_generated = payload.is_ai_generated
         novel.description = payload.description
 
     # ★ タグ差し替え
@@ -504,31 +494,10 @@ def get_novel_detail(
     novel.view_count = (novel.view_count or 0) + 1
     db.commit()
     db.refresh(novel)
-
     try:
         user = require_current_user(request, db)
     except Exception:
         user = None
-    # --- 年齢制限チェック（R18/R15） ---
-    if novel.age_limit in ("r15", "r18"):
-        try:
-            current_user = require_current_user(request, db)
-        except Exception:
-            current_user = None
-
-        if not current_user:
-            raise HTTPException(status_code=403, detail="年齢制限コンテンツです")
-
-        age = calc_age(current_user.birth_date)
-        if age is None:
-            raise HTTPException(status_code=403, detail="生年月日が未登録のため閲覧できません")
-
-        if novel.age_limit == "r15" and age < 15:
-            raise HTTPException(status_code=403, detail="R15コンテンツを閲覧できません")
-
-        if novel.age_limit == "r18" and age < 18:
-            raise HTTPException(status_code=403, detail="R18コンテンツを閲覧できません")
-
     # いいね状態
     is_liked = False
     if user:
@@ -562,8 +531,6 @@ def get_novel_detail(
         "like_count": novel.like_count or 0,
         "is_liked": is_liked,
         "is_premium_user": is_premium,
-        "age_limit": novel.age_limit,            # ★追加
-        "is_ai_generated": novel.is_ai_generated,  # ★追加
         "tags": tags,
         "episodes": [
             {
@@ -584,22 +551,10 @@ def get_novel_detail(
 # =========================================
 @app.get("/api/public/novels")
 def list_public_novels(
-    request: Request,
     q: str | None = None,
     tag: str | None = None,
     db: Session = Depends(get_db),
 ):
-    # --- ユーザー取得（ログインしていない場合は None） ---
-    try:
-        user = require_current_user(request, db)
-    except Exception:
-        user = None
-
-    # --- 年齢計算 ---
-    user_age = None
-    if user and user.birth_date:
-        user_age = calc_age(user.birth_date)
-
     query = (
         db.query(models.Novel)
         .options(
@@ -608,20 +563,6 @@ def list_public_novels(
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
     )
 
-    # --- 年齢フィルタリング ---
-    if user_age is None:
-        # 年齢不明 → R15 / R18 を表示しない
-        query = query.filter(models.Novel.age_limit == "all")
-    else:
-        # R15 制限
-        if user_age < 15:
-            query = query.filter(models.Novel.age_limit == "all")
-
-        # R18 制限
-        elif user_age < 18:
-            query = query.filter(models.Novel.age_limit.in_(["all", "r15"]))
-
-    # --- 検索 ---
     if q:
         like = f"%{q}%"
         query = query.filter(
@@ -631,17 +572,19 @@ def list_public_novels(
             )
         )
 
-    # --- タグフィルタ ---
+    # タグで絞り込み
     if tag:
         query = (
-            query.join(models.NovelTag, models.Novel.id == models.NovelTag.novel_id)
+            query.join(
+                models.NovelTag, models.Novel.id == models.NovelTag.novel_id
+            )
             .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
             .filter(models.Tag.name == tag)
         )
 
     novels = query.order_by(models.Novel.created_at.desc()).all()
 
-    result = []
+    result: List[dict] = []
     for novel in novels:
         tag_names = [t.name for t in novel.tags]
         result.append(
@@ -653,8 +596,6 @@ def list_public_novels(
                 "author_id": novel.author_id,
                 "author_username": novel.author.username if novel.author else None,
                 "tag_names": tag_names,
-                "age_limit": novel.age_limit,
-                "is_ai_generated": novel.is_ai_generated,
             }
         )
     return result
@@ -912,24 +853,6 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         user = require_current_user(request, db)
     except Exception:
         user = None
-    # novel を取得（年齢制限のため）
-    novel = db.query(models.Novel).get(ep.novel_id)
-
-    # 年齢チェック
-    if novel.age_limit in ("r15", "r18"):
-        if not user:
-            raise HTTPException(status_code=403, detail="年齢制限コンテンツです")
-
-        age = calc_age(user.birth_date)
-        if age is None:
-            raise HTTPException(status_code=403, detail="生年月日が未登録のため閲覧できません")
-
-        if novel.age_limit == "r15" and age < 15:
-            raise HTTPException(status_code=403, detail="R15コンテンツを閲覧できません")
-
-        if novel.age_limit == "r18" and age < 18:
-            raise HTTPException(status_code=403, detail="R18コンテンツを閲覧できません")
-
     # いいね状態
     is_liked = False
     if user:
@@ -1259,51 +1182,4 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
         .count()
     )
     return {"ok": True, "liked": False, "like_count": like_count}
-
-
-# ============================
-# ユーザープロフィール取得
-# ============================
-@app.get("/api/users/me")
-def read_profile(request: Request, db: Session = Depends(get_db)):
-    user = require_current_user(request, db)
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "birth_date": str(user.birth_date) if user.birth_date else None,
-        "is_premium": bool(user.is_premium),
-    }
-
-# ============================
-# ユーザープロフィール更新
-# ============================
-@app.put("/api/users/me")
-def update_profile(payload: dict, request: Request, db: Session = Depends(get_db)):
-    from datetime import date
-    user = require_current_user(request, db)
-
-    if "email" in payload and payload["email"]:
-        user.email = payload["email"].strip()
-
-    if "birth_date" in payload:
-        if payload["birth_date"]:
-            try:
-                user.birth_date = date.fromisoformat(payload["birth_date"])
-            except:
-                raise HTTPException(400, "生年月日の形式が不正です（YYYY-MM-DD）")
-        else:
-            user.birth_date = None
-
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "birth_date": str(user.birth_date) if user.birth_date else None,
-        "is_premium": bool(user.is_premium),
-    }
 

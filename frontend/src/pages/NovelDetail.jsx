@@ -20,6 +20,18 @@ export default function NovelDetail() {
     return new Date(isoString).toLocaleString("ja-JP");
   };
 
+  const AGE_LABELS = {
+    all: "全年齢",
+    r15: "R15",
+    r18: "R18",
+  };
+
+  const getAgeLabel = (ageLimit) => {
+    if (!ageLimit) return "全年齢";
+    return AGE_LABELS[ageLimit] ?? ageLimit;
+  };
+
+
   useEffect(() => {
     const fetchNovel = async () => {
       try {
@@ -246,6 +258,42 @@ export default function NovelDetail() {
             小説を削除
           </button>
         </div>
+      </div>
+            {/* 年齢区分 & AI創作バッジ */}
+      <div
+        style={{
+          marginTop: 8,
+          marginBottom: 4,
+          display: "flex",
+          gap: 8,
+          flexWrap: "wrap",
+          alignItems: "center",
+          fontSize: "0.85rem",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-block",
+            padding: "2px 8px",
+            borderRadius: 999,
+            border: "1px solid #888",
+          }}
+        >
+          {getAgeLabel(novel.age_limit)}
+        </span>
+
+        {novel.is_ai_generated && (
+          <span
+            style={{
+              display: "inline-block",
+              padding: "2px 8px",
+              borderRadius: 999,
+              border: "1px solid #888",
+            }}
+          >
+            AI創作
+          </span>
+        )}
       </div>
 
       {/* 著者 / 日付 / 閲覧数 / いいね */}

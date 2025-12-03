@@ -56,6 +56,7 @@ export default function Mypage() {
       </div>
 
       <h2>{username} さんのマイページ</h2>
+      <div style={{ marginBottom: 12 }}><Link to="/mypage/settings">マイページ設定</Link></div>
 
       {error && <p style={{ color: "red" }}>{error}</p>}
 

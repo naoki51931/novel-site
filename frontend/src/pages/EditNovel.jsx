@@ -9,6 +9,8 @@ export default function EditNovel() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
+  const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -25,7 +27,12 @@ export default function EditNovel() {
         setLoading(true);
         setError("");
 
-        const res = await fetch(`${API_BASE}/api/novels/${id}`);
+        const token2 = localStorage.getItem("token");
+        const res = await fetch(`${API_BASE}/api/novels/${id}`, {
+          headers: {
+            Authorization: "Bearer " + token2,
+          },
+        });
         if (!res.ok) {
           throw new Error(`小説情報の取得に失敗しました (${res.status})`);
         }
@@ -33,6 +40,8 @@ export default function EditNovel() {
         const data = await res.json();
         setTitle(data.title || "");
         setDescription(data.description || "");
+        setAgeLimit(data.age_limit || "all");
+        setIsAIGenerated(!!data.is_ai_generated);
       } catch (err) {
         console.error(err);
         setError(err.message || "小説情報の取得中にエラーが発生しました");
@@ -69,6 +78,8 @@ export default function EditNovel() {
         body: JSON.stringify({
           title,
           description,
+          age_limit: ageLimit,
+          is_ai_generated: isAIGenerated,
         }),
       });
 
@@ -123,6 +134,34 @@ export default function EditNovel() {
               rows={6}
               style={{ width: "100%", padding: 4 }}
             />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            年齢区分
+            <br />
+            <select
+              value={ageLimit}
+              onChange={(e) => setAgeLimit(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+            >
+              <option value="all">全年齢</option>
+              <option value="r15">R15</option>
+              <option value="r18">R18</option>
+            </select>
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={isAIGenerated}
+              onChange={(e) => setIsAIGenerated(e.target.checked)}
+              style={{ marginRight: 4 }}
+            />
+            AI創作
           </label>
         </div>
 

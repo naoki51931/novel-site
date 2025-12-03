@@ -6,6 +6,8 @@ from sqlalchemy import (
     ForeignKey,
     DateTime,
     Boolean,
+    Enum,
+    Date,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -22,9 +24,12 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
+    email = Column(String(255), unique=True, nullable=True)
+    birth_date = Column(Date, nullable=True)
     # 課金フラグ（Stripe 用）
     is_premium = Column(Boolean, nullable=False, server_default="0")
+    Enum,
+    Date,
     two_factor_code = Column(String(6), nullable=True)
     two_factor_expires_at = Column(DateTime, nullable=True)
 
@@ -35,11 +40,17 @@ class User(Base):
 # Novel
 # =========================
 class Novel(Base):
+    is_ai_generated = Column(Boolean, default=False, nullable=False)
+    age_limit = Column(Enum("all","r15","r18",name="age_limit_enum"), default="all", nullable=False)
     __tablename__ = "novels"
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), index=True, nullable=False)
+    age_limit = Column(Enum("all", "r15", "r18", name="age_limit_enum"), default="all", nullable=False)
     description = Column(Text, nullable=True)
+    is_ai_generated = Column(Boolean, default=False, nullable=False)
+    Enum,
+    Date,
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     view_count = Column(Integer, nullable=False, server_default="0")
