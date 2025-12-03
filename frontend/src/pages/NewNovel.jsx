@@ -8,6 +8,8 @@ export default function NewNovel() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [tagNamesInput, setTagNamesInput] = useState("");
+
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [saving, setSaving] = useState(false);
@@ -29,18 +31,24 @@ export default function NewNovel() {
         throw new Error("ログインが必要です。");
       }
 
-      const res = await fetch(`${API_BASE}/api/novels/`, {
+      const payload = {
+        title,
+        description,
+        age_limit: ageLimit,
+        is_ai_generated: isAIGenerated,
+        tag_names: tagNamesInput
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+
+      const res = await fetch(`${API_BASE}/api/novels`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: "Bearer " + token,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          title,
-          description,
-          age_limit: ageLimit,
-          is_ai_generated: isAIGenerated,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -93,6 +101,20 @@ export default function NewNovel() {
               onChange={(e) => setDescription(e.target.value)}
               rows={6}
               style={{ width: "100%", padding: 4 }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            タグ（カンマ区切り）
+            <br />
+            <input
+              type="text"
+              value={tagNamesInput}
+              onChange={(e) => setTagNamesInput(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+              placeholder="例: ファンタジー, バトル, 百合"
             />
           </label>
         </div>
