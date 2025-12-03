@@ -4,11 +4,14 @@ import { useNavigate, Link } from "react-router-dom";
 const API_BASE = "";
 
 export default function NewNovel() {
+  const navigate = useNavigate();
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
+  const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -19,16 +22,14 @@ export default function NewNovel() {
       return;
     }
 
-    const token = localStorage.getItem("token");
-    if (!token) {
-      setError("小説を投稿するにはログインが必要です。");
-      navigate("/login");
-      return;
-    }
-
-    setLoading(true);
+    setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/api/novels`, {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error("ログインが必要です。");
+      }
+
+      const res = await fetch(`${API_BASE}/api/novels/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -37,30 +38,38 @@ export default function NewNovel() {
         body: JSON.stringify({
           title,
           description,
+          age_limit: ageLimit,
+          is_ai_generated: isAIGenerated,
         }),
       });
 
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || `投稿に失敗しました (status=${res.status})`);
+        throw new Error(data.detail || "小説の作成に失敗しました");
       }
 
-      navigate(`/novels/${data.id}`);
+      if (data.id) {
+        navigate(`/novels/${data.id}`);
+      } else {
+        navigate("/novels");
+      }
     } catch (err) {
       console.error(err);
-      setError(err.message || "投稿に失敗しました。");
+      setError(err.message || "小説の作成中にエラーが発生しました");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">← 一覧に戻る</Link>
+        <Link to="/novels">← 小説一覧に戻る</Link>
       </div>
-      <h2>新規小説投稿</h2>
+
+      <h2>新しい小説を作成</h2>
+
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
@@ -74,6 +83,7 @@ export default function NewNovel() {
             />
           </label>
         </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             説明（あらすじ）
@@ -86,12 +96,55 @@ export default function NewNovel() {
             />
           </label>
         </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            年齢区分
+            <br />
+            <select
+              value={ageLimit}
+              onChange={(e) => setAgeLimit(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+            >
+              <option value="all">全年齢</option>
+              <option value="r15">R15</option>
+              <option value="r18">R18</option>
+            </select>
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={isAIGenerated}
+              onChange={(e) => setIsAIGenerated(e.target.checked)}
+              style={{ marginRight: 4 }}
+            />
+            AI創作
+          </label>
+        </div>
+
         {error && (
           <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>
         )}
-        <button className="btn btn-border" type="submit" disabled={loading}>
-          {loading ? "投稿中..." : "投稿する"}
-        </button>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="btn btn-border"
+            type="submit"
+            disabled={saving}
+          >
+            {saving ? "作成中..." : "作成する"}
+          </button>
+          <button
+            className="btn btn-border"
+            type="button"
+            onClick={() => navigate("/novels")}
+          >
+            キャンセル
+          </button>
+        </div>
       </form>
     </div>
   );

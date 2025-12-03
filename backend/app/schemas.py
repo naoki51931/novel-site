@@ -1,8 +1,9 @@
 from datetime import datetime
+from typing import Literal
 from typing import Optional, List
-from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict
+from datetime import date
 
 
 # =========================
@@ -29,6 +30,8 @@ class TagRead(TagBase):
 class NovelBase(BaseModel):
     title: str
     description: Optional[str] = None
+    age_limit: Literal["all", "r15", "r18"] = "all"
+    is_ai_generated: bool = False
 
 
 class NovelCreate(NovelBase):
@@ -41,6 +44,8 @@ class NovelUpdate(BaseModel):
     description: Optional[str] = None
     # 更新時、タグを全部差し替えるイメージ
     tag_names: Optional[List[str]] = None
+    age_limit: Optional[Literal["all", "r15", "r18"]] = None
+    is_ai_generated: Optional[bool] = None
 
 
 class Novel(BaseModel):
@@ -90,3 +95,18 @@ class Episode(BaseModel):
     tags: List[TagRead] = []
     is_premium_user: bool  # ★ これを追加
     model_config = ConfigDict(from_attributes=True)
+
+# --- マイページ用 Profile スキーマ ---
+class ProfileRead(BaseModel):
+    id: int
+    username: str
+    email: Optional[str] = None
+    birth_date: Optional[date] = None
+
+    class Config:
+        orm_mode = True
+
+
+class ProfileUpdate(BaseModel):
+    email: Optional[str] = None
+    birth_date: Optional[date] = None

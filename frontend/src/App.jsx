@@ -1,4 +1,5 @@
 // frontend/src/App.jsx
+import AccountSettings from "./pages/AccountSettings";
 import Register from "./pages/Register.jsx";
 import { useState } from "react";
 import SearchBar from "./components/SearchBar.jsx";
@@ -92,6 +93,7 @@ export default function App() {
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
+        <Route path="/mypage/settings" element={<AccountSettings />} />
           <Route path="/" element={<Home q={q} tag={tag} />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />

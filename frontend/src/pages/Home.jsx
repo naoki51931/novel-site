@@ -19,7 +19,17 @@ export default function Home({ q = "", tag = "" }) {
         if (params.length > 0) {
           url += `?${params.join("\        const res = await fetch(`${API_BASE}/api/public/novels`);")}`;
         }
-        const res = await fetch(url);
+	const token = localStorage.getItem("token");
+        const headers = {};
+
+        if (token) {
+          headers["Authorization"] = "Bearer " + token;
+        }
+
+        const res = await fetch(url, {
+          headers,
+        });
+
         if (!res.ok) {
           throw new Error("小説一覧の取得に失敗しました");
         }
