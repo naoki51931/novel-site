@@ -502,6 +502,13 @@ def get_novel_detail(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    # ログインユーザー（いなければ None）
+    try:
+        user = require_current_user(request, db)
+    except Exception:
+        user = None
+
+    # 小説本体＋著者＋タグ
     novel = (
         db.query(models.Novel)
         .options(
@@ -513,25 +520,18 @@ def get_novel_detail(
     )
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+
+    # 閲覧数カウント
     novel.view_count = (novel.view_count or 0) + 1
     db.commit()
     db.refresh(novel)
 
-    try:
-        user = require_current_user(request, db)
-    except Exception:
-        user = None
-    # --- 年齢制限チェック（R18/R15） ---
+    # --- 年齢制限チェック（R15/R18） ---
     if novel.age_limit in ("r15", "r18"):
-        try:
-            current_user = require_current_user(request, db)
-        except Exception:
-            current_user = None
-
-        if not current_user:
+        if not user:
             raise HTTPException(status_code=403, detail="年齢制限コンテンツです")
 
-        age = calc_age(current_user.birth_date)
+        age = calc_age(user.birth_date)
         if age is None:
             raise HTTPException(status_code=403, detail="生年月日が未登録のため閲覧できません")
 
@@ -553,16 +553,33 @@ def get_novel_detail(
             .first()
             is not None
         )
+
+    # ★ お気に入り状態
+    is_favorited = False
+    if user:
+        is_favorited = (
+            db.query(models.NovelFavorite)
+            .filter(
+                models.NovelFavorite.novel_id == novel.id,
+                models.NovelFavorite.user_id == user.id,
+            )
+            .first()
+            is not None
+        )
+
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
+
     episodes = (
-        db.query(models.Episode)
-        .filter(models.Episode.novel_id == novel_id)
-        .order_by(models.Episode.episode_number)
-        .all()
+      db.query(models.Episode)
+      .filter(models.Episode.novel_id == novel_id)
+      .order_by(models.Episode.episode_number)
+      .all()
     )
+
     tags = [{"id": nt.tag.id, "name": nt.tag.name} for nt in novel.novel_tags]
+
     return {
         "id": novel.id,
         "title": novel.title,
@@ -573,9 +590,10 @@ def get_novel_detail(
         "view_count": novel.view_count,
         "like_count": novel.like_count or 0,
         "is_liked": is_liked,
+        "is_favorited": is_favorited,
         "is_premium_user": is_premium,
-        "age_limit": novel.age_limit,            # ★追加
-        "is_ai_generated": novel.is_ai_generated,  # ★追加
+        "age_limit": novel.age_limit,
+        "is_ai_generated": novel.is_ai_generated,
         "tags": tags,
         "episodes": [
             {
@@ -583,7 +601,9 @@ def get_novel_detail(
                 "title": ep.title,
                 "cover_image_url": ep.cover_image_url,
                 "number": get_episode_number(ep),
-                "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
+                "body": ep.body
+                if is_premium or (user and novel.author_id == user.id)
+                else truncate_for_free(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes
@@ -665,8 +685,6 @@ def list_public_novels(
                 "author_id": novel.author_id,
                 "author_username": novel.author.username if novel.author else None,
                 "tag_names": tag_names,
-                "age_limit": novel.age_limit,
-                "is_ai_generated": novel.is_ai_generated,
             }
         )
     return result
@@ -848,7 +866,7 @@ def list_episodes(
             "title": ep.title,
         "cover_image_url": ep.cover_image_url,
             "number": get_episode_number(ep),
-            "body": ep.body if is_premium else truncate_for_free(ep.body or ""),
+            "body": ep.body if is_premium or (user and novel.author_id == user.id) else truncate_for_free(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes
@@ -959,7 +977,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         bool(getattr(user, "is_premium", False)) if user else False
     )
 
-    body_converted = ep.body if is_premium else truncate_for_free(ep.body or "")
+    body_converted = ep.body if is_premium or (user and novel.author_id == user.id) else truncate_for_free(ep.body or "")
 
     # いいね情報
     like_count = db.query(models.EpisodeLike).filter(
@@ -1272,6 +1290,31 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
     )
     return {"ok": True, "liked": False, "like_count": like_count}
 
+@app.get("/api/me/favorites")
+def list_my_favorites(request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+
+    favorites = (
+        db.query(models.Novel)
+        .join(models.NovelFavorite, models.Novel.id == models.NovelFavorite.novel_id)
+        .filter(models.NovelFavorite.user_id == user.id)
+        .order_by(models.NovelFavorite.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": n.id,
+            "title": n.title,
+            "description": n.description,
+            "age_limit": n.age_limit,
+            "is_ai_generated": n.is_ai_generated,
+            "author_id": n.author_id,
+            "author_username": n.author.username if n.author else None,
+            "created_at": n.created_at,
+        }
+        for n in favorites
+    ]
 
 # ============================
 # ユーザープロフィール取得
@@ -1318,4 +1361,33 @@ def update_profile(payload: dict, request: Request, db: Session = Depends(get_db
         "birth_date": str(user.birth_date) if user.birth_date else None,
         "is_premium": bool(user.is_premium),
     }
+
+
+@app.post("/api/novels/{novel_id}/favorite")
+def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    exists = db.query(models.NovelFavorite).filter(
+        models.NovelFavorite.novel_id == novel_id,
+        models.NovelFavorite.user_id == user.id).first()
+    if exists:
+        return {"ok": True, "favorited": True}
+    fav = models.NovelFavorite(user_id=user.id, novel_id=novel_id)
+    db.add(fav); db.commit()
+    return {"ok": True, "favorited": True}
+
+
+@app.delete("/api/novels/{novel_id}/favorite")
+def unfavorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    fav = db.query(models.NovelFavorite).filter(
+        models.NovelFavorite.novel_id == novel_id,
+        models.NovelFavorite.user_id == user.id).first()
+    if not fav:
+        return {"ok": True, "favorited": False}
+    db.delete(fav); db.commit()
+    return {"ok": True, "favorited": False}
+
 

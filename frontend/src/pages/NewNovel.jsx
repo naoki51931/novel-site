@@ -60,7 +60,7 @@ export default function NewNovel() {
       if (data.id) {
         navigate(`/novels/${data.id}`);
       } else {
-        navigate("/novels");
+        navigate("/");
       }
     } catch (err) {
       console.error(err);
@@ -162,7 +162,7 @@ export default function NewNovel() {
           <button
             className="btn btn-border"
             type="button"
-            onClick={() => navigate("/novels")}
+            onClick={() => navigate("/")}
           >
             キャンセル
           </button>

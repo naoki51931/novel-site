@@ -35,27 +35,28 @@ class User(Base):
 
     novels = relationship("Novel", back_populates="author")
 
+    favorite_links = relationship("NovelFavorite", back_populates="user", cascade="all, delete-orphan")
+
 
 # =========================
 # Novel
 # =========================
 class Novel(Base):
-    is_ai_generated = Column(Boolean, default=False, nullable=False)
-    age_limit = Column(Enum("all","r15","r18",name="age_limit_enum"), default="all", nullable=False)
     __tablename__ = "novels"
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), index=True, nullable=False)
-    age_limit = Column(Enum("all", "r15", "r18", name="age_limit_enum"), default="all", nullable=False)
     description = Column(Text, nullable=True)
-    is_ai_generated = Column(Boolean, default=False, nullable=False)
     Enum,
     Date,
+    is_ai_generated = Column(Boolean, default=False, nullable=False)
+    age_limit = Column(Enum("all","r15","r18",name="age_limit_enum"), default="all", nullable=False)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     view_count = Column(Integer, nullable=False, server_default="0")
     like_count = Column(Integer, nullable=False, default=0)
 
+    favorite_links = relationship("NovelFavorite", back_populates="novel", cascade="all, delete-orphan")
     author = relationship("User", back_populates="novels")
     episodes = relationship(
         "Episode",
@@ -238,3 +239,13 @@ class NovelLike(Base):
     novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, server_default=func.now())
+
+class NovelFavorite(Base):
+    __tablename__ = "novel_favorites"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    user = relationship("User", back_populates="favorite_links")
+    novel = relationship("Novel", back_populates="favorite_links")
+
