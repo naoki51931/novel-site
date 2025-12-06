@@ -494,6 +494,26 @@ def delete_novel(
 
 
 # =========================================
+@app.get("/api/novels/{novel_id}/comments")
+def get_comments(novel_id: int, db: Session = Depends(get_db)):
+    comments = (
+        db.query(models.NovelComment)
+        .filter(models.NovelComment.novel_id == novel_id)
+        .order_by(models.NovelComment.created_at.desc())
+        .all()
+    )
+    return [{"id": c.id, "user_id": c.user_id, "username": c.user.username if c.user else None, "body": c.body, "created_at": c.created_at} for c in comments]
+
+@app.post("/api/novels/{novel_id}/comments")
+def post_comment(novel_id: int, payload: dict = Body(...), request: Request = None, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    body = (payload.get("body") or "").strip()
+    if not body:
+        raise HTTPException(400, "コメントが空です")
+    c = models.NovelComment(novel_id=novel_id, user_id=user.id, body=body)
+    db.add(c); db.commit(); db.refresh(c)
+    return {"ok": True, "id": c.id}
+
 # 小説詳細（tags 付き）
 # =========================================
 @app.get("/api/novels/{novel_id}")
@@ -1114,7 +1134,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     """
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
 
@@ -1158,7 +1178,7 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
     """
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
 

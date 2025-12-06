@@ -12,10 +12,14 @@ export default function NovelDetail() {
   const [isFavorited, setIsFavorited] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const myUserId = Number(localStorage.getItem("user_id") || "0");
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [commentBody, setCommentBody] = useState("");
+
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
@@ -131,9 +135,48 @@ export default function NovelDetail() {
     };
 
     fetchNovel();
+    fetch(`${API_BASE}/api/novels/${id}/comments`)
+      .then((res) => res.json())
+      .then((data) => setComments(Array.isArray(data) ? data : []));
+
   }, [id]);
 
   // ★ 小説 いいねトグル
+  const handlePostComment = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("コメントするにはログインが必要です。");
+      return;
+    }
+    const body = (commentBody || "").trim();
+    if (!body) {
+      alert("コメントを入力してください。");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${id}/comments`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ body }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "コメント投稿に失敗しました");
+      }
+      setCommentBody("");
+      const listRes = await fetch(`${API_BASE}/api/novels/${id}/comments`);
+      const listData = await listRes.json().catch(() => []);
+      setComments(Array.isArray(listData) ? listData : []);
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "コメント投稿中にエラーが発生しました");
+    }
+  };
+
+
   const handleToggleLike = async () => {
     const token = localStorage.getItem("token");
   const toggleFavorite = async () => {
@@ -562,6 +605,7 @@ export default function NovelDetail() {
                   第{ep.number || ep.episode_number}話 {ep.title}
                 </Link>
 
+
                 {/* エピソード編集・削除ボタン */}
                 <button
                   type="button"
@@ -596,6 +640,66 @@ export default function NovelDetail() {
                   <span>閲覧数: {ep.view_count}</span>
                 )}
               </div>
+		  {/* ---- コメント欄 ---- */}
+<div style={{ marginTop: "1.5rem", marginBottom: "2rem" }}>
+  <h3>コメント</h3>
+
+  {/* コメント一覧 */}
+  <div style={{ marginBottom: "1rem" }}>
+    {comments.length === 0 ? (
+      <p>まだコメントはありません。</p>
+    ) : (
+      comments.map((c) => (
+        <div
+          key={c.id}
+          style={{
+            borderBottom: "1px solid #ddd",
+            padding: "6px 0",
+            marginBottom: "6px",
+          }}
+        >
+          <strong>{c.username || "匿名"}</strong>
+          <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{c.body}</div>
+
+          {/* 編集・削除（作者 or コメント投稿者のみ表示） */}
+          {(c.user_id === myUserId || myUserId === novel.author_id) && (
+            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <button
+                className="btn btn-border"
+                onClick={() => handleEditComment(c.id)}
+              >
+                編集
+              </button>
+              <button
+                className="btn btn-border"
+                style={{ borderColor: "#c00", color: "#c00" }}
+                onClick={() => handleDeleteComment(c.id)}
+              >
+                削除
+              </button>
+            </div>
+          )}
+        </div>
+      ))
+    )}
+  </div>
+
+  {/* コメント投稿エリア */}
+  <textarea
+    value={commentBody}
+    onChange={(e) => setCommentBody(e.target.value)}
+    style={{
+      width: "100%",
+      height: "80px",
+      marginBottom: "8px",
+      padding: "6px",
+    }}
+  />
+  <button className="btn btn-border" onClick={handlePostComment}>
+    コメント投稿
+  </button>
+</div>
+
             </li>
           ))}
         </ul>
