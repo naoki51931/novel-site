@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
+const DRAFT_KEY = "draft_new_novel";
 
 export default function NewNovel() {
   const navigate = useNavigate();
@@ -14,6 +15,42 @@ export default function NewNovel() {
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // === auto-save draft start ===
+  // マウント時に下書きを読み込む
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (draft.title) setTitle(draft.title);
+      if (draft.description) setDescription(draft.description);
+      if (draft.tagNamesInput) setTagNamesInput(draft.tagNamesInput);
+    } catch (e) {
+      console.error("failed to load draft", e);
+    }
+  }, []);
+
+  // 入力が変わるたび 1秒後に自動保存
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const payload = {
+        title,
+        description,
+        tagNamesInput,
+        saved_at: new Date().toISOString(),
+      };
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
+      } catch (e) {
+        console.error("failed to save draft", e);
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [title, description, tagNamesInput]);
+  // === auto-save draft end ===
+
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -58,8 +95,10 @@ export default function NewNovel() {
       }
 
       if (data.id) {
+        localStorage.removeItem(DRAFT_KEY);
         navigate(`/novels/${data.id}`);
       } else {
+        localStorage.removeItem(DRAFT_KEY);
         navigate("/");
       }
     } catch (err) {

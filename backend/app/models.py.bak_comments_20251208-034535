@@ -33,16 +33,6 @@ class User(Base):
 
     # リレーション
     novels = relationship("Novel", back_populates="author")
-    favorite_links = relationship(
-        "NovelFavorite",
-        back_populates="user",
-        cascade="all, delete-orphan",
-    )
-    comments = relationship(
-        "NovelComment",
-        back_populates="user",
-        cascade="all, delete-orphan",
-    )
     favorite_links = relationship("NovelFavorite", back_populates="user")
     comments = relationship("NovelComment", back_populates="user")
     episode_likes = relationship("EpisodeLike", back_populates="user")
@@ -78,18 +68,6 @@ class Novel(Base):
     )
 
     # Novel <-> Tag の中間
-    comments = relationship(
-        "NovelComment",
-        back_populates="novel",
-        cascade="all, delete-orphan",
-    )
-
-    favorite_links = relationship(
-        "NovelFavorite",
-        back_populates="novel",
-        cascade="all, delete-orphan",
-    )
-
     novel_tags = relationship(
         "NovelTag",
         back_populates="novel",

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 const API_BASE = "";
+const draftKey = `draft_new_episode_${id}`;
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
@@ -13,6 +14,44 @@ export default function NewEpisode() {
   const [tags, setTags] = useState("");          // ★ タグ用 state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // === auto-save episode draft start ===
+  // マウント時に下書きを読み込む
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (draft.episodeNumber !== undefined) setEpisodeNumber(draft.episodeNumber);
+      if (draft.title) setTitle(draft.title);
+      if (draft.body) setBody(draft.body);
+      if (draft.tags) setTags(draft.tags);
+    } catch (e) {
+      console.error("failed to load episode draft", e);
+    }
+  }, []);
+
+  // 入力が変わるたび 1秒後に自動保存
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const payload = {
+        episodeNumber,
+        title,
+        body,
+        tags,
+        saved_at: new Date().toISOString(),
+      };
+      try {
+        localStorage.setItem(draftKey, JSON.stringify(payload));
+      } catch (e) {
+        console.error("failed to save episode draft", e);
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [episodeNumber, title, body, tags]);
+  // === auto-save episode draft end ===
+
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -65,7 +104,8 @@ export default function NewEpisode() {
         );
       }
 
-      // 成功したら小説詳細へ戻る
+      // 成功したら下書きを消して小説詳細へ戻る
+      localStorage.removeItem(draftKey);
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error("❌ NewEpisode error:", err);
