@@ -840,34 +840,14 @@ def list_episodes(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = db.query(models.Novel).get(novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
-        db.commit()  # cleanup old broken code
-        db.add(novel)
-        db.commit()
-        db.refresh(novel)
-    db.commit()  # cleanup old broken code
-    db.add(novel)
-    db.commit()
-    db.refresh(novel)
 
     try:
         user = require_current_user(request, db)
     except Exception:
         user = None
-    # いいね状態
-    is_liked = False
-    if user:
-        is_liked = (
-            db.query(models.NovelLike)
-            .filter(
-                models.NovelLike.novel_id == novel.id,
-                models.NovelLike.user_id == user.id,
-            )
-            .first()
-            is not None
-        )
 
     is_premium = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
@@ -884,13 +864,16 @@ def list_episodes(
         {
             "id": ep.id,
             "title": ep.title,
-        "cover_image_url": ep.cover_image_url,
+            "cover_image_url": ep.cover_image_url,
             "number": get_episode_number(ep),
-            "body": ep.body if is_premium or (user and novel.author_id == user.id) else truncate_for_free(ep.body or ""),
+            "body": ep.body
+            if is_premium or (user and novel.author_id == user.id)
+            else truncate_for_free(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes
     ]
+
 # =========================================
 # =========================================
 # Episode 画像削除（表紙・押絵）
@@ -1410,4 +1393,40 @@ def unfavorite_novel(novel_id: int, request: Request, db: Session = Depends(get_
     db.delete(fav); db.commit()
     return {"ok": True, "favorited": False}
 
+@app.delete("/api/novels/{novel_id}/comments/{comment_id}")
+def delete_comment(
+    novel_id: int,
+    comment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    小説コメント削除 API
+    - 自分のコメント か 小説作者 だけが削除可能
+    """
+    user = require_current_user(request, db)
+
+    comment = (
+        db.query(models.NovelComment)
+        .filter(
+            models.NovelComment.id == comment_id,
+            models.NovelComment.novel_id == novel_id,
+        )
+        .first()
+    )
+    if not comment:
+        raise HTTPException(404, "コメントが存在しません")
+
+    novel = db.query(models.Novel).get(novel_id)
+
+    # コメント本人 or 小説の作者 のどちらかだけ許可
+    if not (
+        (comment.user_id is not None and comment.user_id == user.id)
+        or (novel and novel.author_id == user.id)
+    ):
+        raise HTTPException(403, "コメントを削除する権限がありません")
+
+    db.delete(comment)
+    db.commit()
+    return {"ok": True}
 

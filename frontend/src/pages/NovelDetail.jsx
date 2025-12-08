@@ -8,17 +8,18 @@ export default function NovelDetail() {
   const navigate = useNavigate();
 
   const [novel, setNovel] = useState(null);
+  const [comments, setComments] = useState([]);
+  const [commentBody, setCommentBody] = useState("");
+  const [myUserId, setMyUserId] = useState(null);
+
   const authorName = novel?.author_username;
   const [isFavorited, setIsFavorited] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const myUserId = Number(localStorage.getItem("user_id") || "0");
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
-  const [comments, setComments] = useState([]);
-  const [commentBody, setCommentBody] = useState("");
 
 
   const formatDateTime = (isoString) => {
@@ -303,6 +304,42 @@ export default function NovelDetail() {
     }
   };
 
+    const handleDeleteComment = async (commentId) => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("コメントを削除するにはログインが必要です。");
+      navigate("/login");
+      return;
+    }
+    if (!window.confirm("このコメントを削除します。よろしいですか？")) {
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/novels/${id}/comments/${commentId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || "コメントの削除に失敗しました");
+      }
+
+      // ローカル状態からも削除
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "コメント削除中にエラーが発生しました");
+    }
+  };
+
+
   // ★ エピソード編集ボタン
   const handleEditEpisode = (episodeId) => {
     navigate(`/episodes/${episodeId}/edit`);
@@ -381,6 +418,23 @@ export default function NovelDetail() {
       alert(e.message || "削除中にエラーが発生しました");
     }
   };
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/users/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setMyUserId(data.id);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
 
   if (loading) {
     return <div>読み込み中...</div>;
@@ -561,8 +615,9 @@ export default function NovelDetail() {
       )}
 
       <hr />
+      
 
-      {/* エピソード一覧 */}
+            {/* エピソード一覧 */}
       <h3 style={{ marginTop: 16 }}>エピソード一覧</h3>
 
       {/* エピソード追加ボタン */}
@@ -575,6 +630,7 @@ export default function NovelDetail() {
           ＋ エピソードを追加
         </button>
       </div>
+
       {episodes.length === 0 ? (
         <p>まだエピソードがありません。</p>
       ) : (
@@ -604,7 +660,6 @@ export default function NovelDetail() {
                 >
                   第{ep.number || ep.episode_number}話 {ep.title}
                 </Link>
-
 
                 {/* エピソード編集・削除ボタン */}
                 <button
@@ -640,70 +695,90 @@ export default function NovelDetail() {
                   <span>閲覧数: {ep.view_count}</span>
                 )}
               </div>
-		  {/* ---- コメント欄 ---- */}
-<div style={{ marginTop: "1.5rem", marginBottom: "2rem" }}>
-  <h3>コメント</h3>
-
-  {/* コメント一覧 */}
-  <div style={{ marginBottom: "1rem" }}>
-    {comments.length === 0 ? (
-      <p>まだコメントはありません。</p>
-    ) : (
-      comments.map((c) => (
-        <div
-          key={c.id}
-          style={{
-            borderBottom: "1px solid #ddd",
-            padding: "6px 0",
-            marginBottom: "6px",
-          }}
-        >
-          <strong>{c.username || "匿名"}</strong>
-          <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{c.body}</div>
-
-          {/* 編集・削除（作者 or コメント投稿者のみ表示） */}
-          {(c.user_id === myUserId || myUserId === novel.author_id) && (
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <button
-                className="btn btn-border"
-                onClick={() => handleEditComment(c.id)}
-              >
-                編集
-              </button>
-              <button
-                className="btn btn-border"
-                style={{ borderColor: "#c00", color: "#c00" }}
-                onClick={() => handleDeleteComment(c.id)}
-              >
-                削除
-              </button>
-            </div>
-          )}
-        </div>
-      ))
-    )}
-  </div>
-
-  {/* コメント投稿エリア */}
-  <textarea
-    value={commentBody}
-    onChange={(e) => setCommentBody(e.target.value)}
-    style={{
-      width: "100%",
-      height: "80px",
-      marginBottom: "8px",
-      padding: "6px",
-    }}
-  />
-  <button className="btn btn-border" onClick={handlePostComment}>
-    コメント投稿
-  </button>
-</div>
-
             </li>
           ))}
         </ul>
       )}
+
+      {/* ---- コメント欄 ---- */}
+      <div style={{ marginTop: "2rem" }}>
+        <h3>コメント</h3>
+
+        {comments.length === 0 ? (
+          <p style={{ fontSize: "0.9rem", color: "#666" }}>
+            まだコメントはありません。最初の感想を書いてみましょう。
+          </p>
+        ) : (
+          <div>
+            {comments.map((c) => (
+              <div
+                key={c.id}
+                style={{
+                  borderBottom: "1px solid #ddd",
+                  padding: "6px 0",
+                  marginBottom: 4,
+                  fontSize: "0.9rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <strong>
+                    {c.username || "匿名"}
+                    {myUserId && c.user_id === myUserId ? "（あなた）" : ""}
+                  </strong>
+
+                  {myUserId && c.user_id === myUserId && (
+                    <button
+                      type="button"
+                      className="btn btn-border"
+                      style={{
+                        borderColor: "#c00",
+                        color: "#c00",
+                        fontSize: "0.8rem",
+                      }}
+                      onClick={() => handleDeleteComment(c.id)}
+                    >
+                      削除
+                    </button>
+                  )}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>
+                  {c.body}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 8 }}>
+          <textarea
+            value={commentBody}
+            onChange={(e) => setCommentBody(e.target.value)}
+            placeholder="感想や一言コメントを書いてください"
+            style={{
+              width: "100%",
+              height: "70px",
+              marginTop: "8px",
+              padding: 8,
+              fontSize: "0.9rem",
+            }}
+          />
+          <button
+            className="btn btn-border"
+            style={{ marginTop: 8 }}
+            onClick={handlePostComment}
+          >
+            コメント投稿
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
+
