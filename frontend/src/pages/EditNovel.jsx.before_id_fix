@@ -1,8 +1,7 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
-const NOVEL_DRAFT_KEY_PREFIX = "draft_edit_novel"; // 作品ごとの編集下書き用プレフィックス
 
 export default function EditNovel() {
   const { id } = useParams();
@@ -16,69 +15,6 @@ export default function EditNovel() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // この作品の編集用ローカルストレージキー
-  const novelDraftKey = `${NOVEL_DRAFT_KEY_PREFIX}_${id ?? "unknown"}`;
-
-  // 「下書きを適用したかどうか」のフラグ
-  const hasDraftRef = useRef(false);
-
-  // === auto-save novel edit draft start ===
-  // マウント時に編集下書きを読み込む（あればサーバ値の上から上書き）
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(novelDraftKey);
-      if (!raw) return;
-      const draft = JSON.parse(raw);
-
-      let applied = false;
-
-      if (draft.title) {
-        setTitle(draft.title);
-        applied = true;
-      }
-      if (draft.description) {
-        setDescription(draft.description);
-        applied = true;
-      }
-      if (draft.ageLimit) {
-        setAgeLimit(draft.ageLimit);
-        applied = true;
-      }
-      if (typeof draft.isAIGenerated === "boolean") {
-        setIsAIGenerated(draft.isAIGenerated);
-        applied = true;
-      }
-
-      if (applied) {
-        hasDraftRef.current = true;
-      }
-    } catch (e) {
-      console.error("failed to load novel edit draft", e);
-    }
-  }, [novelDraftKey]);
-
-  // 入力が変わるたび 1 秒後に自動保存
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const payload = {
-        title,
-        description,
-        ageLimit,
-        isAIGenerated,
-        saved_at: new Date().toISOString(),
-      };
-      try {
-        localStorage.setItem(novelDraftKey, JSON.stringify(payload));
-      } catch (e) {
-        console.error("failed to save novel edit draft", e);
-      }
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, [novelDraftKey, title, description, ageLimit, isAIGenerated]);
-  // === auto-save novel edit draft end ===
-
-  // サーバから小説情報を取得
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
@@ -102,14 +38,10 @@ export default function EditNovel() {
         }
 
         const data = await res.json();
-
-        // すでに下書きを反映している場合はサーバ値で上書きしない
-        if (!hasDraftRef.current) {
-          setTitle(data.title || "");
-          setDescription(data.description || "");
-          setAgeLimit(data.age_limit || "all");
-          setIsAIGenerated(!!data.is_ai_generated);
-        }
+        setTitle(data.title || "");
+        setDescription(data.description || "");
+        setAgeLimit(data.age_limit || "all");
+        setIsAIGenerated(!!data.is_ai_generated);
       } catch (err) {
         console.error(err);
         setError(err.message || "小説情報の取得中にエラーが発生しました");
@@ -155,13 +87,6 @@ export default function EditNovel() {
 
       if (!res.ok) {
         throw new Error(data.detail || "小説の更新に失敗しました");
-      }
-
-      // 更新に成功したら、この小説の編集下書きを削除
-      try {
-        localStorage.removeItem(novelDraftKey);
-      } catch (e) {
-        console.error("failed to clear novel edit draft", e);
       }
 
       navigate(`/novels/${id}`);
@@ -264,4 +189,3 @@ export default function EditNovel() {
     </div>
   );
 }
-

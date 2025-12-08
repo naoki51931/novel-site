@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 const API_BASE = "";
-const draftKey = `draft_new_episode_${id}`;
+const EP_DRAFT_KEY_PREFIX = "draft_new_episode"; // 作品ごとの下書き用プレフィックス
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
@@ -11,9 +11,12 @@ export default function NewEpisode() {
   const [episodeNumber, setEpisodeNumber] = useState(1);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [tags, setTags] = useState("");          // ★ タグ用 state
+  const [tags, setTags] = useState("");          // タグ用 state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // この作品用のローカルストレージキー
+  const draftKey = `${EP_DRAFT_KEY_PREFIX}_${id ?? "unknown"}`;
 
   // === auto-save episode draft start ===
   // マウント時に下書きを読み込む
@@ -22,14 +25,16 @@ export default function NewEpisode() {
       const raw = localStorage.getItem(draftKey);
       if (!raw) return;
       const draft = JSON.parse(raw);
-      if (draft.episodeNumber !== undefined) setEpisodeNumber(draft.episodeNumber);
+      if (draft.episodeNumber !== undefined && draft.episodeNumber !== null) {
+        setEpisodeNumber(draft.episodeNumber);
+      }
       if (draft.title) setTitle(draft.title);
       if (draft.body) setBody(draft.body);
-      if (draft.tags) setTags(draft.tags);
+      if (typeof draft.tags === "string") setTags(draft.tags);
     } catch (e) {
       console.error("failed to load episode draft", e);
     }
-  }, []);
+  }, [draftKey]);
 
   // 入力が変わるたび 1秒後に自動保存
   useEffect(() => {
@@ -49,9 +54,8 @@ export default function NewEpisode() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [episodeNumber, title, body, tags]);
+  }, [draftKey, episodeNumber, title, body, tags]);
   // === auto-save episode draft end ===
-
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -70,7 +74,7 @@ export default function NewEpisode() {
       episode_number: Number(episodeNumber),
       title,
       body,
-      // ★ カンマ区切りの文字列 → 配列に変換
+      // カンマ区切りの文字列 → 配列に変換
       tag_names: tags
         .split(",")
         .map((s) => s.trim())
@@ -104,7 +108,7 @@ export default function NewEpisode() {
         );
       }
 
-      // 成功したら下書きを消して小説詳細へ戻る
+      // 成功したらこの小説の下書きを消して小説詳細へ戻る
       localStorage.removeItem(draftKey);
       navigate(`/novels/${id}`);
     } catch (err) {
@@ -145,7 +149,7 @@ export default function NewEpisode() {
           </label>
         </div>
 
-        {/* ★ タグ入力欄 */}
+        {/* タグ入力欄 */}
         <div style={{ marginBottom: 8 }}>
           <label>
             タグ (カンマ区切り)
@@ -182,4 +186,3 @@ export default function NewEpisode() {
     </div>
   );
 }
-

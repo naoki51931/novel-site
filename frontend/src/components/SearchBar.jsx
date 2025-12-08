@@ -1,8 +1,10 @@
-// src/components/SearchBar.jsx （パスは今の構成に合わせてね）
-export default function SearchBar({ q, tag, onChangeQ, onChangeTag }) {
+// frontend/src/components/SearchBar.jsx
+export default function SearchBar({ q, tag, onChangeQ, onChangeTag, onSearch }) {
   const handleSubmit = (e) => {
     e.preventDefault();
-    console.log("検索:", q, tag);
+    if (onSearch) {
+      onSearch();        // ← 親に「検索して」と依頼する
+    }
   };
 
   return (

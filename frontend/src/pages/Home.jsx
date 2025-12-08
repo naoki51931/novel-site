@@ -1,3 +1,4 @@
+// frontend/src/pages/Home.jsx
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -6,33 +7,25 @@ const API_BASE = "";
 export default function Home({ q = "", tag = "" }) {
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const fetchNovels = async () => {
       try {
         setLoading(true);
-        // 🔹 認証不要の公開APIを叩く
+        setError("");
+
         let url = `${API_BASE}/api/public/novels`;
         const params = [];
-        if (q) params.push(`q=${encodeURIComponent(q)}`);
-        if (tag) params.push(`tag=${encodeURIComponent(tag)}`);
+        if (q.trim()) params.push(`q=${encodeURIComponent(q.trim())}`);
+        if (tag.trim()) params.push(`tag=${encodeURIComponent(tag.trim())}`);
         if (params.length > 0) {
-          url += `?${params.join("\        const res = await fetch(`${API_BASE}/api/public/novels`);")}`;
-        }
-	const token = localStorage.getItem("token");
-        const headers = {};
-
-        if (token) {
-          headers["Authorization"] = "Bearer " + token;
+          url += `?${params.join("&")}`;
         }
 
-        const res = await fetch(url, {
-          headers,
-        });
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("小説一覧の取得に失敗しました");
 
-        if (!res.ok) {
-          throw new Error("小説一覧の取得に失敗しました");
-        }
         const data = await res.json();
 
         const sorted = (data || []).slice().sort((a, b) => {
@@ -44,13 +37,14 @@ export default function Home({ q = "", tag = "" }) {
         setNovels(sorted);
       } catch (err) {
         console.error(err);
+        setError(err.message || "エラーが発生しました");
       } finally {
         setLoading(false);
       }
     };
 
     fetchNovels();
-  }, [q, tag]);
+  }, [q, tag]); // ← q/tag が変わるたびに再取得
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
@@ -67,7 +61,11 @@ export default function Home({ q = "", tag = "" }) {
 
   return (
     <div>
-      {novels.length === 0 && <p>まだ小説がありません。</p>}
+      {error && (
+        <p style={{ color: "red", marginTop: 8, marginBottom: 8 }}>{error}</p>
+      )}
+
+      {novels.length === 0 && <p>小説が見つかりません。</p>}
 
       <div
         style={{
@@ -126,3 +124,4 @@ export default function Home({ q = "", tag = "" }) {
     </div>
   );
 }
+

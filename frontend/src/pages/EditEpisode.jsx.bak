@@ -1,4 +1,4 @@
-import {useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
@@ -30,9 +30,6 @@ export default function EditEpisode() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // draft を読んだかどうかのフラグ
-  const hasDraftRef = useRef(false);
-
   // === auto-save edit episode draft start ===
   useEffect(() => {
     if (!id) return;
@@ -41,7 +38,6 @@ export default function EditEpisode() {
       const raw = localStorage.getItem(key);
       if (!raw) return;
       const draft = JSON.parse(raw);
-      hasDraftRef.current = true;
       if (draft.episodeNumber !== undefined && draft.episodeNumber !== null) {
         setEpisodeNumber(String(draft.episodeNumber));
       }
@@ -95,27 +91,24 @@ export default function EditEpisode() {
 
         const data = await res.json();
         setNovelId(data.novel_id);
+        setEpisodeNumber(
+          String(
+            data.number != null
+              ? data.number
+              : data.episode_number != null
+              ? data.episode_number
+              : ""
+          )
+        );
+        setTitle(data.title || "");
+        setBody(data.body || "");
 
-        // draft を読み込んでいない場合だけ API の内容で上書き
-        if (!hasDraftRef.current) {
-          setEpisodeNumber(
-            String(
-              data.number != null
-                ? data.number
-                : data.episode_number != null
-                ? data.episode_number
-                : ""
-            )
-          );
-          setTitle(data.title || "");
-          setBody(data.body || "");
-          if (Array.isArray(data.tags)) {
-            setTags(data.tags.map((t) => t.name).join(", "));
-          } else {
-            setTags("");
-          }
+        // ★ 既存タグを "A, B, C" の形に変換
+        if (Array.isArray(data.tags)) {
+          setTags(data.tags.map((t) => t.name).join(", "));
+        } else {
+          setTags("");
         }
-
 
         // ★ 表紙・押絵も state に取り込む
         setCoverImageUrl(data.cover_image_url || "");
