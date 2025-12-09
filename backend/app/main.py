@@ -685,17 +685,38 @@ def list_public_novels(
 
     # --- タグフィルタ ---
     if tag:
-        query = (
-            query.join(models.NovelTag, models.Novel.id == models.NovelTag.novel_id)
-            .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
-            .filter(models.Tag.name == tag)
-        )
+        tag_str = tag.strip()
+        if tag_str:
+            # Novel タグ または Episode タグのどちらかに tag_str が付いている作品を取得
+            ep_subq = (
+                db.query(models.Episode.novel_id)
+                .join(
+                    models.EpisodeTag,
+                    models.EpisodeTag.episode_id == models.Episode.id,
+                )
+                .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+                .filter(models.Tag.name == tag_str)
+                .subquery()
+            )
+
+            query = (
+                query.outerjoin(
+                    models.NovelTag, models.Novel.id == models.NovelTag.novel_id
+                )
+                .outerjoin(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+                .filter(
+                    or_(
+                        models.Tag.name == tag_str,       # 小説自体のタグ
+                        models.Novel.id.in_(ep_subq),     # エピソード側のタグ
+                    )
+                )
+            )
 
     novels = query.order_by(models.Novel.created_at.desc()).all()
 
     result = []
     for novel in novels:
-        tag_names = [t.name for t in novel.tags]
+        tag_names = [nt.tag.name for nt in novel.novel_tags]
         result.append(
             {
                 "id": novel.id,
