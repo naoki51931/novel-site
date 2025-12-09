@@ -350,6 +350,7 @@ def create_novel(
         is_ai_generated=getattr(payload, "is_ai_generated", False),
         age_limit=getattr(payload, "age_limit", "all"),
         like_count=0,
+        is_public=getattr(payload, "is_public", True),
     )
     db.add(novel)
     db.commit()
@@ -410,6 +411,13 @@ def update_novel(
     db.refresh(novel)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+    # Draft/Public の公開制御: draft は作者以外には 404 扱い
+    # ※ status 列がないプロジェクトでも壊れないように hasattr チェックを入れている
+    if hasattr(novel, "is_public") and not novel.is_public:
+        # ログインしていない、または作者本人でない場合は存在しないことにする
+        if (not user) or (novel.author_id != user.id):
+            raise HTTPException(404, "小説が存在しません")
+
         db.commit()  # cleanup old broken code
         db.add(novel)
         db.commit()
@@ -430,6 +438,9 @@ def update_novel(
         if payload.is_ai_generated is not None:
             novel.is_ai_generated = payload.is_ai_generated
         novel.description = payload.description
+
+    if payload.is_public is not None:
+        novel.is_public = payload.is_public
 
     # ★ タグ差し替え
     if payload.tag_names is not None:
@@ -541,6 +552,11 @@ def get_novel_detail(
     if not novel:
         raise HTTPException(404, "小説が存在しません")
 
+    # 下書きの場合は作者以外は 404
+    if not novel.is_public:
+        if not user or novel.author_id != user.id:
+            raise HTTPException(404, "小説が存在しません")
+
     # 閲覧数カウント
     novel.view_count = (novel.view_count or 0) + 1
     db.commit()
@@ -614,6 +630,8 @@ def get_novel_detail(
         "is_premium_user": is_premium,
         "age_limit": novel.age_limit,
         "is_ai_generated": novel.is_ai_generated,
+        "is_public": bool(getattr(novel, "is_public", True)),
+        "status": getattr(novel, "status", "public"),
         "tags": tags,
         "episodes": [
             {
@@ -659,6 +677,11 @@ def list_public_novels(
         )
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
     )
+    query = query.filter(models.Novel.is_public == True)
+
+    # --- 公開ステータス (Draft/Public) ---
+    # status 列がある前提で、公開作品だけ一覧に出す
+    query = query.filter(models.Novel.is_public == True)
 
     # --- 年齢フィルタリング ---
     if user_age is None:
@@ -822,6 +845,9 @@ def update_episode(
     if "body" in payload and payload["body"] is not None:
         ep.body = payload["body"]
 
+    if "is_public" in payload and payload["is_public"] is not None:
+        ep.is_public = bool(payload["is_public"])
+
     # タグ更新（差し替え）
     tag_names = payload.get("tag_names")
     if tag_names is not None:
@@ -874,12 +900,19 @@ def list_episodes(
         bool(getattr(user, "is_premium", False)) if user else False
     )
 
-    episodes = (
+    base_q = (
         db.query(models.Episode)
         .filter(models.Episode.novel_id == novel_id)
-        .order_by(models.Episode.episode_number)
-        .all()
     )
+
+    if user and novel.author_id == user.id:
+        episodes = base_q.order_by(models.Episode.episode_number).all()
+    else:
+        episodes = (
+            base_q.filter(models.Episode.is_public == True)
+            .order_by(models.Episode.episode_number)
+            .all()
+        )
 
     return [
         {
@@ -968,6 +1001,15 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         user = None
     # novel を取得（年齢制限のため）
     novel = db.query(models.Novel).get(ep.novel_id)
+
+    # 下書きエピソードは作者だけ
+    try:
+        user = require_current_user(request, db)
+    except Exception:
+        user = None
+    if False and ep.is_public:  # FIXME: episode draft/public not yet implemented
+        if not user or (novel and novel.author_id != user.id):
+            raise HTTPException(404, "エピソードが存在しません")
 
     # 年齢チェック
     if novel.age_limit in ("r15", "r18"):

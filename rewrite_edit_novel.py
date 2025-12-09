@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import pathlib
+
+code = r'''import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
@@ -47,13 +49,8 @@ export default function EditNovel() {
         setDescription(data.description || "");
         setAgeLimit(data.age_limit || "all");
         setIsAIGenerated(!!data.is_ai_generated);
-        // status が "draft" なら下書き。
-        // それ以外でも is_public === false なら下書き扱いにする（データ不整合の保険）
-        if (data.status === "draft" || data.is_public === false) {
-          setStatus("draft");
-        } else {
-          setStatus("public");
-        }
+        // status があればそれを、なければ is_public から推測
+        setStatus(data.status || (data.is_public === false ? "draft" : "public"));
       } catch (err) {
         console.error(err);
         // @ts-ignore
@@ -267,3 +264,8 @@ export default function EditNovel() {
     </div>
   );
 }
+'''
+
+path = pathlib.Path("frontend/src/pages/EditNovel.jsx")
+path.write_text(code, encoding="utf-8")
+print("EditNovel.jsx overwritten.")

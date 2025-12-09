@@ -32,6 +32,7 @@ class NovelBase(BaseModel):
     description: Optional[str] = None
     age_limit: Literal["all", "r15", "r18"] = "all"
     is_ai_generated: bool = False
+    is_public: bool = True
 
 
 class NovelCreate(NovelBase):
@@ -46,6 +47,7 @@ class NovelUpdate(BaseModel):
     tag_names: Optional[List[str]] = None
     age_limit: Optional[Literal["all", "r15", "r18"]] = None
     is_ai_generated: Optional[bool] = None
+    is_public: Optional[bool] = None
 
 
 class Novel(BaseModel):

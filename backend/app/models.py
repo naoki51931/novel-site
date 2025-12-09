@@ -1,17 +1,6 @@
-from sqlalchemy import (
-    Column,
-    Integer,
-    String,
-    Text,
-    ForeignKey,
-    DateTime,
-    Boolean,
-    Enum,
-    Date,
-)
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-
 from .database import Base
 
 # =========================
@@ -62,6 +51,7 @@ class Novel(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), index=True, nullable=False)
     description = Column(Text, nullable=True)
+    is_public = Column(Boolean, nullable=False, default=True)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     view_count = Column(Integer, nullable=False, server_default="0")
@@ -113,6 +103,7 @@ class Novel(Base):
         back_populates="novel",
         cascade="all, delete-orphan",
     )
+
 
     @property
     def tags(self):
