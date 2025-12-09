@@ -34,6 +34,15 @@ import os
 os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
 from fastapi import UploadFile, File
 
+from fastapi import APIRouter
+
+from .ai_novel import (
+    AINovelRequest,
+    AINovelResponse,
+    build_ai_prompt,
+    call_openai_novel_api,
+)
+
 # =========================================
 # DB 初期化
 # =========================================
