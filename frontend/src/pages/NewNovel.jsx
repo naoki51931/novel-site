@@ -16,6 +16,11 @@ export default function NewNovel() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // 🔹 AI小説生成ページへ移動
+  const handleOpenAINovel = () => {
+    navigate("/ai-novel");
+  };
+
   // === auto-save draft start ===
   // マウント時に下書きを読み込む
   useEffect(() => {
@@ -116,6 +121,17 @@ export default function NewNovel() {
       </div>
 
       <h2>新しい小説を作成</h2>
+
+      {/* 🔹 AI小説生成ページへのショートカットボタン */}
+      <div style={{ marginBottom: 16 }}>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleOpenAINovel}
+        >
+          AI小説生成ページへ
+        </button>
+      </div>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>

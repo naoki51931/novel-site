@@ -128,71 +128,61 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
 
 # ===== 実際に OpenAI API を叩く関数 =====
 
-def call_openai_novel_api(prompt: str) -> AINovelResponse:
+
+async def call_openai_novel_api(req: AINovelRequest) -> AINovelResponse:
     """
-    Responses API を使って小説テキストを生成し、
-    AINovelResponse を返す。
+    OpenAI Responses API を用いて小説を生成する。
+    input は単一テキストで送信する。
     """
-    if client is None:
-        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
+    import json
+    import os
 
+    model = (
+        getattr(req, "model", None)
+        or os.getenv("OPENAI_MODEL_TEXT")
+        or "gpt-4.1-mini"
+    ).strip()
+
+    prompt = build_ai_prompt(req)
+
+    # OpenAI 呼び出し
+    resp = client.responses.create(
+        model=model,
+        instructions=(
+            "あなたは日本語ライトノベル作家です。"
+            "与えられた条件に基づいて短編小説を生成してください。"
+            "出力は必ず JSON 1個のみ。"
+            '例: {\\"title\\": \\"タイトル\\", \\"body\\": \\"本文\\"}'
+        ),
+        input=prompt,
+        max_output_tokens=getattr(req, "max_tokens", None) or 2048,
+    )
+
+    raw = resp.output_text or ""
+
+    # JSON パース
+    title = ""
+    body = raw
     try:
-        response = client.responses.create(  # Responses API の推奨パターン 
-            model=OPENAI_MODEL_TEXT,
-            input=[
-                {
-                    "role": "system",
-                    "content": "あなたは日本語で読みやすい小説を書く作家です。",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            temperature=0.9,
-            max_output_tokens=4096,
-            text={
-                "format": {
-                    "type": "text",
-                }
-            },
-        )
+        data = json.loads(raw)
+        title = str(data.get("title") or "")
+        body = str(data.get("body") or "")
+    except:
+        lines = raw.splitlines()
+        if lines:
+            title = lines[0].strip()
+            body = "\n".join(lines[1:]).strip()
 
-    except Exception as e:
-        # API 側のエラーは 502 / 503 相当で返す
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI 小説生成 API 呼び出しに失敗しました: {e}",
-        )
-
-    # Python SDK では output_text プロパティにテキスト全体が入っている 
-    raw_text = getattr(response, "output_text", None)
-    if not raw_text:
-        # 念のため、output 配列から拾うフォールバックも用意しておく
-        try:
-            # 最初の message → 最初の content → text
-            first_message = response.output[0]
-            first_content = first_message.content[0]
-            raw_text = first_content.text
-        except Exception:
-            raise HTTPException(
-                status_code=500,
-                detail="AI 小説生成の結果を解析できませんでした。",
-            )
-
-    title, body = split_title_and_body(raw_text)
-
-    used_tokens = None
-    try:
-        if response.usage:
-            used_tokens = response.usage.total_tokens  # 入出力合計トークン
-    except Exception:
-        used_tokens = None
+    tokens = 0
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", 0) or 0
 
     return AINovelResponse(
         generated_title=title,
         body=body,
-        used_tokens=used_tokens,
-        model=response.model if hasattr(response, "model") else OPENAI_MODEL_TEXT,
+        prompt_used=prompt,
+        model=model,
+        tokens_used=tokens,
     )
 

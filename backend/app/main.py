@@ -165,6 +165,78 @@ def calc_age(birth_date: date | None) -> int | None:
         (today.month, today.day) < (birth_date.month, birth_date.day)
     )
 
+def require_premium_user(request: Request, db: Session) -> models.User:
+    """
+    課金ユーザー専用機能向けの共通チェック。
+    - FORCE_ALL_PREMIUM=1 のときは全ユーザーをプレミアム扱い
+    - そうでない場合は User.is_premium を見る
+    """
+    user = require_current_user(request, db)
+
+    is_premium = FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))
+    if not is_premium:
+        # 402 を返してフロント側で「有料プラン専用です」と表示させる想定
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="この機能は有料プラン専用です。",
+        )
+    return user
+
+def check_ai_quota(db: Session, user_id: int, limit_per_day: int = 10):
+    """
+    ユーザーごとの AI 小説生成回数を 1日あたり limit_per_day 回までに制限する。
+
+    - 日付の境界はサーバのローカル日付ベース（UTCならUTC日）
+    """
+    today = date.today()
+    start = datetime.combine(today, datetime.min.time())
+    end = start + timedelta(days=1)
+
+    count = (
+        db.query(models.AIGenerateLog)
+        .filter(
+            models.AIGenerateLog.user_id == user_id,
+            models.AIGenerateLog.created_at >= start,
+            models.AIGenerateLog.created_at < end,
+        )
+        .count()
+    )
+
+    if count >= limit_per_day:
+        raise HTTPException(
+            status_code=429,
+            detail="本日の AI 小説生成の上限回数に達しました。",
+        )
+
+def save_ai_log(
+    db: Session,
+    user_id: int,
+    req: AINovelRequest,
+    resp: AINovelResponse,
+):
+    """
+    AI 小説生成1回分の利用ログを DB に保存する。
+    """
+    # おおざっぱな要約（タイトル or ジャンル or 登場人物のいずれか）
+    summary_src = (
+        req.title_hint
+        or req.genre
+        or req.characters
+        or ""
+    )
+    prompt_summary = (summary_src or "")[:200]
+
+    log = models.AIGenerateLog(
+        user_id=user_id,
+        prompt_summary=prompt_summary,
+        tokens_used=resp.used_tokens,
+        model=resp.model,
+    )
+    db.add(log)
+    db.commit()
+
+
+
 # =========================================
 # モデル / スキーマ
 # =========================================
@@ -333,7 +405,60 @@ async def stripe_webhook(
     return {"ok": True}
 
 
+# =========================================
+# AI 小説生成 API（有料会員専用）
+# =========================================
+@app.post("/api/ai/novels/generate", response_model=AINovelResponse)
+async def generate_ai_novel(
+    req: AINovelRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    プレミアムユーザー向けAI小説生成API。
+    - 1日あたりの利用回数制限あり
+    - 生成内容を ai_generate_logs テーブルに記録
+    """
+    user = require_current_user(request, db)
 
+    # ★ 1日あたりの利用回数制限
+    today = datetime.utcnow().date()
+    start_of_day = datetime.combine(today, datetime.min.time())
+    MAX_PER_DAY = 20
+
+    count_today = (
+        db.query(models.AIGenerateLog)
+        .filter(models.AIGenerateLog.user_id == user.id)
+        .filter(models.AIGenerateLog.created_at >= start_of_day)
+        .count()
+    )
+    if count_today >= MAX_PER_DAY:
+        raise HTTPException(
+            status_code=429,
+            detail="本日のAI小説生成回数の上限に達しました。",
+        )
+
+    # ★ OpenAI で小説生成
+    resp = await call_openai_novel_api(req)
+
+    # ★ ログ保存用サマリを作成（タイトル/ジャンル/キャラ/トーンを適当にまとめて200文字まで）
+    parts = [req.title_hint, req.genre, req.characters, req.tone]
+    prompt_summary = " / ".join([p for p in parts if p])[:200] if any(parts) else None
+
+    # 使用モデル・トークン数（取れなければ None のまま）
+    model_used = getattr(resp, "model", None) or getattr(req, "model", None) or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+    tokens_used = getattr(resp, "tokens_used", None)
+
+    log = models.AIGenerateLog(
+        user_id=user.id,
+        prompt_summary=prompt_summary,
+        tokens_used=tokens_used,
+        model=model_used,
+    )
+    db.add(log)
+    db.commit()
+
+    return resp
 # =========================================
 # Novel API（タグ対応）
 # =========================================
@@ -1502,3 +1627,36 @@ def delete_comment(
     db.commit()
     return {"ok": True}
 
+
+
+
+@app.get("/api/ai/logs/me")
+def get_my_ai_logs(
+    request: Request,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """
+    自分のAI小説生成ログを新しい順で返す。
+    - 認証必須
+    - limit で件数制限（デフォルト50）
+    """
+    user = require_current_user(request, db)
+
+    q = (
+        db.query(models.AIGenerateLog)
+        .filter(models.AIGenerateLog.user_id == user.id)
+        .order_by(models.AIGenerateLog.created_at.desc())
+        .limit(limit)
+    )
+    logs = q.all()
+    return [
+        {
+            "id": log.id,
+            "created_at": log.created_at,
+            "prompt_summary": log.prompt_summary,
+            "tokens_used": log.tokens_used,
+            "model": log.model,
+        }
+        for log in logs
+    ]

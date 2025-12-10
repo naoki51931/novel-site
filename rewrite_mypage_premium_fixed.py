@@ -1,4 +1,8 @@
-import { useEffect, useState } from "react";
+from pathlib import Path
+
+path = Path("frontend/src/pages/Mypage.jsx")
+
+new_code = r'''import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 const API_BASE = "";
@@ -273,3 +277,7 @@ export default function Mypage() {
     </div>
   );
 }
+'''
+
+path.write_text(new_code, encoding="utf-8")
+print("✅ frontend/src/pages/Mypage.jsx を上書きしました")
