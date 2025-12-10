@@ -1,4 +1,8 @@
-import { Link } from "react-router-dom";
+from pathlib import Path
+
+path = Path("frontend/src/pages/StripeReturn.jsx")
+
+code = r'''import { Link } from "react-router-dom";
 
 /**
  * Stripe 決済結果表示ページ
@@ -50,3 +54,7 @@ export default function StripeReturn({ mode }) {
     </div>
   );
 }
+'''
+
+path.write_text(code, encoding="utf-8")
+print("✅ frontend/src/pages/StripeReturn.jsx を課金完了ページ対応で上書きしました")

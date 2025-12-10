@@ -36,6 +36,8 @@ class User(Base):
     comments = relationship("NovelComment", back_populates="user")
     episode_likes = relationship("EpisodeLike", back_populates="user")
     novel_likes = relationship("NovelLike", back_populates="user")
+    ai_generate_logs = relationship("AIGenerateLog", back_populates="user")
+
 
 
 # =========================
@@ -249,3 +251,17 @@ class NovelComment(Base):
 
     novel = relationship("Novel", back_populates="comments")
     user = relationship("User", back_populates="comments")
+
+class AIGenerateLog(Base):
+    __tablename__ = "ai_generate_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+    prompt_summary = Column(String(255), nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+    model = Column(String(64), nullable=True)
+
+    user = relationship("User", back_populates="ai_generate_logs")
+

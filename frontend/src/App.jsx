@@ -14,6 +14,9 @@ import EpisodeDetail from "./pages/EpisodeDetail";
 import StripeReturn from "./pages/StripeReturn";
 import Login from "./pages/Login";
 import Mypage from "./pages/Mypage";
+import AINovelPage from "./pages/AINovelPage";
+import AiLogsPage from "./pages/AiLogsPage";
+
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -102,6 +105,8 @@ export default function App() {
           <Route path="/novels/:id" element={<NovelDetail />} />
           <Route path="/novels/:id/edit" element={<EditNovel />} />
           <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
+	  <Route path="/ai-novel" element={<AINovelPage />} />
+	  <Route path="/ai-logs" element={<AiLogsPage />} />
           <Route path="/episodes/:id/edit" element={<EditEpisode />} />
           <Route path="/episodes/:id" element={<EpisodeDetail />} />
           <Route path="/stripe/cancel" element={<StripeReturn mode="cancel" />} />

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
+import AiLogsPage from "./pages/AiLogsPage";
 
 // すべての <a> と <button> に自動で btn btn-border を付ける
 function applyGlobalButtonClasses() {
