@@ -1593,21 +1593,35 @@ def read_profile(request: Request, db: Session = Depends(get_db)):
 # ユーザープロフィール更新
 # ============================
 @app.put("/api/users/me")
-def update_profile(payload: dict, request: Request, db: Session = Depends(get_db)):
-    from datetime import date
+def update_profile(
+    payload: schemas.ProfileUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     user = require_current_user(request, db)
 
-    if "email" in payload and payload["email"]:
-        user.email = payload["email"].strip()
+    if payload.username is not None:
+        new_username = payload.username.strip()
+        if not new_username:
+            raise HTTPException(400, "ユーザー名を空にすることはできません")
 
-    if "birth_date" in payload:
-        if payload["birth_date"]:
-            try:
-                user.birth_date = date.fromisoformat(payload["birth_date"])
-            except:
-                raise HTTPException(400, "生年月日の形式が不正です（YYYY-MM-DD）")
-        else:
-            user.birth_date = None
+        if new_username != user.username:
+            exists = (
+                db.query(models.User)
+                .filter(models.User.username == new_username, models.User.id != user.id)
+                .first()
+            )
+            if exists:
+                raise HTTPException(400, "このユーザー名は既に使用されています")
+
+            user.username = new_username
+
+    if payload.email is not None:
+        email = payload.email.strip()
+        user.email = email or None
+
+    if payload.birth_date is not None:
+        user.birth_date = payload.birth_date
 
     db.add(user)
     db.commit()

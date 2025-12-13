@@ -45,6 +45,10 @@ export default function Mypage() {
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [username, setUsername] = useState(() => {
+    if (typeof window === "undefined") return "ユーザー";
+    return localStorage.getItem("username") || "ユーザー";
+  });
   const navigate = useNavigate();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -113,6 +117,10 @@ export default function Mypage() {
         if (resProfile.ok) {
           const profile = await resProfile.json();
           setIsPremium(!!profile.is_premium);
+          if (profile.username) {
+            setUsername(profile.username);
+            localStorage.setItem("username", profile.username);
+          }
         }
       } catch (e) {
         console.error(e);
@@ -123,10 +131,6 @@ export default function Mypage() {
   }, [token]);
 
   if (loading) return <p>読み込み中...</p>;
-
-  const username =
-    (typeof window !== "undefined" && localStorage.getItem("username")) ||
-    "ユーザー";
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>

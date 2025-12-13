@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 export default function AccountSettings() {
   const navigate = useNavigate();
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [loading, setLoading] = useState(true);
@@ -16,8 +17,22 @@ export default function AccountSettings() {
     fetch(`/api/users/me`, {
       headers: { Authorization: "Bearer " + token }
     })
-      .then(res => res.json())
-      .then(data => {
+      .then(async (res) => {
+        if (res.status === 401) {
+          navigate("/login");
+          return null;
+        }
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || "プロフィール取得に失敗しました");
+        }
+
+        return res.json();
+      })
+      .then((data) => {
+        if (!data) return;
+        setUsername(data.username || "");
         setEmail(data.email || "");
         setBirthDate(data.birth_date || "");
       })
@@ -41,12 +56,18 @@ export default function AccountSettings() {
           Authorization: "Bearer " + token,
         },
         body: JSON.stringify({
+          username,
           email,
           birth_date: birthDate,
         }),
       });
 
       let msg = "保存しました。";
+      if (res.status === 401) {
+        navigate("/login");
+        return;
+      }
+
       if (!res.ok) {
         try {
           const d = await res.json();
@@ -57,6 +78,7 @@ export default function AccountSettings() {
         throw new Error(msg);
       }
 
+      localStorage.setItem("username", username);
       alert("保存しました。");
     } catch (e) {
       setError(e.message || "保存に失敗しました");
@@ -72,6 +94,19 @@ export default function AccountSettings() {
       <h2>マイページ設定</h2>
 
       <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            ユーザー名<br />
+            <input
+              type="text"
+              value={username}
+              onChange={(e)=>setUsername(e.target.value)}
+              style={{ width:"100%", padding:4 }}
+              required
+            />
+          </label>
+        </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             メールアドレス<br />
