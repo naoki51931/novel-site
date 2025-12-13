@@ -120,3 +120,5 @@ class ProfileRead(BaseModel):
 class ProfileUpdate(BaseModel):
     email: Optional[str] = None
     birth_date: Optional[date] = None
+
+

@@ -12,6 +12,14 @@ export default function NewEpisode() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");          // タグ用 state
+
+  // ★ 表紙・押絵（NewEpisode 用）
+  const [coverFile, setCoverFile] = useState(null);
+  const [isUploadingCover, setIsUploadingCover] = useState(false);
+
+  // 押絵は複数選択できるようにする
+  const [illustItems, setIllustItems] = useState([]); // [{file, caption}]
+  const [isUploadingIllust, setIsUploadingIllust] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -57,6 +65,86 @@ export default function NewEpisode() {
   }, [draftKey, episodeNumber, title, body, tags]);
   // === auto-save episode draft end ===
 
+
+  // =========================
+  // ★ 表紙・押絵（NewEpisode）
+  // =========================
+  const handleCoverFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setCoverFile(e.target.files[0]);
+    }
+  };
+
+  const handleIllustFilesChange = (e) => {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (!files.length) return;
+    // 追加形式（既存に追記）
+    setIllustItems((prev) => [
+      ...prev,
+      ...files.map((f) => ({ file: f, caption: "" })),
+    ]);
+    // 同じファイルをもう一度選べるよう input をリセット
+    e.target.value = "";
+  };
+
+  const updateIllustCaption = (index, caption) => {
+    setIllustItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, caption } : it))
+    );
+  };
+
+  const removeIllustItem = (index) => {
+    setIllustItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const uploadCover = async (episodeId, token) => {
+    if (!coverFile) return;
+    const formData = new FormData();
+    formData.append("file", coverFile);
+
+    setIsUploadingCover(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/episodes/${episodeId}/cover-image`, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+        body: formData,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "表紙のアップロードに失敗しました");
+      }
+    } finally {
+      setIsUploadingCover(false);
+    }
+  };
+
+  const uploadIllusts = async (episodeId, token) => {
+    if (!illustItems.length) return;
+
+    setIsUploadingIllust(true);
+    try {
+      for (const item of illustItems) {
+        const formData = new FormData();
+        formData.append("file", item.file);
+        formData.append("caption", item.caption || "");
+
+        const res = await fetch(`${API_BASE}/api/episodes/${episodeId}/illusts`, {
+          method: "POST",
+          headers: { Authorization: "Bearer " + token },
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || "押絵のアップロードに失敗しました");
+        }
+      }
+    } finally {
+      setIsUploadingIllust(false);
+    }
+  };
+
+  
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
@@ -70,11 +158,16 @@ export default function NewEpisode() {
       return;
     }
 
+    const token = localStorage.getItem("token");
+    if (!token) {
+      setError("ログインが必要です。");
+      return;
+    }
+
     const payload = {
       episode_number: Number(episodeNumber),
       title,
       body,
-      // カンマ区切りの文字列 → 配列に変換
       tag_names: tags
         .split(",")
         .map((s) => s.trim())
@@ -85,11 +178,12 @@ export default function NewEpisode() {
 
     setLoading(true);
     try {
+      // 1) エピソード作成
       const res = await fetch(`${API_BASE}/api/novels/${id}/episodes`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: "Bearer " + localStorage.getItem("token"),
+          Authorization: "Bearer " + token,
         },
         body: JSON.stringify(payload),
       });
@@ -108,16 +202,42 @@ export default function NewEpisode() {
         );
       }
 
+      // episode_id を取得（返却形式ゆらぎ対応）
+      const createdEpisodeId =
+        (data && (data.id ?? data.episode_id)) ??
+        null;
+
+      if (!createdEpisodeId) {
+        // ここまで成功してるので、少なくとも小説詳細には戻す
+        console.warn("episode_id がレスポンスから取得できませんでした。アップロードはスキップします。");
+        localStorage.removeItem(draftKey);
+        navigate(`/novels/${id}`);
+        return;
+      }
+
+      // 2) 表紙アップロード（任意）
+      if (coverFile) {
+        await uploadCover(createdEpisodeId, token);
+      }
+
+      // 3) 押絵アップロード（任意・複数）
+      if (illustItems.length) {
+        await uploadIllusts(createdEpisodeId, token);
+      }
+
       // 成功したらこの小説の下書きを消して小説詳細へ戻る
       localStorage.removeItem(draftKey);
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error("❌ NewEpisode error:", err);
-      setError(err.message);
+      setError(err.message || "投稿中にエラーが発生しました。");
     } finally {
       setLoading(false);
     }
   };
+
+
+
 
   return (
     <div>
@@ -150,6 +270,98 @@ export default function NewEpisode() {
         </div>
 
         {/* タグ入力欄 */}
+
+
+        {/* =========================
+            ★ 表紙・押絵（任意）
+           ========================= */}
+        <div
+          style={{
+            marginTop: 16,
+            marginBottom: 16,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>表紙画像（任意）</h3>
+          <input type="file" accept="image/*" onChange={handleCoverFileChange} />
+          {coverFile && (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#555" }}>
+              選択中: {coverFile.name}
+            </div>
+          )}
+          {isUploadingCover && (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#777" }}>
+              表紙アップロード中...
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            marginTop: 16,
+            marginBottom: 16,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>押絵（任意・複数）</h3>
+
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleIllustFilesChange}
+          />
+
+          {illustItems.length > 0 ? (
+            <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+              {illustItems.map((it, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    border: "1px solid #eee",
+                    borderRadius: 8,
+                    padding: 10,
+                    display: "grid",
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "#555" }}>
+                    {it.file?.name}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="キャプション（任意）"
+                    value={it.caption || ""}
+                    onChange={(e) => updateIllustCaption(idx, e.target.value)}
+                    style={{ width: "100%", padding: 6 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => removeIllustItem(idx)}
+                  >
+                    この押絵を外す
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ marginTop: 10, color: "#777", fontSize: 13 }}>
+              まだ押絵は選択されていません。
+            </p>
+          )}
+
+          {isUploadingIllust && (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#777" }}>
+              押絵アップロード中...
+            </div>
+          )}
+        </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             タグ (カンマ区切り)

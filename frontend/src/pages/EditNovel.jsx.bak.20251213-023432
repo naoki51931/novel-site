@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
@@ -14,14 +13,7 @@ export default function EditNovel() {
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [status, setStatus] = useState("public");            // "public" / "draft"
-
-  // ★ タグ（カンマ区切り入力）
-  const [tagsInput, setTagsInput] = useState("");
-
-  
-  // draft を読んだかどうか
-  const hasDraftRef = useRef(false);
-const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -42,7 +34,9 @@ const [loading, setLoading] = useState(true);
         setError("");
 
         const res = await fetch(`${API_BASE}/api/novels/${id}`, {
-          headers: { Authorization: "Bearer " + token },
+          headers: {
+            Authorization: "Bearer " + token,
+          },
         });
         if (!res.ok) {
           throw new Error(`小説情報の取得に失敗しました (${res.status})`);
@@ -53,14 +47,6 @@ const [loading, setLoading] = useState(true);
         setDescription(data.description || "");
         setAgeLimit(data.age_limit || "all");
         setIsAIGenerated(!!data.is_ai_generated);
-
-        // ★ tags（配列）→ "A, B" にしてセット
-        if (Array.isArray(data.tags)) {
-          setTagsInput(data.tags.map((t) => t.name).join(", "));
-        } else {
-          setTagsInput("");
-        }
-
         // status が "draft" なら下書き。
         // それ以外でも is_public === false なら下書き扱いにする（データ不整合の保険）
         if (data.status === "draft" || data.is_public === false) {
@@ -70,6 +56,7 @@ const [loading, setLoading] = useState(true);
         }
       } catch (err) {
         console.error(err);
+        // @ts-ignore
         setError(err.message || "小説情報の取得中にエラーが発生しました");
       } finally {
         setLoading(false);
@@ -86,16 +73,13 @@ const [loading, setLoading] = useState(true);
       if (!raw) return;
       const draft = JSON.parse(raw);
 
-      
-      hasDraftRef.current = true;
-if (draft.title) setTitle(draft.title);
+      if (draft.title) setTitle(draft.title);
       if (draft.description) setDescription(draft.description);
       if (draft.ageLimit) setAgeLimit(draft.ageLimit);
-      if (typeof draft.isAIGenerated === "boolean") setIsAIGenerated(draft.isAIGenerated);
+      if (typeof draft.isAIGenerated === "boolean") {
+        setIsAIGenerated(draft.isAIGenerated);
+      }
       if (draft.status) setStatus(draft.status);
-
-      // ★ draft の tagsInput
-      if (typeof draft.tagsInput === "string") setTagsInput(draft.tagsInput);
     } catch (e) {
       console.error("failed to load novel edit draft", e);
     }
@@ -110,7 +94,6 @@ if (draft.title) setTitle(draft.title);
         ageLimit,
         status,
         isAIGenerated,
-        tagsInput, // ★ 追加
         saved_at: new Date().toISOString(),
       };
       try {
@@ -121,7 +104,7 @@ if (draft.title) setTitle(draft.title);
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [novelDraftKey, title, description, ageLimit, status, isAIGenerated, tagsInput]);
+  }, [novelDraftKey, title, description, ageLimit, status, isAIGenerated]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -135,13 +118,9 @@ if (draft.title) setTitle(draft.title);
     setSaving(true);
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
-
-      // ★ "A, B" → ["A","B"]
-      const tagNames = (tagsInput || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      if (!token) {
+        throw new Error("ログインが必要です。");
+      }
 
       const res = await fetch(`${API_BASE}/api/novels/${id}`, {
         method: "PUT",
@@ -156,14 +135,14 @@ if (draft.title) setTitle(draft.title);
           is_ai_generated: isAIGenerated,
           status,
           is_public: status === "public",
-
-          // ★ ここが本命
-          tag_names: tagNames,
         }),
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "小説の更新に失敗しました");
+
+      if (!res.ok) {
+        throw new Error(data.detail || "小説の更新に失敗しました");
+      }
 
       // 更新に成功したら、この小説の編集下書きを削除
       try {
@@ -175,13 +154,16 @@ if (draft.title) setTitle(draft.title);
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error(err);
+      // @ts-ignore
       setError(err.message || "小説の更新中にエラーが発生しました");
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) {
+    return <p>読み込み中...</p>;
+  }
 
   return (
     <div>
@@ -216,24 +198,6 @@ if (draft.title) setTitle(draft.title);
               style={{ width: "100%", padding: 4 }}
             />
           </label>
-        </div>
-
-        {/* ★ タグ編集 */}
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            タグ（カンマ区切り）
-            <br />
-            <input
-              type="text"
-              value={tagsInput}
-              onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="例: ファンタジー, バトル, 百合"
-              style={{ width: "100%", padding: 4 }}
-            />
-          </label>
-          <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
-            ※ カンマ区切りで複数指定できます
-          </div>
         </div>
 
         <div style={{ marginBottom: 8 }}>
@@ -279,10 +243,16 @@ if (draft.title) setTitle(draft.title);
           </label>
         </div>
 
-        {error && <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>}
+        {error && (
+          <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>
+        )}
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-border" type="submit" disabled={saving}>
+          <button
+            className="btn btn-border"
+            type="submit"
+            disabled={saving}
+          >
             {saving ? "更新中..." : "更新する"}
           </button>
           <button
@@ -297,4 +267,3 @@ if (draft.title) setTitle(draft.title);
     </div>
   );
 }
-
