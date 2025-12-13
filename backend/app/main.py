@@ -1714,7 +1714,7 @@ def get_my_ai_logs(
             "id": log.id,
             "created_at": log.created_at,
             "prompt_summary": log.prompt_summary,
-            "tokens_used": log.used_tokens,
+            "tokens_used": log.tokens_used,
             "model": log.model,
         }
         for log in logs
