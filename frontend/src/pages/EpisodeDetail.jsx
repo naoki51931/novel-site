@@ -212,6 +212,13 @@ export default function EpisodeDetail() {
         {typeof episode.view_count === "number" && (
           <span>閲覧数: {episode.view_count}</span>
         )}
+	<Link
+          to={`/ai-novel?episode_id=${episode.id}`}
+          className="btn btn-border"
+        >
+          AIで続きを生成
+        </Link>
+
         <button
           type="button"
           className="btn btn-border"

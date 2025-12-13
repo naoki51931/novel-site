@@ -6,43 +6,50 @@ from typing import Tuple
 
 from fastapi import HTTPException
 from openai import OpenAI
-from dotenv import load_dotenv  # 既に他で使っていれば不要
-
-# .env 読み込み（既にどこかでやっているならこの行は不要）
-load_dotenv()
-
-# ===== OpenAI クライアント初期化 =====
-
-# 新SDK推奨スタイル:
-# from openai import OpenAI
-# client = OpenAI() で OK 
-try:
-    client = OpenAI()
-except Exception as e:
-    # 起動時に例外が出てもアプリ自体は動くようにしておく
-    client = None
-
-OPENAI_MODEL_TEXT = os.getenv("OPENAI_MODEL_TEXT", "gpt-5.1-mini")
-
-
-# ===== Pydantic 用のリクエスト・レスポンス型（main.py 側でも使うならそこへ移動してもOK） =====
+from dotenv import load_dotenv
 
 from pydantic import BaseModel
 
+# .env 読み込み（他でやっていても二重読み込みは特に害なし）
+load_dotenv()
+
+# ===== OpenAI クライアント初期化 =====
+try:
+    client = OpenAI()
+except Exception as e:
+    # 起動時に OpenAI クライアント初期化でコケてもアプリ自体は起動できるようにしておく
+    print("[WARN] OpenAI client init failed:", repr(e))
+    client = None
+
+# デフォルトモデル（env に無ければ gpt-4.1-mini を使う）
+OPENAI_MODEL_TEXT = os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+
+
+# ===== Pydantic モデル =====
 
 class AINovelRequest(BaseModel):
+    """
+    /api/ai/novels/generate 用の共通リクエスト。
+    通常の「お題から生成」用では title_hint / genre / characters / tone / length を使う。
+    「続き生成」のようなケースでは prompt を直接渡して使うこともできる。
+    """
     title_hint: str | None = None
     genre: str | None = None
     characters: str | None = None
     tone: str | None = None
     length: str | None = "medium"  # "short" | "medium" | "long"
+    prompt: str | None = None
+    model: str | None = None
 
 
 class AINovelResponse(BaseModel):
     generated_title: str
     body: str
-    used_tokens: int | None = None
-    model: str | None = None
+    used_tokens: int | None = None  # OpenAIの使用トークン数
+    model: str | None = None        # 実際に使ったモデル名
+    prompt_used: str | None = None  # 生成に使ったプロンプト全文（ログ用）
+    # デバッグやログ確認用に実際に投げたプロンプト全文を残す
+    prompt_used: str | None = None
 
 
 # ===== プロンプト組み立て =====
@@ -64,8 +71,6 @@ def build_ai_prompt(req: AINovelRequest) -> str:
 
     title_hint = req.title_hint or "タイトルは内容に合うものをあなたが考えてほしい"
 
-    # モデル側への指示（システム寄りメッセージ相当）は instructions でも良いが、
-    # シンプルにユーザープロンプト内で完結させる。
     prompt = dedent(
         f"""
         あなたは日本語のライトノベル風の小説家です。
@@ -93,7 +98,7 @@ def build_ai_prompt(req: AINovelRequest) -> str:
     return prompt
 
 
-# ===== 生成テキストからタイトルと本文を切り分ける =====
+# ===== テキストからタイトルと本文を切り分ける（今は使っていないが残しておく） =====
 
 def split_title_and_body(text: str) -> Tuple[str, str]:
     """
@@ -103,10 +108,9 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
     if not text:
         return "タイトル未設定", ""
 
-    # 改行を統一
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-
     lines = text.split("\n")
+
     # 先頭の空行を削る
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -115,8 +119,6 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
         return "タイトル未設定", ""
 
     title = lines[0].strip()
-
-    # 残りを本文として結合（2行目が空行であればそのまま残しておいてOK）
     body_lines = lines[1:] if len(lines) > 1 else []
     body = "\n".join(body_lines).lstrip("\n")
 
@@ -128,51 +130,84 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
 
 # ===== 実際に OpenAI API を叩く関数 =====
 
-
-async def call_openai_novel_api(req: AINovelRequest) -> AINovelResponse:
+async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
     """
     OpenAI Responses API を用いて小説を生成する。
-    input は単一テキストで送信する。
+
+    - 通常の小説生成:
+        req: AINovelRequest
+        -> req.prompt があればそれをそのまま使い、無ければ build_ai_prompt(req) で組み立てる。
+
+    - 「エピソードの続き生成」など:
+        req: str  （すでに組み立て済みのプロンプト文字列）
+        -> そのまま input に渡す。
     """
     import json
-    import os
 
-    model = (
-        getattr(req, "model", None)
-        or os.getenv("OPENAI_MODEL_TEXT")
-        or "gpt-4.1-mini"
-    ).strip()
+    if client is None:
+        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
 
-    prompt = build_ai_prompt(req)
+    # ---- モデル決定 ----
+    if isinstance(req, AINovelRequest):
+        effective_model = (
+            model
+            or (req.model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT)
+        )
+        effective_model = effective_model.strip()
+        # プロンプト決定: 直接指定があればそれを優先
+        if req.prompt:
+            prompt = req.prompt
+        else:
+            prompt = build_ai_prompt(req)
+    else:
+        # 文字列としてプロンプトを直接渡されたパターン
+        effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
+        prompt = str(req)
 
-    # OpenAI 呼び出し
-    resp = client.responses.create(
-        model=model,
-        instructions=(
-            "あなたは日本語ライトノベル作家です。"
-            "与えられた条件に基づいて短編小説を生成してください。"
-            "出力は必ず JSON 1個のみ。"
-            '例: {\\"title\\": \\"タイトル\\", \\"body\\": \\"本文\\"}'
-        ),
-        input=prompt,
-        max_output_tokens=getattr(req, "max_tokens", None) or 2048,
-    )
+    # ---- OpenAI 呼び出し ----
+    try:
+        resp = client.responses.create(
+            model=effective_model,
+            instructions=(
+                "あなたは日本語ライトノベル作家です。"
+                "与えられた条件に基づいて短編小説を生成してください。"
+                "出力は必ず JSON 1個のみ。"
+                '例: {\\"title\\": \\"タイトル\\", \\"body\\": \\"本文\\"}'
+            ),
+            input=prompt,
+            max_output_tokens=2048,
+        )
+    except Exception as e:
+        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
+        raise HTTPException(status_code=502, detail=f"AI 小説生成 API 呼び出しに失敗しました: {e!r}")
 
-    raw = resp.output_text or ""
+    # ---- テキスト部分を抽出 ----
+    raw = ""
+    try:
+        # 新しい Responses API 形式
+        raw = resp.output[0].content[0].text
+    except Exception:
+        # 念のため互換用のフィールドも試す
+        raw = getattr(resp, "output_text", "") or ""
 
-    # JSON パース
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    # ---- JSON パースして title/body を取り出す ----
     title = ""
-    body = raw
+    body = ""
     try:
         data = json.loads(raw)
         title = str(data.get("title") or "")
         body = str(data.get("body") or "")
-    except:
-        lines = raw.splitlines()
-        if lines:
-            title = lines[0].strip()
-            body = "\n".join(lines[1:]).strip()
+    except Exception:
+        # JSON で返ってこなかった場合は、先頭行=タイトル扱いで分割
+        title, body = split_title_and_body(raw)
 
+    if not title:
+        title = "タイトル未設定"
+
+    # ---- トークン使用量 ----
     tokens = 0
     usage = getattr(resp, "usage", None)
     if usage is not None:
@@ -181,8 +216,7 @@ async def call_openai_novel_api(req: AINovelRequest) -> AINovelResponse:
     return AINovelResponse(
         generated_title=title,
         body=body,
+        used_tokens=tokens,
+        model=effective_model,
         prompt_used=prompt,
-        model=model,
-        tokens_used=tokens,
     )
-

@@ -157,6 +157,16 @@ def require_current_user(request: Request, db: Session) -> models.User:
         raise HTTPException(401, "ユーザーが存在しません")
     return user
 
+def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> models.User:
+    """
+    FastAPI の Depends 用にラップした current user 取得関数
+    """
+    return require_current_user(request, db)
+
+
 def calc_age(birth_date: date | None) -> int | None:
     if not birth_date:
         return None
@@ -226,7 +236,7 @@ def save_ai_log(
     )
     prompt_summary = (summary_src or "")[:200]
 
-    log = models.AIGenerateLog(
+    log = models.models.AIGenerateLog(
         user_id=user_id,
         prompt_summary=prompt_summary,
         tokens_used=resp.used_tokens,
@@ -449,7 +459,7 @@ async def generate_ai_novel(
     model_used = getattr(resp, "model", None) or getattr(req, "model", None) or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
     tokens_used = getattr(resp, "tokens_used", None)
 
-    log = models.AIGenerateLog(
+    log = models.models.AIGenerateLog(
         user_id=user.id,
         prompt_summary=prompt_summary,
         tokens_used=tokens_used,
@@ -459,6 +469,56 @@ async def generate_ai_novel(
     db.commit()
 
     return resp
+
+# =====================================================
+#  AI：エピソードの続き生成
+# =====================================================
+from .models import Episode
+from .ai_novel import call_openai_novel_api
+
+@app.post("/api/ai/episodes/{episode_id}/continue")
+async def generate_ai_episode_continue(
+    episode_id: int,
+    req: AINovelRequest,
+    session: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # プレミアムチェック（既存の処理）
+    if not current_user.is_premium:
+        raise HTTPException(403, "AI機能はプレミアム専用です")
+
+    # エピソード取得
+    ep = session.query(Episode).filter(Episode.id == episode_id).first()
+    if not ep:
+        raise HTTPException(404, "エピソードが見つかりません")
+
+    # --- プロンプト構築 ---
+    prompt = f"""あなたは小説家です。
+以下のエピソードの続きとなる文章を、小説として自然につながるように書いてください。
+
+【前の話の本文】
+{ep.body}
+
+【続きの指示】
+{req.prompt or "自然な続きお願いします"}
+
+"""
+
+    # OpenAI 呼び出し
+    ai_resp = await call_openai_novel_api(prompt, model=req.model)
+
+    # 利用ログに記録
+    log = models.AIGenerateLog(
+        user_id=current_user.id,
+        prompt_summary=f"EP#{episode_id} の続き",
+        tokens_used=ai_resp.used_tokens,
+        model=req.model,
+    )
+    session.add(log)
+    session.commit()
+
+    return ai_resp
+
 # =========================================
 # Novel API（タグ対応）
 # =========================================
@@ -1655,7 +1715,7 @@ def get_my_ai_logs(
             "id": log.id,
             "created_at": log.created_at,
             "prompt_summary": log.prompt_summary,
-            "tokens_used": log.tokens_used,
+            "tokens_used": log.used_tokens,
             "model": log.model,
         }
         for log in logs

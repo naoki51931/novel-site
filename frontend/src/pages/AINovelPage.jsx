@@ -1,5 +1,5 @@
 // frontend/src/pages/AINovelPage.jsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 /**
@@ -21,6 +21,10 @@ export default function AINovelPage() {
   const [length, setLength] = useState("medium");
   const [model, setModel] = useState("gpt-4.1-mini");
 
+  // ★ ここが「続き生成モード」用の state
+  const [isContinueMode, setIsContinueMode] = useState(false);
+  const [episodeId, setEpisodeId] = useState(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
@@ -28,6 +32,41 @@ export default function AINovelPage() {
   const [result, setResult] = useState(null);
 
   const navigate = useNavigate();
+
+  // ★ URL の ?episode_id=xxx を拾って「続きモード」にする
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const eid = params.get("episode_id");
+    if (!eid) return;
+
+    setIsContinueMode(true);
+    setEpisodeId(eid);
+
+    // ここでエピソードを取得して、タイトルヒントなどに反映しておくと親切
+    (async () => {
+      try {
+        const token = getAuthToken();
+        const res = await fetch(`/api/episodes/${eid}`, {
+          headers: token
+            ? { Authorization: `Bearer ${token}` }
+            : {},
+        });
+        if (!res.ok) {
+          console.warn("failed to load episode for continue mode", res.status);
+          return;
+        }
+        const data = await res.json();
+
+        // タイトルのイメージに「◯話の続き」っぽい文言を入れておく
+        if (data?.title) {
+          setTitleHint(`「${data.title}」の続き`);
+        }
+        // 必要ならここで characters / tone を埋めてもよい
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
 
   const handleGenerate = async (e) => {
     e.preventDefault();
@@ -48,7 +87,12 @@ export default function AINovelPage() {
     }
 
     try {
-      const res = await fetch("/api/ai/novels/generate", {
+      // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
+      const endpoint = episodeId
+        ? `/api/ai/episodes/${episodeId}/continue`
+        : "/api/ai/novels/generate";
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -60,6 +104,7 @@ export default function AINovelPage() {
           characters: characters || null,
           tone: tone || null,
           length: length || "medium",
+          model: model || "gpt-4.1-mini",
         }),
       });
 
@@ -113,13 +158,23 @@ export default function AINovelPage() {
 
   return (
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "1.5rem" }}>
-      <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>AI小説生成（有料会員専用）</h1>
+      <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>
+        {isContinueMode ? "AI小説：エピソードの続き生成" : "AI小説生成（有料会員専用）"}
+      </h1>
 
-      <p style={{ marginBottom: "1.5rem", color: "#555" }}>
-        お題や登場人物を入力して、「AI小説を生成する」を押すとお試し小説を生成します。
-        <br />
-        生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。
-      </p>
+      {isContinueMode ? (
+        <p style={{ marginBottom: "1.5rem", color: "#555" }}>
+          選択したエピソードの<strong>続き</strong>を AI が生成します。
+          <br />
+          必要であれば、雰囲気や追加したい展開を下のフォームに書き足してから「AI小説を生成する」を押してください。
+        </p>
+      ) : (
+        <p style={{ marginBottom: "1.5rem", color: "#555" }}>
+          お題や登場人物を入力して、「AI小説を生成する」を押すとお試し小説を生成します。
+          <br />
+          生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。
+        </p>
+      )}
 
       <form
         onSubmit={handleGenerate}
@@ -140,49 +195,59 @@ export default function AINovelPage() {
             type="text"
             value={titleHint}
             onChange={(e) => setTitleHint(e.target.value)}
-            placeholder="例: 月夜の喫茶店で始まる物語"
+            placeholder={
+              isContinueMode
+                ? "例: 前話の雰囲気を引き継ぎつつ、二人の関係をもう一歩進めてほしい など"
+                : "例: 月夜の喫茶店で始まる物語"
+            }
             style={{ width: "100%", padding: "0.5rem" }}
           />
         </div>
 
-        <div>
-          <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            ジャンル（任意）
-          </label>
-          <input
-            type="text"
-            value={genre}
-            onChange={(e) => setGenre(e.target.value)}
-            placeholder="例: ファンタジー / 日常 / SF / ラブコメ"
-            style={{ width: "100%", padding: "0.5rem" }}
-          />
-        </div>
+        {!isContinueMode && (
+          <>
+            <div>
+              <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+                ジャンル（任意）
+              </label>
+              <input
+                type="text"
+                value={genre}
+                onChange={(e) => setGenre(e.target.value)}
+                placeholder="例: ファンタジー / 日常 / SF / ラブコメ"
+                style={{ width: "100%", padding: "0.5rem" }}
+              />
+            </div>
 
-        <div>
-          <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            登場人物・設定
-          </label>
-          <textarea
-            value={characters}
-            onChange={(e) => setCharacters(e.target.value)}
-            rows={3}
-            placeholder="例: 大学生の主人公と、不思議な店主がいる深夜の喫茶店。主人公は最近よく見る夢の話を打ち明ける。"
-            style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
-          />
-        </div>
+            <div>
+              <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+                登場人物・設定
+              </label>
+              <textarea
+                value={characters}
+                onChange={(e) => setCharacters(e.target.value)}
+                rows={3}
+                placeholder="例: 大学生の主人公と、不思議な店主がいる深夜の喫茶店。主人公は最近よく見る夢の話を打ち明ける。"
+                style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
+              />
+            </div>
+          </>
+        )}
 
-        <div>
-          <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            雰囲気・トーン（任意）
-          </label>
-          <input
-            type="text"
-            value={tone}
-            onChange={(e) => setTone(e.target.value)}
-            placeholder="例: ほのぼの / 少し切ない / ダーク寄り など"
-            style={{ width: "100%", padding: "0.5rem" }}
-          />
-        </div>
+        {!isContinueMode && (
+          <div>
+            <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+              雰囲気・トーン（任意）
+            </label>
+            <input
+              type="text"
+              value={tone}
+              onChange={(e) => setTone(e.target.value)}
+              placeholder="例: ほのぼの / 少し切ない / ダーク寄り など"
+              style={{ width: "100%", padding: "0.5rem" }}
+            />
+          </div>
+        )}
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
@@ -198,6 +263,7 @@ export default function AINovelPage() {
             <option value="long">長め（4000〜6000文字程度）</option>
           </select>
         </div>
+
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
             使用モデル
@@ -228,16 +294,19 @@ export default function AINovelPage() {
             opacity: loading ? 0.7 : 1,
           }}
         >
-          {loading ? "生成中..." : "AI小説を生成する"}
+          {loading
+            ? "生成中..."
+            : isContinueMode
+            ? "このエピソードの続きを生成する"
+            : "AI小説を生成する"}
         </button>
-	<button
+        <button
           type="button"
           className="btn btn-border"
           onClick={() => navigate("/ai-logs")}
         >
           利用履歴を見る
         </button>
-
       </form>
 
       {premiumError && (
