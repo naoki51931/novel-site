@@ -429,7 +429,7 @@ async def generate_ai_novel(
     - 1日あたりの利用回数制限あり
     - 生成内容を ai_generate_logs テーブルに記録
     """
-    user = require_current_user(request, db)
+    user = require_premium_user(request, db)
 
     # ★ 1日あたりの利用回数制限
     today = datetime.utcnow().date()
@@ -484,9 +484,8 @@ async def generate_ai_episode_continue(
     current_user: models.User = Depends(get_current_user),
 ):
     # プレミアムチェック（既存の処理）
-    if not current_user.is_premium:
-        raise HTTPException(403, "AI機能はプレミアム専用です")
-
+    user = require_premium_user(request, db)
+    
     # エピソード取得
     ep = session.query(Episode).filter(Episode.id == episode_id).first()
     if not ep:
