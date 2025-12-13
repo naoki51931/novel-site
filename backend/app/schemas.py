@@ -118,6 +118,7 @@ class ProfileRead(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
+    username: Optional[str] = None
     email: Optional[str] = None
     birth_date: Optional[date] = None
 
