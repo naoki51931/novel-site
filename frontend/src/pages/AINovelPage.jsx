@@ -13,6 +13,51 @@ function getAuthToken() {
   return localStorage.getItem("access_token") || localStorage.getItem("token");
 }
 
+function normalizeAINovelResponse(data) {
+  if (!data || typeof data !== "object") return data;
+  if (typeof data.body !== "string") return data;
+
+  const raw = data.body.trim();
+  if (!raw) return data;
+
+  const stripFence = (s) => {
+    const t = (s || "").trim();
+    if (!t.startsWith("```")) return t;
+    const lines = t.split("\n");
+    if (lines.length && lines[0].startsWith("```")) lines.shift();
+    if (lines.length && lines[lines.length - 1].trim() === "```") lines.pop();
+    return lines.join("\n").trim();
+  };
+
+  const tryParse = (s) => {
+    const cleaned = stripFence(s);
+    if (!cleaned.startsWith("{")) return null;
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  const parsed =
+    tryParse(raw) ||
+    (raw.includes('\\"') ? tryParse(raw.replace(/\\"/g, '"')) : null);
+
+  if (!parsed) return data;
+
+  const title =
+    data.generated_title ||
+    parsed.title ||
+    parsed.generated_title ||
+    parsed.generatedTitle ||
+    "タイトル未設定";
+  const body = parsed.body || parsed.text || parsed.content || parsed.story || data.body;
+
+  return { ...data, generated_title: title, body };
+}
+
 export default function AINovelPage() {
   const [titleHint, setTitleHint] = useState("");
   const [genre, setGenre] = useState("");
@@ -151,7 +196,7 @@ export default function AINovelPage() {
       }
 
       const data = await res.json();
-      setResult(data);
+      setResult(normalizeAINovelResponse(data));
     } catch (err) {
       console.error(err);
       setError(err.message || "生成中にエラーが発生しました。");

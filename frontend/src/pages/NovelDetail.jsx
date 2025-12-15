@@ -27,6 +27,18 @@ export default function NovelDetail() {
     return new Date(isoString).toLocaleString("ja-JP");
   };
 
+  const titleStartsWithEpisodePrefix = (title) => {
+    if (typeof title !== "string") return false;
+    return /^\s*第\s*(?:[0-9０-９]+|[一二三四五六七八九十百千万]+)\s*話/.test(title);
+  };
+
+  const formatEpisodeDisplayTitle = (episodeNumber, title) => {
+    const cleanTitle = typeof title === "string" ? title.trim() : "";
+    if (cleanTitle && titleStartsWithEpisodePrefix(cleanTitle)) return cleanTitle;
+    if (episodeNumber == null || episodeNumber === "") return cleanTitle;
+    return cleanTitle ? `第${episodeNumber}話 ${cleanTitle}` : `第${episodeNumber}話`;
+  };
+
   const AGE_LABELS = {
     all: "全年齢",
     r15: "R15",
@@ -617,7 +629,7 @@ export default function NovelDetail() {
       <hr />
       
 
-            {/* エピソード一覧 */}
+      {/* エピソード一覧 */}
       <h3 style={{ marginTop: 16 }}>エピソード一覧</h3>
 
       {/* エピソード追加ボタン */}
@@ -658,7 +670,10 @@ export default function NovelDetail() {
                   to={`/episodes/${ep.id}`}
                   style={{ fontWeight: "bold", marginRight: "auto" }}
                 >
-                  第{ep.number || ep.episode_number}話 {ep.title}
+                  {formatEpisodeDisplayTitle(
+                    ep.number || ep.episode_number,
+                    ep.title
+                  )}
                 </Link>
 
                 {/* エピソード編集・削除ボタン */}
@@ -781,4 +796,3 @@ export default function NovelDetail() {
     </div>
   );
 }
-
