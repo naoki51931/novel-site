@@ -430,6 +430,8 @@ export default function AINovelPage() {
             <option value="openai/chatgpt-4o-latest">ChatGPT（OpenRouter / chatgpt-4o-latest）</option>
             <option value="moonshotai/kimi-k2">Kimi（OpenRouter / kimi-k2）</option>
             <option value="deepseek/deepseek-chat">DeepSeek（OpenRouter / deepseek-chat）</option>
+            <option value="deepseek:deepseek-chat">DeepSeek（公式 / deepseek-chat）</option>
+            <option value="deepseek:deepseek-reasoner">DeepSeek（公式 / deepseek-reasoner）</option>
             <option value="google/gemini-2.0-flash-001">Gemini（OpenRouter / gemini-2.0-flash）</option>
             <option value="anthropic/claude-3.5-sonnet">Claude（OpenRouter / claude-3.5-sonnet）</option>
           </select>

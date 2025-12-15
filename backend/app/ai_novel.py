@@ -56,9 +56,27 @@ except Exception as e:
     openrouter_client = None
 
 
+DEEPSEEK_API_KEY = _read_secret_from_env_or_file(
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_KEY_FILE",
+)
+
+try:
+    deepseek_client = (
+        OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+        if DEEPSEEK_API_KEY
+        else None
+    )
+except Exception as e:
+    print("[WARN] DeepSeek client init failed:", repr(e))
+    deepseek_client = None
+
+
 def provider_from_model(model: str | None) -> str:
     if not model:
         return "openai"
+    if model.startswith("deepseek:"):
+        return "deepseek"
     return "openrouter" if "/" in model else "openai"
 
 
@@ -293,6 +311,69 @@ async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None
         )
     except Exception as e:
         print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
+        raise HTTPException(status_code=502, detail=f"AI 小説生成 API 呼び出しに失敗しました: {e!r}")
+
+    raw = ""
+    try:
+        raw = resp.choices[0].message.content or ""
+    except Exception:
+        raw = ""
+
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    title, body = _parse_title_and_body(raw)
+
+    tokens: int | None = None
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", None)
+
+    return AINovelResponse(
+        generated_title=title,
+        body=body,
+        used_tokens=tokens,
+        model=effective_model,
+        prompt_used=prompt,
+    )
+
+
+async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
+    if deepseek_client is None:
+        raise HTTPException(status_code=500, detail="DeepSeek の API キーが設定されていません。")
+
+    if isinstance(req, AINovelRequest):
+        effective_model = (model or req.model or os.getenv("DEEPSEEK_MODEL_TEXT") or "").strip()
+        prompt = req.prompt or build_ai_prompt(req)
+    else:
+        effective_model = (model or os.getenv("DEEPSEEK_MODEL_TEXT") or "").strip()
+        prompt = str(req)
+
+    if effective_model.startswith("deepseek:"):
+        effective_model = effective_model.split(":", 1)[1].strip()
+
+    if not effective_model:
+        raise HTTPException(status_code=400, detail="モデルが指定されていません。")
+
+    try:
+        resp = deepseek_client.chat.completions.create(
+            model=effective_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "あなたは日本語ライトノベル作家です。"
+                        "与えられた条件に基づいて短編小説を生成してください。"
+                        "出力は必ず JSON 1個のみ。"
+                        '例: {"title": "タイトル", "body": "本文"}'
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=2048,
+        )
+    except Exception as e:
+        print("[ERROR] DeepSeek API 呼び出し失敗:", repr(e))
         raise HTTPException(status_code=502, detail=f"AI 小説生成 API 呼び出しに失敗しました: {e!r}")
 
     raw = ""
