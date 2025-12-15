@@ -24,12 +24,16 @@ export default function AINovelPage() {
   // ★ ここが「続き生成モード」用の state
   const [isContinueMode, setIsContinueMode] = useState(false);
   const [episodeId, setEpisodeId] = useState(null);
+  const [continueNovelId, setContinueNovelId] = useState(null);
+  const [continueEpisodeNumber, setContinueEpisodeNumber] = useState(null);
 
   const [loading, setLoading] = useState(false);
+  const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
   const [result, setResult] = useState(null);
+  const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
 
   const navigate = useNavigate();
 
@@ -61,12 +65,23 @@ export default function AINovelPage() {
         if (data?.title) {
           setTitleHint(`「${data.title}」の続き`);
         }
+        if (typeof data?.novel_id === "number") setContinueNovelId(data.novel_id);
+        if (typeof data?.episode_number === "number") setContinueEpisodeNumber(data.episode_number);
         // 必要ならここで characters / tone を埋めてもよい
       } catch (e) {
         console.error(e);
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!result) return;
+    if (isContinueMode) {
+      setPostEpisodeTitle(result.generated_title || "続き");
+      return;
+    }
+    setPostEpisodeTitle("");
+  }, [result, isContinueMode]);
 
   const handleGenerate = async (e) => {
     e.preventDefault();
@@ -142,6 +157,140 @@ export default function AINovelPage() {
       setError(err.message || "生成中にエラーが発生しました。");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePostAsNewNovel = async () => {
+    if (!result?.body) return;
+    setPosting(true);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+
+    const token = getAuthToken();
+    if (!token) {
+      setError("ログインが必要です。ログイン画面へ移動します。");
+      setTimeout(() => navigate("/login"), 800);
+      setPosting(false);
+      return;
+    }
+
+    try {
+      const novelPayload = {
+        title: result.generated_title || "AI生成小説",
+        description: "AI生成",
+        age_limit: "all",
+        is_ai_generated: true,
+        tag_names: [],
+      };
+
+      const novelRes = await fetch("/api/novels", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(novelPayload),
+      });
+      const novelData = await novelRes.json().catch(() => ({}));
+      if (!novelRes.ok) {
+        throw new Error(novelData.detail || `小説の作成に失敗しました (status=${novelRes.status})`);
+      }
+      const novelId = novelData?.id;
+      if (!novelId) {
+        throw new Error("小説IDが取得できませんでした。");
+      }
+
+      const episodePayload = {
+        episode_number: 1,
+        title: "第1話",
+        body: result.body,
+        tag_names: [],
+      };
+      const epRes = await fetch(`/api/novels/${novelId}/episodes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(episodePayload),
+      });
+      const epData = await epRes.json().catch(() => ({}));
+      if (!epRes.ok) {
+        throw new Error(epData.detail || `第1話の投稿に失敗しました (status=${epRes.status})`);
+      }
+
+      navigate(`/novels/${novelId}`);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "投稿中にエラーが発生しました。");
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const handlePostAsNextEpisode = async () => {
+    if (!result?.body) return;
+    if (!continueNovelId) {
+      setError("投稿先の小説が特定できません（novel_id が取得できませんでした）。");
+      return;
+    }
+    setPosting(true);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+
+    const token = getAuthToken();
+    if (!token) {
+      setError("ログインが必要です。ログイン画面へ移動します。");
+      setTimeout(() => navigate("/login"), 800);
+      setPosting(false);
+      return;
+    }
+
+    try {
+      const listRes = await fetch(`/api/novels/${continueNovelId}/episodes`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const listData = await listRes.json().catch(() => []);
+      if (!listRes.ok) {
+        throw new Error(
+          (listData && listData.detail) ||
+            `エピソード一覧の取得に失敗しました (status=${listRes.status})`
+        );
+      }
+
+      const numbers = Array.isArray(listData)
+        ? listData.map((e) => (typeof e?.number === "number" ? e.number : null)).filter((n) => n !== null)
+        : [];
+      const maxNumber = numbers.length ? Math.max(...numbers) : 0;
+      const nextNumber = maxNumber + 1;
+
+      const episodePayload = {
+        episode_number: nextNumber,
+        title: (postEpisodeTitle || "").trim() || `第${nextNumber}話`,
+        body: result.body,
+        tag_names: [],
+      };
+      const epRes = await fetch(`/api/novels/${continueNovelId}/episodes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(episodePayload),
+      });
+      const epData = await epRes.json().catch(() => ({}));
+      if (!epRes.ok) {
+        throw new Error(epData.detail || `エピソードの投稿に失敗しました (status=${epRes.status})`);
+      }
+
+      navigate(`/novels/${continueNovelId}`);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "投稿中にエラーが発生しました。");
+    } finally {
+      setPosting(false);
     }
   };
 
@@ -278,6 +427,11 @@ export default function AINovelPage() {
             <option value="gpt-4.1-preview">GPT-4.1 Preview（長文向け）</option>
             <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="gpt-4o">GPT-4o</option>
+            <option value="openai/chatgpt-4o-latest">ChatGPT（OpenRouter / chatgpt-4o-latest）</option>
+            <option value="moonshotai/kimi-k2">Kimi（OpenRouter / kimi-k2）</option>
+            <option value="deepseek/deepseek-chat">DeepSeek（OpenRouter / deepseek-chat）</option>
+            <option value="google/gemini-2.0-flash-001">Gemini（OpenRouter / gemini-2.0-flash）</option>
+            <option value="anthropic/claude-3.5-sonnet">Claude（OpenRouter / claude-3.5-sonnet）</option>
           </select>
         </div>
 
@@ -405,9 +559,85 @@ export default function AINovelPage() {
           >
             {result.body}
           </pre>
+
+          <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
+            <div
+              style={{
+                padding: "0.75rem",
+                borderRadius: "6px",
+                border: "1px solid #e5e5e5",
+                backgroundColor: "#fff",
+              }}
+            >
+              <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>投稿する</div>
+
+              {isContinueMode && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  <div style={{ fontSize: "0.9rem", color: "#555", marginBottom: "0.25rem" }}>
+                    既存小説に「続き」を新しいエピソードとして投稿します。
+                  </div>
+                  <label style={{ display: "block", fontSize: "0.9rem", marginBottom: "0.25rem" }}>
+                    エピソードタイトル（任意）
+                  </label>
+                  <input
+                    type="text"
+                    value={postEpisodeTitle}
+                    onChange={(e) => setPostEpisodeTitle(e.target.value)}
+                    placeholder="例: ふたりの約束"
+                    style={{ width: "100%", padding: "0.5rem" }}
+                    disabled={posting}
+                  />
+                  <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.25rem" }}>
+                    {continueNovelId ? (
+                      <span>
+                        投稿先: novel_id={continueNovelId}
+                        {typeof continueEpisodeNumber === "number" ? `（前話: 第${continueEpisodeNumber}話）` : ""}
+                      </span>
+                    ) : (
+                      <span>投稿先: 読み込み中...</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                {isContinueMode && (
+                  <button
+                    type="button"
+                    onClick={handlePostAsNextEpisode}
+                    disabled={posting || !continueNovelId}
+                    style={{
+                      padding: "0.6rem 1rem",
+                      fontWeight: "bold",
+                      borderRadius: "6px",
+                      border: "1px solid #ccc",
+                      cursor: posting ? "default" : "pointer",
+                      opacity: posting ? 0.7 : 1,
+                    }}
+                  >
+                    {posting ? "投稿中..." : "この続きを新しいエピソードとして投稿"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handlePostAsNewNovel}
+                  disabled={posting}
+                  style={{
+                    padding: "0.6rem 1rem",
+                    fontWeight: "bold",
+                    borderRadius: "6px",
+                    border: "1px solid #ccc",
+                    cursor: posting ? "default" : "pointer",
+                    opacity: posting ? 0.7 : 1,
+                  }}
+                >
+                  {posting ? "投稿中..." : "新しい小説として投稿（第1話）"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
-
