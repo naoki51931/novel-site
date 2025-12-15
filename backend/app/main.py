@@ -492,6 +492,14 @@ async def generate_ai_episode_continue(
     if not ep:
         raise HTTPException(404, "エピソードが見つかりません")
 
+    characters_hint = (req.characters or "").strip()
+    characters_block = (
+        f"\n【登場人物・設定（今回の指定）】\n{characters_hint}\n"
+        "※上記の登場人物・設定を優先し、前話と矛盾が出ない範囲で自然に反映してください。\n"
+        if characters_hint
+        else ""
+    )
+
     # --- プロンプト構築 ---
     prompt = f"""あなたは小説家です。
 以下のエピソードの続きとなる文章を、小説として自然につながるように書いてください。
@@ -499,6 +507,7 @@ async def generate_ai_episode_continue(
 【前の話の本文】
 {ep.body}
 
+{characters_block}
 【続きの指示】
 {req.prompt or req.title_hint or "自然な続きお願いします"}
 
