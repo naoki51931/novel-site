@@ -153,6 +153,18 @@ export default function EpisodeDetail() {
     return new Date(isoString).toLocaleString("ja-JP");
   };
 
+  const titleStartsWithEpisodePrefix = (title) => {
+    if (typeof title !== "string") return false;
+    return /^\s*第\s*(?:[0-9０-９]+|[一二三四五六七八九十百千万]+)\s*話/.test(title);
+  };
+
+  const formatEpisodeDisplayTitle = (episodeNumber, title) => {
+    const cleanTitle = typeof title === "string" ? title.trim() : "";
+    if (cleanTitle && titleStartsWithEpisodePrefix(cleanTitle)) return cleanTitle;
+    if (episodeNumber == null || episodeNumber === "") return cleanTitle;
+    return cleanTitle ? `第${episodeNumber}話 ${cleanTitle}` : `第${episodeNumber}話`;
+  };
+
   const openModal = (url) => {
     if (!url) return;
     setModalImageUrl(url);
@@ -169,7 +181,10 @@ export default function EpisodeDetail() {
       </button>
 
       <h2 style={{ marginTop: 12 }}>
-        第{episode.number || episode.episode_number}話 {episode.title}
+        {formatEpisodeDisplayTitle(
+          episode.number || episode.episode_number,
+          episode.title
+        )}
       </h2>
 
       {/* タグ */}

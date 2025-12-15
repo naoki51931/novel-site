@@ -183,6 +183,7 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
 
 def _parse_title_and_body(raw: str) -> Tuple[str, str]:
     import json
+    import re
 
     if not raw:
         return "タイトル未設定", ""
@@ -190,13 +191,18 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
     text = raw.strip()
 
     # よくある ```json ... ``` のコードフェンスを剥がす
-    if text.startswith("```"):
-        lines = text.splitlines()
+    def _strip_code_fence(s: str) -> str:
+        s = (s or "").strip()
+        if not s.startswith("```"):
+            return s
+        lines = s.splitlines()
         if lines and lines[0].lstrip().startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
-        text = "\n".join(lines).strip()
+        return "\n".join(lines).strip()
+
+    text = _strip_code_fence(text)
 
     def _from_dict(data: dict) -> Tuple[str, str]:
         title = (
@@ -218,13 +224,52 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
             title = "タイトル未設定"
         return title, body
 
-    # まずは素直に JSON として解釈
-    try:
-        data = json.loads(text)
+    def _extract_dict(data) -> dict | None:
         if isinstance(data, dict):
-            return _from_dict(data)
-    except Exception:
-        pass
+            return data
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return data[0]
+        return None
+
+    def _try_parse_dict(s: str) -> dict | None:
+        s = _strip_code_fence((s or "").strip())
+        if not s:
+            return None
+
+        try:
+            parsed = json.loads(s)
+            d = _extract_dict(parsed)
+            if d is not None:
+                return d
+            # JSON の中身がさらに JSON 文字列として二重エンコードされているケース
+            if isinstance(parsed, str):
+                inner = _strip_code_fence(parsed.strip())
+                try:
+                    parsed2 = json.loads(inner)
+                    d2 = _extract_dict(parsed2)
+                    if d2 is not None:
+                        return d2
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return None
+
+    # まずは素直に JSON として解釈
+    d0 = _try_parse_dict(text)
+    if d0 is not None:
+        return _from_dict(d0)
+
+    # よくある「\"title\"」のようなバックスラッシュ付き JSON を救済（モデルが JSON を文字列化して返す等）
+    if '\\"' in text:
+        text_unescaped_quotes = text.replace('\\"', '"')
+        d1 = _try_parse_dict(text_unescaped_quotes)
+        if d1 is not None:
+            return _from_dict(d1)
+
+        # 余計な前後テキスト付きの場合に備えて、 unescape 後の文字列を使って JSON 断片抽出を試す
+        text = text_unescaped_quotes
 
     # 前後に余計な説明が付くケースに備えて JSON オブジェクト部分だけを抽出
     try:
@@ -241,6 +286,16 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
             except Exception:
                 pass
             start = brace_index + 1
+    except Exception:
+        pass
+
+    # 最後の手段: { ... } っぽい範囲を雑に切り出して試す（本文中の { } で壊れる可能性があるので最終手段）
+    try:
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if m:
+            d2 = _try_parse_dict(m.group(0))
+            if d2 is not None:
+                return _from_dict(d2)
     except Exception:
         pass
 
