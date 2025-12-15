@@ -42,6 +42,7 @@ from .ai_novel import (
     build_ai_prompt,
     call_openai_novel_api,
     call_openrouter_novel_api,
+    call_deepseek_novel_api,
     provider_from_model,
 )
 
@@ -452,7 +453,9 @@ async def generate_ai_novel(
 
     # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
     provider = provider_from_model(getattr(req, "model", None))
-    if provider == "openrouter":
+    if provider == "deepseek":
+        resp = await call_deepseek_novel_api(req)
+    elif provider == "openrouter":
         resp = await call_openrouter_novel_api(req)
     else:
         resp = await call_openai_novel_api(req)
@@ -502,7 +505,9 @@ async def generate_ai_episode_continue(
 """
 
     provider = provider_from_model(getattr(req, "model", None))
-    if provider == "openrouter":
+    if provider == "deepseek":
+        ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
+    elif provider == "openrouter":
         ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
     else:
         ai_resp = await call_openai_novel_api(prompt, model=req.model)
