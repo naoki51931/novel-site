@@ -1,5 +1,7 @@
 import os
 import json
+import html
+import re
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 
@@ -18,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from sqlalchemy.orm import selectinload
@@ -1291,6 +1294,100 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         ],
         "is_premium_user": is_premium,
     }
+
+
+@app.get("/share/episodes/{episode_id}", response_class=HTMLResponse)
+def share_episode_page(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    origin = f"{scheme}://{host}"
+
+    def format_episode_display_title(episode_number: int | None, title: str | None) -> str:
+        clean_title = (title or "").strip()
+        if clean_title and re.match(r"^\\s*第\\s*(?:[0-9０-９]+|[一二三四五六七八九十百千万]+)\\s*話", clean_title):
+            return clean_title
+        if episode_number is None:
+            return clean_title
+        return f"第{episode_number}話 {clean_title}".strip()
+
+    def to_abs_url(url: str | None) -> str | None:
+        if not url:
+            return None
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        if url.startswith("/"):
+            return origin + url
+        return origin + "/" + url
+
+    share_url = f"{origin}/share/episodes/{episode_id}"
+    episode_url = f"{origin}/episodes/{episode_id}"
+    title = f"{novel.title}｜{format_episode_display_title(get_episode_number(ep), ep.title) or 'エピソード'}"
+
+    body_text = (ep.body or "").strip()
+    body_text = re.sub(r"\\s+", " ", body_text)
+    description = body_text[:120] if body_text else (novel.description or "エピソードを読む")
+    if description and len(description) >= 120:
+        description = description[:117] + "…"
+
+    image_url = to_abs_url(ep.cover_image_url)
+    twitter_card = "summary_large_image" if image_url else "summary"
+
+    age_limit_notice = ""
+    if novel.age_limit in ("r15", "r18"):
+        age_limit_notice = "（年齢制限コンテンツ）"
+
+    safe_title = html.escape(title + age_limit_notice, quote=True)
+    safe_desc = html.escape(description or "", quote=True)
+    safe_share_url = html.escape(share_url, quote=True)
+    safe_episode_url = html.escape(episode_url, quote=True)
+
+    head_image_tags = ""
+    if image_url:
+        safe_image_url = html.escape(image_url, quote=True)
+        head_image_tags = f"""
+    <meta property="og:image" content="{safe_image_url}" />
+    <meta name="twitter:image" content="{safe_image_url}" />
+        """.strip()
+
+    html_content = f"""<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{safe_title}</title>
+    <link rel="canonical" href="{safe_episode_url}" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="小説投稿サイト" />
+    <meta property="og:title" content="{safe_title}" />
+    <meta property="og:description" content="{safe_desc}" />
+    <meta property="og:url" content="{safe_share_url}" />
+    {head_image_tags}
+
+    <meta name="twitter:card" content="{twitter_card}" />
+    <meta name="twitter:title" content="{safe_title}" />
+    <meta name="twitter:description" content="{safe_desc}" />
+
+    <script>
+      // SNS クローラは JS を実行しない前提。人間だけエピソード本体へ遷移させる。
+      setTimeout(function() {{
+        try {{ window.location.replace({json.dumps(episode_url)}); }} catch (e) {{}}
+      }}, 800);
+    </script>
+  </head>
+  <body>
+    <p>移動中です… <a href="{safe_episode_url}">開く</a></p>
+  </body>
+</html>"""
+    return HTMLResponse(html_content)
 
 
 class LoginVerify(BaseModel):

@@ -18,6 +18,22 @@ export default function EpisodeDetail() {
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
 
+  const handleShareToX = () => {
+    if (!episode?.id) return;
+
+    const origin = window.location.origin;
+    const shareUrl = `${origin}/share/episodes/${episode.id}`;
+    const displayTitle = formatEpisodeDisplayTitle(
+      episode.number || episode.episode_number,
+      episode.title
+    );
+    const text = displayTitle ? `${displayTitle}` : "エピソードを読みました";
+    const intentUrl = `https://x.com/intent/tweet?url=${encodeURIComponent(
+      shareUrl
+    )}&text=${encodeURIComponent(text)}`;
+    window.open(intentUrl, "_blank", "noopener,noreferrer");
+  };
+
   const handleSubscribe = async () => {
     const token = localStorage.getItem("token");
     try {
@@ -233,6 +249,14 @@ export default function EpisodeDetail() {
         >
           AIで続きを生成
         </Link>
+
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleShareToX}
+        >
+          Xで共有
+        </button>
 
         <button
           type="button"
