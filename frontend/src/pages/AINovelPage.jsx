@@ -58,6 +58,25 @@ function normalizeAINovelResponse(data) {
   return { ...data, generated_title: title, body };
 }
 
+function getJwtUserId(token) {
+  try {
+    if (!token) return null;
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "===".slice((base64.length + 3) % 4);
+    const json = atob(padded);
+    const payload = JSON.parse(json);
+    const sub = payload?.sub;
+    if (sub === undefined || sub === null) return null;
+    const n = Number(sub);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function AINovelPage() {
   const [titleHint, setTitleHint] = useState("");
   const [genre, setGenre] = useState("");
@@ -71,6 +90,8 @@ export default function AINovelPage() {
   const [episodeId, setEpisodeId] = useState(null);
   const [continueNovelId, setContinueNovelId] = useState(null);
   const [continueEpisodeNumber, setContinueEpisodeNumber] = useState(null);
+  const [canPostToContinueNovel, setCanPostToContinueNovel] = useState(null); // null=判定中, true/false
+  const [continueInfoError, setContinueInfoError] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -90,11 +111,18 @@ export default function AINovelPage() {
 
     setIsContinueMode(true);
     setEpisodeId(eid);
+    setContinueInfoError("");
+    setCanPostToContinueNovel(null);
 
     // ここでエピソードを取得して、タイトルヒントなどに反映しておくと親切
     (async () => {
       try {
         const token = getAuthToken();
+        if (!token) {
+          setContinueInfoError("ログインが必要です。ログイン後にもう一度お試しください。");
+          setCanPostToContinueNovel(false);
+          return;
+        }
         const res = await fetch(`/api/episodes/${eid}`, {
           headers: token
             ? { Authorization: `Bearer ${token}` }
@@ -102,6 +130,10 @@ export default function AINovelPage() {
         });
         if (!res.ok) {
           console.warn("failed to load episode for continue mode", res.status);
+          setContinueInfoError(
+            `続き生成元のエピソード情報を取得できませんでした (status=${res.status})`
+          );
+          setCanPostToContinueNovel(false);
           return;
         }
         const data = await res.json();
@@ -113,8 +145,47 @@ export default function AINovelPage() {
         if (typeof data?.novel_id === "number") setContinueNovelId(data.novel_id);
         if (typeof data?.episode_number === "number") setContinueEpisodeNumber(data.episode_number);
         // 必要ならここで characters / tone を埋めてもよい
+
+        // 既存小説へ投稿できるか（作者か）を判定
+        const novelId = typeof data?.novel_id === "number" ? data.novel_id : null;
+        if (!novelId) {
+          setContinueInfoError("投稿先の小説IDを取得できませんでした。");
+          setCanPostToContinueNovel(false);
+          return;
+        }
+        const meId = getJwtUserId(token);
+        if (!meId) {
+          // 判定できない場合は投稿時にサーバの 403 を見て案内する
+          setCanPostToContinueNovel(true);
+          return;
+        }
+        const novelRes = await fetch(`/api/novels/${novelId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!novelRes.ok) {
+          setCanPostToContinueNovel(false);
+          setContinueInfoError(
+            `投稿先の小説情報を取得できませんでした (status=${novelRes.status})`
+          );
+          return;
+        }
+        const novelData = await novelRes.json().catch(() => ({}));
+        const authorId = typeof novelData?.author_id === "number" ? novelData.author_id : null;
+        if (!authorId) {
+          setCanPostToContinueNovel(false);
+          setContinueInfoError("投稿先の小説の author_id を取得できませんでした。");
+          return;
+        }
+        if (authorId !== meId) {
+          setCanPostToContinueNovel(false);
+          setContinueInfoError("この小説はあなたの作品ではないため、既存小説への続き投稿はできません。");
+          return;
+        }
+        setCanPostToContinueNovel(true);
       } catch (e) {
         console.error(e);
+        setContinueInfoError("続き生成の準備中にエラーが発生しました。");
+        setCanPostToContinueNovel(false);
       }
     })();
   }, []);
@@ -280,6 +351,10 @@ export default function AINovelPage() {
       setError("投稿先の小説が特定できません（novel_id が取得できませんでした）。");
       return;
     }
+    if (canPostToContinueNovel === false) {
+      setError(continueInfoError || "既存小説への投稿権限がありません。");
+      return;
+    }
     setPosting(true);
     setError("");
     setQuotaError("");
@@ -325,6 +400,9 @@ export default function AINovelPage() {
         },
         body: JSON.stringify(episodePayload),
       });
+      if (epRes.status === 403) {
+        throw new Error("この小説にエピソードを追加する権限がありません（作者のみ投稿できます）。");
+      }
       const epData = await epRes.json().catch(() => ({}));
       if (!epRes.ok) {
         throw new Error(epData.detail || `エピソードの投稿に失敗しました (status=${epRes.status})`);
@@ -399,34 +477,36 @@ export default function AINovelPage() {
         </div>
 
         {!isContinueMode && (
-          <>
-            <div>
-              <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-                ジャンル（任意）
-              </label>
-              <input
-                type="text"
-                value={genre}
-                onChange={(e) => setGenre(e.target.value)}
-                placeholder="例: ファンタジー / 日常 / SF / ラブコメ"
-                style={{ width: "100%", padding: "0.5rem" }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-                登場人物・設定
-              </label>
-              <textarea
-                value={characters}
-                onChange={(e) => setCharacters(e.target.value)}
-                rows={3}
-                placeholder="例: 大学生の主人公と、不思議な店主がいる深夜の喫茶店。主人公は最近よく見る夢の話を打ち明ける。"
-                style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
-              />
-            </div>
-          </>
+          <div>
+            <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+              ジャンル（任意）
+            </label>
+            <input
+              type="text"
+              value={genre}
+              onChange={(e) => setGenre(e.target.value)}
+              placeholder="例: ファンタジー / 日常 / SF / ラブコメ"
+              style={{ width: "100%", padding: "0.5rem" }}
+            />
+          </div>
         )}
+
+        <div>
+          <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+            {isContinueMode ? "登場人物・設定（変更/追加したい場合）" : "登場人物・設定"}
+          </label>
+          <textarea
+            value={characters}
+            onChange={(e) => setCharacters(e.target.value)}
+            rows={3}
+            placeholder={
+              isContinueMode
+                ? "例: 新キャラ「◯◯」を追加。主人公は「◯◯」とは旧知の仲。口調は丁寧に。など"
+                : "例: 大学生の主人公と、不思議な店主がいる深夜の喫茶店。主人公は最近よく見る夢の話を打ち明ける。"
+            }
+            style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
+          />
+        </div>
 
         {!isContinueMode && (
           <div>
@@ -623,6 +703,11 @@ export default function AINovelPage() {
                   <div style={{ fontSize: "0.9rem", color: "#555", marginBottom: "0.25rem" }}>
                     既存小説に「続き」を新しいエピソードとして投稿します。
                   </div>
+                  {continueInfoError && (
+                    <div style={{ fontSize: "0.9rem", color: "#842029", marginBottom: "0.5rem" }}>
+                      {continueInfoError}
+                    </div>
+                  )}
                   <label style={{ display: "block", fontSize: "0.9rem", marginBottom: "0.25rem" }}>
                     エピソードタイトル（任意）
                   </label>
@@ -652,7 +737,7 @@ export default function AINovelPage() {
                   <button
                     type="button"
                     onClick={handlePostAsNextEpisode}
-                    disabled={posting || !continueNovelId}
+                    disabled={posting || !continueNovelId || canPostToContinueNovel === false}
                     style={{
                       padding: "0.6rem 1rem",
                       fontWeight: "bold",
