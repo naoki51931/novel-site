@@ -186,15 +186,65 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
 
     if not raw:
         return "タイトル未設定", ""
-    try:
-        data = json.loads(raw)
-        title = str(data.get("title") or "").strip()
-        body = str(data.get("body") or "")
+
+    text = raw.strip()
+
+    # よくある ```json ... ``` のコードフェンスを剥がす
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    def _from_dict(data: dict) -> Tuple[str, str]:
+        title = (
+            data.get("title")
+            or data.get("generated_title")
+            or data.get("generatedTitle")
+            or ""
+        )
+        body = (
+            data.get("body")
+            or data.get("text")
+            or data.get("content")
+            or data.get("story")
+            or ""
+        )
+        title = str(title or "").strip()
+        body = str(body or "")
         if not title:
             title = "タイトル未設定"
         return title, body
+
+    # まずは素直に JSON として解釈
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return _from_dict(data)
     except Exception:
-        return split_title_and_body(raw)
+        pass
+
+    # 前後に余計な説明が付くケースに備えて JSON オブジェクト部分だけを抽出
+    try:
+        decoder = json.JSONDecoder()
+        start = 0
+        while True:
+            brace_index = text.find("{", start)
+            if brace_index < 0:
+                break
+            try:
+                parsed, _end = decoder.raw_decode(text[brace_index:])
+                if isinstance(parsed, dict):
+                    return _from_dict(parsed)
+            except Exception:
+                pass
+            start = brace_index + 1
+    except Exception:
+        pass
+
+    return split_title_and_body(raw)
 
 
 # ===== 実際に OpenAI API を叩く関数 =====
@@ -238,7 +288,7 @@ async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = N
             instructions=(
                 "あなたは日本語ライトノベル作家です。"
                 "与えられた条件に基づいて短編小説を生成してください。"
-                "出力は必ず JSON 1個のみ。"
+                "出力は必ず JSON 1個のみ（前後に説明文を付けない / ``` で囲まない）。"
                 '例: {\\"title\\": \\"タイトル\\", \\"body\\": \\"本文\\"}'
             ),
             input=prompt,
@@ -301,7 +351,7 @@ async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None
                     "content": (
                         "あなたは日本語ライトノベル作家です。"
                         "与えられた条件に基づいて短編小説を生成してください。"
-                        "出力は必ず JSON 1個のみ。"
+                        "出力は必ず JSON 1個のみ（前後に説明文を付けない / ``` で囲まない）。"
                         '例: {"title": "タイトル", "body": "本文"}'
                     ),
                 },
@@ -364,7 +414,7 @@ async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None =
                     "content": (
                         "あなたは日本語ライトノベル作家です。"
                         "与えられた条件に基づいて短編小説を生成してください。"
-                        "出力は必ず JSON 1個のみ。"
+                        "出力は必ず JSON 1個のみ（前後に説明文を付けない / ``` で囲まない）。"
                         '例: {"title": "タイトル", "body": "本文"}'
                     ),
                 },
