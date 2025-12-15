@@ -41,6 +41,8 @@ from .ai_novel import (
     AINovelResponse,
     build_ai_prompt,
     call_openai_novel_api,
+    call_openrouter_novel_api,
+    provider_from_model,
 )
 
 # =========================================
@@ -448,8 +450,12 @@ async def generate_ai_novel(
             detail="本日のAI小説生成回数の上限に達しました。",
         )
 
-    # ★ OpenAI で小説生成
-    resp = await call_openai_novel_api(req)
+    # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
+    provider = provider_from_model(getattr(req, "model", None))
+    if provider == "openrouter":
+        resp = await call_openrouter_novel_api(req)
+    else:
+        resp = await call_openai_novel_api(req)
 
     # ★ ログ保存用サマリを作成（タイトル/ジャンル/キャラ/トーンを適当にまとめて200文字まで）
     parts = [req.title_hint, req.genre, req.characters, req.tone]
@@ -457,9 +463,9 @@ async def generate_ai_novel(
 
     # 使用モデル・トークン数（取れなければ None のまま）
     model_used = getattr(resp, "model", None) or getattr(req, "model", None) or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
-    tokens_used = getattr(resp, "tokens_used", None)
+    tokens_used = getattr(resp, "used_tokens", None)
 
-    log = models.models.AIGenerateLog(
+    log = models.AIGenerateLog(
         user_id=user.id,
         prompt_summary=prompt_summary,
         tokens_used=tokens_used,
@@ -470,24 +476,16 @@ async def generate_ai_novel(
 
     return resp
 
-# =====================================================
-#  AI：エピソードの続き生成
-# =====================================================
-from .models import Episode
-from .ai_novel import call_openai_novel_api
-
 @app.post("/api/ai/episodes/{episode_id}/continue")
 async def generate_ai_episode_continue(
     episode_id: int,
     req: AINovelRequest,
-    session: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    request: Request,
+    db: Session = Depends(get_db),
 ):
-    # プレミアムチェック（既存の処理）
     user = require_premium_user(request, db)
-    
-    # エピソード取得
-    ep = session.query(Episode).filter(Episode.id == episode_id).first()
+
+    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
     if not ep:
         raise HTTPException(404, "エピソードが見つかりません")
 
@@ -499,22 +497,25 @@ async def generate_ai_episode_continue(
 {ep.body}
 
 【続きの指示】
-{req.prompt or "自然な続きお願いします"}
+{req.prompt or req.title_hint or "自然な続きお願いします"}
 
 """
 
-    # OpenAI 呼び出し
-    ai_resp = await call_openai_novel_api(prompt, model=req.model)
+    provider = provider_from_model(getattr(req, "model", None))
+    if provider == "openrouter":
+        ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+    else:
+        ai_resp = await call_openai_novel_api(prompt, model=req.model)
 
     # 利用ログに記録
     log = models.AIGenerateLog(
-        user_id=current_user.id,
+        user_id=user.id,
         prompt_summary=f"EP#{episode_id} の続き",
         tokens_used=ai_resp.used_tokens,
-        model=req.model,
+        model=getattr(ai_resp, "model", None) or getattr(req, "model", None),
     )
-    session.add(log)
-    session.commit()
+    db.add(log)
+    db.commit()
 
     return ai_resp
 

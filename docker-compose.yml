@@ -51,6 +51,8 @@ services:
 
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL_TEXT: ${OPENAI_MODEL_TEXT}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_API_KEY_FILE: ${OPENROUTER_API_KEY_FILE}
 
     volumes:
       - ./static:/app/static
@@ -86,4 +88,3 @@ services:
 
 volumes:
   db-data:
-

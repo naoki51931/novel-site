@@ -25,6 +25,43 @@ except Exception as e:
 OPENAI_MODEL_TEXT = os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
 
 
+def _read_secret_from_env_or_file(env_name: str, file_env_name: str) -> str | None:
+    v = os.getenv(env_name)
+    if v:
+        v = v.strip()
+        return v if v else None
+    file_path = os.getenv(file_env_name)
+    if not file_path:
+        return None
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except Exception:
+        return None
+
+
+OPENROUTER_API_KEY = _read_secret_from_env_or_file(
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_API_KEY_FILE",
+)
+
+try:
+    openrouter_client = (
+        OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+        if OPENROUTER_API_KEY
+        else None
+    )
+except Exception as e:
+    print("[WARN] OpenRouter client init failed:", repr(e))
+    openrouter_client = None
+
+
+def provider_from_model(model: str | None) -> str:
+    if not model:
+        return "openai"
+    return "openrouter" if "/" in model else "openai"
+
+
 # ===== Pydantic モデル =====
 
 class AINovelRequest(BaseModel):
@@ -47,8 +84,6 @@ class AINovelResponse(BaseModel):
     body: str
     used_tokens: int | None = None  # OpenAIの使用トークン数
     model: str | None = None        # 実際に使ったモデル名
-    prompt_used: str | None = None  # 生成に使ったプロンプト全文（ログ用）
-    # デバッグやログ確認用に実際に投げたプロンプト全文を残す
     prompt_used: str | None = None
 
 
@@ -128,6 +163,22 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
     return title, body
 
 
+def _parse_title_and_body(raw: str) -> Tuple[str, str]:
+    import json
+
+    if not raw:
+        return "タイトル未設定", ""
+    try:
+        data = json.loads(raw)
+        title = str(data.get("title") or "").strip()
+        body = str(data.get("body") or "")
+        if not title:
+            title = "タイトル未設定"
+        return title, body
+    except Exception:
+        return split_title_and_body(raw)
+
+
 # ===== 実際に OpenAI API を叩く関数 =====
 
 async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
@@ -142,8 +193,6 @@ async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = N
         req: str  （すでに組み立て済みのプロンプト文字列）
         -> そのまま input に渡す。
     """
-    import json
-
     if client is None:
         raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
 
@@ -194,24 +243,73 @@ async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = N
         raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
 
     # ---- JSON パースして title/body を取り出す ----
-    title = ""
-    body = ""
-    try:
-        data = json.loads(raw)
-        title = str(data.get("title") or "")
-        body = str(data.get("body") or "")
-    except Exception:
-        # JSON で返ってこなかった場合は、先頭行=タイトル扱いで分割
-        title, body = split_title_and_body(raw)
-
-    if not title:
-        title = "タイトル未設定"
+    title, body = _parse_title_and_body(raw)
 
     # ---- トークン使用量 ----
-    tokens = 0
+    tokens: int | None = None
     usage = getattr(resp, "usage", None)
     if usage is not None:
-        tokens = getattr(usage, "total_tokens", 0) or 0
+        tokens = getattr(usage, "total_tokens", None)
+
+    return AINovelResponse(
+        generated_title=title,
+        body=body,
+        used_tokens=tokens,
+        model=effective_model,
+        prompt_used=prompt,
+    )
+
+
+async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
+    if openrouter_client is None:
+        raise HTTPException(status_code=500, detail="OpenRouter の API キーが設定されていません。")
+
+    if isinstance(req, AINovelRequest):
+        effective_model = (model or req.model or os.getenv("OPENROUTER_MODEL_TEXT") or "").strip()
+        prompt = req.prompt or build_ai_prompt(req)
+    else:
+        effective_model = (model or os.getenv("OPENROUTER_MODEL_TEXT") or "").strip()
+        prompt = str(req)
+
+    if not effective_model:
+        raise HTTPException(status_code=400, detail="モデルが指定されていません。")
+
+    try:
+        resp = openrouter_client.chat.completions.create(
+            model=effective_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "あなたは日本語ライトノベル作家です。"
+                        "与えられた条件に基づいて短編小説を生成してください。"
+                        "出力は必ず JSON 1個のみ。"
+                        '例: {"title": "タイトル", "body": "本文"}'
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=2048,
+        )
+    except Exception as e:
+        print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
+        raise HTTPException(status_code=502, detail=f"AI 小説生成 API 呼び出しに失敗しました: {e!r}")
+
+    raw = ""
+    try:
+        raw = resp.choices[0].message.content or ""
+    except Exception:
+        raw = ""
+
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    title, body = _parse_title_and_body(raw)
+
+    tokens: int | None = None
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", None)
 
     return AINovelResponse(
         generated_title=title,
