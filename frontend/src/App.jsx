@@ -19,8 +19,7 @@ import AiLogsPage from "./pages/AiLogsPage";
 
 
 export default function App() {
-  const [q, setQ] = useState("");
-  const [tag, setTag] = useState("");
+  const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
 
   const username =
@@ -92,12 +91,12 @@ export default function App() {
       </header>
 
       {/* 検索バーはヘッダーの下に固定 */}
-      <SearchBar q={q} tag={tag} onChangeQ={setQ} onChangeTag={setTag} />
+      <SearchBar query={query} onChangeQuery={setQuery} />
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
         <Route path="/mypage/settings" element={<AccountSettings />} />
-          <Route path="/" element={<Home q={q} tag={tag} />} />
+          <Route path="/" element={<Home query={query} />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
@@ -119,4 +118,3 @@ export default function App() {
     </div>
   );
 }
-

@@ -909,42 +909,94 @@ def list_public_novels(
 
     # --- 検索 ---
     if q:
-        like = f"%{q}%"
-        query = query.filter(
-            or_(
-                models.Novel.title.ilike(like),
-                models.Novel.description.ilike(like),
-            )
-        )
+        raw = q.strip()
+        if raw:
+            terms = [t for t in re.split(r"[\s,]+", raw) if t]
+
+            # 先頭が @ の場合はユーザー検索（作者名）
+            if terms and terms[0].startswith("@"):
+                username_term = terms[0][1:].strip()
+                if username_term:
+                    query = query.filter(models.User.username.ilike(f"%{username_term}%"))
+                terms = terms[1:]
+
+            def episode_match_exists(like: str):
+                return (
+                    db.query(models.Episode.id)
+                    .filter(models.Episode.novel_id == models.Novel.id)
+                    .filter(
+                        or_(
+                            models.Episode.title.ilike(like),
+                            models.Episode.body.ilike(like),
+                        )
+                    )
+                    .exists()
+                )
+
+            def novel_tag_match_exists(like: str):
+                return (
+                    db.query(models.NovelTag.novel_id)
+                    .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+                    .filter(models.NovelTag.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
+                )
+
+            def episode_tag_match_exists(like: str):
+                return (
+                    db.query(models.Episode.id)
+                    .join(
+                        models.EpisodeTag,
+                        models.EpisodeTag.episode_id == models.Episode.id,
+                    )
+                    .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+                    .filter(models.Episode.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
+                )
+
+            for term in terms:
+                like = f"%{term}%"
+                query = query.filter(
+                    or_(
+                        models.Novel.title.ilike(like),
+                        models.Novel.description.ilike(like),
+                        models.User.username.ilike(like),
+                        episode_match_exists(like),
+                        novel_tag_match_exists(like),
+                        episode_tag_match_exists(like),
+                    )
+                )
 
     # --- タグフィルタ ---
     if tag:
-        tag_str = tag.strip()
-        if tag_str:
-            # Novel タグ または Episode タグのどちらかに tag_str が付いている作品を取得
-            ep_subq = (
-                db.query(models.Episode.novel_id)
-                .join(
-                    models.EpisodeTag,
-                    models.EpisodeTag.episode_id == models.Episode.id,
-                )
-                .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
-                .filter(models.Tag.name == tag_str)
-                .subquery()
-            )
+        raw = tag.strip()
+        if raw:
+            tag_terms = [t for t in re.split(r"[\s,]+", raw) if t]
 
-            query = (
-                query.outerjoin(
-                    models.NovelTag, models.Novel.id == models.NovelTag.novel_id
+            def tag_match_exists(like: str):
+                novel_exists = (
+                    db.query(models.NovelTag.novel_id)
+                    .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+                    .filter(models.NovelTag.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
                 )
-                .outerjoin(models.Tag, models.Tag.id == models.NovelTag.tag_id)
-                .filter(
-                    or_(
-                        models.Tag.name == tag_str,       # 小説自体のタグ
-                        models.Novel.id.in_(ep_subq),     # エピソード側のタグ
+                episode_exists = (
+                    db.query(models.Episode.id)
+                    .join(
+                        models.EpisodeTag,
+                        models.EpisodeTag.episode_id == models.Episode.id,
                     )
+                    .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+                    .filter(models.Episode.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
                 )
-            )
+                return or_(novel_exists, episode_exists)
+
+            if tag_terms:
+                query = query.filter(or_(*[tag_match_exists(f"%{t}%") for t in tag_terms]))
 
     novels = query.order_by(models.Novel.created_at.desc()).all()
 
