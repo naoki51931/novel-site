@@ -37,6 +37,7 @@ EPISODE_IMAGE_DIR = "/app/static/episode_images"
 import os
 os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
 from fastapi import UploadFile, File
+from fastapi import Form
 
 from fastapi import APIRouter
 
@@ -1248,7 +1249,187 @@ def delete_episode_cover_image(episode_id: int, request: Request, db: Session = 
             print("delete cover file error:", repr(e))
         ep.cover_image_url = None
         db.add(ep)
+        db.commit()
     return {"ok": True, "message": "表紙画像を削除しました"}
+
+
+@app.post("/api/episodes/{episode_id}/cover-image")
+async def upload_episode_cover_image(
+    episode_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if not novel or novel.author_id != user.id:
+        raise HTTPException(403, "このエピソードを編集する権限がありません")
+
+    content_type = (file.content_type or "").lower()
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    if content_type not in ext_map:
+        raise HTTPException(400, "画像ファイル（jpg/png/webp/gif）のみアップロードできます")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "画像ファイルが空です")
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "画像サイズが大きすぎます（最大 10MB）")
+
+    # 既存表紙があれば削除
+    if ep.cover_image_url:
+        rel_path = ep.cover_image_url.lstrip("/")
+        old_path = os.path.join("/app", rel_path)
+        try:
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        except Exception as e:
+            print("delete old cover file error:", repr(e))
+
+    token = secrets.token_hex(8)
+    ext = ext_map[content_type]
+    filename = f"ep_{episode_id}_cover_{token}{ext}"
+    save_path = os.path.join(EPISODE_IMAGE_DIR, filename)
+
+    if ext == ".gif":
+        with open(save_path, "wb") as f:
+            f.write(data)
+    elif PIL_AVAILABLE:
+        try:
+            img = Image.open(io.BytesIO(data))
+            img = ImageOps.exif_transpose(img)
+            # RGBA/P などを JPEG に落とす場合のため
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            # 表紙の最大辺を抑える（縦横どちらか 1600px まで）
+            img.thumbnail((1600, 1600))
+            if ext in (".jpg",):
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(save_path, format="JPEG", quality=90, optimize=True)
+            elif ext == ".png":
+                img.save(save_path, format="PNG", optimize=True)
+            elif ext == ".webp":
+                img.save(save_path, format="WEBP", quality=85, method=6)
+            elif ext == ".gif":
+                # GIF は最適化が強く効くので、素の保存に寄せる
+                img.save(save_path, format="GIF")
+            else:
+                with open(save_path, "wb") as f:
+                    f.write(data)
+        except Exception as e:
+            print("cover image processing error:", repr(e))
+            with open(save_path, "wb") as f:
+                f.write(data)
+    else:
+        with open(save_path, "wb") as f:
+            f.write(data)
+
+    ep.cover_image_url = f"/static/episode_images/{filename}"
+    db.add(ep)
+    db.commit()
+    db.refresh(ep)
+    return {"ok": True, "cover_image_url": ep.cover_image_url}
+
+
+@app.post("/api/episodes/{episode_id}/illusts")
+async def upload_episode_illust(
+    episode_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if not novel or novel.author_id != user.id:
+        raise HTTPException(403, "このエピソードを編集する権限がありません")
+
+    content_type = (file.content_type or "").lower()
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    if content_type not in ext_map:
+        raise HTTPException(400, "画像ファイル（jpg/png/webp/gif）のみアップロードできます")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "画像ファイルが空です")
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "画像サイズが大きすぎます（最大 10MB）")
+
+    # position は最後尾に追加
+    last = (
+        db.query(models.EpisodeIllust)
+        .filter(models.EpisodeIllust.episode_id == episode_id)
+        .order_by(models.EpisodeIllust.position.desc(), models.EpisodeIllust.id.desc())
+        .first()
+    )
+    position = (last.position if last else 0) + 1
+
+    token = secrets.token_hex(8)
+    ext = ext_map[content_type]
+    filename = f"ep_{episode_id}_illust_{position}_{token}{ext}"
+    save_path = os.path.join(EPISODE_IMAGE_DIR, filename)
+
+    if ext == ".gif":
+        with open(save_path, "wb") as f:
+            f.write(data)
+    elif PIL_AVAILABLE:
+        try:
+            img = Image.open(io.BytesIO(data))
+            img = ImageOps.exif_transpose(img)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            img.thumbnail((2000, 2000))
+            if ext in (".jpg",):
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(save_path, format="JPEG", quality=90, optimize=True)
+            elif ext == ".png":
+                img.save(save_path, format="PNG", optimize=True)
+            elif ext == ".webp":
+                img.save(save_path, format="WEBP", quality=85, method=6)
+            elif ext == ".gif":
+                img.save(save_path, format="GIF")
+            else:
+                with open(save_path, "wb") as f:
+                    f.write(data)
+        except Exception as e:
+            print("illust image processing error:", repr(e))
+            with open(save_path, "wb") as f:
+                f.write(data)
+    else:
+        with open(save_path, "wb") as f:
+            f.write(data)
+
+    image_url = f"/static/episode_images/{filename}"
+    ill = models.EpisodeIllust(
+        episode_id=episode_id,
+        image_url=image_url,
+        position=position,
+        caption=(caption or "").strip() or None,
+    )
+    db.add(ill)
+    db.commit()
+    db.refresh(ill)
+    return {"id": ill.id, "image_url": ill.image_url, "position": ill.position, "caption": ill.caption}
 @app.delete("/api/episodes/{episode_id}/illusts/{illust_id}")
 def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
@@ -1268,6 +1449,7 @@ def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db:
     except Exception as e:
         print("delete illust file error:", repr(e))
     db.delete(ill)
+    db.commit()
     return {"ok": True, "message": "押絵を削除しました"}
 # Episode 詳細（tags 付き）
 # =========================================
