@@ -2,6 +2,7 @@ import os
 import json
 import html
 import re
+import io
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 
@@ -20,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from sqlalchemy.orm import selectinload
@@ -48,6 +49,13 @@ from .ai_novel import (
     call_deepseek_novel_api,
     provider_from_model,
 )
+
+try:
+    from PIL import Image, ImageOps  # type: ignore
+
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
 
 # =========================================
 # DB 初期化
@@ -1417,7 +1425,23 @@ def share_episode_page(episode_id: int, request: Request, db: Session = Depends(
         description = description[:117] + "…"
 
     image_url = to_abs_url(ep.cover_image_url)
-    twitter_card = "summary_large_image" if image_url else "summary"
+
+    def local_static_path_from_url(url: str | None) -> str | None:
+        if not url or not url.startswith("/"):
+            return None
+        rel_path = os.path.normpath(url.lstrip("/"))
+        if rel_path.startswith("..") or not rel_path.startswith("static/"):
+            return None
+        return os.path.join("/app", rel_path)
+
+    og_image_url = None
+    if image_url and PIL_AVAILABLE:
+        local_path = local_static_path_from_url(ep.cover_image_url)
+        if local_path and os.path.exists(local_path):
+            og_version = int(os.path.getmtime(local_path))
+            og_image_url = f"{origin}/share/episodes/{episode_id}/og-image.png?v={og_version}"
+
+    twitter_card = "summary_large_image" if (image_url or og_image_url) else "summary"
 
     age_limit_notice = ""
     if novel.age_limit in ("r15", "r18"):
@@ -1429,7 +1453,17 @@ def share_episode_page(episode_id: int, request: Request, db: Session = Depends(
     safe_episode_url = html.escape(episode_url, quote=True)
 
     head_image_tags = ""
-    if image_url:
+    if og_image_url:
+        safe_image_url = html.escape(og_image_url, quote=True)
+        head_image_tags = f"""
+    <meta property="og:image" content="{safe_image_url}" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:image" content="{safe_image_url}" />
+    <meta name="twitter:image:width" content="1200" />
+    <meta name="twitter:image:height" content="630" />
+        """.strip()
+    elif image_url:
         safe_image_url = html.escape(image_url, quote=True)
         head_image_tags = f"""
     <meta property="og:image" content="{safe_image_url}" />
@@ -1467,6 +1501,60 @@ def share_episode_page(episode_id: int, request: Request, db: Session = Depends(
   </body>
 </html>"""
     return HTMLResponse(html_content)
+
+
+@app.get("/share/episodes/{episode_id}/og-image.png")
+def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
+    if not PIL_AVAILABLE:
+        raise HTTPException(501, "OG画像生成が未設定です")
+
+    ep = db.query(models.Episode).get(episode_id)
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    if not ep.cover_image_url:
+        raise HTTPException(404, "表紙画像が存在しません")
+
+    if not ep.cover_image_url.startswith("/"):
+        raise HTTPException(404, "ローカル画像ではありません")
+
+    rel_path = os.path.normpath(ep.cover_image_url.lstrip("/"))
+    if rel_path.startswith("..") or not rel_path.startswith("static/"):
+        raise HTTPException(404, "不正な画像パスです")
+
+    file_path = os.path.join("/app", rel_path)
+    if not os.path.exists(file_path):
+        raise HTTPException(404, "画像ファイルが見つかりません")
+
+    try:
+        with Image.open(file_path) as img:
+            img = ImageOps.exif_transpose(img)
+            img = img.convert("RGBA")
+
+            target_w, target_h = 1200, 630
+            scale = min(target_w / img.width, target_h / img.height)
+            resized = img.resize(
+                (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+
+            background = Image.new("RGBA", (target_w, target_h), (17, 17, 17, 255))
+            offset_x = (target_w - resized.width) // 2
+            offset_y = (target_h - resized.height) // 2
+            background.paste(resized, (offset_x, offset_y), resized)
+
+            out = io.BytesIO()
+            background.convert("RGB").save(out, format="PNG", optimize=True)
+            png_bytes = out.getvalue()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"OG画像生成に失敗しました: {e!r}")
+
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 class LoginVerify(BaseModel):
