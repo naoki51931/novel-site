@@ -3,7 +3,7 @@ import AccountSettings from "./pages/AccountSettings";
 import Register from "./pages/Register.jsx";
 import { useState } from "react";
 import SearchBar from "./components/SearchBar.jsx";
-import { Routes, Route, Link } from "react-router-dom";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
 import Home from "./pages/Home";
 import NewNovel from "./pages/NewNovel";
 import NovelDetail from "./pages/NovelDetail";
@@ -21,6 +21,7 @@ import AiLogsPage from "./pages/AiLogsPage";
 export default function App() {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const navigate = useNavigate();
 
   const username =
     typeof window !== "undefined" ? localStorage.getItem("username") : null;
@@ -91,7 +92,14 @@ export default function App() {
       </header>
 
       {/* 検索バーはヘッダーの下に固定 */}
-      <SearchBar query={query} onChangeQuery={setQuery} />
+      <SearchBar
+        query={query}
+        onChangeQuery={setQuery}
+        onSearch={() => {
+          setMenuOpen(false);
+          navigate("/");
+        }}
+      />
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
