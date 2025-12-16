@@ -602,10 +602,37 @@ def list_novels(
 
     # selectinload で tags をまとめてロードしておくとクエリが減る
     q = q.options(
-        selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag)
+        selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        selectinload(models.Novel.favorite_links),
     )
 
-    return q.all()
+    novels = (
+        q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
+    )
+
+    # フロントで使いやすい形に整形（マイページの指標表示など）
+    return [
+        {
+            "id": novel.id,
+            "title": novel.title,
+            "description": novel.description,
+            "created_at": novel.created_at,
+            "author_id": novel.author_id,
+            "view_count": getattr(novel, "view_count", 0) or 0,
+            "like_count": getattr(novel, "like_count", 0) or 0,
+            "favorite_count": len(getattr(novel, "favorite_links", []) or []),
+            "age_limit": getattr(novel, "age_limit", "all"),
+            "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
+            "is_public": bool(getattr(novel, "is_public", True)),
+            "status": getattr(novel, "status", "public"),
+            "tags": [
+                {"id": nt.tag.id, "name": nt.tag.name}
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+        }
+        for novel in novels
+    ]
 
 
 @app.put("/api/novels/{novel_id}")
