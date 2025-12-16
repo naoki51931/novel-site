@@ -107,7 +107,12 @@ export default function Mypage() {
 
         if (resFav.ok) {
           const dataFav = await resFav.json();
-          setFavorites(dataFav);
+          const sortedFav = (dataFav || []).slice().sort((a, b) => {
+            const ad = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const bd = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return bd - ad;
+          });
+          setFavorites(sortedFav);
         } else {
           console.error("failed to fetch favorites");
         }
@@ -194,25 +199,6 @@ export default function Mypage() {
         )}
       </section>
 
-      {/* お気に入り小説 */}
-      <section style={{ marginTop: "2.5rem" }}>
-        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
-          お気に入り小説
-        </h3>
-
-        {favorites.length === 0 ? (
-          <p style={{ marginTop: 10 }}>お気に入りはまだありません。</p>
-        ) : (
-          <ul style={{ marginTop: 10, paddingLeft: 20 }}>
-            {favorites.map((novel) => (
-              <li key={novel.id} style={{ marginBottom: 8 }}>
-                <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
       {/* マイページ設定 */}
       <section style={{ marginTop: "2.5rem" }}>
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
@@ -224,6 +210,73 @@ export default function Mypage() {
             設定を開く
           </Link>
         </div>
+      </section>
+
+      {/* お気に入り小説 */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          お気に入り小説
+        </h3>
+
+        {favorites.length === 0 ? (
+          <p style={{ marginTop: 10 }}>お気に入りはまだありません。</p>
+        ) : (
+          <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+            {favorites.map((novel) => (
+              <div
+                key={novel.id}
+                style={{
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  padding: 14,
+                  background: "#fff",
+                }}
+              >
+                <h4 style={{ marginBottom: 6 }}>
+                  <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
+                </h4>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 10,
+                    fontSize: 12,
+                    color: "#666",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span>閲覧: {novel.view_count ?? 0}</span>
+                  <span>LIKE: {novel.like_count ?? 0}</span>
+                  <span>お気に入り: {novel.favorite_count ?? 0}</span>
+                  <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
+                      novel.tags.map((t) => (
+                        <span
+                          key={t.id ?? t.name}
+                          style={{
+                            padding: "2px 8px",
+                            borderRadius: "999px",
+                            background: "#eee",
+                            color: "#444",
+                          }}
+                        >
+                          {t.name}
+                        </span>
+                      ))
+                    ) : (
+                      <span style={{ color: "#888" }}>タグ: なし</span>
+                    )}
+                  </span>
+                </div>
+
+                <p style={{ fontSize: 14, whiteSpace: "pre-wrap", margin: 0 }}>
+                  {novel.description || ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* 作成した小説 */}
