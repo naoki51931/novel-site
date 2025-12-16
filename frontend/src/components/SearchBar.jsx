@@ -3,7 +3,7 @@ export default function SearchBar({ query, onChangeQuery, onSearch }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (onSearch) {
-      onSearch();        // ← 親に「検索して」と依頼する
+      onSearch(query); // ← 親に「検索して」と依頼する
     }
   };
 
