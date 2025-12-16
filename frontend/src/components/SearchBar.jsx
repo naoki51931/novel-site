@@ -1,5 +1,5 @@
 // frontend/src/components/SearchBar.jsx
-export default function SearchBar({ q, tag, onChangeQ, onChangeTag, onSearch }) {
+export default function SearchBar({ query, onChangeQuery, onSearch }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (onSearch) {
@@ -11,18 +11,10 @@ export default function SearchBar({ q, tag, onChangeQ, onChangeTag, onSearch }) 
     <form className="search-bar" onSubmit={handleSubmit}>
       <input
         type="text"
-        placeholder="タイトル検索..."
-        value={q}
-        onChange={(e) => onChangeQ(e.target.value)}
+        placeholder="検索: タイトル/本文/概要/タグ(空白・カンマ)/@ユーザー"
+        value={query}
+        onChange={(e) => onChangeQuery(e.target.value)}
         className="search-input"
-      />
-
-      <input
-        type="text"
-        placeholder="タグ検索..."
-        value={tag}
-        onChange={(e) => onChangeTag(e.target.value)}
-        className="search-tag-input"
       />
 
       <button type="submit" className="search-button">
@@ -31,4 +23,3 @@ export default function SearchBar({ q, tag, onChangeQ, onChangeTag, onSearch }) 
     </form>
   );
 }
-

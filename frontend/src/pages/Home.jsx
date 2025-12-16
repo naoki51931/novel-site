@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 
 const API_BASE = "";
 
-export default function Home({ q = "", tag = "" }) {
+export default function Home({ query = "" }) {
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -16,11 +16,8 @@ export default function Home({ q = "", tag = "" }) {
         setError("");
 
         let url = `${API_BASE}/api/public/novels`;
-        const params = [];
-        if (q.trim()) params.push(`q=${encodeURIComponent(q.trim())}`);
-        if (tag.trim()) params.push(`tag=${encodeURIComponent(tag.trim())}`);
-        if (params.length > 0) {
-          url += `?${params.join("&")}`;
+        if (query.trim()) {
+          url += `?q=${encodeURIComponent(query.trim())}`;
         }
 
         const res = await fetch(url);
@@ -44,7 +41,7 @@ export default function Home({ q = "", tag = "" }) {
     };
 
     fetchNovels();
-  }, [q, tag]); // ← q/tag が変わるたびに再取得
+  }, [query]); // ← query が変わるたびに再取得
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
@@ -124,4 +121,3 @@ export default function Home({ q = "", tag = "" }) {
     </div>
   );
 }
-
