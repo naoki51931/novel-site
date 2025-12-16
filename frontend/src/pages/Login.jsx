@@ -90,7 +90,7 @@ export default function Login() {
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("username", username);
 
-      navigate("/");
+      navigate("/mypage");
     } catch (err) {
       console.error(err);
       setError(err.message || "認証中にエラーが発生しました。");
@@ -237,4 +237,3 @@ export default function Login() {
     </div>
   );
 }
-

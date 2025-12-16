@@ -76,7 +76,12 @@ export default function Mypage() {
           throw new Error(data.detail || "マイページの取得に失敗しました");
         }
 
-        setNovels(data);
+        const sorted = (data || []).slice().sort((a, b) => {
+          const ad = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const bd = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return bd - ad;
+        });
+        setNovels(sorted);
       } catch (err) {
         console.error(err);
         setError(err.message || "マイページの取得中にエラーが発生しました");
@@ -247,6 +252,40 @@ export default function Mypage() {
               <h4 style={{ marginBottom: 6 }}>
                 <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
               </h4>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 10,
+                  fontSize: 12,
+                  color: "#666",
+                  marginBottom: 8,
+                }}
+              >
+                <span>閲覧: {novel.view_count ?? 0}</span>
+                <span>LIKE: {novel.like_count ?? 0}</span>
+                <span>お気に入り: {novel.favorite_count ?? 0}</span>
+                <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
+                    novel.tags.map((t) => (
+                      <span
+                        key={t.id ?? t.name}
+                        style={{
+                          padding: "2px 8px",
+                          borderRadius: "999px",
+                          background: "#eee",
+                          color: "#444",
+                        }}
+                      >
+                        {t.name}
+                      </span>
+                    ))
+                  ) : (
+                    <span style={{ color: "#888" }}>タグ: なし</span>
+                  )}
+                </span>
+              </div>
 
               <p
                 style={{
