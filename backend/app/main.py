@@ -1748,7 +1748,12 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
         db.query(models.Novel)
         .join(models.NovelFavorite, models.Novel.id == models.NovelFavorite.novel_id)
         .filter(models.NovelFavorite.user_id == user.id)
-        .order_by(models.NovelFavorite.created_at.desc())
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.favorite_links),
+        )
+        .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
         .all()
     )
 
@@ -1762,6 +1767,16 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
             "author_id": n.author_id,
             "author_username": n.author.username if n.author else None,
             "created_at": n.created_at,
+            "view_count": getattr(n, "view_count", 0) or 0,
+            "like_count": getattr(n, "like_count", 0) or 0,
+            "favorite_count": len(getattr(n, "favorite_links", []) or []),
+            "is_public": bool(getattr(n, "is_public", True)),
+            "status": getattr(n, "status", "public"),
+            "tags": [
+                {"id": nt.tag.id, "name": nt.tag.name}
+                for nt in (getattr(n, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
         }
         for n in favorites
     ]
