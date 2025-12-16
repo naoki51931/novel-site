@@ -7,6 +7,9 @@ export default function EpisodeDetail() {
   const { id } = useParams(); // episode_id
   const navigate = useNavigate();
 
+  const isXInAppBrowser =
+    typeof navigator !== "undefined" && /Twitter/i.test(navigator.userAgent);
+
   const [episode, setEpisode] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -277,6 +280,7 @@ export default function EpisodeDetail() {
             alt="表紙画像"
             style={{
               maxWidth: "260px",
+              ...(isXInAppBrowser ? { maxHeight: "45vh", objectFit: "contain" } : {}),
               borderRadius: 8,
               cursor: "pointer",
               boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
@@ -425,7 +429,8 @@ export default function EpisodeDetail() {
               alt="拡大画像"
               style={{
                 maxWidth: "100%",
-                maxHeight: "80vh",
+                maxHeight: isXInAppBrowser ? "70vh" : "80vh",
+                objectFit: "contain",
                 display: "block",
                 margin: "0 auto",
               }}
