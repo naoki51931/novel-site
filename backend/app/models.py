@@ -255,3 +255,12 @@ class AIGenerateLog(Base):
     model = Column(String(64), nullable=True)
 
     user = relationship("User", back_populates="ai_generate_logs")
+
+
+class AIGuestGenerateUsage(Base):
+    __tablename__ = "ai_guest_generate_usage"
+
+    guest_id = Column(String(64), primary_key=True)
+    generate_count = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
