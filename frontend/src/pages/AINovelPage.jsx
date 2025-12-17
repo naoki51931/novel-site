@@ -435,13 +435,13 @@ export default function AINovelPage() {
       </h1>
 
       {isContinueMode ? (
-        <p style={{ marginBottom: "1.5rem", color: "#555" }}>
+        <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
           選択したエピソードの<strong>続き</strong>を AI が生成します。
           <br />
           必要であれば、雰囲気や追加したい展開を下のフォームに書き足してから「AI小説を生成する」を押してください。
         </p>
       ) : (
-        <p style={{ marginBottom: "1.5rem", color: "#555" }}>
+        <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
           お題や登場人物を入力して、「AI小説を生成する」を押すとお試し小説を生成します。
           <br />
           生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。
@@ -455,7 +455,7 @@ export default function AINovelPage() {
           gap: "0.75rem",
           marginBottom: "1.5rem",
           padding: "1rem",
-          border: "1px solid #ddd",
+          border: "1px solid var(--border)",
           borderRadius: "8px",
         }}
       >
@@ -640,9 +640,9 @@ export default function AINovelPage() {
           style={{
             marginTop: "1.5rem",
             padding: "1rem",
-            border: "1px solid #ddd",
+            border: "1px solid var(--ai-result-border)",
             borderRadius: "8px",
-            backgroundColor: "#fafafa",
+            backgroundColor: "var(--ai-result-bg)",
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
@@ -657,7 +657,7 @@ export default function AINovelPage() {
                 alignSelf: "center",
                 padding: "0.3rem 0.8rem",
                 borderRadius: "4px",
-                border: "1px solid #ccc",
+                border: "1px solid var(--border)",
                 cursor: "pointer",
               }}
             >
@@ -665,7 +665,7 @@ export default function AINovelPage() {
             </button>
           </div>
 
-          <div style={{ fontSize: "0.85rem", color: "#666", marginBottom: "0.5rem" }}>
+          <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
             {result.model && <span>モデル: {result.model} / </span>}
             {typeof result.used_tokens === "number" && (
               <span>使用トークン: {result.used_tokens}</span>
@@ -676,10 +676,10 @@ export default function AINovelPage() {
             style={{
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
-              backgroundColor: "#fff",
+              backgroundColor: "var(--ai-result-surface)",
               padding: "0.75rem",
               borderRadius: "6px",
-              border: "1px solid #eee",
+              border: "1px solid var(--border)",
               maxHeight: "600px",
               overflowY: "auto",
             }}
@@ -692,15 +692,21 @@ export default function AINovelPage() {
               style={{
                 padding: "0.75rem",
                 borderRadius: "6px",
-                border: "1px solid #e5e5e5",
-                backgroundColor: "#fff",
+                border: "1px solid var(--border)",
+                backgroundColor: "var(--ai-result-surface)",
               }}
             >
               <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>投稿する</div>
 
               {isContinueMode && (
                 <div style={{ marginBottom: "0.5rem" }}>
-                  <div style={{ fontSize: "0.9rem", color: "#555", marginBottom: "0.25rem" }}>
+                  <div
+                    style={{
+                      fontSize: "0.9rem",
+                      color: "var(--muted-text)",
+                      marginBottom: "0.25rem",
+                    }}
+                  >
                     既存小説に「続き」を新しいエピソードとして投稿します。
                   </div>
                   {continueInfoError && (
@@ -719,7 +725,7 @@ export default function AINovelPage() {
                     style={{ width: "100%", padding: "0.5rem" }}
                     disabled={posting}
                   />
-                  <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.25rem" }}>
+                  <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
                     {continueNovelId ? (
                       <span>
                         投稿先: novel_id={continueNovelId}

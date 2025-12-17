@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
 import AiLogsPage from "./pages/AiLogsPage";
+import { initTheme } from "./theme";
 
 // すべての <a> と <button> に自動で btn btn-border を付ける
 function applyGlobalButtonClasses() {
@@ -20,6 +21,8 @@ window.addEventListener("DOMContentLoaded", applyGlobalButtonClasses);
 // React の更新時にも再適用
 const observer = new MutationObserver(applyGlobalButtonClasses);
 observer.observe(document.body, { childList: true, subtree: true });
+
+initTheme();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

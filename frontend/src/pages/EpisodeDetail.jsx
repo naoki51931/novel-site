@@ -361,15 +361,15 @@ export default function EpisodeDetail() {
           style={{
             marginTop: 16,
             padding: 12,
-            border: "1px solid #0a0",
-            background: "#efe",
+            border: "1px solid var(--premium-border)",
+            background: "var(--premium-bg)",
             borderRadius: 6,
           }}
         >
           <p
             style={{
               marginBottom: 0,
-              color: "#060",
+              color: "var(--premium-text)",
               fontWeight: "bold",
             }}
           >

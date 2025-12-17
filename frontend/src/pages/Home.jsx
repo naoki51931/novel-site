@@ -75,11 +75,12 @@ export default function Home({ query = "" }) {
           <div
             key={novel.id}
             style={{
-              border: "1px solid #ddd",
+              border: "1px solid var(--novel-card-border)",
               borderRadius: 8,
               padding: 12,
-              boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
-              backgroundColor: "#fff",
+              boxShadow: "0 2px 4px var(--shadow)",
+              backgroundColor: "var(--novel-card-bg)",
+              color: "var(--text)",
             }}
           >
             <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
@@ -90,7 +91,7 @@ export default function Home({ query = "" }) {
               style={{
                 whiteSpace: "pre-wrap",
                 fontSize: 14,
-                color: "#444",
+                color: "var(--novel-card-desc)",
                 marginBottom: 8,
                 minHeight: "3.5em",
               }}
@@ -98,7 +99,7 @@ export default function Home({ query = "" }) {
               {shorten(novel.description, 120) || "説明がありません。"}
             </p>
 
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>
               <div>
                 作者:{" "}
                 {novel.author_username
