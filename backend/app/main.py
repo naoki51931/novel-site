@@ -1189,6 +1189,175 @@ def list_public_novels(
 
 
 # =========================================
+# 公開: ユーザーページ（プロフィール）
+# =========================================
+@app.get("/api/public/users/{username}")
+def read_public_user(username: str, db: Session = Depends(get_db)):
+    uname = (username or "").strip()
+    if not uname:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    user = get_user_by_username(db, uname)
+    if not user:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "is_premium": bool(getattr(user, "is_premium", False)),
+    }
+
+
+# =========================================
+# 公開: ユーザーページ（公開中の小説一覧）
+# - ログインしていれば年齢制限を考慮して表示
+# =========================================
+@app.get("/api/public/users/{username}/novels")
+def list_public_user_novels(
+    username: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    uname = (username or "").strip()
+    if not uname:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    author = get_user_by_username(db, uname)
+    if not author:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+
+    viewer_age = None
+    if viewer and getattr(viewer, "birth_date", None):
+        viewer_age = calc_age(viewer.birth_date)
+
+    q = (
+        db.query(models.Novel)
+        .filter(models.Novel.author_id == author.id)
+        .filter(models.Novel.is_public == True)
+        .options(
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.favorite_links),
+        )
+    )
+
+    # 年齢不明 → R15 / R18 を表示しない
+    if viewer_age is None:
+        q = q.filter(models.Novel.age_limit == "all")
+    else:
+        if viewer_age < 15:
+            q = q.filter(models.Novel.age_limit == "all")
+        elif viewer_age < 18:
+            q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
+
+    novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
+
+    return [
+        {
+            "id": novel.id,
+            "title": novel.title,
+            "description": novel.description,
+            "created_at": novel.created_at,
+            "author_id": novel.author_id,
+            "author_username": author.username,
+            "view_count": getattr(novel, "view_count", 0) or 0,
+            "like_count": getattr(novel, "like_count", 0) or 0,
+            "favorite_count": len(getattr(novel, "favorite_links", []) or []),
+            "age_limit": getattr(novel, "age_limit", "all"),
+            "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
+            "is_public": True,
+            "status": getattr(novel, "status", "public"),
+            "tags": [
+                {"id": nt.tag.id, "name": nt.tag.name}
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+        }
+        for novel in novels
+    ]
+
+
+# =========================================
+# 公開: ユーザーページ（お気に入り一覧）
+# - ログインしていれば年齢制限を考慮して表示
+# =========================================
+@app.get("/api/public/users/{username}/favorites")
+def list_public_user_favorites(
+    username: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    uname = (username or "").strip()
+    if not uname:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    user = get_user_by_username(db, uname)
+    if not user:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+
+    viewer_age = None
+    if viewer and getattr(viewer, "birth_date", None):
+        viewer_age = calc_age(viewer.birth_date)
+
+    q = (
+        db.query(models.Novel)
+        .join(models.NovelFavorite, models.Novel.id == models.NovelFavorite.novel_id)
+        .filter(models.NovelFavorite.user_id == user.id)
+        .filter(models.Novel.is_public == True)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.favorite_links),
+        )
+        .order_by(models.NovelFavorite.created_at.desc(), models.Novel.id.desc())
+    )
+
+    # 年齢不明 → R15 / R18 を表示しない
+    if viewer_age is None:
+        q = q.filter(models.Novel.age_limit == "all")
+    else:
+        if viewer_age < 15:
+            q = q.filter(models.Novel.age_limit == "all")
+        elif viewer_age < 18:
+            q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
+
+    favorites = q.all()
+
+    return [
+        {
+            "id": n.id,
+            "title": n.title,
+            "description": n.description,
+            "age_limit": n.age_limit,
+            "is_ai_generated": n.is_ai_generated,
+            "author_id": n.author_id,
+            "author_username": n.author.username if n.author else None,
+            "created_at": n.created_at,
+            "view_count": getattr(n, "view_count", 0) or 0,
+            "like_count": getattr(n, "like_count", 0) or 0,
+            "favorite_count": len(getattr(n, "favorite_links", []) or []),
+            "is_public": True,
+            "status": getattr(n, "status", "public"),
+            "tags": [
+                {"id": nt.tag.id, "name": nt.tag.name}
+                for nt in (getattr(n, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+        }
+        for n in favorites
+    ]
+
+
+# =========================================
 # Episode 作成（タグ対応）
 # =========================================
 @app.post("/api/novels/{novel_id}/episodes")
@@ -1678,8 +1847,12 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         user = require_current_user(request, db)
     except Exception:
         user = None
-    # novel を取得（年齢制限のため）
-    novel = db.query(models.Novel).get(ep.novel_id)
+    # novel を取得（年齢制限/作者情報のため）
+    novel = (
+        db.query(models.Novel)
+        .options(selectinload(models.Novel.author))
+        .get(ep.novel_id)
+    )
 
     # 下書きエピソードは作者だけ
     try:
@@ -1742,6 +1915,8 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
     return {
         "id": ep.id,
         "novel_id": ep.novel_id,
+        "author_id": novel.author_id if novel else None,
+        "author_username": (novel.author.username if (novel and novel.author) else None),
         "title": ep.title,
         "cover_image_url": ep.cover_image_url,
         "body": body_converted,

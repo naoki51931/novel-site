@@ -565,7 +565,15 @@ export default function NovelDetail() {
         }}
       >
           {authorName && (
-            <span>作者: {authorName}</span>
+            <span>
+              作者:{" "}
+              <Link
+                className="user-link"
+                to={`/users/${encodeURIComponent(authorName)}`}
+              >
+                {authorName}
+              </Link>
+            </span>
           )}
 	{novel.created_at && (
           <span>作成日時: {formatDateTime(novel.created_at)}</span>
