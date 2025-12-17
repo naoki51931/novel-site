@@ -218,6 +218,27 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   margin-bottom: 1rem;
 }
 
+.tag-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.tag-chip:hover {
+  border-color: var(--border-strong);
+}
+
 /* 入力欄（タイトル／タグ） */
 .search-input,
 .search-tag-input {

@@ -1,9 +1,9 @@
 // frontend/src/App.jsx
 import AccountSettings from "./pages/AccountSettings";
 import Register from "./pages/Register.jsx";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import SearchBar from "./components/SearchBar.jsx";
-import { Routes, Route, Link, useNavigate } from "react-router-dom";
+import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import Home from "./pages/Home";
 import NewNovel from "./pages/NewNovel";
 import NovelDetail from "./pages/NovelDetail";
@@ -22,6 +22,12 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    setQuery(params.get("q") ?? "");
+  }, [location.search]);
 
   const username =
     typeof window !== "undefined" ? localStorage.getItem("username") : null;
@@ -97,7 +103,14 @@ export default function App() {
         onChangeQuery={setQuery}
         onSearch={() => {
           setMenuOpen(false);
-          navigate("/");
+          const q = (query ?? "").trim();
+          if (!q) {
+            navigate("/");
+            return;
+          }
+          const params = new URLSearchParams();
+          params.set("q", q);
+          navigate(`/?${params.toString()}`);
         }}
       />
 

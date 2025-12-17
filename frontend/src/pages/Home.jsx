@@ -1,10 +1,12 @@
 // frontend/src/pages/Home.jsx
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import TagChipLink from "../components/TagChipLink.jsx";
 
 const API_BASE = "";
 
 export default function Home({ query = "" }) {
+  const location = useLocation();
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -15,10 +17,17 @@ export default function Home({ query = "" }) {
         setLoading(true);
         setError("");
 
+        const params = new URLSearchParams(location.search);
+        const urlQuery = (params.get("q") ?? "").trim();
+        const urlTag = (params.get("tag") ?? "").trim();
+        const effectiveQuery = urlQuery || (query ?? "").trim();
+
         let url = `${API_BASE}/api/public/novels`;
-        if (query.trim()) {
-          url += `?q=${encodeURIComponent(query.trim())}`;
-        }
+        const apiParams = new URLSearchParams();
+        if (effectiveQuery) apiParams.set("q", effectiveQuery);
+        if (urlTag) apiParams.set("tag", urlTag);
+        const qs = apiParams.toString();
+        if (qs) url += `?${qs}`;
 
         const res = await fetch(url);
         if (!res.ok) throw new Error("小説一覧の取得に失敗しました");
@@ -41,7 +50,7 @@ export default function Home({ query = "" }) {
     };
 
     fetchNovels();
-  }, [query]); // ← query が変わるたびに再取得
+  }, [query, location.search]); // ← 検索語 or URL が変わるたびに再取得
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
@@ -110,6 +119,14 @@ export default function Home({ query = "" }) {
               </div>
               <div>作成日時: {formatDateTime(novel.created_at)}</div>
             </div>
+
+            {Array.isArray(novel.tag_names) && novel.tag_names.length > 0 && (
+              <div className="tag-chip-row" style={{ marginBottom: 10 }}>
+                {novel.tag_names.map((name) => (
+                  <TagChipLink key={name} name={name} />
+                ))}
+              </div>
+            )}
 
             <div style={{ textAlign: "right" }}>
               <Link to={`/novels/${novel.id}`} className="btn btn-border">
