@@ -86,9 +86,16 @@ export default function EditEpisode() {
         setLoading(true);
         setError("");
 
-        const res = await fetch(`${API_BASE}/api/episodes/${id}`, {
+        const res = await fetch(`${API_BASE}/api/episodes/${id}/edit`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
+        if (res.status === 401) {
+          try {
+            localStorage.removeItem("token");
+          } catch {}
+          navigate("/login");
+          return;
+        }
         if (!res.ok) {
           throw new Error(`エピソード情報の取得に失敗しました (${res.status})`);
         }
@@ -175,6 +182,13 @@ export default function EditEpisode() {
 
       const data = await res.json().catch(() => ({}));
 
+      if (res.status === 401) {
+        try {
+          localStorage.removeItem("token");
+        } catch {}
+        navigate("/login");
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.detail || "エピソードの更新に失敗しました");
       }
@@ -603,4 +617,3 @@ export default function EditEpisode() {
     </div>
   );
 }
-

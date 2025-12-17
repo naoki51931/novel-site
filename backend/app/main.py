@@ -1592,6 +1592,70 @@ def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db:
 # =========================================
 # Episode 詳細（tags / illusts / cover 付き）
 # =========================================
+@app.get("/api/episodes/{episode_id}/edit", response_model=None)
+def get_episode_for_edit(
+    episode_id: int, request: Request, db: Session = Depends(get_db)
+):
+    user = require_current_user(request, db)
+
+    ep = (
+        db.query(models.Episode)
+        .options(
+            selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag),
+            selectinload(models.Episode.illusts),
+        )
+        .get(episode_id)
+    )
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if novel.author_id != user.id:
+        raise HTTPException(403, "このエピソードを編集する権限がありません")
+
+    like_count = db.query(models.EpisodeLike).filter(
+        models.EpisodeLike.episode_id == episode_id
+    ).count()
+
+    is_liked = (
+        db.query(models.EpisodeLike)
+        .filter(
+            models.EpisodeLike.episode_id == episode_id,
+            models.EpisodeLike.user_id == user.id,
+        )
+        .first()
+        is not None
+    )
+
+    is_premium = FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))
+
+    return {
+        "id": ep.id,
+        "novel_id": ep.novel_id,
+        "title": ep.title,
+        "cover_image_url": ep.cover_image_url,
+        "body": ep.body,
+        "episode_number": ep.episode_number,
+        "created_at": ep.created_at,
+        "view_count": ep.view_count,
+        "like_count": like_count,
+        "is_liked": is_liked,
+        "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
+        "illusts": [
+            {
+                "id": il.id,
+                "image_url": il.image_url,
+                "position": il.position,
+                "caption": il.caption,
+            }
+            for il in ep.illusts
+        ],
+        "is_premium_user": is_premium,
+    }
+
+
 @app.get("/api/episodes/{episode_id}", response_model=None)
 def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
     ep = (
