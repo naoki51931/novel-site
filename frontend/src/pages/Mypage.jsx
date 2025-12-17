@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import TagChipLink from "../components/TagChipLink.jsx";
 
 const API_BASE = "";
 
@@ -251,20 +252,10 @@ export default function Mypage() {
                   <span>閲覧: {novel.view_count ?? 0}</span>
                   <span>LIKE: {novel.like_count ?? 0}</span>
                   <span>お気に入り: {novel.favorite_count ?? 0}</span>
-                  <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <span className="tag-chip-row">
                     {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
                       novel.tags.map((t) => (
-                        <span
-                          key={t.id ?? t.name}
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: "999px",
-                            background: "var(--surface-2)",
-                            color: "var(--text)",
-                          }}
-                        >
-                          {t.name}
-                        </span>
+                        <TagChipLink key={t.id ?? t.name} name={t.name} />
                       ))
                     ) : (
                       <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
@@ -323,20 +314,10 @@ export default function Mypage() {
                 <span>閲覧: {novel.view_count ?? 0}</span>
                 <span>LIKE: {novel.like_count ?? 0}</span>
                 <span>お気に入り: {novel.favorite_count ?? 0}</span>
-                <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <span className="tag-chip-row">
                   {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
                     novel.tags.map((t) => (
-                      <span
-                        key={t.id ?? t.name}
-                        style={{
-                          padding: "2px 8px",
-                          borderRadius: "999px",
-                          background: "var(--surface-2)",
-                          color: "var(--text)",
-                        }}
-                      >
-                        {t.name}
-                      </span>
+                      <TagChipLink key={t.id ?? t.name} name={t.name} />
                     ))
                   ) : (
                     <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>

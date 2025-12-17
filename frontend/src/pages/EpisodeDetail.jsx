@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
+import TagChipLink from "../components/TagChipLink.jsx";
 
 const API_BASE = "";
 
@@ -208,21 +209,9 @@ export default function EpisodeDetail() {
 
       {/* タグ */}
       {tags.length > 0 && (
-        <div style={{ marginBottom: 8 }}>
+        <div className="tag-chip-row" style={{ marginBottom: 8 }}>
           {tags.map((t) => (
-            <span
-              key={t.id}
-              style={{
-                display: "inline-block",
-                marginRight: 4,
-                padding: "2px 8px",
-                borderRadius: 12,
-                border: "1px solid #ccc",
-                fontSize: "0.85rem",
-              }}
-            >
-              #{t.name}
-            </span>
+            <TagChipLink key={t.id ?? t.name} name={t.name} />
           ))}
         </div>
       )}
