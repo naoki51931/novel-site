@@ -108,11 +108,17 @@ export default function Home({ query = "" }) {
               {shorten(novel.description, 120) || "説明がありません。"}
             </p>
 
-            <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>
               <div>
                 作者:{" "}
-                {novel.author_username
-                  ? novel.author_username
+                {novel.author_username ? (
+                  <Link
+                    className="user-link"
+                    to={`/users/${encodeURIComponent(novel.author_username)}`}
+                  >
+                    {novel.author_username}
+                  </Link>
+                )
                   : novel.author_id
                   ? `ユーザーID: ${novel.author_id}`
                   : "不明"}

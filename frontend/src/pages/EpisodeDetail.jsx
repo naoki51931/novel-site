@@ -228,7 +228,19 @@ export default function EpisodeDetail() {
           color: "#666",
         }}
       >
-        <span>小説ID: {episode.novel_id}</span>
+        {episode.author_username ? (
+          <span>
+            作者:{" "}
+            <Link
+              className="user-link"
+              to={`/users/${encodeURIComponent(episode.author_username)}`}
+            >
+              {episode.author_username}
+            </Link>
+          </span>
+        ) : (
+          <span>小説ID: {episode.novel_id}</span>
+        )}
         {episode.created_at && (
           <span>作成日時: {formatDateTime(episode.created_at)}</span>
         )}

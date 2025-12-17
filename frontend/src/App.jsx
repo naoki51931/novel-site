@@ -14,6 +14,7 @@ import EpisodeDetail from "./pages/EpisodeDetail";
 import StripeReturn from "./pages/StripeReturn";
 import Login from "./pages/Login";
 import Mypage from "./pages/Mypage";
+import UserPage from "./pages/UserPage";
 import AINovelPage from "./pages/AINovelPage";
 import AiLogsPage from "./pages/AiLogsPage";
 
@@ -90,7 +91,19 @@ export default function App() {
 
         <div className="login-status">
           {hasToken ? (
-            <span>ログイン中: {username || "ユーザー"}</span>
+            <span>
+              ログイン中:{" "}
+              {username ? (
+                <Link
+                  className="user-link"
+                  to={`/users/${encodeURIComponent(username)}`}
+                >
+                  {username}
+                </Link>
+              ) : (
+                "ユーザー"
+              )}
+            </span>
           ) : (
             <span>未ログイン</span>
           )}
@@ -121,6 +134,7 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
+          <Route path="/users/:username" element={<UserPage />} />
           <Route path="/novels/new" element={<NewNovel />} />
           <Route path="/novels/:id" element={<NovelDetail />} />
           <Route path="/novels/:id/edit" element={<EditNovel />} />

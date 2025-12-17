@@ -157,7 +157,10 @@ export default function Mypage() {
           gap: "8px",
         }}
       >
-        {username} さんのマイページ
+        <Link className="user-link" to={`/users/${encodeURIComponent(username)}`}>
+          {username}
+        </Link>{" "}
+        さんのマイページ
         {isPremium && (
           <span
             style={{
@@ -209,6 +212,21 @@ export default function Mypage() {
         <div style={{ marginTop: 12 }}>
           <Link className="btn btn-border" to="/mypage/settings">
             設定を開く
+          </Link>
+        </div>
+      </section>
+
+      {/* 公開ページ */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          公開ページ
+        </h3>
+        <p style={{ marginTop: 8, lineHeight: 1.6 }}>
+          他のユーザーから閲覧できるあなたのページです。
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <Link className="btn btn-border" to={`/users/${encodeURIComponent(username)}`}>
+            公開ページを見る
           </Link>
         </div>
       </section>

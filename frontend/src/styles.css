@@ -76,6 +76,18 @@ a {
   color: inherit;
 }
 
+.user-link {
+  display: inline-block;
+  color: inherit;
+  text-decoration: none;
+  padding: 3px 7px !important;
+  border-radius: 5px !important;
+}
+
+.user-link:hover {
+  text-decoration: underline;
+}
+
 .btn { display: inline-block; padding: 10px 20px; font-weight: 600; text-decoration: none; cursor: pointer; transition: 0.2s ease; }
 .btn-border { border: 2px solid var(--border-strong); border-radius: 0; background: var(--surface); color: var(--text); }
 .btn-border:hover { color: var(--bg); background: var(--text); }
