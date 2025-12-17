@@ -16,6 +16,11 @@ class User(Base):
     birth_date = Column(Date, nullable=True)
     # 課金フラグ（Stripe 用）
     is_premium = Column(Boolean, nullable=False, server_default="0")
+    # プレミアム状態の再確認（ログイン時などで更新）
+    premium_checked_at = Column(DateTime, nullable=True)
+    # Stripe と紐付けるためのID（Webhook/Checkoutから保存）
+    stripe_customer_id = Column(String(255), nullable=True)
+    stripe_subscription_id = Column(String(255), nullable=True)
     # 2FA 用
     two_factor_code = Column(String(6), nullable=True)
     two_factor_expires_at = Column(DateTime, nullable=True)
