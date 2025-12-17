@@ -118,9 +118,9 @@ export default function Login() {
           style={{
             padding: 8,
             marginBottom: 12,
-            border: "1px solid #ddd",
+            border: "1px solid var(--border)",
             borderRadius: 6,
-            backgroundColor: "#f8f8f8",
+            backgroundColor: "var(--login-status-bg)",
             fontSize: 14,
           }}
         >

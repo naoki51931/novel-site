@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getSavedTheme, setTheme } from "../theme";
 
 export default function AccountSettings() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
+  const [theme, setThemeState] = useState(() => {
+    try {
+      return getSavedTheme();
+    } catch {
+      return "light";
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -39,6 +47,15 @@ export default function AccountSettings() {
       .catch((e) => setError(e.message || "プロフィール取得に失敗しました"))
       .finally(() => setLoading(false));
   }, [navigate]);
+
+  const handleChangeTheme = (nextTheme) => {
+    try {
+      const normalized = setTheme(nextTheme);
+      setThemeState(normalized);
+    } catch {
+      setThemeState(nextTheme === "dark" ? "dark" : "light");
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -94,6 +111,35 @@ export default function AccountSettings() {
       <h2>マイページ設定</h2>
 
       <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: 16 }}>
+          <fieldset style={{ padding: 12, border: "1px solid var(--border)" }}>
+            <legend>テーマ</legend>
+            <label style={{ marginRight: 12 }}>
+              <input
+                type="radio"
+                name="theme"
+                value="light"
+                checked={theme === "light"}
+                onChange={() => handleChangeTheme("light")}
+              />{" "}
+              ライト
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="theme"
+                value="dark"
+                checked={theme === "dark"}
+                onChange={() => handleChangeTheme("dark")}
+              />{" "}
+              ダーク
+            </label>
+            <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted-text)" }}>
+              テーマ設定はこのブラウザに保存されます。
+            </div>
+          </fieldset>
+        </div>
+
         <div style={{ marginBottom: 8 }}>
           <label>
             ユーザー名<br />

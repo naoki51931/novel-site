@@ -1,9 +1,86 @@
 
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --text: #111111;
+  --muted-text: #555555;
+  --surface: #ffffff;
+  --surface-2: #f7f7f7;
+  --login-status-bg: #e6e6e6;
+  --border: #dddddd;
+  --border-strong: #333333;
+  --primary: #333333;
+  --on-primary: #ffffff;
+  --danger: #e53935;
+  --shadow: rgba(0, 0, 0, 0.1);
+
+  --novel-card-bg: #ffffff;
+  --novel-card-border: #dddddd;
+  --novel-card-desc: #444444;
+  --novel-card-meta: #666666;
+
+  --ai-desc-text: #555555;
+  --ai-result-bg: #fafafa;
+  --ai-result-surface: #ffffff;
+  --ai-result-border: #dddddd;
+
+  --premium-bg: #eeffee;
+  --premium-border: #00aa00;
+  --premium-text: #006600;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --text: #e8e9ee;
+  --muted-text: #b7bcc8;
+  --surface: #151823;
+  --surface-2: #1b2030;
+  --login-status-bg: #2b2f36;
+  --border: #2a3040;
+  --border-strong: #cfd3dd;
+  --primary: #e8e9ee;
+  --on-primary: #0f1115;
+  --shadow: rgba(0, 0, 0, 0.35);
+
+  --novel-card-bg: #2b2f36;
+  --novel-card-border: #3a3f48;
+  --novel-card-desc: #e8e9ee;
+  --novel-card-meta: #b7bcc8;
+
+  --ai-desc-text: #e8e9ee;
+  --ai-result-bg: #2b2f36;
+  --ai-result-surface: #3a3f48;
+  --ai-result-border: #454b55;
+
+  --premium-bg: #0f2a18;
+  --premium-border: #1f7a3f;
+  --premium-text: #e8e9ee;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+input,
+textarea,
+select {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+a {
+  color: inherit;
+}
+
 .btn { display: inline-block; padding: 10px 20px; font-weight: 600; text-decoration: none; cursor: pointer; transition: 0.2s ease; }
-.btn-border { border: 2px solid #000; border-radius: 0; background: #fff; color: #000; }
-.btn-border:hover { color: #fff; background: #000; }
-button.btn.btn-border { background: #fff; border: 2px solid #000; }
-button.btn.btn-border:hover { background: #000; color: #fff; }
+.btn-border { border: 2px solid var(--border-strong); border-radius: 0; background: var(--surface); color: var(--text); }
+.btn-border:hover { color: var(--bg); background: var(--text); }
+button.btn.btn-border { background: var(--surface); border: 2px solid var(--border-strong); color: var(--text); }
+button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
 
 
 /* ============================
@@ -20,15 +97,15 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
 }
 
 .btn-border {
-  border: 2px solid #000;
+  border: 2px solid var(--border-strong);
   border-radius: 0;
-  background: #fff;
-  color: #000;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .btn-border:hover {
-  background: #000;
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
 }
 
 .site-title-link {
@@ -48,8 +125,8 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #ddd;
-  background: #fff;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .site-header-left {
@@ -76,14 +153,14 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
   border-radius: 6px;
   border: 1px solid transparent;
   text-decoration: none;
-  color: #333;
+  color: var(--text);
   white-space: nowrap;
 }
 
 .nav-link:hover {
-  border-color: #999;
-  background: #f7f7f7;
-  color: #333 !important;
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text) !important;
 }
 
 .nav-link-accent {
@@ -93,7 +170,7 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
 
 .login-status {
   font-size: 12px;
-  color: #555;
+  color: var(--muted-text);
   white-space: nowrap;
 }
 
@@ -116,7 +193,7 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
   display: block;
   width: 20px;
   height: 2px;
-  background: #333;
+  background: var(--text);
   border-radius: 999px;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
@@ -152,7 +229,8 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
 /* ボタン（flex-shrink:0 相当 & 折り返し防止） */
 .search-button {
   padding: 6px 12px;
-  background: #333;
+  background: var(--primary);
+  color: var(--on-primary);
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -164,9 +242,9 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
   max-width: 420px;
   margin: 40px auto;
   padding: 24px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 6px;
-  box-shadow: 0 0 8px rgba(0,0,0,0.1);
+  box-shadow: 0 0 8px var(--shadow);
 }
 
 .register-title {
@@ -195,12 +273,13 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
 .input {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--border);
   border-radius: 4px;
 }
 
 .btn-primary {
-  background: #333;
+  background: var(--primary);
+  color: var(--on-primary);
   padding: 10px 12px;
   border: none;
   border-radius: 4px;
@@ -208,7 +287,8 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
 }
 
 .btn-primary:hover {
-  background: #000;
+  background: var(--text);
+  color: var(--bg);
 }
 
 .register-footer {
@@ -257,12 +337,12 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
     text-align: center;
     padding: 10px 12px;
     border-radius: 8px;
-    border: 1px solid #333;
+    border: 1px solid var(--border-strong);
   }
 
   .nav-link-accent {
-    background: #333;
-    color: #fff;
+    background: var(--primary);
+    color: var(--on-primary);
   }
 
   .search-bar {
@@ -280,7 +360,7 @@ button.btn.btn-border:hover { background: #000; color: #fff; }
 
 }
 
-.nav-link-accent:hover { background: #333; color: #fff; }
+.nav-link-accent:hover { background: var(--primary); color: var(--on-primary); }
 /* ===== アクセントボタン専用デザイン ===== */
-.nav-link-accent { border: 2px solid #e53935; color: #e53935; background: #fff; font-weight: bold; }
-.nav-link-accent:hover { background: #e53935; color: #fff !important; border-color: #e53935; }
+.nav-link-accent { border: 2px solid var(--danger); color: var(--danger); background: var(--surface); font-weight: bold; }
+.nav-link-accent:hover { background: var(--danger); color: #fff !important; border-color: var(--danger); }

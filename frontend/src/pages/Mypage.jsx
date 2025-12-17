@@ -214,7 +214,7 @@ export default function Mypage() {
 
       {/* お気に入り小説 */}
       <section style={{ marginTop: "2.5rem" }}>
-        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+        <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
           お気に入り小説
         </h3>
 
@@ -226,10 +226,12 @@ export default function Mypage() {
               <div
                 key={novel.id}
                 style={{
-                  border: "1px solid #ddd",
-                  borderRadius: 6,
-                  padding: 14,
-                  background: "#fff",
+                  border: "1px solid var(--novel-card-border)",
+                  borderRadius: 8,
+                  padding: 12,
+                  boxShadow: "0 2px 4px var(--shadow)",
+                  backgroundColor: "var(--novel-card-bg)",
+                  color: "var(--text)",
                 }}
               >
                 <h4 style={{ marginBottom: 6 }}>
@@ -242,7 +244,7 @@ export default function Mypage() {
                     flexWrap: "wrap",
                     gap: 10,
                     fontSize: 12,
-                    color: "#666",
+                    color: "var(--novel-card-meta)",
                     marginBottom: 8,
                   }}
                 >
@@ -257,15 +259,15 @@ export default function Mypage() {
                           style={{
                             padding: "2px 8px",
                             borderRadius: "999px",
-                            background: "#eee",
-                            color: "#444",
+                            background: "var(--surface-2)",
+                            color: "var(--text)",
                           }}
                         >
                           {t.name}
                         </span>
                       ))
                     ) : (
-                      <span style={{ color: "#888" }}>タグ: なし</span>
+                      <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
                     )}
                   </span>
                 </div>
@@ -281,7 +283,7 @@ export default function Mypage() {
 
       {/* 作成した小説 */}
       <section style={{ marginTop: "3rem" }}>
-        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+        <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
           作成した小説
         </h3>
 
@@ -296,10 +298,12 @@ export default function Mypage() {
             <div
               key={novel.id}
               style={{
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                padding: 14,
-                background: "#fafafa",
+                border: "1px solid var(--novel-card-border)",
+                borderRadius: 8,
+                padding: 12,
+                boxShadow: "0 2px 4px var(--shadow)",
+                backgroundColor: "var(--novel-card-bg)",
+                color: "var(--text)",
               }}
             >
               <h4 style={{ marginBottom: 6 }}>
@@ -312,7 +316,7 @@ export default function Mypage() {
                   flexWrap: "wrap",
                   gap: 10,
                   fontSize: 12,
-                  color: "#666",
+                  color: "var(--novel-card-meta)",
                   marginBottom: 8,
                 }}
               >
@@ -327,15 +331,15 @@ export default function Mypage() {
                         style={{
                           padding: "2px 8px",
                           borderRadius: "999px",
-                          background: "#eee",
-                          color: "#444",
+                          background: "var(--surface-2)",
+                          color: "var(--text)",
                         }}
                       >
                         {t.name}
                       </span>
                     ))
                   ) : (
-                    <span style={{ color: "#888" }}>タグ: なし</span>
+                    <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
                   )}
                 </span>
               </div>
