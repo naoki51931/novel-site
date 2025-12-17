@@ -63,6 +63,41 @@ except Exception:
 # =========================================
 Base.metadata.create_all(bind=engine)
 
+def ensure_users_table_columns():
+    """
+    このリポジトリはマイグレーションツールを使っていないため、
+    追加カラムは起動時に安全に補完する。
+    """
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'users'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "premium_checked_at" not in existing:
+                alters.append("ADD COLUMN premium_checked_at DATETIME NULL")
+            if "stripe_customer_id" not in existing:
+                alters.append("ADD COLUMN stripe_customer_id VARCHAR(255) NULL")
+            if "stripe_subscription_id" not in existing:
+                alters.append("ADD COLUMN stripe_subscription_id VARCHAR(255) NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE users {clause}"))
+    except Exception as e:
+        print("[db] ensure_users_table_columns failed:", repr(e))
+
+
+ensure_users_table_columns()
+
 # =========================================
 # FastAPI
 # =========================================
@@ -88,6 +123,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
+PREMIUM_REVALIDATE_DAYS = int(os.getenv("PREMIUM_REVALIDATE_DAYS", "30"))
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -124,6 +160,85 @@ def create_access_token(data: dict) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {**data, "exp": expire}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def _stripe_obj_get(obj, key: str, default=None):
+    try:
+        return obj.get(key, default)
+    except Exception:
+        return getattr(obj, key, default)
+
+
+def _stripe_subscription_is_active(subscription) -> bool:
+    status = _stripe_obj_get(subscription, "status")
+    return status in ("active", "trialing")
+
+
+def verify_premium_with_stripe(user: models.User) -> tuple[bool, str | None, str | None]:
+    """
+    Stripe 上で有効なサブスクがあるかを確認し、見つかった ID を返す。
+    """
+    if not STRIPE_SECRET_KEY:
+        raise RuntimeError("STRIPE_SECRET_KEY 未設定")
+
+    sub_id = getattr(user, "stripe_subscription_id", None)
+    if sub_id:
+        sub = stripe.Subscription.retrieve(sub_id)
+        customer_id = _stripe_obj_get(sub, "customer")
+        return _stripe_subscription_is_active(sub), customer_id, _stripe_obj_get(sub, "id")
+
+    customer_id = getattr(user, "stripe_customer_id", None)
+    if customer_id:
+        subs = stripe.Subscription.list(customer=customer_id, status="all", limit=10)
+        data = _stripe_obj_get(subs, "data", []) or []
+        for sub in data:
+            if _stripe_subscription_is_active(sub):
+                return True, customer_id, _stripe_obj_get(sub, "id")
+        return False, customer_id, None
+
+    return False, None, None
+
+
+def revalidate_premium_on_login(user: models.User, db: Session) -> None:
+    """
+    ログイン時にプレミアム状態を一定期間ごとに再確認する。
+    期限切れ（デフォルト30日）なら一旦OFFにして Stripe で課金状態を再判定する。
+    """
+    if FORCE_ALL_PREMIUM:
+        return
+
+    now = datetime.utcnow()
+    last = getattr(user, "premium_checked_at", None)
+    if last and (now - last) < timedelta(days=PREMIUM_REVALIDATE_DAYS):
+        return
+
+    should_check = bool(getattr(user, "is_premium", False)) or bool(
+        getattr(user, "stripe_customer_id", None) or getattr(user, "stripe_subscription_id", None)
+    )
+    if not should_check:
+        return
+
+    if not STRIPE_SECRET_KEY:
+        return
+
+    user.is_premium = False
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    try:
+        active, customer_id, sub_id = verify_premium_with_stripe(user)
+    except Exception as e:
+        print("[premium] stripe verify failed:", repr(e))
+        return
+
+    user.premium_checked_at = now
+    if customer_id:
+        user.stripe_customer_id = customer_id
+    if sub_id:
+        user.stripe_subscription_id = sub_id
+    user.is_premium = bool(active)
+    db.add(user)
+    db.commit()
 
 
 def truncate_for_free(body: str | None, ratio: float = 0.3) -> str | None:
@@ -319,6 +434,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
 
+    revalidate_premium_on_login(user, db)
     token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token)
 
@@ -338,11 +454,16 @@ def stripe_checkout(request: Request, db: Session = Depends(get_db)):
         client_ref = str(user.id)
     except Exception:
         client_ref = None
+        user = None
 
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
         client_reference_id=client_ref,
+        customer=getattr(user, "stripe_customer_id", None) if user else None,
+        customer_email=getattr(user, "email", None) if user else None,
+        metadata={"user_id": client_ref} if client_ref else None,
+        subscription_data={"metadata": {"user_id": client_ref}} if client_ref else None,
         success_url=f"{FRONTEND_ORIGIN}/stripe/success",
         cancel_url=f"{FRONTEND_ORIGIN}/stripe/cancel",
     )
@@ -409,6 +530,13 @@ async def stripe_webhook(
     if event_type == "checkout.session.completed":
         # 決済完了 → プレミアム ON
         user.is_premium = True
+        customer_id = data_object.get("customer")
+        subscription_id = data_object.get("subscription")
+        if customer_id:
+            user.stripe_customer_id = customer_id
+        if subscription_id:
+            user.stripe_subscription_id = subscription_id
+        user.premium_checked_at = datetime.utcnow()
         db.add(user)
         db.commit()
         print(f"[stripe] checkout.session.completed: user_id={user.id} → is_premium=True")
@@ -419,6 +547,13 @@ async def stripe_webhook(
     ):
         # 支払い失敗 or セッション期限切れ → プレミアム OFF
         user.is_premium = False
+        customer_id = data_object.get("customer")
+        subscription_id = data_object.get("subscription")
+        if customer_id:
+            user.stripe_customer_id = customer_id
+        if subscription_id:
+            user.stripe_subscription_id = subscription_id
+        user.premium_checked_at = datetime.utcnow()
         db.add(user)
         db.commit()
         print(f"[stripe] {event_type}: user_id={user.id} → is_premium=False")
@@ -1820,6 +1955,7 @@ def login_verify(payload: LoginVerify, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
 
+    revalidate_premium_on_login(user, db)
     access_token = create_access_token({"sub": str(user.id)})
     return Token(access_token=access_token)
 
