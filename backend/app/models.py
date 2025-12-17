@@ -32,8 +32,6 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
-    favorite_links = relationship("NovelFavorite", back_populates="user")
-    comments = relationship("NovelComment", back_populates="user")
     episode_likes = relationship("EpisodeLike", back_populates="user")
     novel_likes = relationship("NovelLike", back_populates="user")
     ai_generate_logs = relationship("AIGenerateLog", back_populates="user")
@@ -90,18 +88,6 @@ class Novel(Base):
 
     likes = relationship(
         "NovelLike",
-        back_populates="novel",
-        cascade="all, delete-orphan",
-    )
-
-    favorite_links = relationship(
-        "NovelFavorite",
-        back_populates="novel",
-        cascade="all, delete-orphan",
-    )
-
-    comments = relationship(
-        "NovelComment",
         back_populates="novel",
         cascade="all, delete-orphan",
     )
@@ -264,4 +250,3 @@ class AIGenerateLog(Base):
     model = Column(String(64), nullable=True)
 
     user = relationship("User", back_populates="ai_generate_logs")
-
