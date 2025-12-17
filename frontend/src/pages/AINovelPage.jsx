@@ -13,6 +13,38 @@ function getAuthToken() {
   return localStorage.getItem("access_token") || localStorage.getItem("token");
 }
 
+const PENDING_AI_POST_KEY = "pending_ai_post_v1";
+const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
+
+function savePendingAiPost(data) {
+  try {
+    localStorage.setItem(PENDING_AI_POST_KEY, JSON.stringify(data));
+  } catch {
+    // ignore
+  }
+}
+
+function loadPendingAiPost() {
+  try {
+    const raw = localStorage.getItem(PENDING_AI_POST_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function consumePendingAiPostError() {
+  try {
+    const msg = localStorage.getItem(PENDING_AI_POST_ERROR_KEY);
+    if (!msg) return null;
+    localStorage.removeItem(PENDING_AI_POST_ERROR_KEY);
+    return msg;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAINovelResponse(data) {
   if (!data || typeof data !== "object") return data;
   if (typeof data.body !== "string") return data;
@@ -102,6 +134,21 @@ export default function AINovelPage() {
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
 
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const restore = params.get("restore_pending");
+    if (restore !== "1") return;
+
+    const pending = loadPendingAiPost();
+    if (!pending || !pending.body) return;
+    const errMsg = consumePendingAiPostError();
+    if (errMsg) setError(errMsg);
+    setResult({
+      generated_title: pending.generated_title || pending.title || "AI生成小説",
+      body: pending.body,
+    });
+  }, []);
 
   // ★ URL の ?episode_id=xxx を拾って「続きモード」にする
   useEffect(() => {
@@ -208,7 +255,7 @@ export default function AINovelPage() {
     setResult(null);
 
     const token = getAuthToken();
-    if (!token) {
+    if (episodeId && !token) {
       setError("ログインが必要です。ログイン画面へ移動します。");
       setTimeout(() => {
         navigate("/login"); // 既存のログインパスに合わせて変更
@@ -225,10 +272,12 @@ export default function AINovelPage() {
 
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: token
+          ? {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            }
+          : { "Content-Type": "application/json" },
         body: JSON.stringify({
           title_hint: titleHint || null,
           genre: genre || null,
@@ -239,7 +288,7 @@ export default function AINovelPage() {
         }),
       });
 
-      if (res.status === 401) {
+      if (res.status === 401 && token) {
         setError("ログインの有効期限が切れています。再ログインしてください。");
         setTimeout(() => navigate("/login"), 800);
         setLoading(false);
@@ -285,8 +334,14 @@ export default function AINovelPage() {
 
     const token = getAuthToken();
     if (!token) {
-      setError("ログインが必要です。ログイン画面へ移動します。");
-      setTimeout(() => navigate("/login"), 800);
+      savePendingAiPost({
+        kind: "new_novel",
+        generated_title: result.generated_title || "AI生成小説",
+        body: result.body,
+        createdAt: Date.now(),
+      });
+      setError("投稿にはログインが必要です。ログイン画面へ移動します。");
+      setTimeout(() => navigate("/login"), 200);
       setPosting(false);
       return;
     }
@@ -362,8 +417,16 @@ export default function AINovelPage() {
 
     const token = getAuthToken();
     if (!token) {
-      setError("ログインが必要です。ログイン画面へ移動します。");
-      setTimeout(() => navigate("/login"), 800);
+      savePendingAiPost({
+        kind: "next_episode",
+        continue_novel_id: continueNovelId,
+        post_episode_title: postEpisodeTitle || "",
+        generated_title: result.generated_title || "続き",
+        body: result.body,
+        createdAt: Date.now(),
+      });
+      setError("投稿にはログインが必要です。ログイン画面へ移動します。");
+      setTimeout(() => navigate("/login"), 200);
       setPosting(false);
       return;
     }
@@ -431,7 +494,7 @@ export default function AINovelPage() {
   return (
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "1.5rem" }}>
       <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>
-        {isContinueMode ? "AI小説：エピソードの続き生成" : "AI小説生成（有料会員専用）"}
+        {isContinueMode ? "AI小説：エピソードの続き生成" : "AI小説生成（未ログインは10回まで）"}
       </h1>
 
       {isContinueMode ? (

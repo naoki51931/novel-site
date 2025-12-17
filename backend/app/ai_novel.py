@@ -103,6 +103,7 @@ class AINovelResponse(BaseModel):
     used_tokens: int | None = None  # OpenAIの使用トークン数
     model: str | None = None        # 実際に使ったモデル名
     prompt_used: str | None = None
+    guest_remaining: int | None = None
 
 
 # ===== プロンプト組み立て =====

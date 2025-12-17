@@ -2,6 +2,34 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
+const PENDING_AI_POST_KEY = "pending_ai_post_v1";
+const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
+
+function loadPendingAiPost() {
+  try {
+    const raw = localStorage.getItem(PENDING_AI_POST_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingAiPost() {
+  try {
+    localStorage.removeItem(PENDING_AI_POST_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function savePendingAiPostError(message) {
+  try {
+    localStorage.setItem(PENDING_AI_POST_ERROR_KEY, message);
+  } catch {
+    // ignore
+  }
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -90,7 +118,124 @@ export default function Login() {
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("username", username);
 
-      navigate("/mypage");
+      const pending = loadPendingAiPost();
+      if (!pending || !pending.body) {
+        navigate("/mypage");
+        return;
+      }
+
+      setInfo("ログイン完了。保存していた AI 小説を投稿しています…");
+
+      try {
+        const token = data.access_token;
+
+        if (pending.kind === "new_novel") {
+          const novelPayload = {
+            title: pending.generated_title || "AI生成小説",
+            description: "AI生成",
+            age_limit: "all",
+            is_ai_generated: true,
+            tag_names: [],
+          };
+
+          const novelRes = await fetch(`${API_BASE}/api/novels`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(novelPayload),
+          });
+          const novelData = await novelRes.json().catch(() => ({}));
+          if (!novelRes.ok) {
+            throw new Error(novelData.detail || `小説の作成に失敗しました (status=${novelRes.status})`);
+          }
+          const novelId = novelData?.id;
+          if (!novelId) {
+            throw new Error("小説IDが取得できませんでした。");
+          }
+
+          const episodePayload = {
+            episode_number: 1,
+            title: "第1話",
+            body: pending.body,
+            tag_names: [],
+          };
+          const epRes = await fetch(`${API_BASE}/api/novels/${novelId}/episodes`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(episodePayload),
+          });
+          const epData = await epRes.json().catch(() => ({}));
+          if (!epRes.ok) {
+            throw new Error(epData.detail || `第1話の投稿に失敗しました (status=${epRes.status})`);
+          }
+
+          clearPendingAiPost();
+          navigate(`/novels/${novelId}`);
+          return;
+        }
+
+        if (pending.kind === "next_episode") {
+          const novelId = pending.continue_novel_id;
+          if (!novelId) {
+            throw new Error("投稿先の小説IDが取得できませんでした。");
+          }
+
+          const listRes = await fetch(`${API_BASE}/api/novels/${novelId}/episodes`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const listData = await listRes.json().catch(() => []);
+          if (!listRes.ok) {
+            throw new Error(
+              (listData && listData.detail) ||
+                `エピソード一覧の取得に失敗しました (status=${listRes.status})`
+            );
+          }
+
+          const numbers = Array.isArray(listData)
+            ? listData
+                .map((e) => (typeof e?.number === "number" ? e.number : null))
+                .filter((n) => n !== null)
+            : [];
+          const maxNumber = numbers.length ? Math.max(...numbers) : 0;
+          const nextNumber = maxNumber + 1;
+
+          const episodePayload = {
+            episode_number: nextNumber,
+            title: (pending.post_episode_title || "").trim() || `第${nextNumber}話`,
+            body: pending.body,
+            tag_names: [],
+          };
+          const epRes = await fetch(`${API_BASE}/api/novels/${novelId}/episodes`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(episodePayload),
+          });
+          const epData = await epRes.json().catch(() => ({}));
+          if (!epRes.ok) {
+            throw new Error(epData.detail || `エピソードの投稿に失敗しました (status=${epRes.status})`);
+          }
+
+          clearPendingAiPost();
+          navigate(`/novels/${novelId}`);
+          return;
+        }
+
+        navigate("/mypage");
+      } catch (e2) {
+        console.error(e2);
+        savePendingAiPostError(
+          e2?.message || "保存していた AI 小説の投稿に失敗しました。"
+        );
+        navigate("/ai-novel?restore_pending=1");
+      }
     } catch (err) {
       console.error(err);
       setError(err.message || "認証中にエラーが発生しました。");

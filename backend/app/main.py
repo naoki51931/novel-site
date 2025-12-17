@@ -322,6 +322,66 @@ def require_premium_user(request: Request, db: Session) -> models.User:
         )
     return user
 
+AI_GUEST_COOKIE_NAME = "ai_guest_id"
+AI_GUEST_FREE_MAX = 10
+
+
+def get_optional_current_user(request: Request, db: Session) -> models.User | None:
+    auth = request.headers.get("Authorization")
+    if not auth:
+        return None
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "トークンが不正です")
+    token = auth.split()[1]
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        uid = payload.get("sub")
+    except Exception:
+        raise HTTPException(401, "トークンが不正です")
+
+    user = db.query(models.User).get(int(uid))
+    if not user:
+        raise HTTPException(401, "ユーザーが存在しません")
+    return user
+
+
+def get_or_set_ai_guest_id(request: Request, response: Response) -> str:
+    raw = request.cookies.get(AI_GUEST_COOKIE_NAME)
+    if isinstance(raw, str):
+        guest_id = raw.strip()
+        if 1 <= len(guest_id) <= 64 and re.fullmatch(r"[A-Za-z0-9_-]+", guest_id):
+            return guest_id
+
+    guest_id = secrets.token_urlsafe(24)[:64]
+    response.set_cookie(
+        key=AI_GUEST_COOKIE_NAME,
+        value=guest_id,
+        max_age=60 * 60 * 24 * 365,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        path="/",
+    )
+    return guest_id
+
+
+def require_guest_ai_quota(db: Session, guest_id: str) -> models.AIGuestGenerateUsage:
+    usage = db.query(models.AIGuestGenerateUsage).filter(models.AIGuestGenerateUsage.guest_id == guest_id).first()
+    if not usage:
+        usage = models.AIGuestGenerateUsage(guest_id=guest_id, generate_count=0)
+        db.add(usage)
+        db.commit()
+        db.refresh(usage)
+
+    if int(getattr(usage, "generate_count", 0) or 0) >= AI_GUEST_FREE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"無料の AI 小説生成の上限（{AI_GUEST_FREE_MAX}回）に達しました。",
+        )
+
+    return usage
+
 def check_ai_quota(db: Session, user_id: int, limit_per_day: int = 10):
     """
     ユーザーごとの AI 小説生成回数を 1日あたり limit_per_day 回までに制限する。
@@ -572,6 +632,7 @@ async def stripe_webhook(
 async def generate_ai_novel(
     req: AINovelRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     """
@@ -579,7 +640,31 @@ async def generate_ai_novel(
     - 1日あたりの利用回数制限あり
     - 生成内容を ai_generate_logs テーブルに記録
     """
-    user = require_premium_user(request, db)
+    user = get_optional_current_user(request, db)
+    is_premium = bool(user) and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False)))
+
+    if not is_premium:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        usage = require_guest_ai_quota(db, guest_id)
+
+        provider = provider_from_model(getattr(req, "model", None))
+        if provider == "deepseek":
+            resp = await call_deepseek_novel_api(req)
+        elif provider == "openrouter":
+            resp = await call_openrouter_novel_api(req)
+        else:
+            resp = await call_openai_novel_api(req)
+
+        usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
+        usage.last_used_at = datetime.utcnow()
+        db.add(usage)
+        db.commit()
+
+        resp.guest_remaining = max(0, AI_GUEST_FREE_MAX - int(getattr(usage, "generate_count", 0) or 0))
+        return resp
+
+    # --- premium flow ---
+    assert user is not None
 
     # ★ 1日あたりの利用回数制限
     today = datetime.utcnow().date()
