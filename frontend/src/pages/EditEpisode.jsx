@@ -3,7 +3,43 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 
 const API_BASE = "";
 const EDIT_EPISODE_DRAFT_PREFIX = "edit_episode_draft";
+const ILLUST_TAG_PREFIX = "illust:";
+const ILLUST_TAG_RE = /^illust:(\d{8})$/;
+const ILLUST_TAG_BRACKET_RE = /^\[\[illust:(\d{8})\]\]$/;
 
+const generateIllustTag = (usedTags) => {
+  const makeCandidate = () =>
+    `${ILLUST_TAG_PREFIX}${Math.floor(10000000 + Math.random() * 90000000)}`;
+  let candidate = makeCandidate();
+  let attempts = 0;
+  while (usedTags.has(candidate) && attempts < 10) {
+    candidate = makeCandidate();
+    attempts += 1;
+  }
+  if (usedTags.has(candidate)) {
+    const fallback = `${ILLUST_TAG_PREFIX}${String(Date.now()).slice(-8)}`;
+    if (!usedTags.has(fallback)) {
+      return fallback;
+    }
+  }
+  return candidate;
+};
+
+const normalizeIllustTag = (rawTag) => {
+  const trimmed = (rawTag || "").trim();
+  if (!trimmed) return null;
+  let match = trimmed.match(ILLUST_TAG_RE);
+  if (match) return `${ILLUST_TAG_PREFIX}${match[1]}`;
+  match = trimmed.match(ILLUST_TAG_BRACKET_RE);
+  if (match) return `${ILLUST_TAG_PREFIX}${match[1]}`;
+  return null;
+};
+
+const formatIllustTag = (tag) => {
+  const match = (tag || "").trim().match(ILLUST_TAG_RE);
+  if (!match) return tag;
+  return `[[illust:${match[1]}]]`;
+};
 
 export default function EditEpisode() {
   const { id } = useParams(); // episode_id
@@ -24,6 +60,8 @@ export default function EditEpisode() {
 
   const [illustFile, setIllustFile] = useState(null);
   const [illustCaption, setIllustCaption] = useState("");
+  const [illustTag, setIllustTag] = useState("");
+  const [illustMetaTags, setIllustMetaTags] = useState("");
   const [isUploadingIllust, setIsUploadingIllust] = useState(false);
 
   const [loading, setLoading] = useState(true);
@@ -307,12 +345,25 @@ export default function EditEpisode() {
   const handleIllustFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
       setIllustFile(e.target.files[0]);
+      if (!(illustTag || "").trim()) {
+        const usedTags = new Set(
+          illusts
+            .map((it) => (it.illust_tag || "").trim())
+            .filter((tag) => tag.length > 0)
+        );
+        setIllustTag(generateIllustTag(usedTags));
+      }
     }
   };
 
   const handleIllustUpload = async () => {
     if (!illustFile) {
       alert("押絵画像ファイルを選択してください");
+      return;
+    }
+    const normalizedTag = normalizeIllustTag(illustTag);
+    if (!normalizedTag) {
+      alert("illustタグは [[illust:12345678]] の形式で指定してください");
       return;
     }
 
@@ -326,6 +377,8 @@ export default function EditEpisode() {
     const formData = new FormData();
     formData.append("file", illustFile);
     formData.append("caption", illustCaption || "");
+    formData.append("illust_tag", normalizedTag);
+    formData.append("meta_tags", illustMetaTags || "");
 
     try {
       setIsUploadingIllust(true);
@@ -347,6 +400,8 @@ export default function EditEpisode() {
       setIllusts((prev) => [...prev, newIllust]);
       setIllustFile(null);
       setIllustCaption("");
+      setIllustTag("");
+      setIllustMetaTags("");
       alert("押絵を追加しました");
     } catch (e) {
       console.error(e);
@@ -570,6 +625,16 @@ export default function EditEpisode() {
                   alt={illust.caption || "押絵"}
                   style={{ maxWidth: "100%", borderRadius: 4 }}
                 />
+                {illust.illust_tag && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#444" }}>
+                    {formatIllustTag(illust.illust_tag)}
+                  </div>
+                )}
+                {Array.isArray(illust.meta_tags) && illust.meta_tags.length > 0 && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "#777" }}>
+                    {illust.meta_tags.join(", ")}
+                  </div>
+                )}
                 {illust.caption && (
                   <div style={{ marginTop: 4, fontSize: 12 }}>
                     {illust.caption}
@@ -603,6 +668,18 @@ export default function EditEpisode() {
             placeholder="キャプション（任意）"
             value={illustCaption}
             onChange={(e) => setIllustCaption(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="必須タグ（例: [[illust:12345678]]）"
+            value={illustTag}
+            onChange={(e) => setIllustTag(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="補助タグ（例: type:scene, mood:soft）"
+            value={illustMetaTags}
+            onChange={(e) => setIllustMetaTags(e.target.value)}
           />
           <button
             type="button"
