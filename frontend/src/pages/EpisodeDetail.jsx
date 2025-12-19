@@ -194,6 +194,42 @@ export default function EpisodeDetail() {
     setModalImageUrl("");
   };
 
+  const buildBodySegments = (text, illustList) => {
+    const segments = [];
+    const tagToIllust = new Map();
+    const usedTags = new Set();
+    for (const ill of illustList) {
+      if (ill.illust_tag) {
+        tagToIllust.set(ill.illust_tag, ill);
+      }
+    }
+
+    const regex = /\[\[illust:(\d{8})\]\]/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({ type: "text", text: text.slice(lastIndex, match.index) });
+      }
+      const tag = `illust:${match[1]}`;
+      const illust = tagToIllust.get(tag);
+      if (illust) {
+        usedTags.add(tag);
+      }
+      segments.push({ type: "illust", tag, illust });
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      segments.push({ type: "text", text: text.slice(lastIndex) });
+    }
+    return { segments, usedTags };
+  };
+
+  const { segments: bodySegments } = buildBodySegments(
+    episode.body || "",
+    illusts
+  );
+
   return (
     <div>
       <button className="btn btn-border" onClick={() => navigate(-1)}>
@@ -291,58 +327,6 @@ export default function EpisodeDetail() {
         </div>
       )}
 
-      {/* 挿絵一覧 */}
-      {illusts.length > 0 && (
-        <div style={{ margin: "16px 0" }}>
-          <p style={{ marginBottom: 8 }}>挿絵:</p>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-              gap: 12,
-            }}
-          >
-            {illusts.map((ill) => (
-              <div
-                key={ill.id ?? ill.image_url}
-                style={{
-                  border: "1px solid #eee",
-                  borderRadius: 8,
-                  padding: 8,
-                  textAlign: "center",
-                  background: "#fafafa",
-                }}
-              >
-                <img
-                  src={API_BASE + ill.image_url}
-                  alt={ill.caption || "挿絵"}
-                  style={{
-                    maxWidth: "100%",
-                    maxHeight: "200px",
-                    objectFit: "contain",
-                    borderRadius: 4,
-                    cursor: "pointer",
-                  }}
-                  onClick={() => openModal(API_BASE + ill.image_url)}
-                />
-                {ill.caption && (
-                  <div
-                    style={{
-                      marginTop: 4,
-                      fontSize: 12,
-                      color: "#555",
-                      wordBreak: "break-all",
-                    }}
-                  >
-                    {ill.caption}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <hr />
 
       {/* 本文 */}
@@ -353,7 +337,58 @@ export default function EpisodeDetail() {
           marginTop: 12,
         }}
       >
-        {episode.body}
+        {bodySegments.map((segment, index) => {
+          if (segment.type === "text") {
+            return <span key={`text-${index}`}>{segment.text}</span>;
+          }
+          if (!segment.illust) {
+            return (
+              <span
+                key={`missing-${segment.tag}-${index}`}
+                style={{ color: "#888" }}
+              >
+                {`[[${segment.tag}]]`}
+              </span>
+            );
+          }
+          return (
+            <div
+              key={`illust-${segment.illust.id ?? segment.tag}-${index}`}
+              style={{
+                margin: "12px 0",
+                textAlign: "center",
+              }}
+            >
+              <img
+                src={API_BASE + segment.illust.image_url}
+                alt={segment.illust.caption || "挿絵"}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "70vh",
+                  objectFit: "contain",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+                }}
+                onClick={() =>
+                  openModal(API_BASE + segment.illust.image_url)
+                }
+              />
+              {segment.illust.caption && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 12,
+                    color: "#555",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {segment.illust.caption}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* 課金ブロック */}

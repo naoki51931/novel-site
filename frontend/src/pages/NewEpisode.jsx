@@ -3,6 +3,37 @@ import { useNavigate, useParams } from "react-router-dom";
 
 const API_BASE = "";
 const EP_DRAFT_KEY_PREFIX = "draft_new_episode"; // 作品ごとの下書き用プレフィックス
+const ILLUST_TAG_PREFIX = "illust:";
+const ILLUST_TAG_RE = /^illust:(\d{8})$/;
+const ILLUST_TAG_BRACKET_RE = /^\[\[illust:(\d{8})\]\]$/;
+
+const normalizeIllustTag = (rawTag) => {
+  const trimmed = (rawTag || "").trim();
+  if (!trimmed) return null;
+  let match = trimmed.match(ILLUST_TAG_RE);
+  if (match) return `${ILLUST_TAG_PREFIX}${match[1]}`;
+  match = trimmed.match(ILLUST_TAG_BRACKET_RE);
+  if (match) return `${ILLUST_TAG_PREFIX}${match[1]}`;
+  return null;
+};
+
+const generateIllustTag = (usedTags) => {
+  const makeCandidate = () =>
+    `${ILLUST_TAG_PREFIX}${Math.floor(10000000 + Math.random() * 90000000)}`;
+  let candidate = makeCandidate();
+  let attempts = 0;
+  while (usedTags.has(candidate) && attempts < 10) {
+    candidate = makeCandidate();
+    attempts += 1;
+  }
+  if (usedTags.has(candidate)) {
+    const fallback = `${ILLUST_TAG_PREFIX}${String(Date.now()).slice(-8)}`;
+    if (!usedTags.has(fallback)) {
+      return fallback;
+    }
+  }
+  return candidate;
+};
 
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
@@ -18,7 +49,7 @@ export default function NewEpisode() {
   const [isUploadingCover, setIsUploadingCover] = useState(false);
 
   // 押絵は複数選択できるようにする
-  const [illustItems, setIllustItems] = useState([]); // [{file, caption}]
+  const [illustItems, setIllustItems] = useState([]); // [{file, caption, illustTag, metaTags}]
   const [isUploadingIllust, setIsUploadingIllust] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -79,10 +110,19 @@ export default function NewEpisode() {
     const files = e.target.files ? Array.from(e.target.files) : [];
     if (!files.length) return;
     // 追加形式（既存に追記）
-    setIllustItems((prev) => [
-      ...prev,
-      ...files.map((f) => ({ file: f, caption: "" })),
-    ]);
+    setIllustItems((prev) => {
+      const usedTags = new Set(
+        prev
+          .map((it) => (it.illustTag || "").trim())
+          .filter((tag) => tag.length > 0)
+      );
+      const next = files.map((f) => {
+        const illustTag = generateIllustTag(usedTags);
+        usedTags.add(illustTag);
+        return { file: f, caption: "", illustTag, metaTags: "" };
+      });
+      return [...prev, ...next];
+    });
     // 同じファイルをもう一度選べるよう input をリセット
     e.target.value = "";
   };
@@ -90,6 +130,18 @@ export default function NewEpisode() {
   const updateIllustCaption = (index, caption) => {
     setIllustItems((prev) =>
       prev.map((it, i) => (i === index ? { ...it, caption } : it))
+    );
+  };
+
+  const updateIllustTag = (index, illustTag) => {
+    setIllustItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, illustTag } : it))
+    );
+  };
+
+  const updateIllustMetaTags = (index, metaTags) => {
+    setIllustItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, metaTags } : it))
     );
   };
 
@@ -124,9 +176,15 @@ export default function NewEpisode() {
     setIsUploadingIllust(true);
     try {
       for (const item of illustItems) {
+        const normalizedTag = normalizeIllustTag(item.illustTag);
+        if (!normalizedTag) {
+          throw new Error("illustタグは [[illust:12345678]] の形式で指定してください");
+        }
         const formData = new FormData();
         formData.append("file", item.file);
         formData.append("caption", item.caption || "");
+        formData.append("illust_tag", normalizedTag);
+        formData.append("meta_tags", item.metaTags || "");
 
         const res = await fetch(`${API_BASE}/api/episodes/${episodeId}/illusts`, {
           method: "POST",
@@ -337,6 +395,20 @@ export default function NewEpisode() {
                     placeholder="キャプション（任意）"
                     value={it.caption || ""}
                     onChange={(e) => updateIllustCaption(idx, e.target.value)}
+                    style={{ width: "100%", padding: 6 }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="必須タグ（例: [[illust:12345678]]）"
+                    value={it.illustTag || ""}
+                    onChange={(e) => updateIllustTag(idx, e.target.value)}
+                    style={{ width: "100%", padding: 6 }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="補助タグ（例: type:scene, mood:soft）"
+                    value={it.metaTags || ""}
+                    onChange={(e) => updateIllustMetaTags(idx, e.target.value)}
                     style={{ width: "100%", padding: 6 }}
                   />
                   <button

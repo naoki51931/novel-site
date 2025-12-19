@@ -78,6 +78,8 @@ class EpisodeIllustCreate(BaseModel):
     image_url: str
     position: int
     caption: str | None = None
+    illust_tag: str | None = None
+    meta_tags: List[str] = []
 
 
 class EpisodeCreate(EpisodeBase):
@@ -121,5 +123,4 @@ class ProfileUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     birth_date: Optional[date] = None
-
 

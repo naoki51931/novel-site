@@ -146,6 +146,8 @@ class EpisodeIllust(Base):
     image_url = Column(String(255), nullable=False)
     position = Column(Integer, nullable=False, default=1)
     caption = Column(String(255))
+    illust_tag = Column(String(32), index=True)
+    meta_tags = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
     episode = relationship("Episode", back_populates="illusts")

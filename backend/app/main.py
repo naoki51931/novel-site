@@ -98,6 +98,93 @@ def ensure_users_table_columns():
 
 ensure_users_table_columns()
 
+def ensure_episode_illusts_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'episode_illusts'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "illust_tag" not in existing:
+                alters.append("ADD COLUMN illust_tag VARCHAR(32) NULL")
+            if "meta_tags" not in existing:
+                alters.append("ADD COLUMN meta_tags TEXT NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE episode_illusts {clause}"))
+    except Exception as e:
+        print("[db] ensure_episode_illusts_table_columns failed:", repr(e))
+
+
+ensure_episode_illusts_table_columns()
+
+ILLUST_TAG_RE = re.compile(r"^illust:\d{8}$")
+ILLUST_TAG_BRACKET_RE = re.compile(r"^\[\[illust:(\d{8})\]\]$")
+ALLOWED_META_TAGS = {
+    "type": {"scene", "portrait", "object", "map", "symbol"},
+    "pos": {"intro", "middle", "climax", "outro"},
+    "mood": {"bright", "dark", "soft", "tense", "melancholy"},
+    "light": {"day", "night", "backlight"},
+    "spoiler": {"none", "hint", "full"},
+}
+
+def normalize_illust_tag(value: str | None) -> str | None:
+    tag = (value or "").strip()
+    if not tag:
+        return None
+    bracket_match = ILLUST_TAG_BRACKET_RE.match(tag)
+    if bracket_match:
+        tag = f"illust:{bracket_match.group(1)}"
+    if not ILLUST_TAG_RE.match(tag):
+        raise HTTPException(400, "illustタグは [[illust:12345678]] の形式で指定してください")
+    if any(ord(ch) > 127 for ch in tag):
+        raise HTTPException(400, "illustタグは英数字のみで指定してください")
+    return tag
+
+def normalize_meta_tags(value: str | List[str] | None) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        raw_tags = [t for t in re.split(r"[,\\s]+", value.strip()) if t]
+    else:
+        raw_tags = [t for t in value if t]
+
+    normalized: list[str] = []
+    for raw in raw_tags:
+        tag = (raw or "").strip().lower()
+        if not tag:
+            continue
+        if any(ord(ch) > 127 for ch in tag):
+            raise HTTPException(400, "押絵の補助タグは英語のみで指定してください")
+        if ":" not in tag:
+            raise HTTPException(400, f"押絵の補助タグ形式が不正です: {tag}")
+        key, val = tag.split(":", 1)
+        allowed_vals = ALLOWED_META_TAGS.get(key)
+        if not allowed_vals or val not in allowed_vals:
+            raise HTTPException(400, f"押絵の補助タグが不正です: {tag}")
+        if tag not in normalized:
+            normalized.append(tag)
+    return normalized
+
+def serialize_meta_tags(tags: list[str]) -> str | None:
+    if not tags:
+        return None
+    return ",".join(tags)
+
+def deserialize_meta_tags(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [t for t in value.split(",") if t]
+
 # =========================================
 # FastAPI
 # =========================================
@@ -1481,9 +1568,18 @@ def create_episode(
     # ★ 押絵保存
 
     for il in payload.illusts:
-
-        epil = models.EpisodeIllust(episode_id=ep.id, image_url=il.image_url, position=il.position, caption=il.caption)
-
+        illust_tag = normalize_illust_tag(getattr(il, "illust_tag", None))
+        meta_tags = serialize_meta_tags(
+            normalize_meta_tags(getattr(il, "meta_tags", None))
+        )
+        epil = models.EpisodeIllust(
+            episode_id=ep.id,
+            image_url=il.image_url,
+            position=il.position,
+            caption=il.caption,
+            illust_tag=illust_tag,
+            meta_tags=meta_tags,
+        )
         db.add(epil)
 
 
@@ -1736,6 +1832,8 @@ async def upload_episode_illust(
     request: Request,
     file: UploadFile = File(...),
     caption: str = Form(""),
+    illust_tag: str = Form(""),
+    meta_tags: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
@@ -1809,16 +1907,38 @@ async def upload_episode_illust(
             f.write(data)
 
     image_url = f"/static/episode_images/{filename}"
+    normalized_illust_tag = normalize_illust_tag(illust_tag)
+    if normalized_illust_tag:
+        existing = (
+            db.query(models.EpisodeIllust)
+            .filter(
+                models.EpisodeIllust.episode_id == episode_id,
+                models.EpisodeIllust.illust_tag == normalized_illust_tag,
+            )
+            .first()
+        )
+        if existing:
+            raise HTTPException(400, "同じillustタグの押絵が既に存在します")
+    normalized_meta_tags = normalize_meta_tags(meta_tags)
     ill = models.EpisodeIllust(
         episode_id=episode_id,
         image_url=image_url,
         position=position,
         caption=(caption or "").strip() or None,
+        illust_tag=normalized_illust_tag,
+        meta_tags=serialize_meta_tags(normalized_meta_tags),
     )
     db.add(ill)
     db.commit()
     db.refresh(ill)
-    return {"id": ill.id, "image_url": ill.image_url, "position": ill.position, "caption": ill.caption}
+    return {
+        "id": ill.id,
+        "image_url": ill.image_url,
+        "position": ill.position,
+        "caption": ill.caption,
+        "illust_tag": ill.illust_tag,
+        "meta_tags": deserialize_meta_tags(ill.meta_tags),
+    }
 @app.delete("/api/episodes/{episode_id}/illusts/{illust_id}")
 def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
@@ -1903,6 +2023,8 @@ def get_episode_for_edit(
                 "image_url": il.image_url,
                 "position": il.position,
                 "caption": il.caption,
+                "illust_tag": il.illust_tag,
+                "meta_tags": deserialize_meta_tags(il.meta_tags),
             }
             for il in ep.illusts
         ],
@@ -2017,6 +2139,8 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
                 "image_url": il.image_url,
                 "position": il.position,
                 "caption": il.caption,
+                "illust_tag": il.illust_tag,
+                "meta_tags": deserialize_meta_tags(il.meta_tags),
             }
             for il in ep.illusts
         ],
