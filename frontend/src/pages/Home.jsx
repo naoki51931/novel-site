@@ -126,13 +126,16 @@ export default function Home({ query = "" }) {
               <div>作成日時: {formatDateTime(novel.created_at)}</div>
             </div>
 
-            {Array.isArray(novel.tag_names) && novel.tag_names.length > 0 && (
-              <div className="tag-chip-row" style={{ marginBottom: 10 }}>
-                {novel.tag_names.map((name) => (
+            <div
+              className="tag-chip-row tag-chip-row-reserve-2lines"
+              style={{ marginBottom: 10 }}
+            >
+              {Array.isArray(novel.tag_names) &&
+                novel.tag_names.length > 0 &&
+                novel.tag_names.map((name) => (
                   <TagChipLink key={name} name={name} />
                 ))}
-              </div>
-            )}
+            </div>
 
             <div style={{ textAlign: "right" }}>
               <Link to={`/novels/${novel.id}`} className="btn btn-border">
