@@ -231,9 +231,15 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
 }
 
 .tag-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: inline-block;
+}
+
+.tag-chip-row-reserve-2lines {
+  min-height: 46px;
+}
+
+.tag-chip-row .tag-chip {
+  margin: 0 6px 6px 0;
 }
 
 .tag-chip {
