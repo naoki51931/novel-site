@@ -357,6 +357,12 @@ def get_user_by_username(db: Session, username: str):
     return db.query(models.User).filter(models.User.username == username).first()
 
 
+def normalize_dm_pair(user_id: int, target_id: int) -> tuple[int, int]:
+    if user_id == target_id:
+        raise HTTPException(400, "自分自身にはDMできません")
+    return (user_id, target_id) if user_id < target_id else (target_id, user_id)
+
+
 def require_current_user(request: Request, db: Session) -> models.User:
     auth = request.headers.get("Authorization")
     if not auth or not auth.startswith("Bearer "):
@@ -1527,6 +1533,131 @@ def list_public_user_favorites(
         }
         for n in favorites
     ]
+
+
+# =========================================
+# Direct Messages
+# =========================================
+@app.post("/api/dms")
+def create_dm_thread(
+    payload: schemas.DirectMessageThreadCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    target = None
+
+    if payload.target_user_id is not None:
+        target = db.query(models.User).get(int(payload.target_user_id))
+    elif payload.target_username:
+        target = get_user_by_username(db, payload.target_username.strip())
+    else:
+        raise HTTPException(400, "送信先ユーザーが指定されていません")
+
+    if not target:
+        raise HTTPException(404, "送信先ユーザーが見つかりません")
+
+    user1_id, user2_id = normalize_dm_pair(user.id, target.id)
+
+    thread = (
+        db.query(models.DirectMessageThread)
+        .filter(models.DirectMessageThread.user1_id == user1_id)
+        .filter(models.DirectMessageThread.user2_id == user2_id)
+        .first()
+    )
+    if not thread:
+        thread = models.DirectMessageThread(user1_id=user1_id, user2_id=user2_id)
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+
+    return {
+        "id": thread.id,
+        "user1_id": thread.user1_id,
+        "user2_id": thread.user2_id,
+        "partner_username": target.username,
+        "created_at": thread.created_at,
+    }
+
+
+@app.get("/api/dms/{thread_id}")
+def read_dm_thread(
+    thread_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    thread = db.query(models.DirectMessageThread).get(thread_id)
+    if not thread:
+        raise HTTPException(404, "DMが見つかりません")
+
+    if user.id not in (thread.user1_id, thread.user2_id):
+        raise HTTPException(403, "閲覧権限がありません")
+
+    partner = thread.user1 if thread.user2_id == user.id else thread.user2
+
+    messages = (
+        db.query(models.DirectMessage)
+        .filter(models.DirectMessage.thread_id == thread_id)
+        .order_by(models.DirectMessage.created_at.asc(), models.DirectMessage.id.asc())
+        .all()
+    )
+
+    return {
+        "thread": {
+            "id": thread.id,
+            "user1_id": thread.user1_id,
+            "user2_id": thread.user2_id,
+            "partner_username": partner.username if partner else None,
+            "created_at": thread.created_at,
+        },
+        "messages": [
+            {
+                "id": msg.id,
+                "thread_id": msg.thread_id,
+                "sender_id": msg.sender_id,
+                "sender_username": msg.sender.username if msg.sender else None,
+                "body": msg.body,
+                "created_at": msg.created_at,
+            }
+            for msg in messages
+        ],
+    }
+
+
+@app.post("/api/dms/{thread_id}/messages")
+def create_dm_message(
+    thread_id: int,
+    payload: schemas.DirectMessageCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    thread = db.query(models.DirectMessageThread).get(thread_id)
+    if not thread:
+        raise HTTPException(404, "DMが見つかりません")
+    if user.id not in (thread.user1_id, thread.user2_id):
+        raise HTTPException(403, "送信権限がありません")
+
+    body = (payload.body or "").strip()
+    if not body:
+        raise HTTPException(400, "メッセージを入力してください")
+
+    msg = models.DirectMessage(thread_id=thread_id, sender_id=user.id, body=body)
+    thread.updated_at = datetime.utcnow()
+    db.add(msg)
+    db.add(thread)
+    db.commit()
+    db.refresh(msg)
+
+    return {
+        "id": msg.id,
+        "thread_id": msg.thread_id,
+        "sender_id": msg.sender_id,
+        "sender_username": user.username,
+        "body": msg.body,
+        "created_at": msg.created_at,
+    }
 
 
 # =========================================

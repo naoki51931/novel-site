@@ -17,6 +17,7 @@ import Mypage from "./pages/Mypage";
 import UserPage from "./pages/UserPage";
 import AINovelPage from "./pages/AINovelPage";
 import AiLogsPage from "./pages/AiLogsPage";
+import DirectMessageThread from "./pages/DirectMessageThread";
 
 
 export default function App() {
@@ -135,6 +136,7 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/users/:username" element={<UserPage />} />
+          <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />
           <Route path="/novels/:id" element={<NovelDetail />} />
           <Route path="/novels/:id/edit" element={<EditNovel />} />

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -257,6 +257,48 @@ class AIGenerateLog(Base):
     model = Column(String(64), nullable=True)
 
     user = relationship("User", back_populates="ai_generate_logs")
+
+
+# =========================
+# Direct Messages
+# =========================
+class DirectMessageThread(Base):
+    __tablename__ = "direct_message_threads"
+    __table_args__ = (
+        UniqueConstraint("user1_id", "user2_id", name="uq_dm_thread_users"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user1_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user2_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user1 = relationship("User", foreign_keys=[user1_id])
+    user2 = relationship("User", foreign_keys=[user2_id])
+    messages = relationship(
+        "DirectMessage",
+        back_populates="thread",
+        cascade="all, delete-orphan",
+    )
+
+
+class DirectMessage(Base):
+    __tablename__ = "direct_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(
+        Integer,
+        ForeignKey("direct_message_threads.id"),
+        nullable=False,
+        index=True,
+    )
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    thread = relationship("DirectMessageThread", back_populates="messages")
+    sender = relationship("User")
 
 
 class AIGuestGenerateUsage(Base):
