@@ -124,3 +124,35 @@ class ProfileUpdate(BaseModel):
     email: Optional[str] = None
     birth_date: Optional[date] = None
 
+
+# =========================
+# Direct Messages
+# =========================
+class DirectMessageThreadCreate(BaseModel):
+    target_username: Optional[str] = None
+    target_user_id: Optional[int] = None
+
+
+class DirectMessageThreadRead(BaseModel):
+    id: int
+    user1_id: int
+    user2_id: int
+    partner_username: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DirectMessageCreate(BaseModel):
+    body: str
+
+
+class DirectMessageRead(BaseModel):
+    id: int
+    thread_id: int
+    sender_id: int
+    sender_username: Optional[str] = None
+    body: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

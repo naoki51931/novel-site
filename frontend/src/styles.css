@@ -330,6 +330,25 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   color: var(--bg);
 }
 
+.dm-icon-button {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.dm-icon-button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.dm-icon-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .register-footer {
   margin-top: 16px;
 }

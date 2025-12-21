@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 
 const API_BASE = "";
@@ -13,6 +13,9 @@ export default function UserPage() {
   const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [dmError, setDmError] = useState("");
+  const [dmLoading, setDmLoading] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -80,6 +83,48 @@ export default function UserPage() {
 
   const displayName = profile?.username || username;
   const isPremium = !!profile?.is_premium;
+  const currentUsername =
+    typeof window !== "undefined" ? localStorage.getItem("username") : null;
+  const trimmedCurrentUsername = (currentUsername ?? "").trim();
+  const trimmedDisplayName = (displayName ?? "").trim();
+  const canStartDm =
+    trimmedCurrentUsername !== "" && trimmedCurrentUsername !== trimmedDisplayName;
+
+  const handleCreateDm = async () => {
+    const token =
+      typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token) {
+      setDmError("ログインが必要です");
+      return;
+    }
+    if (!trimmedDisplayName) {
+      setDmError("送信先ユーザーが見つかりません");
+      return;
+    }
+
+    try {
+      setDmLoading(true);
+      setDmError("");
+      const res = await fetch(`${API_BASE}/api/dms`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ target_username: trimmedDisplayName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || "DMの作成に失敗しました");
+      }
+      navigate(`/dms/${data.id}`);
+    } catch (e) {
+      console.error(e);
+      setDmError(e.message || "エラーが発生しました");
+    } finally {
+      setDmLoading(false);
+    }
+  };
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
@@ -89,10 +134,11 @@ export default function UserPage() {
 
       <h2
         style={{
-          marginBottom: "1rem",
+          marginBottom: "0.75rem",
           display: "flex",
           alignItems: "center",
           gap: "8px",
+          flexWrap: "wrap",
         }}
       >
         {displayName} さんのページ
@@ -110,7 +156,42 @@ export default function UserPage() {
             PREMIUM
           </span>
         )}
+        {canStartDm && (
+          <button
+            type="button"
+            onClick={handleCreateDm}
+            disabled={dmLoading}
+            title="DMを送る"
+            className="dm-icon-button"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              padding: 0,
+            }}
+            aria-label="DMを送る"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+              <path d="m22 6-10 7L2 6" />
+            </svg>
+          </button>
+        )}
       </h2>
+      {dmError && <p style={{ color: "red", marginBottom: 8 }}>{dmError}</p>}
 
       <section style={{ marginTop: "1.5rem" }}>
         <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
