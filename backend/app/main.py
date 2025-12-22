@@ -3,6 +3,8 @@ import base64
 import hashlib
 import secrets
 import re
+import time
+import logging
 from urllib.parse import urlencode
 import json
 import html
@@ -243,6 +245,7 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "no-reply@example.com")
 # =========================================
 # 認証共通
 # =========================================
+logger = logging.getLogger("uvicorn.error")
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -307,6 +310,21 @@ def _generate_unique_username(db: Session, base: str) -> str:
         if not get_user_by_username(db, name):
             return name
     return f"user_{secrets.token_hex(6)}"
+
+
+USED_OAUTH_CODES: dict[str, float] = {}
+USED_OAUTH_CODE_TTL_SECONDS = 120
+
+
+def _mark_oauth_code_used(code_key: str) -> bool:
+    now = time.time()
+    for key, ts in list(USED_OAUTH_CODES.items()):
+        if now - ts > USED_OAUTH_CODE_TTL_SECONDS:
+            del USED_OAUTH_CODES[key]
+    if code_key in USED_OAUTH_CODES:
+        return False
+    USED_OAUTH_CODES[code_key] = now
+    return True
 
 def _stripe_obj_get(obj, key: str, default=None):
     try:
@@ -786,8 +804,14 @@ async def oauth_callback(
         return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が一致しません"}))
 
     pkce_verifier = state_data.get("pkce") or ""
+    if not pkce_verifier:
+        return RedirectResponse(_oauth_frontend_url({"error": "OAuth PKCE が不正です"}))
     redirect_path = _normalize_redirect_path(state_data.get("redirect") or "")
     redirect_uri = _oauth_redirect_uri(provider)
+
+    code_key = f"{provider}:{code}"
+    if not _mark_oauth_code_used(code_key):
+        return RedirectResponse(_oauth_frontend_url({"oauth": "retry"}))
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -803,9 +827,24 @@ async def oauth_callback(
                         "code_verifier": pkce_verifier,
                     },
                 )
-                token_data = token_res.json()
+                token_body = token_res.text
+                logger.error(
+                    "GOOGLE TOKEN status=%s body=%s",
+                    token_res.status_code,
+                    token_body,
+                )
+                try:
+                    token_data = token_res.json()
+                except Exception:
+                    token_data = {}
                 if token_res.status_code != 200:
-                    raise HTTPException(400, token_data.get("error_description") or "Google 認証に失敗しました")
+                    error_detail = (
+                        token_data.get("error_description")
+                        or token_data.get("error")
+                        or token_body
+                        or "Google 認証に失敗しました"
+                    )
+                    raise HTTPException(400, error_detail)
 
                 access_token = token_data.get("access_token")
                 if not access_token:
@@ -835,9 +874,29 @@ async def oauth_callback(
                     },
                     auth=(X_OAUTH_CLIENT_ID, X_OAUTH_CLIENT_SECRET),
                 )
-                token_data = token_res.json()
+                token_body = token_res.text
+                if token_res.status_code >= 400:
+                    logger.error(
+                        "X_TOKEN_ERROR url=%s status=%s body=%s",
+                        "https://api.twitter.com/2/oauth2/token",
+                        token_res.status_code,
+                        token_body[:2000],
+                    )
+                try:
+                    token_data = token_res.json()
+                except Exception:
+                    token_data = {}
                 if token_res.status_code != 200:
-                    raise HTTPException(400, token_data.get("error_description") or "X 認証に失敗しました")
+                    error_detail = (
+                        token_data.get("error_description")
+                        or token_data.get("error")
+                        or token_body
+                        or "X 認証に失敗しました"
+                    )
+                    raise HTTPException(
+                        400,
+                        f"{error_detail} (status={token_res.status_code} body={token_body[:2000]})",
+                    )
 
                 access_token = token_data.get("access_token")
                 if not access_token:
@@ -848,9 +907,29 @@ async def oauth_callback(
                     params={"user.fields": "profile_image_url,username,name"},
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
-                info = info_res.json()
+                info_body = info_res.text
+                if info_res.status_code >= 400:
+                    logger.error(
+                        "X_API_ERROR method=GET url=%s status=%s body=%s",
+                        "https://api.twitter.com/2/users/me",
+                        info_res.status_code,
+                        info_body[:2000],
+                    )
+                try:
+                    info = info_res.json()
+                except Exception:
+                    info = {}
                 if info_res.status_code != 200:
-                    raise HTTPException(400, "X のユーザー情報取得に失敗しました")
+                    error_detail = (
+                        info.get("error_description")
+                        or info.get("error")
+                        or info_body
+                        or "X のユーザー情報取得に失敗しました"
+                    )
+                    raise HTTPException(
+                        400,
+                        f"{error_detail} (status={info_res.status_code} body={info_body[:2000]})",
+                    )
 
                 data = info.get("data") or {}
                 provider_user_id = str(data.get("id") or "")
@@ -859,8 +938,9 @@ async def oauth_callback(
                 email_verified = False
             else:
                 raise HTTPException(404, "provider が不正です")
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        message = str(getattr(e, "detail", "") or "OAuth 認証に失敗しました")
+        return RedirectResponse(_oauth_frontend_url({"error": message}))
     except Exception:
         return RedirectResponse(_oauth_frontend_url({"error": "OAuth 処理中にエラーが発生しました"}))
 
@@ -1284,6 +1364,14 @@ def update_novel(
     db.refresh(novel)
 
     if novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "編集権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "編集権限がありません")
 
     if payload.title is not None:
@@ -1350,6 +1438,14 @@ def delete_novel(
     db.refresh(novel)
 
     if novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "削除権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "削除権限がありません")
 
     # Episodes 削除（外部キー制約で cascade されているなら不要だが、安全のため）
@@ -1888,6 +1984,14 @@ def read_dm_thread(
         raise HTTPException(404, "DMが見つかりません")
 
     if user.id not in (thread.user1_id, thread.user2_id):
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "閲覧権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "閲覧権限がありません")
 
     partner = thread.user1 if thread.user2_id == user.id else thread.user2
@@ -1933,6 +2037,14 @@ def create_dm_message(
     if not thread:
         raise HTTPException(404, "DMが見つかりません")
     if user.id not in (thread.user1_id, thread.user2_id):
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "送信権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "送信権限がありません")
 
     body = (payload.body or "").strip()
@@ -1979,6 +2091,14 @@ def create_episode(
     db.commit()
     db.refresh(novel)
     if novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "追加権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "追加権限がありません")
 
     ep = models.Episode(cover_image_url=payload.cover_image_url, 
@@ -2046,6 +2166,14 @@ def update_episode(
     # 自分の小説かチェック
     novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "編集権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "編集権限がありません")
 
     # 基本項目を更新
@@ -2151,6 +2279,14 @@ def delete_episode_cover_image(episode_id: int, request: Request, db: Session = 
         raise HTTPException(404, "エピソードが存在しません")
     novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "このエピソードを編集する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "このエピソードを編集する権限がありません")
     if ep.cover_image_url:
         rel_path = ep.cover_image_url.lstrip("/")
@@ -2178,6 +2314,14 @@ async def upload_episode_cover_image(
         raise HTTPException(404, "エピソードが存在しません")
     novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "このエピソードを編集する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "このエピソードを編集する権限がありません")
 
     content_type = (file.content_type or "").lower()
@@ -2269,6 +2413,14 @@ async def upload_episode_illust(
         raise HTTPException(404, "エピソードが存在しません")
     novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "このエピソードを編集する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "このエピソードを編集する権限がありません")
 
     content_type = (file.content_type or "").lower()
@@ -2377,6 +2529,14 @@ def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db:
         raise HTTPException(404, "エピソードが存在しません")
     novel = db.query(models.Novel).get(ep.novel_id)
     if not novel or novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "この押絵を編集する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "この押絵を編集する権限がありません")
     rel_path = ill.image_url.lstrip("/")
     file_path = os.path.join("/app", rel_path)
@@ -2414,6 +2574,14 @@ def get_episode_for_edit(
     if not novel:
         raise HTTPException(404, "小説が存在しません")
     if novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "このエピソードを編集する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "このエピソードを編集する権限がありません")
 
     like_count = db.query(models.EpisodeLike).filter(
@@ -3181,6 +3349,14 @@ def delete_comment(
         (comment.user_id is not None and comment.user_id == user.id)
         or (novel and novel.author_id == user.id)
     ):
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "コメントを削除する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
         raise HTTPException(403, "コメントを削除する権限がありません")
 
     db.delete(comment)
