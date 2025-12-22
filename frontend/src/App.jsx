@@ -13,6 +13,7 @@ import EditEpisode from "./pages/EditEpisode";
 import EpisodeDetail from "./pages/EpisodeDetail";
 import StripeReturn from "./pages/StripeReturn";
 import Login from "./pages/Login";
+import OAuthCallback from "./pages/OAuthCallback";
 import Mypage from "./pages/Mypage";
 import UserPage from "./pages/UserPage";
 import AINovelPage from "./pages/AINovelPage";
@@ -133,6 +134,7 @@ export default function App() {
         <Route path="/mypage/settings" element={<AccountSettings />} />
           <Route path="/" element={<Home query={query} />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/users/:username" element={<UserPage />} />

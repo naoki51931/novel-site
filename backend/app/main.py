@@ -1,13 +1,18 @@
 import os
+import base64
+import hashlib
+import secrets
+import re
+from urllib.parse import urlencode
 import json
 import html
-import re
 import io
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 
 import jwt
 import stripe
+import httpx
 from fastapi import (
     FastAPI,
     Depends,
@@ -21,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from sqlalchemy.orm import selectinload
@@ -32,7 +37,6 @@ from . import models, schemas
 import smtplib
 from email.mime.text import MIMEText  # type: ignore
 
-import secrets
 EPISODE_IMAGE_DIR = "/app/static/episode_images"
 import os
 os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
@@ -216,6 +220,14 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
+
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+X_OAUTH_CLIENT_ID = os.getenv("X_OAUTH_CLIENT_ID", "")
+X_OAUTH_CLIENT_SECRET = os.getenv("X_OAUTH_CLIENT_SECRET", "")
+
+OAUTH_STATE_EXPIRE_MINUTES = int(os.getenv("OAUTH_STATE_EXPIRE_MINUTES", "10"))
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -247,6 +259,54 @@ def create_access_token(data: dict) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {**data, "exp": expire}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _build_pkce_pair() -> tuple[str, str]:
+    verifier = _b64url_encode(secrets.token_bytes(48))
+    challenge = _b64url_encode(hashlib.sha256(verifier.encode("ascii")).digest())
+    return verifier, challenge
+
+
+def _build_oauth_state(provider: str, redirect_to: str | None, pkce_verifier: str) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=OAUTH_STATE_EXPIRE_MINUTES)
+    payload = {
+        "provider": provider,
+        "redirect": redirect_to or "",
+        "pkce": pkce_verifier,
+        "exp": expire,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def _decode_oauth_state(state: str) -> dict:
+    try:
+        return jwt.decode(state, SECRET_KEY, algorithms=[ALGORITHM])
+    except Exception:
+        raise HTTPException(400, "OAuth state が不正です")
+
+
+def _normalize_redirect_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    if not path.startswith("/") or path.startswith("//"):
+        return None
+    return path
+
+
+def _generate_unique_username(db: Session, base: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_]+", "_", base or "").strip("_")
+    candidate = (safe or "user")[:50]
+    if not get_user_by_username(db, candidate):
+        return candidate
+    for i in range(1, 1000):
+        name = f"{candidate[:46]}_{i}"
+        if not get_user_by_username(db, name):
+            return name
+    return f"user_{secrets.token_hex(6)}"
 
 def _stripe_obj_get(obj, key: str, default=None):
     try:
@@ -590,6 +650,242 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
     revalidate_premium_on_login(user, db)
     token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token)
+
+
+def _oauth_redirect_uri(provider: str) -> str:
+    return f"{BACKEND_ORIGIN.rstrip('/')}/api/auth/oauth/{provider}/callback"
+
+
+def _oauth_frontend_url(params: dict) -> str:
+    base = FRONTEND_ORIGIN.rstrip("/")
+    return f"{base}/oauth/callback?{urlencode(params)}"
+
+
+def _get_oauth_account(db: Session, provider: str, provider_user_id: str) -> models.OAuthAccount | None:
+    return (
+        db.query(models.OAuthAccount)
+        .filter(
+            models.OAuthAccount.provider == provider,
+            models.OAuthAccount.provider_user_id == provider_user_id,
+        )
+        .first()
+    )
+
+
+def _get_or_create_user_from_oauth(
+    db: Session,
+    provider: str,
+    provider_user_id: str,
+    provider_username: str | None,
+    provider_email: str | None,
+    email_verified: bool,
+) -> models.User:
+    account = _get_oauth_account(db, provider, provider_user_id)
+    if account and account.user:
+        return account.user
+
+    user = None
+    if provider_email and email_verified:
+        user = db.query(models.User).filter(models.User.email == provider_email).first()
+
+    if not user:
+        base = provider_username or f"{provider}_{provider_user_id}"
+        username = _generate_unique_username(db, base)
+        random_pw = secrets.token_urlsafe(32)
+        user = models.User(
+            username=username,
+            email=provider_email if email_verified else None,
+            password_hash=hash_password(random_pw),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    elif provider_email and email_verified and not user.email:
+        user.email = provider_email
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    account = models.OAuthAccount(
+        user_id=user.id,
+        provider=provider,
+        provider_user_id=provider_user_id,
+        provider_username=provider_username,
+        provider_email=provider_email,
+    )
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    return user
+
+
+@app.get("/api/auth/oauth/{provider}/start")
+def oauth_start(provider: str, redirect: str | None = None):
+    provider = provider.lower()
+    redirect_path = _normalize_redirect_path(redirect)
+    pkce_verifier, pkce_challenge = _build_pkce_pair()
+    state = _build_oauth_state(provider, redirect_path, pkce_verifier)
+
+    redirect_uri = _oauth_redirect_uri(provider)
+
+    if provider == "google":
+        if not GOOGLE_OAUTH_CLIENT_ID or not GOOGLE_OAUTH_CLIENT_SECRET:
+            raise HTTPException(500, "Google OAuth の設定が不足しています")
+        params = {
+            "response_type": "code",
+            "client_id": GOOGLE_OAUTH_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "scope": "openid email profile",
+            "state": state,
+            "code_challenge": pkce_challenge,
+            "code_challenge_method": "S256",
+            "prompt": "select_account",
+        }
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+    elif provider == "x":
+        if not X_OAUTH_CLIENT_ID or not X_OAUTH_CLIENT_SECRET:
+            raise HTTPException(500, "X OAuth の設定が不足しています")
+        params = {
+            "response_type": "code",
+            "client_id": X_OAUTH_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "scope": "users.read",
+            "state": state,
+            "code_challenge": pkce_challenge,
+            "code_challenge_method": "S256",
+        }
+        auth_url = "https://twitter.com/i/oauth2/authorize?" + urlencode(params)
+    else:
+        raise HTTPException(404, "provider が不正です")
+
+    return {"auth_url": auth_url}
+
+
+@app.get("/api/auth/oauth/{provider}/callback")
+async def oauth_callback(
+    provider: str,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    db: Session = Depends(get_db),
+):
+    provider = provider.lower()
+    if error:
+        message = error_description or error
+        return RedirectResponse(_oauth_frontend_url({"error": message}))
+
+    if not code or not state:
+        return RedirectResponse(_oauth_frontend_url({"error": "OAuth のコードが取得できませんでした"}))
+
+    try:
+        state_data = _decode_oauth_state(state)
+    except HTTPException:
+        return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が不正です"}))
+    if state_data.get("provider") != provider:
+        return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が一致しません"}))
+
+    pkce_verifier = state_data.get("pkce") or ""
+    redirect_path = _normalize_redirect_path(state_data.get("redirect") or "")
+    redirect_uri = _oauth_redirect_uri(provider)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if provider == "google":
+                token_res = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "client_id": GOOGLE_OAUTH_CLIENT_ID,
+                        "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
+                        "redirect_uri": redirect_uri,
+                        "code_verifier": pkce_verifier,
+                    },
+                )
+                token_data = token_res.json()
+                if token_res.status_code != 200:
+                    raise HTTPException(400, token_data.get("error_description") or "Google 認証に失敗しました")
+
+                access_token = token_data.get("access_token")
+                if not access_token:
+                    raise HTTPException(400, "Google のアクセストークンが取得できませんでした")
+
+                info_res = await client.get(
+                    "https://openidconnect.googleapis.com/v1/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                info = info_res.json()
+                if info_res.status_code != 200:
+                    raise HTTPException(400, "Google のユーザー情報取得に失敗しました")
+
+                provider_user_id = str(info.get("sub") or "")
+                provider_username = info.get("name") or info.get("email")
+                provider_email = info.get("email")
+                email_verified = bool(info.get("email_verified"))
+            elif provider == "x":
+                token_res = await client.post(
+                    "https://api.twitter.com/2/oauth2/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "client_id": X_OAUTH_CLIENT_ID,
+                        "redirect_uri": redirect_uri,
+                        "code_verifier": pkce_verifier,
+                    },
+                    auth=(X_OAUTH_CLIENT_ID, X_OAUTH_CLIENT_SECRET),
+                )
+                token_data = token_res.json()
+                if token_res.status_code != 200:
+                    raise HTTPException(400, token_data.get("error_description") or "X 認証に失敗しました")
+
+                access_token = token_data.get("access_token")
+                if not access_token:
+                    raise HTTPException(400, "X のアクセストークンが取得できませんでした")
+
+                info_res = await client.get(
+                    "https://api.twitter.com/2/users/me",
+                    params={"user.fields": "profile_image_url,username,name"},
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                info = info_res.json()
+                if info_res.status_code != 200:
+                    raise HTTPException(400, "X のユーザー情報取得に失敗しました")
+
+                data = info.get("data") or {}
+                provider_user_id = str(data.get("id") or "")
+                provider_username = data.get("username") or data.get("name")
+                provider_email = None
+                email_verified = False
+            else:
+                raise HTTPException(404, "provider が不正です")
+    except HTTPException:
+        raise
+    except Exception:
+        return RedirectResponse(_oauth_frontend_url({"error": "OAuth 処理中にエラーが発生しました"}))
+
+    if not provider_user_id:
+        return RedirectResponse(_oauth_frontend_url({"error": "OAuth のユーザーIDが取得できませんでした"}))
+
+    user = _get_or_create_user_from_oauth(
+        db=db,
+        provider=provider,
+        provider_user_id=provider_user_id,
+        provider_username=provider_username,
+        provider_email=provider_email,
+        email_verified=email_verified,
+    )
+    revalidate_premium_on_login(user, db)
+    token = create_access_token({"sub": str(user.id)})
+
+    params = {
+        "token": token,
+        "username": user.username,
+    }
+    if redirect_path:
+        params["redirect"] = redirect_path
+
+    return RedirectResponse(_oauth_frontend_url(params))
 
 
 # =========================================

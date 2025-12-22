@@ -9,3 +9,4 @@ passlib[bcrypt]==1.7.4
 stripe>=11.0.0
 openai
 pillow
+httpx

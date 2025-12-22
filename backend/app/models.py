@@ -40,6 +40,29 @@ class User(Base):
     episode_likes = relationship("EpisodeLike", back_populates="user")
     novel_likes = relationship("NovelLike", back_populates="user")
     ai_generate_logs = relationship("AIGenerateLog", back_populates="user")
+    oauth_accounts = relationship(
+        "OAuthAccount",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class OAuthAccount(Base):
+    __tablename__ = "oauth_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    provider_user_id = Column(String(255), nullable=False, index=True)
+    provider_username = Column(String(255), nullable=True)
+    provider_email = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    user = relationship("User", back_populates="oauth_accounts")
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_user_id", name="uq_oauth_provider_user_id"),
+    )
 
 
 
