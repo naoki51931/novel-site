@@ -1,11 +1,12 @@
 import os
 import base64
 import hashlib
+import hmac
 import secrets
 import re
 import time
 import logging
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote, parse_qs
 import json
 import html
 import io
@@ -226,8 +227,8 @@ BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
 
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
-X_OAUTH_CLIENT_ID = os.getenv("X_OAUTH_CLIENT_ID", "")
-X_OAUTH_CLIENT_SECRET = os.getenv("X_OAUTH_CLIENT_SECRET", "")
+X_OAUTH_CONSUMER_KEY = os.getenv("X_OAUTH_CONSUMER_KEY", "")
+X_OAUTH_CONSUMER_SECRET = os.getenv("X_OAUTH_CONSUMER_SECRET", "")
 
 OAUTH_STATE_EXPIRE_MINUTES = int(os.getenv("OAUTH_STATE_EXPIRE_MINUTES", "10"))
 
@@ -325,6 +326,101 @@ def _mark_oauth_code_used(code_key: str) -> bool:
         return False
     USED_OAUTH_CODES[code_key] = now
     return True
+
+
+OAUTH1_REQUEST_TOKENS: dict[str, dict[str, str | float]] = {}
+OAUTH1_REQUEST_TOKEN_TTL_SECONDS = 600
+
+
+def _store_oauth1_request_token(oauth_token: str, token_secret: str, redirect_path: str | None) -> None:
+    now = time.time()
+    for key, payload in list(OAUTH1_REQUEST_TOKENS.items()):
+        if now - float(payload.get("ts", 0)) > OAUTH1_REQUEST_TOKEN_TTL_SECONDS:
+            del OAUTH1_REQUEST_TOKENS[key]
+    OAUTH1_REQUEST_TOKENS[oauth_token] = {
+        "secret": token_secret,
+        "redirect": redirect_path or "",
+        "ts": now,
+    }
+
+
+def _pop_oauth1_request_token(oauth_token: str) -> dict[str, str] | None:
+    payload = OAUTH1_REQUEST_TOKENS.pop(oauth_token, None)
+    if not payload:
+        return None
+    return {
+        "secret": str(payload.get("secret") or ""),
+        "redirect": str(payload.get("redirect") or ""),
+    }
+
+
+def _oauth1_percent_encode(value: str) -> str:
+    return quote(value, safe="~")
+
+
+def _oauth1_signature_base(
+    method: str, url: str, params: dict[str, str]
+) -> str:
+    normalized_url = url.split("?", 1)[0]
+    encoded_params = [
+        (_oauth1_percent_encode(k), _oauth1_percent_encode(v)) for k, v in params.items()
+    ]
+    encoded_params.sort()
+    param_string = "&".join([f"{k}={v}" for k, v in encoded_params])
+    base_elems = [
+        method.upper(),
+        _oauth1_percent_encode(normalized_url),
+        _oauth1_percent_encode(param_string),
+    ]
+    return "&".join(base_elems)
+
+
+def _oauth1_signature(
+    method: str, url: str, params: dict[str, str], token_secret: str = ""
+) -> str:
+    base_string = _oauth1_signature_base(method, url, params)
+    key = f"{_oauth1_percent_encode(X_OAUTH_CONSUMER_SECRET)}&{_oauth1_percent_encode(token_secret)}"
+    digest = hmac.new(key.encode("ascii"), base_string.encode("ascii"), hashlib.sha1).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _oauth1_build_auth_header(
+    method: str,
+    url: str,
+    oauth_params: dict[str, str],
+    request_params: dict[str, str] | None = None,
+    token_secret: str = "",
+) -> str:
+    all_params = dict(oauth_params)
+    if request_params:
+        all_params.update(request_params)
+    signature = _oauth1_signature(method, url, all_params, token_secret)
+    oauth_params["oauth_signature"] = signature
+    header_params = ", ".join(
+        [f'{_oauth1_percent_encode(k)}="{_oauth1_percent_encode(v)}"' for k, v in oauth_params.items()]
+    )
+    return f"OAuth {header_params}"
+
+
+def _oauth1_base_params(
+    oauth_token: str | None = None,
+    oauth_callback: str | None = None,
+    oauth_verifier: str | None = None,
+) -> dict[str, str]:
+    params = {
+        "oauth_consumer_key": X_OAUTH_CONSUMER_KEY,
+        "oauth_nonce": secrets.token_hex(16),
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(time.time())),
+        "oauth_version": "1.0",
+    }
+    if oauth_token:
+        params["oauth_token"] = oauth_token
+    if oauth_callback:
+        params["oauth_callback"] = oauth_callback
+    if oauth_verifier:
+        params["oauth_verifier"] = oauth_verifier
+    return params
 
 def _stripe_obj_get(obj, key: str, default=None):
     try:
@@ -738,17 +834,16 @@ def _get_or_create_user_from_oauth(
 
 
 @app.get("/api/auth/oauth/{provider}/start")
-def oauth_start(provider: str, redirect: str | None = None):
+async def oauth_start(provider: str, redirect: str | None = None):
     provider = provider.lower()
     redirect_path = _normalize_redirect_path(redirect)
-    pkce_verifier, pkce_challenge = _build_pkce_pair()
-    state = _build_oauth_state(provider, redirect_path, pkce_verifier)
-
     redirect_uri = _oauth_redirect_uri(provider)
 
     if provider == "google":
         if not GOOGLE_OAUTH_CLIENT_ID or not GOOGLE_OAUTH_CLIENT_SECRET:
             raise HTTPException(500, "Google OAuth の設定が不足しています")
+        pkce_verifier, pkce_challenge = _build_pkce_pair()
+        state = _build_oauth_state(provider, redirect_path, pkce_verifier)
         params = {
             "response_type": "code",
             "client_id": GOOGLE_OAUTH_CLIENT_ID,
@@ -761,18 +856,32 @@ def oauth_start(provider: str, redirect: str | None = None):
         }
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
     elif provider == "x":
-        if not X_OAUTH_CLIENT_ID or not X_OAUTH_CLIENT_SECRET:
-            raise HTTPException(500, "X OAuth の設定が不足しています")
-        params = {
-            "response_type": "code",
-            "client_id": X_OAUTH_CLIENT_ID,
-            "redirect_uri": redirect_uri,
-            "scope": "users.read",
-            "state": state,
-            "code_challenge": pkce_challenge,
-            "code_challenge_method": "S256",
-        }
-        auth_url = "https://twitter.com/i/oauth2/authorize?" + urlencode(params)
+        if not X_OAUTH_CONSUMER_KEY or not X_OAUTH_CONSUMER_SECRET:
+            raise HTTPException(500, "X OAuth 1.0a の設定が不足しています")
+        request_token_url = "https://api.twitter.com/oauth/request_token"
+        oauth_params = _oauth1_base_params(oauth_callback=redirect_uri)
+        auth_header = _oauth1_build_auth_header("POST", request_token_url, oauth_params)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_res = await client.post(
+                request_token_url,
+                headers={"Authorization": auth_header},
+            )
+        token_body = token_res.text
+        logger.info(
+            "X_OAUTH1_REQUEST_TOKEN status=%s body=%s",
+            token_res.status_code,
+            token_body[:500],
+        )
+        if token_res.status_code != 200:
+            raise HTTPException(400, "X OAuth 1.0a request token の取得に失敗しました")
+        token_data = parse_qs(token_body)
+        oauth_token = (token_data.get("oauth_token") or [""])[0]
+        oauth_token_secret = (token_data.get("oauth_token_secret") or [""])[0]
+        callback_confirmed = (token_data.get("oauth_callback_confirmed") or [""])[0]
+        if not oauth_token or not oauth_token_secret or callback_confirmed != "true":
+            raise HTTPException(400, "X OAuth 1.0a request token の解析に失敗しました")
+        _store_oauth1_request_token(oauth_token, oauth_token_secret, redirect_path)
+        auth_url = f"https://api.twitter.com/oauth/authorize?oauth_token={quote(oauth_token, safe='')}"
     else:
         raise HTTPException(404, "provider が不正です")
 
@@ -784,6 +893,8 @@ async def oauth_callback(
     provider: str,
     code: str | None = None,
     state: str | None = None,
+    oauth_token: str | None = None,
+    oauth_verifier: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
     db: Session = Depends(get_db),
@@ -793,25 +904,35 @@ async def oauth_callback(
         message = error_description or error
         return RedirectResponse(_oauth_frontend_url({"error": message}))
 
-    if not code or not state:
-        return RedirectResponse(_oauth_frontend_url({"error": "OAuth のコードが取得できませんでした"}))
-
-    try:
-        state_data = _decode_oauth_state(state)
-    except HTTPException:
-        return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が不正です"}))
-    if state_data.get("provider") != provider:
-        return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が一致しません"}))
-
-    pkce_verifier = state_data.get("pkce") or ""
-    if not pkce_verifier:
-        return RedirectResponse(_oauth_frontend_url({"error": "OAuth PKCE が不正です"}))
-    redirect_path = _normalize_redirect_path(state_data.get("redirect") or "")
+    redirect_path = None
+    pkce_verifier = ""
     redirect_uri = _oauth_redirect_uri(provider)
 
-    code_key = f"{provider}:{code}"
-    if not _mark_oauth_code_used(code_key):
-        return RedirectResponse(_oauth_frontend_url({"oauth": "retry"}))
+    if provider == "google":
+        if not code or not state:
+            return RedirectResponse(_oauth_frontend_url({"error": "OAuth のコードが取得できませんでした"}))
+        try:
+            state_data = _decode_oauth_state(state)
+        except HTTPException:
+            return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が不正です"}))
+        if state_data.get("provider") != provider:
+            return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が一致しません"}))
+
+        pkce_verifier = state_data.get("pkce") or ""
+        if not pkce_verifier:
+            return RedirectResponse(_oauth_frontend_url({"error": "OAuth PKCE が不正です"}))
+        redirect_path = _normalize_redirect_path(state_data.get("redirect") or "")
+        code_key = f"{provider}:{code}"
+        if not _mark_oauth_code_used(code_key):
+            return RedirectResponse(_oauth_frontend_url({"oauth": "retry"}))
+    elif provider == "x":
+        if not oauth_token or not oauth_verifier:
+            return RedirectResponse(_oauth_frontend_url({"error": "OAuth のトークンが取得できませんでした"}))
+        code_key = f"{provider}:{oauth_token}:{oauth_verifier}"
+        if not _mark_oauth_code_used(code_key):
+            return RedirectResponse(_oauth_frontend_url({"oauth": "retry"}))
+    else:
+        return RedirectResponse(_oauth_frontend_url({"error": "provider が不正です"}))
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -863,55 +984,63 @@ async def oauth_callback(
                 provider_email = info.get("email")
                 email_verified = bool(info.get("email_verified"))
             elif provider == "x":
+                if not X_OAUTH_CONSUMER_KEY or not X_OAUTH_CONSUMER_SECRET:
+                    raise HTTPException(500, "X OAuth 1.0a の設定が不足しています")
+                request_payload = _pop_oauth1_request_token(oauth_token)
+                if not request_payload:
+                    raise HTTPException(400, "X OAuth 1.0a のトークンが無効です")
+                redirect_path = _normalize_redirect_path(request_payload.get("redirect") or "")
+                request_token_secret = request_payload.get("secret") or ""
+
+                access_token_url = "https://api.twitter.com/oauth/access_token"
+                oauth_params = _oauth1_base_params(
+                    oauth_token=oauth_token,
+                    oauth_verifier=oauth_verifier,
+                )
+                auth_header = _oauth1_build_auth_header(
+                    "POST",
+                    access_token_url,
+                    oauth_params,
+                    token_secret=request_token_secret,
+                )
                 token_res = await client.post(
-                    "https://api.twitter.com/2/oauth2/token",
-                    data={
-                        "grant_type": "authorization_code",
-                        "code": code,
-                        "client_id": X_OAUTH_CLIENT_ID,
-                        "redirect_uri": redirect_uri,
-                        "code_verifier": pkce_verifier,
-                    },
-                    auth=(X_OAUTH_CLIENT_ID, X_OAUTH_CLIENT_SECRET),
+                    access_token_url,
+                    headers={"Authorization": auth_header},
                 )
                 token_body = token_res.text
-                if token_res.status_code >= 400:
-                    logger.error(
-                        "X_TOKEN_ERROR url=%s status=%s body=%s",
-                        "https://api.twitter.com/2/oauth2/token",
-                        token_res.status_code,
-                        token_body[:2000],
-                    )
-                try:
-                    token_data = token_res.json()
-                except Exception:
-                    token_data = {}
+                logger.info(
+                    "X_OAUTH1_ACCESS_TOKEN status=%s body=%s",
+                    token_res.status_code,
+                    token_body[:500],
+                )
                 if token_res.status_code != 200:
-                    error_detail = (
-                        token_data.get("error_description")
-                        or token_data.get("error")
-                        or token_body
-                        or "X 認証に失敗しました"
-                    )
-                    raise HTTPException(
-                        400,
-                        f"{error_detail} (status={token_res.status_code} body={token_body[:2000]})",
-                    )
+                    raise HTTPException(400, "X OAuth 1.0a access token の取得に失敗しました")
+                token_data = parse_qs(token_body)
+                access_token = (token_data.get("oauth_token") or [""])[0]
+                access_token_secret = (token_data.get("oauth_token_secret") or [""])[0]
+                if not access_token or not access_token_secret:
+                    raise HTTPException(400, "X OAuth 1.0a access token の解析に失敗しました")
 
-                access_token = token_data.get("access_token")
-                if not access_token:
-                    raise HTTPException(400, "X のアクセストークンが取得できませんでした")
-
+                verify_url = "https://api.twitter.com/1.1/account/verify_credentials.json"
+                verify_params = {"include_email": "true", "skip_status": "true"}
+                oauth_params = _oauth1_base_params(oauth_token=access_token)
+                auth_header = _oauth1_build_auth_header(
+                    "GET",
+                    verify_url,
+                    oauth_params,
+                    request_params=verify_params,
+                    token_secret=access_token_secret,
+                )
                 info_res = await client.get(
-                    "https://api.twitter.com/2/users/me",
-                    params={"user.fields": "profile_image_url,username,name"},
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    verify_url,
+                    params=verify_params,
+                    headers={"Authorization": auth_header},
                 )
                 info_body = info_res.text
                 if info_res.status_code >= 400:
                     logger.error(
                         "X_API_ERROR method=GET url=%s status=%s body=%s",
-                        "https://api.twitter.com/2/users/me",
+                        verify_url,
                         info_res.status_code,
                         info_body[:2000],
                     )
@@ -920,22 +1049,13 @@ async def oauth_callback(
                 except Exception:
                     info = {}
                 if info_res.status_code != 200:
-                    error_detail = (
-                        info.get("error_description")
-                        or info.get("error")
-                        or info_body
-                        or "X のユーザー情報取得に失敗しました"
-                    )
-                    raise HTTPException(
-                        400,
-                        f"{error_detail} (status={info_res.status_code} body={info_body[:2000]})",
-                    )
+                    error_detail = info.get("errors") or info_body or "X のユーザー情報取得に失敗しました"
+                    raise HTTPException(400, str(error_detail))
 
-                data = info.get("data") or {}
-                provider_user_id = str(data.get("id") or "")
-                provider_username = data.get("username") or data.get("name")
-                provider_email = None
-                email_verified = False
+                provider_user_id = str(info.get("id_str") or info.get("id") or "")
+                provider_username = info.get("screen_name") or info.get("name")
+                provider_email = info.get("email")
+                email_verified = bool(provider_email)
             else:
                 raise HTTPException(404, "provider が不正です")
     except HTTPException as e:
