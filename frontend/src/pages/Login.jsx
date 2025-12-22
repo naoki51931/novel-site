@@ -39,6 +39,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
 
@@ -250,6 +251,24 @@ export default function Login() {
     navigate("/");
   };
 
+  const handleOAuth = async (provider) => {
+    setError("");
+    setInfo("");
+    setOauthLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/oauth/${provider}/start`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.auth_url) {
+        throw new Error(data.detail || "OAuth の開始に失敗しました。");
+      }
+      window.location.href = data.auth_url;
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "OAuth でエラーが発生しました。");
+      setOauthLoading(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
@@ -257,6 +276,28 @@ export default function Login() {
       </div>
 
       <h2>ログイン（二段階認証）</h2>
+
+      <div style={{ marginBottom: 16, display: "grid", gap: 8 }}>
+        <button
+          type="button"
+          className="btn btn-border"
+          disabled={oauthLoading}
+          onClick={() => handleOAuth("google")}
+        >
+          Googleでログイン
+        </button>
+        <button
+          type="button"
+          className="btn btn-border"
+          disabled={oauthLoading}
+          onClick={() => handleOAuth("x")}
+        >
+          Xでログイン
+        </button>
+        <div style={{ textAlign: "center", color: "var(--muted-text)" }}>
+          または
+        </div>
+      </div>
 
       {hasToken && (
         <div
