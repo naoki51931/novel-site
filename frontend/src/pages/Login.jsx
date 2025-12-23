@@ -134,7 +134,7 @@ export default function Login() {
           const novelPayload = {
             title: pending.generated_title || "AI生成小説",
             description: "AI生成",
-            age_limit: "all",
+            age_limit: pending.age_limit === "r18" ? "r18" : "all",
             is_ai_generated: true,
             tag_names: [],
           };

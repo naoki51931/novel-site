@@ -61,6 +61,7 @@ services:
       OPENROUTER_API_KEY_FILE: ${OPENROUTER_API_KEY_FILE}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_API_KEY_FILE: ${DEEPSEEK_API_KEY_FILE}
+      NOVELAI_API_KEY: ${NOVELAI_API_KEY}
 
     volumes:
       - ./static:/app/static

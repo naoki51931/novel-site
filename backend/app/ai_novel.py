@@ -1,6 +1,7 @@
 # backend/app/ai_novel.py
 
 import os
+import json
 from textwrap import dedent
 from typing import Tuple
 
@@ -72,12 +73,23 @@ except Exception as e:
     deepseek_client = None
 
 
+
+
 def provider_from_model(model: str | None) -> str:
     if not model:
         return "openai"
     if model.startswith("deepseek:"):
         return "deepseek"
     return "openrouter" if "/" in model else "openai"
+
+
+def provider_from_request(req: "AINovelRequest | None") -> str:
+    if req is None:
+        return "openai"
+    provider = (getattr(req, "provider", None) or "").strip().lower()
+    if provider:
+        return provider
+    return provider_from_model(getattr(req, "model", None))
 
 
 # ===== Pydantic モデル =====
@@ -95,6 +107,8 @@ class AINovelRequest(BaseModel):
     length: str | None = "medium"  # "short" | "medium" | "long"
     prompt: str | None = None
     model: str | None = None
+    provider: str | None = None
+    r18: bool = False
 
 
 class AINovelResponse(BaseModel):
@@ -125,6 +139,17 @@ def build_ai_prompt(req: AINovelRequest) -> str:
 
     title_hint = req.title_hint or "タイトルは内容に合うものをあなたが考えてほしい"
 
+    constraint_text = (
+        "- 成人向けの内容を含めて構いません。性的描写も許可します。\n"
+        "- 読みやすい段落構成にしてください。\n"
+        "- 一人称 / 三人称は、物語に合うほうをあなたが選んでください。"
+        if req.r18
+        else
+        "- 一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。\n"
+        "- 読みやすい段落構成にしてください。\n"
+        "- 一人称 / 三人称は、物語に合うほうをあなたが選んでください。"
+    )
+
     prompt = dedent(
         f"""
         あなたは日本語のライトノベル風の小説家です。
@@ -136,9 +161,7 @@ def build_ai_prompt(req: AINovelRequest) -> str:
         - 3行目以降に本文を書く
 
         # 制約
-        - 一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。
-        - 読みやすい段落構成にしてください。
-        - 一人称 / 三人称は、物語に合うほうをあなたが選んでください。
+        {constraint_text}
 
         # 要望
         - 作品の長さ: {length_text}
@@ -505,3 +528,4 @@ async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None =
         model=effective_model,
         prompt_used=prompt,
     )
+

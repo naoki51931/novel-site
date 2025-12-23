@@ -116,6 +116,7 @@ export default function AINovelPage() {
   const [tone, setTone] = useState("");
   const [length, setLength] = useState("medium");
   const [model, setModel] = useState("gpt-4.1-mini");
+  const [isR18, setIsR18] = useState(false);
 
   // ★ ここが「続き生成モード」用の state
   const [isContinueMode, setIsContinueMode] = useState(false);
@@ -285,6 +286,7 @@ export default function AINovelPage() {
           tone: tone || null,
           length: length || "medium",
           model: model || "gpt-4.1-mini",
+          r18: isR18,
         }),
       });
 
@@ -338,6 +340,7 @@ export default function AINovelPage() {
         kind: "new_novel",
         generated_title: result.generated_title || "AI生成小説",
         body: result.body,
+        age_limit: isR18 ? "r18" : "all",
         createdAt: Date.now(),
       });
       setError("投稿にはログインが必要です。ログイン画面へ移動します。");
@@ -350,7 +353,7 @@ export default function AINovelPage() {
       const novelPayload = {
         title: result.generated_title || "AI生成小説",
         description: "AI生成",
-        age_limit: "all",
+        age_limit: isR18 ? "r18" : "all",
         is_ai_generated: true,
         tag_names: [],
       };
@@ -603,6 +606,20 @@ export default function AINovelPage() {
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+            年齢区分
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <input
+              type="checkbox"
+              checked={isR18}
+              onChange={(e) => setIsR18(e.target.checked)}
+            />
+            R-18（成人向け・性的描写あり）
+          </label>
+        </div>
+
+        <div>
+          <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
             使用モデル
           </label>
           <select
@@ -616,6 +633,7 @@ export default function AINovelPage() {
             <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="gpt-4o">GPT-4o</option>
             <option value="openai/chatgpt-4o-latest">ChatGPT（OpenRouter / chatgpt-4o-latest）</option>
+            <option value="z-ai/glm-4.6">GLM 4.6（OpenRouter / z-ai/glm-4.6）</option>
             <option value="moonshotai/kimi-k2">Kimi（OpenRouter / kimi-k2）</option>
             <option value="deepseek/deepseek-chat">DeepSeek（OpenRouter / deepseek-chat）</option>
             <option value="deepseek:deepseek-chat">DeepSeek（公式 / deepseek-chat）</option>

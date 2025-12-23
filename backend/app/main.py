@@ -56,6 +56,7 @@ from .ai_novel import (
     call_openrouter_novel_api,
     call_deepseek_novel_api,
     provider_from_model,
+    provider_from_request,
 )
 
 try:
@@ -1345,6 +1346,18 @@ async def stripe_webhook(
 # =========================================
 # AI 小説生成 API（有料会員専用）
 # =========================================
+def _format_ai_log_model(provider: str | None, model: str | None) -> str | None:
+    if not provider and not model:
+        return None
+    provider = (provider or "").strip().lower()
+    model = (model or "").strip()
+    if provider and model:
+        if model.startswith(f"{provider}:"):
+            return model
+        return f"{provider}:{model}"
+    return model or provider
+
+
 @app.post("/api/ai/novels/generate", response_model=AINovelResponse)
 async def generate_ai_novel(
     req: AINovelRequest,
@@ -1364,7 +1377,9 @@ async def generate_ai_novel(
         guest_id = get_or_set_ai_guest_id(request, response)
         usage = require_guest_ai_quota(db, guest_id)
 
-        provider = provider_from_model(getattr(req, "model", None))
+        provider = provider_from_request(req)
+        if getattr(req, "provider", None) is None and provider == "openai":
+            provider = provider_from_model(getattr(req, "model", None))
         if provider == "deepseek":
             resp = await call_deepseek_novel_api(req)
         elif provider == "openrouter":
@@ -1401,7 +1416,9 @@ async def generate_ai_novel(
         )
 
     # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
-    provider = provider_from_model(getattr(req, "model", None))
+    provider = provider_from_request(req)
+    if getattr(req, "provider", None) is None and provider == "openai":
+        provider = provider_from_model(getattr(req, "model", None))
     if provider == "deepseek":
         resp = await call_deepseek_novel_api(req)
     elif provider == "openrouter":
@@ -1415,13 +1432,14 @@ async def generate_ai_novel(
 
     # 使用モデル・トークン数（取れなければ None のまま）
     model_used = getattr(resp, "model", None) or getattr(req, "model", None) or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+    model_log = _format_ai_log_model(provider, model_used)
     tokens_used = getattr(resp, "used_tokens", None)
 
     log = models.AIGenerateLog(
         user_id=user.id,
         prompt_summary=prompt_summary,
         tokens_used=tokens_used,
-        model=model_used,
+        model=model_log,
     )
     db.add(log)
     db.commit()
@@ -1448,11 +1466,17 @@ async def generate_ai_episode_continue(
         if characters_hint
         else ""
     )
+    r18_note = (
+        "※成人向けの内容を許可します。性的描写を含めても構いません。\n"
+        if getattr(req, "r18", False)
+        else "※一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。\n"
+    )
 
     # --- プロンプト構築 ---
     prompt = f"""あなたは小説家です。
 以下のエピソードの続きとなる文章を、小説として自然につながるように書いてください。
 
+{r18_note}
 【前の話の本文】
 {ep.body}
 
@@ -1462,7 +1486,9 @@ async def generate_ai_episode_continue(
 
 """
 
-    provider = provider_from_model(getattr(req, "model", None))
+    provider = provider_from_request(req)
+    if getattr(req, "provider", None) is None and provider == "openai":
+        provider = provider_from_model(getattr(req, "model", None))
     if provider == "deepseek":
         ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
     elif provider == "openrouter":
@@ -1475,7 +1501,10 @@ async def generate_ai_episode_continue(
         user_id=user.id,
         prompt_summary=f"EP#{episode_id} の続き",
         tokens_used=ai_resp.used_tokens,
-        model=getattr(ai_resp, "model", None) or getattr(req, "model", None),
+        model=_format_ai_log_model(
+            provider,
+            getattr(ai_resp, "model", None) or getattr(req, "model", None),
+        ),
     )
     db.add(log)
     db.commit()
