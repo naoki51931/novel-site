@@ -364,6 +364,10 @@ export default function Login() {
           <button className="btn btn-border" type="submit" disabled={loading}>
             {loading ? "送信中..." : "認証コードを送信"}
           </button>
+
+          <div style={{ marginTop: 12, fontSize: 12 }}>
+            <Link to="/reset-password">パスワードを忘れた場合</Link>
+          </div>
         </form>
       )}
 

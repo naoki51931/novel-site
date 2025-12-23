@@ -28,7 +28,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
@@ -215,6 +215,7 @@ app.add_middleware(
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change_me")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
 
 FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
 PREMIUM_REVALIDATE_DAYS = int(os.getenv("PREMIUM_REVALIDATE_DAYS", "30"))
@@ -257,6 +258,10 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def create_access_token(data: dict) -> str:
@@ -718,6 +723,15 @@ class UserLogin(BaseModel):
     password: str
 
 
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -764,6 +778,120 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
     revalidate_premium_on_login(user, db)
     token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token)
+
+
+def send_password_reset_email(to_email: str, reset_url: str, expires_minutes: int) -> None:
+    """
+    パスワード再設定リンク送信用メール関数。
+    SMTP_* の環境変数が設定されていればメール送信を試みる。
+    （失敗してもログ出すだけで処理は続行）
+    """
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS or not to_email:
+        print(f"[password-reset] SMTP設定が不足しているためログにのみ出力: url={reset_url}, to={to_email}")
+        return
+
+    subject = "小説投稿サイト パスワード再設定"
+    body = (
+        "以下のリンクからパスワードを再設定してください。\n\n"
+        f"{reset_url}\n\n"
+        f"このリンクは {expires_minutes} 分間のみ有効です。\n"
+        "心当たりがない場合は、このメールは破棄してください。"
+    )
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        print(f"[password-reset] メール送信成功 to={to_email}")
+    except Exception as e:
+        print(f"[password-reset] メール送信失敗 to={to_email}, err={e!r}")
+
+
+@app.post("/api/auth/password-reset/request")
+def password_reset_request(payload: PasswordResetRequest, db: Session = Depends(get_db)):
+    """
+    パスワード再設定メールを送る。存在しないメールでも 200 を返す。
+    """
+    email = (payload.email or "").strip()
+    if not email:
+        return {"ok": True}
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        return {"ok": True}
+
+    now = datetime.utcnow()
+    db.query(models.PasswordResetToken).filter(
+        models.PasswordResetToken.user_id == user.id,
+        models.PasswordResetToken.consumed == False,
+        models.PasswordResetToken.expires_at >= now,
+    ).update(
+        {"consumed": True},
+        synchronize_session=False,
+    )
+
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_reset_token(raw_token)
+    expires_at = now + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
+    reset_token = models.PasswordResetToken(
+        user_id=user.id,
+        email=email,
+        token_hash=token_hash,
+        created_at=now,
+        expires_at=expires_at,
+        consumed=False,
+    )
+    db.add(reset_token)
+    db.commit()
+
+    reset_base = FRONTEND_ORIGIN.rstrip("/") or "http://localhost:5173"
+    reset_url = f"{reset_base}/reset-password?token={raw_token}"
+    send_password_reset_email(email, reset_url, PASSWORD_RESET_EXPIRE_MINUTES)
+    return {"ok": True}
+
+
+@app.post("/api/auth/password-reset/confirm")
+def password_reset_confirm(payload: PasswordResetConfirm, db: Session = Depends(get_db)):
+    """
+    トークンと新パスワードでパスワードを更新する。
+    """
+    token = (payload.token or "").strip()
+    if not token:
+        raise HTTPException(400, "トークンが無効です")
+    if not (payload.new_password or "").strip():
+        raise HTTPException(400, "新しいパスワードを入力してください")
+
+    now = datetime.utcnow()
+    token_hash = _hash_reset_token(token)
+    record = (
+        db.query(models.PasswordResetToken)
+        .filter(
+            models.PasswordResetToken.token_hash == token_hash,
+            models.PasswordResetToken.consumed == False,
+            models.PasswordResetToken.expires_at >= now,
+        )
+        .order_by(models.PasswordResetToken.created_at.desc())
+        .first()
+    )
+    if not record:
+        raise HTTPException(400, "トークンが無効か期限切れです")
+
+    user = db.query(models.User).get(record.user_id)
+    if not user:
+        raise HTTPException(400, "ユーザーが見つかりません")
+
+    user.password_hash = hash_password(payload.new_password)
+    record.consumed = True
+    db.add(user)
+    db.add(record)
+    db.commit()
+    return {"ok": True}
 
 
 def _oauth_redirect_uri(provider: str) -> str:
