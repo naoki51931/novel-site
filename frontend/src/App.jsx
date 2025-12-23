@@ -19,6 +19,7 @@ import UserPage from "./pages/UserPage";
 import AINovelPage from "./pages/AINovelPage";
 import AiLogsPage from "./pages/AiLogsPage";
 import DirectMessageThread from "./pages/DirectMessageThread";
+import ResetPassword from "./pages/ResetPassword";
 
 
 export default function App() {
@@ -134,6 +135,7 @@ export default function App() {
         <Route path="/mypage/settings" element={<AccountSettings />} />
           <Route path="/" element={<Home query={query} />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
