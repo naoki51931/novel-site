@@ -4,6 +4,7 @@ import { useNavigate, Link } from "react-router-dom";
 const API_BASE = "";
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
+const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
 
 function loadPendingAiPost() {
   try {
@@ -28,6 +29,17 @@ function savePendingAiPostError(message) {
     localStorage.setItem(PENDING_AI_POST_ERROR_KEY, message);
   } catch {
     // ignore
+  }
+}
+
+function consumePostLoginRedirect() {
+  try {
+    const path = localStorage.getItem(POST_LOGIN_REDIRECT_KEY);
+    if (!path) return null;
+    localStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+    return path;
+  } catch {
+    return null;
   }
 }
 
@@ -118,10 +130,15 @@ export default function Login() {
       // トークンとユーザー名を保存
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("username", username);
+      const redirectPath = consumePostLoginRedirect();
 
       const pending = loadPendingAiPost();
       if (!pending || !pending.body) {
-        navigate("/mypage");
+        if (redirectPath && redirectPath.startsWith("/")) {
+          navigate(redirectPath);
+        } else {
+          navigate("/mypage");
+        }
         return;
       }
 

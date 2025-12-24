@@ -15,6 +15,7 @@ function getAuthToken() {
 
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
+const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 
 function savePendingAiPost(data) {
   try {
@@ -141,6 +142,64 @@ export default function AINovelPage() {
   const [lastGenerateParams, setLastGenerateParams] = useState(null);
 
   const navigate = useNavigate();
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AI_NOVEL_DRAFT_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (typeof draft.titleHint === "string") setTitleHint(draft.titleHint);
+      if (typeof draft.genre === "string") setGenre(draft.genre);
+      if (typeof draft.characters === "string") setCharacters(draft.characters);
+      if (typeof draft.tone === "string") setTone(draft.tone);
+      if (typeof draft.length === "string") setLength(draft.length);
+      if (typeof draft.model === "string") setModel(draft.model);
+      if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
+      if (draft.result && typeof draft.result === "object") setResult(draft.result);
+      if (typeof draft.continuationBody === "string") setContinuationBody(draft.continuationBody);
+      if (draft.lastGenerateParams && typeof draft.lastGenerateParams === "object") {
+        setLastGenerateParams(draft.lastGenerateParams);
+      }
+    } catch (e) {
+      console.error("failed to load ai novel draft", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const payload = {
+        titleHint,
+        genre,
+        characters,
+        tone,
+        length,
+        model,
+        isR18,
+        result,
+        continuationBody,
+        lastGenerateParams,
+        saved_at: new Date().toISOString(),
+      };
+      try {
+        localStorage.setItem(AI_NOVEL_DRAFT_KEY, JSON.stringify(payload));
+      } catch (e) {
+        console.error("failed to save ai novel draft", e);
+      }
+    }, 60 * 1000);
+
+    return () => clearInterval(timer);
+  }, [
+    titleHint,
+    genre,
+    characters,
+    tone,
+    length,
+    model,
+    isR18,
+    result,
+    continuationBody,
+    lastGenerateParams,
+  ]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

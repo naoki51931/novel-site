@@ -27,11 +27,67 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
+  const LOGIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     setQuery(params.get("q") ?? "");
   }, [location.search]);
+
+  useEffect(() => {
+    const isLoginRoute = () => {
+      const path = location.pathname;
+      return (
+        path === "/login" ||
+        path === "/register" ||
+        path === "/reset-password" ||
+        path === "/oauth/callback"
+      );
+    };
+
+    const isTokenExpired = (token) => {
+      try {
+        const parts = token.split(".");
+        if (parts.length < 2) return false;
+        const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const padded = base64 + "===".slice((base64.length + 3) % 4);
+        const payload = JSON.parse(atob(padded));
+        const exp = payload?.exp;
+        if (!exp) return false;
+        return Date.now() >= exp * 1000;
+      } catch {
+        return false;
+      }
+    };
+
+    const checkLoginStatus = () => {
+      const token =
+        typeof window !== "undefined"
+          ? localStorage.getItem("token") || localStorage.getItem("access_token")
+          : null;
+      if (token && isTokenExpired(token)) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("access_token");
+      }
+
+      const hasToken =
+        typeof window !== "undefined" ? !!localStorage.getItem("token") : false;
+      if (!hasToken && !isLoginRoute()) {
+        const redirectPath = `${location.pathname}${location.search}${location.hash || ""}`;
+        try {
+          localStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectPath);
+        } catch {
+          // ignore
+        }
+        navigate("/login", { replace: true });
+      }
+    };
+
+    checkLoginStatus();
+    const timer = setInterval(checkLoginStatus, LOGIN_CHECK_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [location.pathname, location.search, location.hash, navigate]);
 
   const username =
     typeof window !== "undefined" ? localStorage.getItem("username") : null;

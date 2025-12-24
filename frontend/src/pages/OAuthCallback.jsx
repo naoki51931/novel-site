@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
 
+const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
+
 export default function OAuthCallback() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -32,7 +34,19 @@ export default function OAuthCallback() {
     }
 
     const redirect = params.get("redirect");
-    const nextPath = redirect && redirect.startsWith("/") ? redirect : "/mypage";
+    let nextPath = redirect && redirect.startsWith("/") ? redirect : null;
+    if (!nextPath) {
+      try {
+        const stored = localStorage.getItem(POST_LOGIN_REDIRECT_KEY);
+        if (stored && stored.startsWith("/")) {
+          nextPath = stored;
+        }
+        localStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+      } catch {
+        // ignore
+      }
+    }
+    if (!nextPath) nextPath = "/mypage";
     navigate(nextPath, { replace: true });
   }, [location.search, navigate]);
 
