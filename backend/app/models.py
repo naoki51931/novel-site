@@ -90,6 +90,7 @@ class OAuthAccount(Base):
 # =========================
 
 age_limit_enum = Enum("all", "r15", "r18", name="age_limit_enum")
+creative_type_enum = Enum("original", "fanfic", name="creative_type_enum")
 
 
 class Novel(Base):
@@ -106,6 +107,7 @@ class Novel(Base):
 
     age_limit = Column(age_limit_enum, nullable=False, server_default="all")
     is_ai_generated = Column(Boolean, nullable=False, server_default="0")
+    creative_type = Column(creative_type_enum, nullable=False, server_default="original")
 
     author = relationship("User", back_populates="novels")
     episodes = relationship(

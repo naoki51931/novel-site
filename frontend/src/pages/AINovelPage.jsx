@@ -127,12 +127,15 @@ export default function AINovelPage() {
   const [continueInfoError, setContinueInfoError] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [continuing, setContinuing] = useState(false);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
   const [result, setResult] = useState(null);
+  const [continuationBody, setContinuationBody] = useState("");
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
+  const [lastGenerateParams, setLastGenerateParams] = useState(null);
 
   const navigate = useNavigate();
 
@@ -247,6 +250,46 @@ export default function AINovelPage() {
     setPostEpisodeTitle("");
   }, [result, isContinueMode]);
 
+  const getCombinedBody = () => {
+    if (!result?.body) return "";
+    if (!continuationBody) return result.body;
+    return `${result.body}\n\n${continuationBody}`;
+  };
+
+  const buildContinuationPrompt = (baseBody, params) => {
+    const lengthMap = {
+      short: "800〜1200文字程度",
+      medium: "2000〜3000文字程度",
+      long: "4000〜6000文字程度",
+    };
+    const lengthText = lengthMap[params.length || "medium"] || lengthMap.medium;
+    const r18Note = params.isR18
+      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
+      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
+    const titleHintText = params.titleHint || "指定なし";
+    const genreText = params.genre || "指定なし";
+    const toneText = params.tone || "指定なし";
+    const charactersText = params.characters || "指定なし";
+
+    return [
+      "あなたは日本語のライトノベル作家です。",
+      "以下の小説本文の続きを自然につながるように書いてください。",
+      r18Note,
+      "",
+      "【前に書いた本文】",
+      baseBody,
+      "",
+      "【参考情報】",
+      `- タイトルのイメージ: ${titleHintText}`,
+      `- ジャンル: ${genreText}`,
+      `- 雰囲気: ${toneText}`,
+      `- 登場人物・設定: ${charactersText}`,
+      `- 文字数の目安: ${lengthText}`,
+      "",
+      "出力は JSON の body に続き本文のみを書いてください（タイトルは変更しない）。",
+    ].join("\n");
+  };
+
   const handleGenerate = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -254,6 +297,7 @@ export default function AINovelPage() {
     setQuotaError("");
     setPremiumError("");
     setResult(null);
+    setContinuationBody("");
 
     const token = getAuthToken();
     if (episodeId && !token) {
@@ -266,6 +310,15 @@ export default function AINovelPage() {
     }
 
     try {
+      const params = {
+        titleHint,
+        genre,
+        characters,
+        tone,
+        length,
+        model,
+        isR18,
+      };
       // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
       const endpoint = episodeId
         ? `/api/ai/episodes/${episodeId}/continue`
@@ -318,12 +371,93 @@ export default function AINovelPage() {
       }
 
       const data = await res.json();
+      setLastGenerateParams(params);
       setResult(normalizeAINovelResponse(data));
     } catch (err) {
       console.error(err);
       setError(err.message || "生成中にエラーが発生しました。");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGenerateContinuation = async () => {
+    if (!result?.body) return;
+    setContinuing(true);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+
+    const token = getAuthToken();
+    const params = lastGenerateParams || {
+      titleHint,
+      genre,
+      characters,
+      tone,
+      length,
+      model,
+      isR18,
+    };
+
+    try {
+      const prompt = buildContinuationPrompt(getCombinedBody(), params);
+      const res = await fetch("/api/ai/novels/generate", {
+        method: "POST",
+        headers: token
+          ? {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            }
+          : { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title_hint: params.titleHint || null,
+          genre: params.genre || null,
+          characters: params.characters || null,
+          tone: params.tone || null,
+          length: params.length || "medium",
+          model: params.model || "gpt-4.1-mini",
+          r18: params.isR18,
+          prompt,
+        }),
+      });
+
+      if (res.status === 401 && token) {
+        setError("ログインの有効期限が切れています。再ログインしてください。");
+        setTimeout(() => navigate("/login"), 800);
+        setContinuing(false);
+        return;
+      }
+
+      if (res.status === 402) {
+        setPremiumError("この機能は有料プラン専用です。マイページからプランをご確認ください。");
+        setContinuing(false);
+        return;
+      }
+
+      if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        setQuotaError(
+          data.detail || "本日の AI 小説生成の上限回数に達しました。明日またお試しください。"
+        );
+        setContinuing(false);
+        return;
+      }
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `生成に失敗しました (status=${res.status})`);
+      }
+
+      const data = normalizeAINovelResponse(await res.json());
+      const nextBody = (data?.body || "").trim();
+      if (nextBody) {
+        setContinuationBody((prev) => (prev ? `${prev}\n\n${nextBody}` : nextBody));
+      }
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "生成中にエラーが発生しました。");
+    } finally {
+      setContinuing(false);
     }
   };
 
@@ -335,11 +469,12 @@ export default function AINovelPage() {
     setPremiumError("");
 
     const token = getAuthToken();
+    const combinedBody = getCombinedBody();
     if (!token) {
       savePendingAiPost({
         kind: "new_novel",
         generated_title: result.generated_title || "AI生成小説",
-        body: result.body,
+        body: combinedBody,
         age_limit: isR18 ? "r18" : "all",
         createdAt: Date.now(),
       });
@@ -378,7 +513,7 @@ export default function AINovelPage() {
       const episodePayload = {
         episode_number: 1,
         title: "第1話",
-        body: result.body,
+        body: combinedBody,
         tag_names: [],
       };
       const epRes = await fetch(`/api/novels/${novelId}/episodes`, {
@@ -419,13 +554,14 @@ export default function AINovelPage() {
     setPremiumError("");
 
     const token = getAuthToken();
+    const combinedBody = getCombinedBody();
     if (!token) {
       savePendingAiPost({
         kind: "next_episode",
         continue_novel_id: continueNovelId,
         post_episode_title: postEpisodeTitle || "",
         generated_title: result.generated_title || "続き",
-        body: result.body,
+        body: combinedBody,
         createdAt: Date.now(),
       });
       setError("投稿にはログインが必要です。ログイン画面へ移動します。");
@@ -455,7 +591,7 @@ export default function AINovelPage() {
       const episodePayload = {
         episode_number: nextNumber,
         title: (postEpisodeTitle || "").trim() || `第${nextNumber}話`,
-        body: result.body,
+        body: combinedBody,
         tag_names: [],
       };
       const epRes = await fetch(`/api/novels/${continueNovelId}/episodes`, {
@@ -485,7 +621,7 @@ export default function AINovelPage() {
 
   const handleCopyToClipboard = async () => {
     if (!result) return;
-    const text = `${result.generated_title}\n\n${result.body}`;
+    const text = `${result.generated_title}\n\n${getCombinedBody()}`;
     try {
       await navigator.clipboard.writeText(text);
       alert("クリップボードにコピーしました。");
@@ -765,10 +901,43 @@ export default function AINovelPage() {
               overflowY: "auto",
             }}
           >
-            {result.body}
+            <span>{result.body}</span>
+            {continuationBody && (
+              <span style={{ color: "#1b7f2a" }}>{`\n\n${continuationBody}`}</span>
+            )}
           </pre>
 
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
+            {!isContinueMode && (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border)",
+                  backgroundColor: "var(--ai-result-surface)",
+                }}
+              >
+                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>続きを作成する</div>
+                <div style={{ fontSize: "0.9rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                  直前の生成結果と入力項目（タイトルのイメージ〜使用モデル）を使って続き部分を生成します。
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateContinuation}
+                  disabled={continuing || loading}
+                  style={{
+                    padding: "0.6rem 1rem",
+                    fontWeight: "bold",
+                    borderRadius: "6px",
+                    border: "1px solid #ccc",
+                    cursor: continuing ? "default" : "pointer",
+                    opacity: continuing ? 0.7 : 1,
+                  }}
+                >
+                  {continuing ? "続き生成中..." : "続きを作成する"}
+                </button>
+              </div>
+            )}
             <div
               style={{
                 padding: "0.75rem",

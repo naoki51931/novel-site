@@ -135,6 +135,33 @@ def ensure_episode_illusts_table_columns():
 
 ensure_episode_illusts_table_columns()
 
+def ensure_novels_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'novels'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "creative_type" not in existing:
+                alters.append("ADD COLUMN creative_type ENUM('original','fanfic') NOT NULL DEFAULT 'original'")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE novels {clause}"))
+    except Exception as e:
+        print("[db] ensure_novels_table_columns failed:", repr(e))
+
+
+ensure_novels_table_columns()
+
 ILLUST_TAG_RE = re.compile(r"^illust:\d{8}$")
 ILLUST_TAG_BRACKET_RE = re.compile(r"^\[\[illust:(\d{8})\]\]$")
 ALLOWED_META_TAGS = {
@@ -1535,6 +1562,7 @@ def create_novel(
         author_id=user.id,
         is_ai_generated=getattr(payload, "is_ai_generated", False),
         age_limit=getattr(payload, "age_limit", "all"),
+        creative_type=getattr(payload, "creative_type", "original"),
         like_count=0,
         is_public=getattr(payload, "is_public", True),
     )
@@ -1598,6 +1626,7 @@ def list_novels(
             "favorite_count": len(getattr(novel, "favorite_links", []) or []),
             "age_limit": getattr(novel, "age_limit", "all"),
             "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
+            "creative_type": getattr(novel, "creative_type", "original"),
             "is_public": bool(getattr(novel, "is_public", True)),
             "status": getattr(novel, "status", "public"),
             "tags": [
@@ -1662,6 +1691,8 @@ def update_novel(
 
     if payload.is_public is not None:
         novel.is_public = payload.is_public
+    if payload.creative_type is not None:
+        novel.creative_type = payload.creative_type
 
     # ★ タグ差し替え
     if payload.tag_names is not None:
@@ -1859,6 +1890,7 @@ def get_novel_detail(
         "is_premium_user": is_premium,
         "age_limit": novel.age_limit,
         "is_ai_generated": novel.is_ai_generated,
+        "creative_type": getattr(novel, "creative_type", "original"),
         "is_public": bool(getattr(novel, "is_public", True)),
         "status": getattr(novel, "status", "public"),
         "tags": tags,
@@ -2116,6 +2148,7 @@ def list_public_user_novels(
             "favorite_count": len(getattr(novel, "favorite_links", []) or []),
             "age_limit": getattr(novel, "age_limit", "all"),
             "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
+            "creative_type": getattr(novel, "creative_type", "original"),
             "is_public": True,
             "status": getattr(novel, "status", "public"),
             "tags": [
@@ -2186,6 +2219,7 @@ def list_public_user_favorites(
             "description": n.description,
             "age_limit": n.age_limit,
             "is_ai_generated": n.is_ai_generated,
+            "creative_type": getattr(n, "creative_type", "original"),
             "author_id": n.author_id,
             "author_username": n.author.username if n.author else None,
             "created_at": n.created_at,
@@ -3490,6 +3524,7 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
             "description": n.description,
             "age_limit": n.age_limit,
             "is_ai_generated": n.is_ai_generated,
+            "creative_type": getattr(n, "creative_type", "original"),
             "author_id": n.author_id,
             "author_username": n.author.username if n.author else None,
             "created_at": n.created_at,

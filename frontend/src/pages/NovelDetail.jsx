@@ -51,6 +51,16 @@ export default function NovelDetail() {
     return AGE_LABELS[ageLimit] ?? ageLimit;
   };
 
+  const CREATIVE_TYPE_LABELS = {
+    original: "オリジナル",
+    fanfic: "二次創作",
+  };
+
+  const getCreativeTypeLabel = (creativeType) => {
+    if (!creativeType) return "オリジナル";
+    return CREATIVE_TYPE_LABELS[creativeType] ?? creativeType;
+  };
+
 
   const toggleFavorite = async () => {
     const token = localStorage.getItem("token");
@@ -535,6 +545,17 @@ export default function NovelDetail() {
           }}
         >
           {getAgeLabel(novel.age_limit)}
+        </span>
+
+        <span
+          style={{
+            display: "inline-block",
+            padding: "2px 8px",
+            borderRadius: 999,
+            border: "1px solid #888",
+          }}
+        >
+          {getCreativeTypeLabel(novel.creative_type)}
         </span>
 
         {novel.is_ai_generated && (

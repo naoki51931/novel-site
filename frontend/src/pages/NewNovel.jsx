@@ -13,6 +13,7 @@ export default function NewNovel() {
 
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
+  const [creativeType, setCreativeType] = useState("original"); // オリジナル / 二次創作
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -31,6 +32,7 @@ export default function NewNovel() {
       if (draft.title) setTitle(draft.title);
       if (draft.description) setDescription(draft.description);
       if (draft.tagNamesInput) setTagNamesInput(draft.tagNamesInput);
+      if (draft.creativeType) setCreativeType(draft.creativeType);
     } catch (e) {
       console.error("failed to load draft", e);
     }
@@ -43,6 +45,7 @@ export default function NewNovel() {
         title,
         description,
         tagNamesInput,
+        creativeType,
         saved_at: new Date().toISOString(),
       };
       try {
@@ -82,6 +85,7 @@ export default function NewNovel() {
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
+        creative_type: creativeType,
       };
 
       const res = await fetch(`${API_BASE}/api/novels`, {
@@ -171,6 +175,37 @@ export default function NewNovel() {
               style={{ width: "100%", padding: 4 }}
               placeholder="例: ファンタジー, バトル, 百合"
             />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            作品種別
+            <br />
+            <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+              <label>
+                <input
+                  type="radio"
+                  name="creative_type"
+                  value="original"
+                  checked={creativeType === "original"}
+                  onChange={(e) => setCreativeType(e.target.value)}
+                  style={{ marginRight: 4 }}
+                />
+                オリジナル
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="creative_type"
+                  value="fanfic"
+                  checked={creativeType === "fanfic"}
+                  onChange={(e) => setCreativeType(e.target.value)}
+                  style={{ marginRight: 4 }}
+                />
+                二次創作
+              </label>
+            </div>
           </label>
         </div>
 

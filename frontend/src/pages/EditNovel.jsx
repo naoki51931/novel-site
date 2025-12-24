@@ -13,6 +13,7 @@ export default function EditNovel() {
   const [description, setDescription] = useState("");
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
+  const [creativeType, setCreativeType] = useState("original"); // オリジナル / 二次創作
   const [status, setStatus] = useState("public");            // "public" / "draft"
 
   // ★ タグ（カンマ区切り入力）
@@ -53,6 +54,7 @@ const [loading, setLoading] = useState(true);
         setDescription(data.description || "");
         setAgeLimit(data.age_limit || "all");
         setIsAIGenerated(!!data.is_ai_generated);
+        setCreativeType(data.creative_type || "original");
 
         // ★ tags（配列）→ "A, B" にしてセット
         if (Array.isArray(data.tags)) {
@@ -93,6 +95,7 @@ if (draft.title) setTitle(draft.title);
       if (draft.ageLimit) setAgeLimit(draft.ageLimit);
       if (typeof draft.isAIGenerated === "boolean") setIsAIGenerated(draft.isAIGenerated);
       if (draft.status) setStatus(draft.status);
+      if (draft.creativeType) setCreativeType(draft.creativeType);
 
       // ★ draft の tagsInput
       if (typeof draft.tagsInput === "string") setTagsInput(draft.tagsInput);
@@ -110,6 +113,7 @@ if (draft.title) setTitle(draft.title);
         ageLimit,
         status,
         isAIGenerated,
+        creativeType,
         tagsInput, // ★ 追加
         saved_at: new Date().toISOString(),
       };
@@ -154,6 +158,7 @@ if (draft.title) setTitle(draft.title);
           description,
           age_limit: ageLimit,
           is_ai_generated: isAIGenerated,
+          creative_type: creativeType,
           status,
           is_public: status === "public",
 
@@ -238,6 +243,37 @@ if (draft.title) setTitle(draft.title);
 
         <div style={{ marginBottom: 8 }}>
           <label>
+            作品種別
+            <br />
+            <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+              <label>
+                <input
+                  type="radio"
+                  name="creative_type"
+                  value="original"
+                  checked={creativeType === "original"}
+                  onChange={(e) => setCreativeType(e.target.value)}
+                  style={{ marginRight: 4 }}
+                />
+                オリジナル
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="creative_type"
+                  value="fanfic"
+                  checked={creativeType === "fanfic"}
+                  onChange={(e) => setCreativeType(e.target.value)}
+                  style={{ marginRight: 4 }}
+                />
+                二次創作
+              </label>
+            </div>
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
             年齢区分
             <br />
             <select
@@ -297,4 +333,3 @@ if (draft.title) setTitle(draft.title);
     </div>
   );
 }
-
