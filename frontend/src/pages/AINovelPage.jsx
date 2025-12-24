@@ -128,10 +128,13 @@ export default function AINovelPage() {
 
   const [loading, setLoading] = useState(false);
   const [continuing, setContinuing] = useState(false);
+  const [autoFillLoading, setAutoFillLoading] = useState(false);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
+  const [autoFillError, setAutoFillError] = useState("");
+  const [autoFillPreview, setAutoFillPreview] = useState(null);
   const [result, setResult] = useState(null);
   const [continuationBody, setContinuationBody] = useState("");
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
@@ -296,6 +299,7 @@ export default function AINovelPage() {
     setError("");
     setQuotaError("");
     setPremiumError("");
+    setAutoFillError("");
     setResult(null);
     setContinuationBody("");
 
@@ -387,6 +391,7 @@ export default function AINovelPage() {
     setError("");
     setQuotaError("");
     setPremiumError("");
+    setAutoFillError("");
 
     const token = getAuthToken();
     const params = lastGenerateParams || {
@@ -467,6 +472,7 @@ export default function AINovelPage() {
     setError("");
     setQuotaError("");
     setPremiumError("");
+    setAutoFillError("");
 
     const token = getAuthToken();
     const combinedBody = getCombinedBody();
@@ -552,6 +558,7 @@ export default function AINovelPage() {
     setError("");
     setQuotaError("");
     setPremiumError("");
+    setAutoFillError("");
 
     const token = getAuthToken();
     const combinedBody = getCombinedBody();
@@ -630,6 +637,114 @@ export default function AINovelPage() {
     }
   };
 
+  const handleFixJsonOutput = () => {
+    if (!result?.body) return;
+    const raw = (result.body || "").trim();
+    const stripFence = (s) => {
+      const t = (s || "").trim();
+      if (!t.startsWith("```")) return t;
+      const lines = t.split("\n");
+      if (lines.length && lines[0].startsWith("```")) lines.shift();
+      if (lines.length && lines[lines.length - 1].trim() === "```") lines.pop();
+      return lines.join("\n").trim();
+    };
+
+    const tryParse = (s) => {
+      const cleaned = stripFence(s);
+      if (!cleaned.startsWith("{")) return null;
+      try {
+        const parsed = JSON.parse(cleaned);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch {
+        return null;
+      }
+      return null;
+    };
+
+    let parsed = tryParse(raw);
+    if (!parsed && raw.includes('\\"')) {
+      parsed = tryParse(raw.replace(/\\"/g, '"'));
+    }
+    if (!parsed) {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) parsed = tryParse(m[0]);
+    }
+
+    if (!parsed) {
+      setError("JSON形式の修正に失敗しました。");
+      return;
+    }
+
+    const nextTitle =
+      parsed.title ||
+      parsed.generated_title ||
+      parsed.generatedTitle ||
+      result.generated_title;
+    const nextBody =
+      parsed.body ||
+      parsed.text ||
+      parsed.content ||
+      parsed.story ||
+      result.body;
+
+    setResult((prev) => ({
+      ...(prev || {}),
+      generated_title: nextTitle || "タイトル未設定",
+      body: nextBody || "",
+    }));
+  };
+
+  const handleAutoFill = async () => {
+    const q = (genre || "").trim();
+    const c = (characters || "").trim();
+    if (!q && !c) {
+      setAutoFillError("ジャンルか登場人物・設定を入力してから自動補完してください。");
+      return;
+    }
+    setAutoFillLoading(true);
+    setAutoFillError("");
+    try {
+      const params = new URLSearchParams();
+      if (q) params.set("query", q);
+      if (c) params.set("characters", c);
+      const res = await fetch(`/api/ai/novels/auto-fill?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || `自動補完に失敗しました (status=${res.status})`);
+      }
+      const appendGenre = (data.genre_append || "").trim();
+      const appendCharacters = (data.characters_append || "").trim();
+      if (appendGenre) {
+        setGenre((prev) => {
+          const base = (prev || "").trim();
+          return base ? `${base} / ${appendGenre}` : appendGenre;
+        });
+      }
+      if (appendCharacters) {
+        setCharacters((prev) => {
+          const base = (prev || "").trim();
+          return base ? `${base}\n\n${appendCharacters}` : appendCharacters;
+        });
+      }
+      if (!appendGenre && !appendCharacters) {
+        setAutoFillError("検索結果から補完できる要素が見つかりませんでした。");
+      }
+      setAutoFillPreview({
+        query: data.query || q,
+        charactersQuery: data.characters_query || c,
+        terms: Array.isArray(data.terms) ? data.terms : [],
+        genreAppend: appendGenre,
+        charactersAppend: appendCharacters,
+        sources: Array.isArray(data.sources) ? data.sources : [],
+      });
+    } catch (e) {
+      console.error(e);
+      setAutoFillError(e.message || "自動補完中にエラーが発生しました。");
+    } finally {
+      setAutoFillLoading(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "1.5rem" }}>
       <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>
@@ -690,6 +805,91 @@ export default function AINovelPage() {
               placeholder="例: ファンタジー / 日常 / SF / ラブコメ"
               style={{ width: "100%", padding: "0.5rem" }}
             />
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
+              <button
+                type="button"
+                onClick={handleAutoFill}
+                disabled={autoFillLoading || loading}
+                className="btn btn-border"
+              >
+                {autoFillLoading ? "調査中..." : "ジャンル/設定を自動補完"}
+              </button>
+              <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
+                入力したジャンルを検索して反映
+              </span>
+            </div>
+            <div style={{ marginTop: "0.4rem", fontSize: "0.8rem", color: "var(--muted-text)" }}>
+              ※ 登場人物・設定で「"キャラ名"」のようにダブルクォートで囲むと、分割せずそのまま検索します。
+            </div>
+            {autoFillError && (
+              <div style={{ marginTop: "0.5rem", color: "#842029", fontSize: "0.9rem" }}>
+                {autoFillError}
+              </div>
+            )}
+            {autoFillPreview && (
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  padding: "0.75rem",
+                  border: "1px solid var(--border)",
+                  borderRadius: "6px",
+                  backgroundColor: "var(--ai-result-surface)",
+                }}
+              >
+                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                  自動補完で追加した内容
+                </div>
+                {autoFillPreview.terms && autoFillPreview.terms.length > 0 && (
+                  <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                    検索語: {autoFillPreview.terms.join(" / ")}
+                  </div>
+                )}
+                {autoFillPreview.charactersQuery && (
+                  <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                    登場人物・設定の検索元: {autoFillPreview.charactersQuery}
+                  </div>
+                )}
+                {autoFillPreview.genreAppend && (
+                  <div style={{ marginBottom: "0.5rem" }}>
+                    <strong>ジャンルに追加:</strong> {autoFillPreview.genreAppend}
+                  </div>
+                )}
+                {autoFillPreview.charactersAppend && (
+                  <div style={{ marginBottom: "0.5rem" }}>
+                    <strong>登場人物・設定に追加:</strong>
+                    <pre
+                      style={{
+                        marginTop: "0.35rem",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        backgroundColor: "#fff",
+                        padding: "0.5rem",
+                        borderRadius: "4px",
+                        border: "1px solid var(--border)",
+                        maxHeight: "240px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {autoFillPreview.charactersAppend}
+                    </pre>
+                  </div>
+                )}
+                {autoFillPreview.sources && autoFillPreview.sources.length > 0 && (
+                  <div style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
+                    参照:
+                    <ul style={{ marginTop: "0.35rem", paddingLeft: "1.2rem" }}>
+                      {autoFillPreview.sources.map((s, idx) => (
+                        <li key={`${s.link || s.title || "source"}-${idx}`}>
+                          <a href={s.link} target="_blank" rel="noreferrer">
+                            {s.title || s.link}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -866,20 +1066,36 @@ export default function AINovelPage() {
             <h2 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>
               {result.generated_title || "生成された小説"}
             </h2>
-            <button
-              type="button"
-              onClick={handleCopyToClipboard}
-              style={{
-                height: "2.2rem",
-                alignSelf: "center",
-                padding: "0.3rem 0.8rem",
-                borderRadius: "4px",
-                border: "1px solid var(--border)",
-                cursor: "pointer",
-              }}
-            >
-              文章をコピー
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <button
+                type="button"
+                onClick={handleFixJsonOutput}
+                style={{
+                  height: "2.2rem",
+                  alignSelf: "center",
+                  padding: "0.3rem 0.8rem",
+                  borderRadius: "4px",
+                  border: "1px solid var(--border)",
+                  cursor: "pointer",
+                }}
+              >
+                JSON出力を修正
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyToClipboard}
+                style={{
+                  height: "2.2rem",
+                  alignSelf: "center",
+                  padding: "0.3rem 0.8rem",
+                  borderRadius: "4px",
+                  border: "1px solid var(--border)",
+                  cursor: "pointer",
+                }}
+              >
+                文章をコピー
+              </button>
+            </div>
           </div>
 
           <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>

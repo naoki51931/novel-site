@@ -6,7 +6,7 @@ import secrets
 import re
 import time
 import logging
-from urllib.parse import urlencode, quote, parse_qs
+from urllib.parse import urlencode, quote, parse_qs, urlparse
 import json
 import html
 import io
@@ -16,6 +16,10 @@ from typing import Optional, List
 import jwt
 import stripe
 import httpx
+try:
+    from janome.tokenizer import Tokenizer  # type: ignore
+except Exception:
+    Tokenizer = None
 from fastapi import (
     FastAPI,
     Depends,
@@ -65,6 +69,9 @@ try:
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
+
+JANOME_AVAILABLE = Tokenizer is not None
+_janome_tokenizer = Tokenizer() if JANOME_AVAILABLE else None
 
 # =========================================
 # DB 初期化
@@ -162,6 +169,103 @@ def ensure_novels_table_columns():
 
 ensure_novels_table_columns()
 
+GOOGLE_CSE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "").strip()
+GOOGLE_CSE_CX = os.getenv("GOOGLE_CSE_CX", "").strip()
+
+PREFERRED_CSE_HOSTS = (
+    "wikipedia.org",
+    "fandom.com",
+    "atwiki.jp",
+    "pixiv.net",
+    "dic.pixiv.net",
+)
+
+def _is_preferred_cse_host(url: str | None) -> bool:
+    if not url:
+        return False
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    return any(h in host for h in PREFERRED_CSE_HOSTS)
+
+def _build_auto_fill_snippets(items: list[dict]) -> tuple[str, str]:
+    if not items:
+        return ("", "")
+    titles = [i.get("title", "").strip() for i in items if i.get("title")]
+    titles = [t for t in titles if t]
+    genre_append = " / ".join(titles[:3])
+
+    lines = []
+    for item in items:
+        title = (item.get("title") or "").strip()
+        snippet = (item.get("snippet") or "").strip()
+        if title and snippet:
+            lines.append(f"- {title}: {snippet}")
+        elif title:
+            lines.append(f"- {title}")
+        elif snippet:
+            lines.append(f"- {snippet}")
+        if sum(len(line) for line in lines) >= 1000:
+            break
+    characters_append = "\n".join(lines)
+    if len(characters_append) > 1000:
+        characters_append = characters_append[:1000].rstrip()
+    return (genre_append, characters_append)
+
+def _split_search_terms(query: str) -> list[str]:
+    parts = re.split(r"[,/、\\n]+", query)
+    terms = [p.strip() for p in parts if p.strip()]
+    return terms[:3]
+
+def _split_character_terms(text: str) -> list[str]:
+    if not text:
+        return []
+    if not JANOME_AVAILABLE or _janome_tokenizer is None:
+        parts = re.split(r"[\\s、,。.!?！？/]+", text)
+        terms = [p.strip() for p in parts if p.strip()]
+        return terms[:15]
+
+    quoted_matches = re.findall(r'["“”]([^"“”]+)["“”]', text)
+    protected = [s.strip() for s in quoted_matches if s.strip()]
+    if protected:
+        for s in quoted_matches:
+            text = text.replace(s, " ")
+
+    person_terms: list[str] = []
+    sahen_terms: list[str] = []
+    other_terms: list[str] = []
+    seen: set[str] = set()
+    for term in protected:
+        if term in seen:
+            continue
+        seen.add(term)
+        person_terms.append(term)
+    for token in _janome_tokenizer.tokenize(text):
+        surface = (token.surface or "").strip()
+        if not surface:
+            continue
+        pos_parts = (token.part_of_speech or "").split(",")
+        pos = pos_parts[0] if pos_parts else ""
+        if pos != "名詞":
+            continue
+        if len(surface) == 1 and not surface.isalnum():
+            continue
+        if surface in seen:
+            continue
+        seen.add(surface)
+        if len(pos_parts) >= 3 and pos_parts[1] == "固有名詞" and pos_parts[2] == "人名":
+            person_terms.append(surface)
+        elif len(pos_parts) >= 2 and pos_parts[1] == "固有名詞":
+            person_terms.append(surface)
+        elif len(pos_parts) >= 2 and pos_parts[1] == "サ変接続":
+            sahen_terms.append(surface)
+        else:
+            other_terms.append(surface)
+
+    ordered = person_terms + sahen_terms + other_terms
+    return ordered[:15]
+
 ILLUST_TAG_RE = re.compile(r"^illust:\d{8}$")
 ILLUST_TAG_BRACKET_RE = re.compile(r"^\[\[illust:(\d{8})\]\]$")
 ALLOWED_META_TAGS = {
@@ -242,7 +346,7 @@ app.add_middleware(
 # =========================================
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change_me")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 300
 PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
 
 FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
@@ -1472,6 +1576,84 @@ async def generate_ai_novel(
     db.commit()
 
     return resp
+
+@app.get("/api/ai/novels/auto-fill")
+async def auto_fill_ai_novel_inputs(query: str, characters: str | None = None):
+    q = (query or "").strip()
+    c = (characters or "").strip()
+    if not q and not c:
+        raise HTTPException(400, "検索キーワードが空です。")
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_CX:
+        raise HTTPException(500, "Google Custom Search の API 設定がありません。")
+
+    terms = []
+    if q:
+        terms.extend(_split_search_terms(q))
+    if c:
+        terms.extend(_split_character_terms(c))
+    if not terms:
+        raise HTTPException(400, "検索キーワードが空です。")
+    # 重複排除（順序維持）
+    seen = set()
+    merged_terms = []
+    for term in terms:
+        if term in seen:
+            continue
+        seen.add(term)
+        merged_terms.append(term)
+    terms = merged_terms[:5]
+
+    aggregated_items: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for term in terms:
+                params = {
+                    "key": GOOGLE_CSE_API_KEY,
+                    "cx": GOOGLE_CSE_CX,
+                    "q": term,
+                    "num": 5,
+                    "gl": "jp",
+                    "hl": "ja",
+                    "lr": "lang_ja",
+                }
+                res = await client.get(
+                    "https://www.googleapis.com/customsearch/v1",
+                    params=params,
+                )
+                if res.status_code != 200:
+                    detail = res.text[:300]
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"検索 API が失敗しました (status={res.status_code}): {detail}",
+                    )
+                data = res.json() if res.content else {}
+                items = data.get("items") or []
+                if isinstance(items, list):
+                    aggregated_items.extend(items)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"検索 API の呼び出しに失敗しました: {e!r}")
+
+    preferred = [i for i in aggregated_items if _is_preferred_cse_host(i.get("link"))]
+    picked = preferred[:5] if preferred else aggregated_items[:5]
+    genre_append, characters_append = _build_auto_fill_snippets(picked)
+
+    return {
+        "query": q,
+        "characters_query": c,
+        "terms": terms,
+        "genre_append": genre_append,
+        "characters_append": characters_append,
+        "sources": [
+            {
+                "title": (i.get("title") or "").strip(),
+                "link": i.get("link"),
+                "snippet": (i.get("snippet") or "").strip(),
+            }
+            for i in picked
+        ],
+    }
 
 @app.post("/api/ai/episodes/{episode_id}/continue")
 async def generate_ai_episode_continue(

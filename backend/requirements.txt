@@ -11,3 +11,4 @@ openai
 pillow
 httpx
 email-validator
+janome
