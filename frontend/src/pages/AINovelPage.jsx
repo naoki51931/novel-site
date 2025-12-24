@@ -136,12 +136,41 @@ export default function AINovelPage() {
   const [premiumError, setPremiumError] = useState("");
   const [autoFillError, setAutoFillError] = useState("");
   const [autoFillPreview, setAutoFillPreview] = useState(null);
+  const [guestRemaining, setGuestRemaining] = useState(null);
+  const [userRemaining, setUserRemaining] = useState(null);
   const [result, setResult] = useState(null);
   const [continuationBody, setContinuationBody] = useState("");
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
   const [lastGenerateParams, setLastGenerateParams] = useState(null);
 
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchRemaining = async () => {
+      try {
+        const token = getAuthToken();
+        const res = await fetch("/api/ai/novels/remaining", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+        if (typeof data?.guest_remaining === "number") {
+          setGuestRemaining(data.guest_remaining);
+        } else {
+          setGuestRemaining(null);
+        }
+        if (typeof data?.user_remaining === "number") {
+          setUserRemaining(data.user_remaining);
+        } else {
+          setUserRemaining(null);
+        }
+      } catch (e) {
+        console.error("failed to load ai remaining", e);
+      }
+    };
+
+    fetchRemaining();
+  }, []);
 
   useEffect(() => {
     try {
@@ -434,6 +463,16 @@ export default function AINovelPage() {
       }
 
       const data = await res.json();
+      if (typeof data?.guest_remaining === "number") {
+        setGuestRemaining(data.guest_remaining);
+      } else {
+        setGuestRemaining(null);
+      }
+      if (typeof data?.user_remaining === "number") {
+        setUserRemaining(data.user_remaining);
+      } else {
+        setUserRemaining(null);
+      }
       setLastGenerateParams(params);
       setResult(normalizeAINovelResponse(data));
     } catch (err) {
@@ -444,7 +483,7 @@ export default function AINovelPage() {
     }
   };
 
-  const handleGenerateContinuation = async () => {
+  const handleGenerateContinuation = async (baseBodyOverride = null) => {
     if (!result?.body) return;
     setContinuing(true);
     setError("");
@@ -464,7 +503,8 @@ export default function AINovelPage() {
     };
 
     try {
-      const prompt = buildContinuationPrompt(getCombinedBody(), params);
+      const baseBody = typeof baseBodyOverride === "string" ? baseBodyOverride : getCombinedBody();
+      const prompt = buildContinuationPrompt(baseBody, params);
       const res = await fetch("/api/ai/novels/generate", {
         method: "POST",
         headers: token
@@ -513,6 +553,16 @@ export default function AINovelPage() {
       }
 
       const data = normalizeAINovelResponse(await res.json());
+      if (typeof data?.guest_remaining === "number") {
+        setGuestRemaining(data.guest_remaining);
+      } else {
+        setGuestRemaining(null);
+      }
+      if (typeof data?.user_remaining === "number") {
+        setUserRemaining(data.user_remaining);
+      } else {
+        setUserRemaining(null);
+      }
       const nextBody = (data?.body || "").trim();
       if (nextBody) {
         setContinuationBody((prev) => (prev ? `${prev}\n\n${nextBody}` : nextBody));
@@ -523,6 +573,12 @@ export default function AINovelPage() {
     } finally {
       setContinuing(false);
     }
+  };
+
+  const handleRedoContinuation = async () => {
+    if (!result?.body) return;
+    setContinuationBody("");
+    await handleGenerateContinuation(result.body);
   };
 
   const handlePostAsNewNovel = async () => {
@@ -756,8 +812,9 @@ export default function AINovelPage() {
   const handleAutoFill = async () => {
     const q = (genre || "").trim();
     const c = (characters || "").trim();
-    if (!q && !c) {
-      setAutoFillError("ジャンルか登場人物・設定を入力してから自動補完してください。");
+    const t = (titleHint || "").trim();
+    if (!q && !c && !t) {
+      setAutoFillError("タイトルのイメージ、ジャンル、登場人物・設定のいずれかを入力してください。");
       return;
     }
     setAutoFillLoading(true);
@@ -765,6 +822,7 @@ export default function AINovelPage() {
     try {
       const params = new URLSearchParams();
       if (q) params.set("query", q);
+      else if (t) params.set("query", t);
       if (c) params.set("characters", c);
       const res = await fetch(`/api/ai/novels/auto-fill?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
@@ -822,6 +880,35 @@ export default function AINovelPage() {
           <br />
           生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。
         </p>
+      )}
+
+      {typeof guestRemaining === "number" && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.5rem 0.75rem",
+            border: "1px solid var(--border)",
+            borderRadius: "6px",
+            backgroundColor: "var(--ai-result-surface)",
+            fontSize: "0.9rem",
+          }}
+        >
+          ゲストの AI生成 残り回数: {guestRemaining}
+        </div>
+      )}
+      {typeof userRemaining === "number" && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.5rem 0.75rem",
+            border: "1px solid var(--border)",
+            borderRadius: "6px",
+            backgroundColor: "var(--ai-result-surface)",
+            fontSize: "0.9rem",
+          }}
+        >
+          ユーザーの AI生成 残り回数: {userRemaining}
+        </div>
       )}
 
       <form
@@ -1211,6 +1298,24 @@ export default function AINovelPage() {
                 >
                   {continuing ? "続き生成中..." : "続きを作成する"}
                 </button>
+                {continuationBody && (
+                  <button
+                    type="button"
+                    onClick={handleRedoContinuation}
+                    disabled={continuing || loading}
+                    style={{
+                      padding: "0.6rem 1rem",
+                      fontWeight: "bold",
+                      borderRadius: "6px",
+                      border: "1px solid #ccc",
+                      cursor: continuing ? "default" : "pointer",
+                      opacity: continuing ? 0.7 : 1,
+                      marginLeft: "0.5rem",
+                    }}
+                  >
+                    続き生成をやり直す
+                  </button>
+                )}
               </div>
             )}
             <div

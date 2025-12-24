@@ -728,6 +728,7 @@ def require_premium_user(request: Request, db: Session) -> models.User:
 
 AI_GUEST_COOKIE_NAME = "ai_guest_id"
 AI_GUEST_FREE_MAX = 10
+AI_USER_DAILY_MAX = 80
 
 
 def get_optional_current_user(request: Request, db: Session) -> models.User | None:
@@ -770,13 +771,21 @@ def get_or_set_ai_guest_id(request: Request, response: Response) -> str:
     return guest_id
 
 
-def require_guest_ai_quota(db: Session, guest_id: str) -> models.AIGuestGenerateUsage:
-    usage = db.query(models.AIGuestGenerateUsage).filter(models.AIGuestGenerateUsage.guest_id == guest_id).first()
+def get_guest_ai_usage(db: Session, guest_id: str) -> models.AIGuestGenerateUsage:
+    usage = (
+        db.query(models.AIGuestGenerateUsage)
+        .filter(models.AIGuestGenerateUsage.guest_id == guest_id)
+        .first()
+    )
     if not usage:
         usage = models.AIGuestGenerateUsage(guest_id=guest_id, generate_count=0)
         db.add(usage)
         db.commit()
         db.refresh(usage)
+    return usage
+
+def require_guest_ai_quota(db: Session, guest_id: str) -> models.AIGuestGenerateUsage:
+    usage = get_guest_ai_usage(db, guest_id)
 
     if int(getattr(usage, "generate_count", 0) or 0) >= AI_GUEST_FREE_MAX:
         raise HTTPException(
@@ -1532,19 +1541,18 @@ async def generate_ai_novel(
     # ★ 1日あたりの利用回数制限
     today = datetime.utcnow().date()
     start_of_day = datetime.combine(today, datetime.min.time())
-    MAX_PER_DAY = 20
-
     count_today = (
         db.query(models.AIGenerateLog)
         .filter(models.AIGenerateLog.user_id == user.id)
         .filter(models.AIGenerateLog.created_at >= start_of_day)
         .count()
     )
-    if count_today >= MAX_PER_DAY:
+    if count_today >= AI_USER_DAILY_MAX:
         raise HTTPException(
             status_code=429,
             detail="本日のAI小説生成回数の上限に達しました。",
         )
+    user_remaining = max(0, AI_USER_DAILY_MAX - count_today)
 
     # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
     provider = provider_from_request(req)
@@ -1575,10 +1583,43 @@ async def generate_ai_novel(
     db.add(log)
     db.commit()
 
+    resp.user_remaining = max(0, user_remaining - 1)
     return resp
 
+@app.get("/api/ai/novels/remaining")
+def get_ai_novel_remaining(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    guest_id = get_or_set_ai_guest_id(request, response)
+    usage = get_guest_ai_usage(db, guest_id)
+    guest_remaining = max(0, AI_GUEST_FREE_MAX - int(getattr(usage, "generate_count", 0) or 0))
+
+    try:
+        user = get_optional_current_user(request, db)
+    except HTTPException:
+        user = None
+
+    user_remaining = None
+    if user and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))):
+        today = datetime.utcnow().date()
+        start_of_day = datetime.combine(today, datetime.min.time())
+        count_today = (
+            db.query(models.AIGenerateLog)
+            .filter(models.AIGenerateLog.user_id == user.id)
+            .filter(models.AIGenerateLog.created_at >= start_of_day)
+            .count()
+        )
+        user_remaining = max(0, AI_USER_DAILY_MAX - count_today)
+
+    return {
+        "guest_remaining": guest_remaining,
+        "user_remaining": user_remaining,
+    }
+
 @app.get("/api/ai/novels/auto-fill")
-async def auto_fill_ai_novel_inputs(query: str, characters: str | None = None):
+async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | None = None):
     q = (query or "").strip()
     c = (characters or "").strip()
     if not q and not c:

@@ -118,6 +118,7 @@ class AINovelResponse(BaseModel):
     model: str | None = None        # 実際に使ったモデル名
     prompt_used: str | None = None
     guest_remaining: int | None = None
+    user_remaining: int | None = None
 
 
 # ===== プロンプト組み立て =====
@@ -528,4 +529,3 @@ async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None =
         model=effective_model,
         prompt_used=prompt,
     )
-
