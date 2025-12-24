@@ -351,6 +351,7 @@ PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "
 
 FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
 PREMIUM_REVALIDATE_DAYS = int(os.getenv("PREMIUM_REVALIDATE_DAYS", "30"))
+AGE_RESTRICTION_DISABLED = os.getenv("AGE_RESTRICTION_DISABLED", "0") == "1"
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -2046,7 +2047,7 @@ def get_novel_detail(
     db.refresh(novel)
 
     # --- 年齢制限チェック（R15/R18） ---
-    if novel.age_limit in ("r15", "r18"):
+    if not AGE_RESTRICTION_DISABLED and novel.age_limit in ("r15", "r18"):
         if not user:
             raise HTTPException(status_code=403, detail="年齢制限コンテンツです")
 
@@ -2168,17 +2169,18 @@ def list_public_novels(
     query = query.filter(models.Novel.is_public == True)
 
     # --- 年齢フィルタリング ---
-    if user_age is None:
-        # 年齢不明 → R15 / R18 を表示しない
-        query = query.filter(models.Novel.age_limit == "all")
-    else:
-        # R15 制限
-        if user_age < 15:
+    if not AGE_RESTRICTION_DISABLED:
+        if user_age is None:
+            # 年齢不明 → R15 / R18 を表示しない
             query = query.filter(models.Novel.age_limit == "all")
+        else:
+            # R15 制限
+            if user_age < 15:
+                query = query.filter(models.Novel.age_limit == "all")
 
-        # R18 制限
-        elif user_age < 18:
-            query = query.filter(models.Novel.age_limit.in_(["all", "r15"]))
+            # R18 制限
+            elif user_age < 18:
+                query = query.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
     # --- 検索 ---
     if q:
@@ -2347,14 +2349,15 @@ def list_public_user_novels(
         )
     )
 
-    # 年齢不明 → R15 / R18 を表示しない
-    if viewer_age is None:
-        q = q.filter(models.Novel.age_limit == "all")
-    else:
-        if viewer_age < 15:
+    if not AGE_RESTRICTION_DISABLED:
+        # 年齢不明 → R15 / R18 を表示しない
+        if viewer_age is None:
             q = q.filter(models.Novel.age_limit == "all")
-        elif viewer_age < 18:
-            q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
+        else:
+            if viewer_age < 15:
+                q = q.filter(models.Novel.age_limit == "all")
+            elif viewer_age < 18:
+                q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
     novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
 
@@ -2424,14 +2427,15 @@ def list_public_user_favorites(
         .order_by(models.NovelFavorite.created_at.desc(), models.Novel.id.desc())
     )
 
-    # 年齢不明 → R15 / R18 を表示しない
-    if viewer_age is None:
-        q = q.filter(models.Novel.age_limit == "all")
-    else:
-        if viewer_age < 15:
+    if not AGE_RESTRICTION_DISABLED:
+        # 年齢不明 → R15 / R18 を表示しない
+        if viewer_age is None:
             q = q.filter(models.Novel.age_limit == "all")
-        elif viewer_age < 18:
-            q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
+        else:
+            if viewer_age < 15:
+                q = q.filter(models.Novel.age_limit == "all")
+            elif viewer_age < 18:
+                q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
     favorites = q.all()
 
@@ -3200,7 +3204,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
             raise HTTPException(404, "エピソードが存在しません")
 
     # 年齢チェック
-    if novel.age_limit in ("r15", "r18"):
+    if not AGE_RESTRICTION_DISABLED and novel.age_limit in ("r15", "r18"):
         if not user:
             raise HTTPException(status_code=403, detail="年齢制限コンテンツです")
 

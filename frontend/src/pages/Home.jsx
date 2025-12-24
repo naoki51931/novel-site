@@ -29,7 +29,14 @@ export default function Home({ query = "" }) {
         const qs = apiParams.toString();
         if (qs) url += `?${qs}`;
 
-        const res = await fetch(url);
+        const token =
+          localStorage.getItem("token") ||
+          localStorage.getItem("access_token");
+        const headers = token ? { Authorization: "Bearer " + token } : undefined;
+        const res = await fetch(
+          url,
+          headers ? { headers, cache: "no-store" } : { cache: "no-store" }
+        );
         if (!res.ok) throw new Error("小説一覧の取得に失敗しました");
 
         const data = await res.json();

@@ -39,6 +39,11 @@ export default function App() {
     const isLoginRoute = () => {
       const path = location.pathname;
       return (
+        path === "/" ||
+        path.startsWith("/ai-novel") ||
+        path.startsWith("/novels/") ||
+        path.startsWith("/episodes/") ||
+        path.startsWith("/users/") ||
         path === "/login" ||
         path === "/register" ||
         path === "/reset-password" ||
