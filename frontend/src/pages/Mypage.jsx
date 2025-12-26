@@ -216,6 +216,21 @@ export default function Mypage() {
         </div>
       </section>
 
+      {/* 作者ダッシュボード */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          作者ダッシュボード
+        </h3>
+        <p style={{ marginTop: 8, lineHeight: 1.6 }}>
+          支援の売上残高や精算設定を確認できます。
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <Link className="btn btn-border" to="/me/creator">
+            作者ダッシュボードを開く
+          </Link>
+        </div>
+      </section>
+
       {/* 公開ページ */}
       <section style={{ marginTop: "2.5rem" }}>
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>

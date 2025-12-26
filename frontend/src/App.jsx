@@ -20,6 +20,9 @@ import AINovelPage from "./pages/AINovelPage";
 import AiLogsPage from "./pages/AiLogsPage";
 import DirectMessageThread from "./pages/DirectMessageThread";
 import ResetPassword from "./pages/ResetPassword";
+import CreatorDashboard from "./pages/CreatorDashboard";
+import AdminPayouts from "./pages/AdminPayouts";
+import SupportReturn from "./pages/SupportReturn";
 
 
 export default function App() {
@@ -200,6 +203,8 @@ export default function App() {
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
+          <Route path="/me/creator" element={<CreatorDashboard />} />
+          <Route path="/admin/payouts" element={<AdminPayouts />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />
@@ -215,6 +220,10 @@ export default function App() {
             path="/stripe/success"
             element={<StripeReturn mode="success" />}
           />
+          <Route path="/support/success" element={<SupportReturn mode="success" label="支援" />} />
+          <Route path="/support/cancel" element={<SupportReturn mode="cancel" label="支援" />} />
+          <Route path="/membership/success" element={<SupportReturn mode="success" label="月額支援" />} />
+          <Route path="/membership/cancel" element={<SupportReturn mode="cancel" label="月額支援" />} />
         </Routes>
       </main>
     </div>

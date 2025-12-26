@@ -239,6 +239,179 @@ class EpisodeTag(Base):
 
 
 # =========================
+# Support / Payout
+# =========================
+support_status_enum = Enum(
+    "pending",
+    "paid",
+    "refunded",
+    "chargeback",
+    "canceled",
+    name="support_status_enum",
+)
+membership_status_enum = Enum(
+    "active",
+    "past_due",
+    "canceled",
+    name="membership_status_enum",
+)
+membership_invoice_status_enum = Enum(
+    "paid",
+    "void",
+    "uncollectible",
+    "refunded",
+    name="membership_invoice_status_enum",
+)
+payout_method_enum = Enum("bank_transfer", name="payout_method_enum")
+payout_status_enum = Enum(
+    "scheduled",
+    "processing",
+    "paid",
+    "failed",
+    "canceled",
+    name="payout_status_enum",
+)
+payout_source_type_enum = Enum("support", "membership_invoice", name="payout_source_type_enum")
+
+
+class AuthorPayoutProfile(Base):
+    __tablename__ = "authors_payout_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    payout_enabled = Column(Boolean, nullable=False, server_default="1")
+    payout_method = Column(payout_method_enum, nullable=False, server_default="bank_transfer")
+    bank_name = Column(String(100), nullable=True)
+    bank_branch = Column(String(100), nullable=True)
+    bank_account_type = Column(String(20), nullable=True)
+    bank_account_number = Column(String(32), nullable=True)
+    bank_account_holder = Column(String(100), nullable=True)
+    payout_minimum_yen = Column(Integer, nullable=False, server_default="3000")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User")
+
+
+class SupportPlan(Base):
+    __tablename__ = "support_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    author_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    amount_yen = Column(Integer, nullable=False)
+    stripe_price_id = Column(String(255), nullable=False)
+    is_active = Column(Boolean, nullable=False, server_default="1")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    author = relationship("User")
+
+
+class Support(Base):
+    __tablename__ = "supports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    supporter_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    author_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=True, index=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), nullable=True, index=True)
+    amount_yen = Column(Integer, nullable=False)
+    platform_fee_yen = Column(Integer, nullable=False)
+    author_share_yen = Column(Integer, nullable=False)
+    status = Column(support_status_enum, nullable=False, server_default="pending")
+    stripe_checkout_session_id = Column(String(255), nullable=False, unique=True)
+    stripe_payment_intent_id = Column(String(255), nullable=True, index=True)
+    paid_at = Column(DateTime, nullable=True)
+    refunded_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    supporter = relationship("User", foreign_keys=[supporter_user_id])
+    author = relationship("User", foreign_keys=[author_user_id])
+
+
+class Membership(Base):
+    __tablename__ = "memberships"
+
+    id = Column(Integer, primary_key=True, index=True)
+    supporter_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    author_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    plan_id = Column(Integer, ForeignKey("support_plans.id"), nullable=False, index=True)
+    status = Column(membership_status_enum, nullable=False, server_default="active")
+    stripe_customer_id = Column(String(255), nullable=True, index=True)
+    stripe_subscription_id = Column(String(255), nullable=False, unique=True)
+    current_period_start = Column(DateTime, nullable=True)
+    current_period_end = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    supporter = relationship("User", foreign_keys=[supporter_user_id])
+    author = relationship("User", foreign_keys=[author_user_id])
+    plan = relationship("SupportPlan")
+
+
+class MembershipInvoice(Base):
+    __tablename__ = "membership_invoices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    membership_id = Column(Integer, ForeignKey("memberships.id"), nullable=False, index=True)
+    amount_yen = Column(Integer, nullable=False)
+    platform_fee_yen = Column(Integer, nullable=False)
+    author_share_yen = Column(Integer, nullable=False)
+    status = Column(membership_invoice_status_enum, nullable=False, server_default="paid")
+    stripe_invoice_id = Column(String(255), nullable=False, unique=True)
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    membership = relationship("Membership")
+
+
+class AuthorBalance(Base):
+    __tablename__ = "author_balances"
+
+    author_user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    available_yen = Column(Integer, nullable=False, server_default="0")
+    pending_yen = Column(Integer, nullable=False, server_default="0")
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    author = relationship("User")
+
+
+class Payout(Base):
+    __tablename__ = "payouts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    author_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    amount_yen = Column(Integer, nullable=False)
+    status = Column(payout_status_enum, nullable=False, server_default="scheduled")
+    paid_at = Column(DateTime, nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    author = relationship("User")
+
+
+class PayoutItem(Base):
+    __tablename__ = "payout_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    payout_id = Column(Integer, ForeignKey("payouts.id"), nullable=False, index=True)
+    source_type = Column(payout_source_type_enum, nullable=False)
+    source_id = Column(Integer, nullable=False)
+    author_share_yen = Column(Integer, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    payout = relationship("Payout")
+
+    __table_args__ = (
+        UniqueConstraint("payout_id", "source_type", "source_id", name="uq_payout_items_source"),
+    )
+
+
+# =========================
 # Likes / Favorites / Comments
 # =========================
 class EpisodeLike(Base):

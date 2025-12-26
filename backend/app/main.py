@@ -28,6 +28,7 @@ from fastapi import (
     Body,
     status,
     Header,
+    Query,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -356,6 +357,8 @@ AGE_RESTRICTION_DISABLED = os.getenv("AGE_RESTRICTION_DISABLED", "0") == "1"
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+PLATFORM_FEE_RATE = float(os.getenv("PLATFORM_FEE_RATE", "0.2"))
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
 
@@ -640,6 +643,85 @@ def revalidate_premium_on_login(user: models.User, db: Session) -> None:
     db.commit()
 
 
+def require_admin(request: Request) -> None:
+    if not ADMIN_API_KEY:
+        raise HTTPException(500, "ADMIN_API_KEY 未設定")
+    token = request.headers.get("X-Admin-Token")
+    if token != ADMIN_API_KEY:
+        raise HTTPException(403, "管理者権限が必要です")
+
+
+def calc_platform_fee(amount_yen: int) -> int:
+    if amount_yen <= 0:
+        return 0
+    return int(amount_yen * PLATFORM_FEE_RATE)
+
+
+def calc_author_share(amount_yen: int) -> tuple[int, int]:
+    fee = calc_platform_fee(amount_yen)
+    return fee, amount_yen - fee
+
+
+def get_or_create_author_balance(db: Session, author_user_id: int) -> models.AuthorBalance:
+    balance = (
+        db.query(models.AuthorBalance)
+        .filter(models.AuthorBalance.author_user_id == author_user_id)
+        .first()
+    )
+    if balance:
+        return balance
+    balance = models.AuthorBalance(author_user_id=author_user_id, available_yen=0, pending_yen=0)
+    db.add(balance)
+    db.flush()
+    return balance
+
+
+def apply_author_balance_delta(
+    db: Session,
+    author_user_id: int,
+    delta_available: int = 0,
+    delta_pending: int = 0,
+) -> models.AuthorBalance:
+    balance = get_or_create_author_balance(db, author_user_id)
+    balance.available_yen = int(balance.available_yen or 0) + int(delta_available)
+    balance.pending_yen = int(balance.pending_yen or 0) + int(delta_pending)
+    db.add(balance)
+    return balance
+
+
+def get_or_create_payout_profile(db: Session, author_user_id: int) -> models.AuthorPayoutProfile:
+    profile = (
+        db.query(models.AuthorPayoutProfile)
+        .filter(models.AuthorPayoutProfile.user_id == author_user_id)
+        .first()
+    )
+    if profile:
+        return profile
+    profile = models.AuthorPayoutProfile(user_id=author_user_id)
+    db.add(profile)
+    db.flush()
+    return profile
+
+
+def parse_payout_period(period: str) -> tuple[date, date]:
+    try:
+        year_str, month_str = period.split("-")
+        year = int(year_str)
+        month = int(month_str)
+        if not (1 <= month <= 12):
+            raise ValueError("month out of range")
+    except Exception:
+        raise HTTPException(400, "period は YYYY-MM 形式で指定してください")
+
+    start = date(year, month, 1)
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    end = next_month - timedelta(days=1)
+    return start, end
+
+
 def truncate_for_free(body: str | None, ratio: float = 0.3) -> str | None:
     if not body:
         return body
@@ -876,6 +958,44 @@ class PasswordResetConfirm(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+
+
+class SupportCheckoutRequest(BaseModel):
+    author_user_id: int
+    amount_yen: int
+    novel_id: int | None = None
+    episode_id: int | None = None
+    mode: str = "one_time"
+
+
+class MembershipCheckoutRequest(BaseModel):
+    author_user_id: int
+    plan_id: int
+
+
+class PayoutProfileUpdateRequest(BaseModel):
+    payout_enabled: bool | None = None
+    bank_name: str | None = None
+    bank_branch: str | None = None
+    bank_account_type: str | None = None
+    bank_account_number: str | None = None
+    bank_account_holder: str | None = None
+    payout_minimum_yen: int | None = None
+
+
+class PayoutMarkRequest(BaseModel):
+    note: str | None = None
+
+
+class SupportPlanOut(BaseModel):
+    id: int
+    author_user_id: int
+    name: str
+    price_yen: int
+    is_active: bool
+
+    class Config:
+        from_attributes = True
     token_type: str = "bearer"
 
 
@@ -1359,6 +1479,140 @@ async def oauth_callback(
 
 
 # =========================================
+# Support / Membership Checkout
+# =========================================
+@app.post("/api/supports/checkout")
+def supports_checkout(
+    req: SupportCheckoutRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(500, "STRIPE_SECRET_KEY 未設定")
+
+    if req.amount_yen <= 0:
+        raise HTTPException(400, "支援金額が不正です")
+
+    author = db.query(models.User).get(req.author_user_id)
+    if not author:
+        raise HTTPException(404, "作者が見つかりません")
+
+    supporter = get_optional_current_user(request, db)
+    supporter_id = supporter.id if supporter else None
+
+    metadata = {
+        "type": "support",
+        "author_user_id": str(req.author_user_id),
+    }
+    if supporter_id:
+        metadata["supporter_user_id"] = str(supporter_id)
+    if req.novel_id:
+        metadata["novel_id"] = str(req.novel_id)
+    if req.episode_id:
+        metadata["episode_id"] = str(req.episode_id)
+
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "jpy",
+                    "product_data": {"name": f"{author.username} への支援"},
+                    "unit_amount": req.amount_yen,
+                },
+                "quantity": 1,
+            }
+        ],
+        client_reference_id=str(supporter_id) if supporter_id else None,
+        customer=getattr(supporter, "stripe_customer_id", None) if supporter else None,
+        customer_email=getattr(supporter, "email", None) if supporter else None,
+        metadata=metadata,
+        success_url=f"{FRONTEND_ORIGIN}/support/success",
+        cancel_url=f"{FRONTEND_ORIGIN}/support/cancel",
+    )
+
+    fee_yen, share_yen = calc_author_share(req.amount_yen)
+    support = models.Support(
+        supporter_user_id=supporter_id,
+        author_user_id=req.author_user_id,
+        novel_id=req.novel_id,
+        episode_id=req.episode_id,
+        amount_yen=req.amount_yen,
+        platform_fee_yen=fee_yen,
+        author_share_yen=share_yen,
+        status="pending",
+        stripe_checkout_session_id=session.id,
+        stripe_payment_intent_id=getattr(session, "payment_intent", None),
+    )
+    db.add(support)
+    db.commit()
+
+    return {"checkout_url": session.url}
+
+
+@app.get("/api/support_plans", response_model=List[SupportPlanOut])
+def list_support_plans(
+    author_user_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+):
+    plans = (
+        db.query(models.SupportPlan)
+        .filter(models.SupportPlan.author_user_id == author_user_id)
+        .filter(models.SupportPlan.is_active == True)
+        .order_by(models.SupportPlan.amount_yen.asc(), models.SupportPlan.id.asc())
+        .all()
+    )
+    return [
+        SupportPlanOut(
+            id=plan.id,
+            author_user_id=plan.author_user_id,
+            name=plan.name,
+            price_yen=plan.amount_yen,
+            is_active=bool(plan.is_active),
+        )
+        for plan in plans
+    ]
+
+
+@app.post("/api/memberships/checkout")
+def memberships_checkout(
+    req: MembershipCheckoutRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(500, "STRIPE_SECRET_KEY 未設定")
+
+    supporter = require_current_user(request, db)
+    plan = db.query(models.SupportPlan).get(req.plan_id)
+    if not plan or not getattr(plan, "is_active", False):
+        raise HTTPException(404, "支援プランが見つかりません")
+    if plan.author_user_id != req.author_user_id:
+        raise HTTPException(400, "支援プランが作者と一致しません")
+
+    metadata = {
+        "type": "membership",
+        "author_user_id": str(req.author_user_id),
+        "supporter_user_id": str(supporter.id),
+        "plan_id": str(req.plan_id),
+    }
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
+        client_reference_id=str(supporter.id),
+        customer=getattr(supporter, "stripe_customer_id", None),
+        customer_email=getattr(supporter, "email", None),
+        metadata=metadata,
+        subscription_data={"metadata": metadata},
+        success_url=f"{FRONTEND_ORIGIN}/membership/success",
+        cancel_url=f"{FRONTEND_ORIGIN}/membership/cancel",
+    )
+
+    return {"checkout_url": session.url}
+
+
+# =========================================
 # Stripe Checkout
 # =========================================
 @app.post("/api/stripe/create-checkout-session")
@@ -1427,9 +1681,271 @@ async def stripe_webhook(
 
     event_type = event.get("type")
     data_object = event.get("data", {}).get("object", {})
+    metadata = _stripe_obj_get(data_object, "metadata", {}) or {}
 
-    # どのユーザーかを特定（create-checkout-session 側で設定している想定）
-    raw_uid = data_object.get("client_reference_id")
+    def _meta_int(key: str) -> int | None:
+        raw = metadata.get(key)
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except Exception:
+            return None
+
+    def _dt_from_ts(ts: int | None) -> datetime | None:
+        if not ts:
+            return None
+        return datetime.utcfromtimestamp(int(ts))
+
+    now = datetime.utcnow()
+
+    if event_type == "checkout.session.completed":
+        meta_type = metadata.get("type")
+        if meta_type == "support":
+            author_user_id = _meta_int("author_user_id")
+            if not author_user_id:
+                print("[stripe] support: author_user_id missing", metadata)
+                return {"ok": True, "skipped": True}
+
+            amount_total = _stripe_obj_get(data_object, "amount_total") or _stripe_obj_get(
+                data_object, "amount_subtotal"
+            )
+            if amount_total is None:
+                print("[stripe] support: amount_total missing", data_object)
+                return {"ok": True, "skipped": True}
+
+            fee_yen, share_yen = calc_author_share(int(amount_total))
+            session_id = _stripe_obj_get(data_object, "id")
+            support = (
+                db.query(models.Support)
+                .filter(models.Support.stripe_checkout_session_id == session_id)
+                .first()
+            )
+            if support and support.status == "paid":
+                return {"ok": True}
+
+            if not support:
+                support = models.Support(
+                    supporter_user_id=_meta_int("supporter_user_id"),
+                    author_user_id=author_user_id,
+                    novel_id=_meta_int("novel_id"),
+                    episode_id=_meta_int("episode_id"),
+                    amount_yen=int(amount_total),
+                    platform_fee_yen=fee_yen,
+                    author_share_yen=share_yen,
+                    status="paid",
+                    stripe_checkout_session_id=session_id,
+                    stripe_payment_intent_id=_stripe_obj_get(data_object, "payment_intent"),
+                    paid_at=now,
+                )
+            else:
+                support.amount_yen = int(amount_total)
+                support.platform_fee_yen = fee_yen
+                support.author_share_yen = share_yen
+                support.status = "paid"
+                support.stripe_payment_intent_id = _stripe_obj_get(data_object, "payment_intent")
+                support.paid_at = now
+
+            db.add(support)
+            apply_author_balance_delta(db, author_user_id, delta_available=share_yen)
+            db.commit()
+            return {"ok": True}
+
+        if meta_type == "membership":
+            subscription_id = _stripe_obj_get(data_object, "subscription")
+            if not subscription_id:
+                print("[stripe] membership: subscription missing", data_object)
+                return {"ok": True, "skipped": True}
+
+            author_user_id = _meta_int("author_user_id")
+            supporter_user_id = _meta_int("supporter_user_id")
+            plan_id = _meta_int("plan_id")
+            if not all([author_user_id, supporter_user_id, plan_id]):
+                print("[stripe] membership: metadata missing", metadata)
+                return {"ok": True, "skipped": True}
+
+            sub = stripe.Subscription.retrieve(subscription_id)
+            current_start = _dt_from_ts(_stripe_obj_get(sub, "current_period_start"))
+            current_end = _dt_from_ts(_stripe_obj_get(sub, "current_period_end"))
+
+            membership = (
+                db.query(models.Membership)
+                .filter(models.Membership.stripe_subscription_id == subscription_id)
+                .first()
+            )
+            if not membership:
+                membership = models.Membership(
+                    supporter_user_id=supporter_user_id,
+                    author_user_id=author_user_id,
+                    plan_id=plan_id,
+                    status="active",
+                    stripe_customer_id=_stripe_obj_get(data_object, "customer"),
+                    stripe_subscription_id=subscription_id,
+                    current_period_start=current_start,
+                    current_period_end=current_end,
+                )
+            else:
+                membership.status = "active"
+                membership.plan_id = plan_id
+                membership.author_user_id = author_user_id
+                membership.supporter_user_id = supporter_user_id
+                membership.stripe_customer_id = _stripe_obj_get(data_object, "customer")
+                membership.current_period_start = current_start
+                membership.current_period_end = current_end
+
+            db.add(membership)
+            db.commit()
+            return {"ok": True}
+
+    if event_type == "invoice.paid":
+        invoice_id = _stripe_obj_get(data_object, "id")
+        subscription_id = _stripe_obj_get(data_object, "subscription")
+        amount_paid = _stripe_obj_get(data_object, "amount_paid") or _stripe_obj_get(
+            data_object, "amount_due"
+        )
+        if not invoice_id or not subscription_id or amount_paid is None:
+            print("[stripe] invoice.paid: missing fields", data_object)
+            return {"ok": True, "skipped": True}
+
+        existing = (
+            db.query(models.MembershipInvoice)
+            .filter(models.MembershipInvoice.stripe_invoice_id == invoice_id)
+            .first()
+        )
+        if existing:
+            return {"ok": True}
+
+        sub = stripe.Subscription.retrieve(subscription_id)
+        sub_metadata = _stripe_obj_get(sub, "metadata", {}) or {}
+
+        def _meta_int_from(meta: dict, key: str) -> int | None:
+            raw = meta.get(key)
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except Exception:
+                return None
+
+        author_user_id = _meta_int_from(sub_metadata, "author_user_id")
+        supporter_user_id = _meta_int_from(sub_metadata, "supporter_user_id")
+        plan_id = _meta_int_from(sub_metadata, "plan_id")
+
+        if not all([author_user_id, supporter_user_id, plan_id]):
+            print("[stripe] invoice.paid: metadata missing", sub_metadata)
+            return {"ok": True, "skipped": True}
+
+        membership = (
+            db.query(models.Membership)
+            .filter(models.Membership.stripe_subscription_id == subscription_id)
+            .first()
+        )
+        if not membership:
+            membership = models.Membership(
+                supporter_user_id=supporter_user_id,
+                author_user_id=author_user_id,
+                plan_id=plan_id,
+                status="active",
+                stripe_customer_id=_stripe_obj_get(sub, "customer"),
+                stripe_subscription_id=subscription_id,
+                current_period_start=_dt_from_ts(_stripe_obj_get(sub, "current_period_start")),
+                current_period_end=_dt_from_ts(_stripe_obj_get(sub, "current_period_end")),
+            )
+            db.add(membership)
+            db.flush()
+        else:
+            membership.status = "active"
+            membership.current_period_start = _dt_from_ts(_stripe_obj_get(sub, "current_period_start"))
+            membership.current_period_end = _dt_from_ts(_stripe_obj_get(sub, "current_period_end"))
+            db.add(membership)
+
+        fee_yen, share_yen = calc_author_share(int(amount_paid))
+        invoice = models.MembershipInvoice(
+            membership_id=membership.id,
+            amount_yen=int(amount_paid),
+            platform_fee_yen=fee_yen,
+            author_share_yen=share_yen,
+            status="paid",
+            stripe_invoice_id=invoice_id,
+            paid_at=_dt_from_ts(
+                _stripe_obj_get(data_object, "status_transitions", {}).get("paid_at")
+            )
+            or now,
+        )
+        db.add(invoice)
+        apply_author_balance_delta(db, author_user_id, delta_available=share_yen)
+        db.commit()
+        return {"ok": True}
+
+    if event_type == "charge.refunded":
+        charge_invoice_id = _stripe_obj_get(data_object, "invoice")
+        if charge_invoice_id:
+            invoice = (
+                db.query(models.MembershipInvoice)
+                .filter(models.MembershipInvoice.stripe_invoice_id == charge_invoice_id)
+                .first()
+            )
+            if invoice and invoice.status != "refunded":
+                invoice.status = "refunded"
+                membership = db.query(models.Membership).get(invoice.membership_id)
+                if membership:
+                    apply_author_balance_delta(
+                        db, membership.author_user_id, delta_available=-invoice.author_share_yen
+                    )
+                db.add(invoice)
+                db.commit()
+            return {"ok": True}
+
+        payment_intent_id = _stripe_obj_get(data_object, "payment_intent")
+        if payment_intent_id:
+            support = (
+                db.query(models.Support)
+                .filter(models.Support.stripe_payment_intent_id == payment_intent_id)
+                .first()
+            )
+            if support and support.status != "refunded":
+                support.status = "refunded"
+                support.refunded_at = now
+                db.add(support)
+                apply_author_balance_delta(
+                    db, support.author_user_id, delta_available=-support.author_share_yen
+                )
+                db.commit()
+            return {"ok": True}
+
+    if event_type == "payment_intent.payment_failed":
+        payment_intent_id = _stripe_obj_get(data_object, "id")
+        if payment_intent_id:
+            support = (
+                db.query(models.Support)
+                .filter(models.Support.stripe_payment_intent_id == payment_intent_id)
+                .first()
+            )
+            if support and support.status == "pending":
+                support.status = "canceled"
+                db.add(support)
+                db.commit()
+        return {"ok": True}
+
+    if event_type in ("checkout.session.async_payment_failed", "checkout.session.expired"):
+        meta_type = metadata.get("type")
+        if meta_type == "support":
+            session_id = _stripe_obj_get(data_object, "id")
+            support = (
+                db.query(models.Support)
+                .filter(models.Support.stripe_checkout_session_id == session_id)
+                .first()
+            )
+            if support and support.status == "pending":
+                support.status = "canceled"
+                db.add(support)
+                db.commit()
+            return {"ok": True}
+
+    # ----------------------------
+    # プレミアム課金の既存フロー
+    # ----------------------------
+    raw_uid = _stripe_obj_get(data_object, "client_reference_id")
     user: models.User | None = None
     if raw_uid is not None:
         try:
@@ -1438,19 +1954,14 @@ async def stripe_webhook(
         except Exception as e:
             print("stripe webhook: invalid client_reference_id:", raw_uid, repr(e))
 
-    # ユーザーが特定できない場合はログだけ出して何もしない
     if user is None:
         print(f"stripe webhook: user not found for event_type={event_type}, object={data_object}")
         return {"ok": True, "skipped": True}
 
-    # ----------------------------
-    # イベントごとの分岐
-    # ----------------------------
     if event_type == "checkout.session.completed":
-        # 決済完了 → プレミアム ON
         user.is_premium = True
-        customer_id = data_object.get("customer")
-        subscription_id = data_object.get("subscription")
+        customer_id = _stripe_obj_get(data_object, "customer")
+        subscription_id = _stripe_obj_get(data_object, "subscription")
         if customer_id:
             user.stripe_customer_id = customer_id
         if subscription_id:
@@ -1464,10 +1975,9 @@ async def stripe_webhook(
         "checkout.session.async_payment_failed",
         "checkout.session.expired",
     ):
-        # 支払い失敗 or セッション期限切れ → プレミアム OFF
         user.is_premium = False
-        customer_id = data_object.get("customer")
-        subscription_id = data_object.get("subscription")
+        customer_id = _stripe_obj_get(data_object, "customer")
+        subscription_id = _stripe_obj_get(data_object, "subscription")
         if customer_id:
             user.stripe_customer_id = customer_id
         if subscription_id:
@@ -1476,11 +1986,215 @@ async def stripe_webhook(
         db.add(user)
         db.commit()
         print(f"[stripe] {event_type}: user_id={user.id} → is_premium=False")
-
     else:
-        # それ以外はとりあえずログだけ（必要に応じて拡張）
         print(f"[stripe] unhandled event type: {event_type}")
 
+    return {"ok": True}
+
+
+# =========================================
+# Author Balance / Payout Profile
+# =========================================
+@app.get("/api/authors/me/balance")
+def get_author_balance(request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    balance = get_or_create_author_balance(db, user.id)
+    profile = get_or_create_payout_profile(db, user.id)
+
+    today = date.today()
+    if today.month == 12:
+        next_payout_date = date(today.year + 1, 1, 1)
+    else:
+        next_payout_date = date(today.year, today.month + 1, 1)
+
+    return {
+        "available_yen": int(balance.available_yen or 0),
+        "pending_yen": int(balance.pending_yen or 0),
+        "payout_minimum_yen": int(profile.payout_minimum_yen or 0),
+        "payout_enabled": bool(profile.payout_enabled),
+        "next_payout_date": next_payout_date,
+    }
+
+
+@app.post("/api/authors/me/payout_profile")
+def update_payout_profile(
+    req: PayoutProfileUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    profile = get_or_create_payout_profile(db, user.id)
+
+    if req.payout_enabled is not None:
+        profile.payout_enabled = bool(req.payout_enabled)
+    if req.bank_name is not None:
+        profile.bank_name = req.bank_name
+    if req.bank_branch is not None:
+        profile.bank_branch = req.bank_branch
+    if req.bank_account_type is not None:
+        profile.bank_account_type = req.bank_account_type
+    if req.bank_account_number is not None:
+        profile.bank_account_number = req.bank_account_number
+    if req.bank_account_holder is not None:
+        profile.bank_account_holder = req.bank_account_holder
+    if req.payout_minimum_yen is not None:
+        profile.payout_minimum_yen = max(0, int(req.payout_minimum_yen))
+
+    db.add(profile)
+    db.commit()
+    return {"ok": True}
+
+
+# =========================================
+# Admin Payouts
+# =========================================
+@app.post("/api/admin/payouts/generate")
+def generate_payouts(
+    period: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    period_start, period_end = parse_payout_period(period)
+    start_dt = datetime.combine(period_start, datetime.min.time())
+    end_dt = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
+
+    support_payout_subq = (
+        db.query(models.PayoutItem.source_id)
+        .filter(models.PayoutItem.source_type == "support")
+        .subquery()
+    )
+    supports = (
+        db.query(models.Support)
+        .filter(
+            models.Support.status == "paid",
+            models.Support.paid_at >= start_dt,
+            models.Support.paid_at < end_dt,
+            ~models.Support.id.in_(support_payout_subq),
+        )
+        .all()
+    )
+
+    invoice_payout_subq = (
+        db.query(models.PayoutItem.source_id)
+        .filter(models.PayoutItem.source_type == "membership_invoice")
+        .subquery()
+    )
+    invoice_rows = (
+        db.query(models.MembershipInvoice, models.Membership.author_user_id)
+        .join(models.Membership, models.Membership.id == models.MembershipInvoice.membership_id)
+        .filter(
+            models.MembershipInvoice.status == "paid",
+            models.MembershipInvoice.paid_at >= start_dt,
+            models.MembershipInvoice.paid_at < end_dt,
+            ~models.MembershipInvoice.id.in_(invoice_payout_subq),
+        )
+        .all()
+    )
+
+    author_items: dict[int, dict[str, list]] = {}
+    for support in supports:
+        author_items.setdefault(support.author_user_id, {"supports": [], "invoices": []})
+        author_items[support.author_user_id]["supports"].append(support)
+
+    for invoice, author_user_id in invoice_rows:
+        author_items.setdefault(author_user_id, {"supports": [], "invoices": []})
+        author_items[author_user_id]["invoices"].append(invoice)
+
+    created_count = 0
+    total_amount = 0
+
+    for author_id, items in author_items.items():
+        profile = get_or_create_payout_profile(db, author_id)
+        if not profile.payout_enabled:
+            continue
+
+        supports_list = items["supports"]
+        invoices_list = items["invoices"]
+        amount = sum(s.author_share_yen for s in supports_list) + sum(
+            i.author_share_yen for i in invoices_list
+        )
+        if amount <= 0 or amount < int(profile.payout_minimum_yen or 0):
+            continue
+
+        payout = models.Payout(
+            author_user_id=author_id,
+            period_start=period_start,
+            period_end=period_end,
+            amount_yen=amount,
+            status="scheduled",
+        )
+        db.add(payout)
+        db.flush()
+
+        for support in supports_list:
+            db.add(
+                models.PayoutItem(
+                    payout_id=payout.id,
+                    source_type="support",
+                    source_id=support.id,
+                    author_share_yen=support.author_share_yen,
+                )
+            )
+
+        for invoice in invoices_list:
+            db.add(
+                models.PayoutItem(
+                    payout_id=payout.id,
+                    source_type="membership_invoice",
+                    source_id=invoice.id,
+                    author_share_yen=invoice.author_share_yen,
+                )
+            )
+
+        apply_author_balance_delta(db, author_id, delta_available=-amount)
+        created_count += 1
+        total_amount += amount
+
+    db.commit()
+    return {"count": created_count, "total_amount_yen": total_amount}
+
+
+@app.post("/api/admin/payouts/{payout_id}/mark_paid")
+def mark_payout_paid(
+    payout_id: int,
+    req: PayoutMarkRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    payout = db.query(models.Payout).get(payout_id)
+    if not payout:
+        raise HTTPException(404, "payout が見つかりません")
+
+    payout.status = "paid"
+    payout.paid_at = datetime.utcnow()
+    if req.note is not None:
+        payout.note = req.note
+    db.add(payout)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/payouts/{payout_id}/mark_failed")
+def mark_payout_failed(
+    payout_id: int,
+    req: PayoutMarkRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    payout = db.query(models.Payout).get(payout_id)
+    if not payout:
+        raise HTTPException(404, "payout が見つかりません")
+
+    if payout.status != "failed":
+        apply_author_balance_delta(db, payout.author_user_id, delta_available=payout.amount_yen)
+    payout.status = "failed"
+    if req.note is not None:
+        payout.note = req.note
+    db.add(payout)
+    db.commit()
     return {"ok": True}
 
 

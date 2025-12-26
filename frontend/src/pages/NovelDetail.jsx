@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
+import SupportPanel from "../components/SupportPanel.jsx";
 
 const API_BASE = "";
 
@@ -620,6 +621,14 @@ export default function NovelDetail() {
           {isLiked ? "♥ いいね済み" : "♡ いいね"} ({likeCount})
         </button>
       </div>
+
+      {novel?.author_id && (
+        <SupportPanel
+          authorUserId={novel.author_id}
+          novelId={novel.id}
+          authorName={authorName || "作者"}
+        />
+      )}
 
       {/* タグ */}
       {tags.length > 0 && (

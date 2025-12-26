@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
+import SupportPanel from "../components/SupportPanel.jsx";
 
 const API_BASE = "";
 
@@ -192,6 +193,13 @@ export default function UserPage() {
         )}
       </h2>
       {dmError && <p style={{ color: "red", marginBottom: 8 }}>{dmError}</p>}
+
+      {profile?.id && (
+        <SupportPanel
+          authorUserId={profile.id}
+          authorName={displayName || "作者"}
+        />
+      )}
 
       <section style={{ marginTop: "1.5rem" }}>
         <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
