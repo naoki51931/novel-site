@@ -7,18 +7,12 @@ const getToken = () => {
 
 export async function apiFetch(
   path,
-  { method = "GET", body = null, auth = false, admin = false } = {}
+  { method = "GET", body = null, auth = false, credentials = "same-origin" } = {}
 ) {
   const headers = {};
   const token = getToken();
   if (auth && token) {
     headers.Authorization = `Bearer ${token}`;
-  }
-  if (admin) {
-    const adminToken = import.meta.env.VITE_ADMIN_API_KEY;
-    if (adminToken) {
-      headers["X-Admin-Token"] = adminToken;
-    }
   }
   if (body != null) {
     headers["Content-Type"] = "application/json";
@@ -28,6 +22,7 @@ export async function apiFetch(
     method,
     headers,
     body: body != null ? JSON.stringify(body) : undefined,
+    credentials,
   });
 
   const data = await res.json().catch(() => ({}));
