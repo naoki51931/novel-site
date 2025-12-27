@@ -12,6 +12,9 @@ export default function AdminPayouts() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [selectedProfile, setSelectedProfile] = useState(null);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -24,6 +27,38 @@ export default function AdminPayouts() {
     };
     checkAuth();
   }, [navigate]);
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (!payoutId) {
+        setSelectedProfile(null);
+        setProfileError("");
+        return;
+      }
+      const target = payoutsList.find((item) => String(item.payout_id) === String(payoutId));
+      if (!target?.author_user_id) {
+        setSelectedProfile(null);
+        setProfileError("振込先の取得に必要な作者情報がありません");
+        return;
+      }
+      try {
+        setProfileLoading(true);
+        setProfileError("");
+        const data = await apiFetch(
+          `/api/admin/authors/${target.author_user_id}/payout_profile`,
+          {
+            credentials: "include",
+          }
+        );
+        setSelectedProfile(data);
+      } catch (e) {
+        setProfileError(e.message || "振込先情報の取得に失敗しました");
+      } finally {
+        setProfileLoading(false);
+      }
+    };
+    loadProfile();
+  }, [payoutId, payoutsList]);
 
   const loadPayouts = async () => {
     const data = await apiFetch("/api/admin/payouts?status=scheduled,processing", {
@@ -98,6 +133,8 @@ export default function AdminPayouts() {
       setLoading(false);
     }
   };
+
+  const yen = (value) => new Intl.NumberFormat("ja-JP").format(value || 0);
 
   return (
     <div style={{ maxWidth: 700, margin: "0 auto" }}>
@@ -241,6 +278,32 @@ export default function AdminPayouts() {
               ))}
             </select>
           </label>
+          {profileLoading && (
+            <div style={{ fontSize: 13, color: "#666" }}>振込先情報を取得中...</div>
+          )}
+          {profileError && <div style={{ fontSize: 13, color: "red" }}>{profileError}</div>}
+          {selectedProfile && (
+            <div
+              style={{
+                border: "1px solid #e0e0e0",
+                padding: 10,
+                borderRadius: 8,
+                background: "#f9fbfc",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                {selectedProfile.username} の振込先
+              </div>
+              <div>振込有効: {selectedProfile.payout_enabled ? "有効" : "無効"}</div>
+              <div>最低振込額: {yen(selectedProfile.payout_minimum_yen)}円</div>
+              <div>銀行名: {selectedProfile.bank_name || "-"}</div>
+              <div>支店名: {selectedProfile.bank_branch || "-"}</div>
+              <div>口座種別: {selectedProfile.bank_account_type || "-"}</div>
+              <div>口座番号: {selectedProfile.bank_account_number || "-"}</div>
+              <div>口座名義: {selectedProfile.bank_account_holder || "-"}</div>
+            </div>
+          )}
           <label>
             メモ
             <input
