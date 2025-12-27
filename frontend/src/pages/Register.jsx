@@ -8,6 +8,7 @@ export default function Register() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState(""); // ← 追加
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
 
   const handleSubmit = async (e) => {
@@ -80,12 +81,21 @@ export default function Register() {
         <div className="form-group">
           <label>パスワード</label>
           <input
-            type="password"
+            type={showPassword ? "text" : "password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="input"
             required
           />
+          <label style={{ display: "block", fontSize: 12, marginTop: 6 }}>
+            <input
+              type="checkbox"
+              checked={showPassword}
+              onChange={(e) => setShowPassword(e.target.checked)}
+              style={{ marginRight: 6 }}
+            />
+            パスワードを表示
+          </label>
         </div>
 
         <button type="submit" className="btn-primary">
@@ -100,4 +110,3 @@ export default function Register() {
     </div>
   );
 }
-

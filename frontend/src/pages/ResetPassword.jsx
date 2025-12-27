@@ -9,6 +9,7 @@ export default function ResetPassword() {
   const [email, setEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -132,7 +133,7 @@ export default function ResetPassword() {
               新しいパスワード
               <br />
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 style={{ width: "100%", padding: 4 }}
@@ -145,12 +146,23 @@ export default function ResetPassword() {
               新しいパスワード（確認）
               <br />
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 style={{ width: "100%", padding: 4 }}
               />
             </label>
+            <div style={{ marginTop: 6 }}>
+              <label style={{ fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={showPassword}
+                  onChange={(e) => setShowPassword(e.target.checked)}
+                  style={{ marginRight: 6 }}
+                />
+                パスワードを表示
+              </label>
+            </div>
           </div>
 
           {error && (

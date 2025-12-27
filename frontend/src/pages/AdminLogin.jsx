@@ -6,6 +6,7 @@ export default function AdminLogin() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -42,16 +43,29 @@ export default function AdminLogin() {
             required
           />
         </label>
-        <label>
-          パスワード
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </label>
+        <div>
+          <label>
+            パスワード
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <div style={{ fontSize: 12, marginTop: 6 }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={showPassword}
+                onChange={(e) => setShowPassword(e.target.checked)}
+                style={{ marginRight: 6 }}
+              />
+              パスワードを表示
+            </label>
+          </div>
+        </div>
         <button type="submit" className="btn btn-border" disabled={loading}>
           {loading ? "ログイン中..." : "ログイン"}
         </button>

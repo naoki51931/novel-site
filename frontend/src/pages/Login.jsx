@@ -49,6 +49,7 @@ export default function Login() {
   const [step, setStep] = useState(1); // 1: ユーザー名+パスワード / 2: 6桁コード入力
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
@@ -359,12 +360,23 @@ export default function Login() {
               パスワード
               <br />
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 style={{ width: "100%", padding: 4 }}
               />
             </label>
+            <div style={{ marginTop: 6 }}>
+              <label style={{ fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={showPassword}
+                  onChange={(e) => setShowPassword(e.target.checked)}
+                  style={{ marginRight: 6 }}
+                />
+                パスワードを表示
+              </label>
+            </div>
           </div>
 
           {error && (
