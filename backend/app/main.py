@@ -36,7 +36,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text, or_
+from sqlalchemy import text, or_, func
 from sqlalchemy.orm import selectinload
 
 from .database import Base, engine, get_db
@@ -169,6 +169,36 @@ def ensure_novels_table_columns():
 
 
 ensure_novels_table_columns()
+
+def ensure_tag_indexes():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT TABLE_NAME, INDEX_NAME
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME IN ('novel_tags', 'episode_tags')
+                    """
+                )
+            ).fetchall()
+            existing = {(r[0], r[1]) for r in rows}
+
+            desired = [
+                ("novel_tags", "idx_novel_tags_tag_id", "tag_id"),
+                ("episode_tags", "idx_episode_tags_tag_id", "tag_id"),
+            ]
+
+            for table, index_name, column in desired:
+                if (table, index_name) in existing:
+                    continue
+                conn.execute(text(f"CREATE INDEX {index_name} ON {table} ({column})"))
+    except Exception as e:
+        print("[db] ensure_tag_indexes failed:", repr(e))
+
+
+ensure_tag_indexes()
 
 GOOGLE_CSE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "").strip()
 GOOGLE_CSE_CX = os.getenv("GOOGLE_CSE_CX", "").strip()
@@ -359,6 +389,11 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 PLATFORM_FEE_RATE = float(os.getenv("PLATFORM_FEE_RATE", "0.2"))
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
+ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "")
+ADMIN_JWT_EXPIRES_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRES_MINUTES", "120"))
+ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "1") == "1"
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
 
@@ -385,6 +420,7 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "no-reply@example.com")
 # =========================================
 logger = logging.getLogger("uvicorn.error")
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+admin_pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
@@ -643,12 +679,52 @@ def revalidate_premium_on_login(user: models.User, db: Session) -> None:
     db.commit()
 
 
-def require_admin(request: Request) -> None:
-    if not ADMIN_API_KEY:
-        raise HTTPException(500, "ADMIN_API_KEY 未設定")
-    token = request.headers.get("X-Admin-Token")
-    if token != ADMIN_API_KEY:
+def create_admin_token(username: str) -> str:
+    if not ADMIN_JWT_SECRET:
+        raise HTTPException(500, "ADMIN_JWT_SECRET 未設定")
+    expire = datetime.utcnow() + timedelta(minutes=ADMIN_JWT_EXPIRES_MINUTES)
+    payload = {"role": "admin", "sub": username, "exp": expire}
+    return jwt.encode(payload, ADMIN_JWT_SECRET, algorithm=ALGORITHM)
+
+
+def verify_admin_token(token: str) -> dict:
+    if not ADMIN_JWT_SECRET:
+        raise HTTPException(500, "ADMIN_JWT_SECRET 未設定")
+    try:
+        payload = jwt.decode(token, ADMIN_JWT_SECRET, algorithms=[ALGORITHM])
+    except Exception:
+        raise HTTPException(401, "管理者トークンが不正です")
+    if payload.get("role") != "admin":
         raise HTTPException(403, "管理者権限が必要です")
+    return payload
+
+
+def require_admin(request: Request) -> None:
+    admin_cookie = request.cookies.get("admin_token")
+    if admin_cookie:
+        verify_admin_token(admin_cookie)
+        return
+    # 移行期間用: 旧 X-Admin-Token を許可 (後で削除)
+    if ADMIN_API_KEY:
+        legacy = request.headers.get("X-Admin-Token")
+        if legacy == ADMIN_API_KEY:
+            return
+    raise HTTPException(401, "管理者権限が必要です")
+
+
+def _set_admin_cookie(response: Response, token: str | None) -> None:
+    if token:
+        response.set_cookie(
+            key="admin_token",
+            value=token,
+            httponly=True,
+            secure=ADMIN_COOKIE_SECURE,
+            samesite="lax",
+            max_age=ADMIN_JWT_EXPIRES_MINUTES * 60,
+            path="/",
+        )
+    else:
+        response.delete_cookie(key="admin_token", path="/")
 
 
 def calc_platform_fee(amount_yen: int) -> int:
@@ -696,8 +772,12 @@ def get_or_create_payout_profile(db: Session, author_user_id: int) -> models.Aut
         .first()
     )
     if profile:
+        if profile.payout_minimum_yen is None:
+            profile.payout_minimum_yen = 3000
+            db.add(profile)
+            db.flush()
         return profile
-    profile = models.AuthorPayoutProfile(user_id=author_user_id)
+    profile = models.AuthorPayoutProfile(user_id=author_user_id, payout_minimum_yen=3000)
     db.add(profile)
     db.flush()
     return profile
@@ -996,6 +1076,36 @@ class SupportPlanOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SupportPlanAuthorOut(BaseModel):
+    id: int
+    author_user_id: int
+    name: str
+    amount_yen: int
+    stripe_price_id: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class SupportPlanCreate(BaseModel):
+    name: str | None = None
+    amount_yen: int
+    stripe_price_id: str
+
+
+class SupportPlanUpdate(BaseModel):
+    name: str | None = None
+    amount_yen: int | None = None
+    stripe_price_id: str | None = None
+    is_active: bool | None = None
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
     token_type: str = "bearer"
 
 
@@ -1550,6 +1660,38 @@ def supports_checkout(
     return {"checkout_url": session.url}
 
 
+@app.post("/api/admin/auth/login")
+def admin_login(payload: AdminLoginRequest, response: Response):
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD_HASH:
+        raise HTTPException(500, "管理者認証が未設定です")
+    if payload.username != ADMIN_USERNAME:
+        raise HTTPException(401, "ログインに失敗しました")
+    raw_password = payload.password or ""
+    password_bytes = raw_password.encode("utf-8")
+    if len(password_bytes) > 72:
+        raw_password = password_bytes[:72].decode("utf-8", errors="ignore")
+    if not admin_pwd_context.verify(raw_password, ADMIN_PASSWORD_HASH):
+        raise HTTPException(401, "ログインに失敗しました")
+    token = create_admin_token(payload.username)
+    _set_admin_cookie(response, token)
+    return {"ok": True}
+
+
+@app.post("/api/admin/auth/logout")
+def admin_logout(response: Response):
+    _set_admin_cookie(response, None)
+    return {"ok": True}
+
+
+@app.get("/api/admin/auth/me")
+def admin_me(request: Request):
+    admin_cookie = request.cookies.get("admin_token")
+    if not admin_cookie:
+        raise HTTPException(401, "未ログインです")
+    verify_admin_token(admin_cookie)
+    return {"is_admin": True}
+
+
 @app.get("/api/support_plans", response_model=List[SupportPlanOut])
 def list_support_plans(
     author_user_id: int = Query(..., ge=1),
@@ -1572,6 +1714,216 @@ def list_support_plans(
         )
         for plan in plans
     ]
+
+
+@app.get("/api/authors/me/support_plans", response_model=List[SupportPlanAuthorOut])
+def list_my_support_plans(request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    plans = (
+        db.query(models.SupportPlan)
+        .filter(models.SupportPlan.author_user_id == user.id)
+        .order_by(
+            models.SupportPlan.is_active.desc(),
+            models.SupportPlan.amount_yen.asc(),
+            models.SupportPlan.id.asc(),
+        )
+        .all()
+    )
+    return [
+        SupportPlanAuthorOut(
+            id=plan.id,
+            author_user_id=plan.author_user_id,
+            name=plan.name,
+            amount_yen=plan.amount_yen,
+            stripe_price_id=plan.stripe_price_id,
+            is_active=bool(plan.is_active),
+        )
+        for plan in plans
+    ]
+
+
+@app.post("/api/authors/me/support_plans", response_model=SupportPlanAuthorOut)
+def create_support_plan(
+    payload: SupportPlanCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    amount_yen = int(payload.amount_yen)
+    if amount_yen < 100 or amount_yen > 100000 or (amount_yen % 100) != 0:
+        raise HTTPException(400, "amount_yen は100〜100000の100円刻みで指定してください")
+    stripe_price_id = (payload.stripe_price_id or "").strip()
+    if not stripe_price_id:
+        raise HTTPException(400, "stripe_price_id は必須です")
+
+    duplicate = (
+        db.query(models.SupportPlan)
+        .filter(
+            models.SupportPlan.author_user_id == user.id,
+            models.SupportPlan.amount_yen == amount_yen,
+            models.SupportPlan.is_active == True,
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(409, "同額の有効プランが既に存在します")
+
+    name = (payload.name or "").strip()
+    if not name:
+        name = f"月額{amount_yen}円"
+
+    plan = models.SupportPlan(
+        author_user_id=user.id,
+        name=name,
+        amount_yen=amount_yen,
+        stripe_price_id=stripe_price_id,
+        is_active=True,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return SupportPlanAuthorOut(
+        id=plan.id,
+        author_user_id=plan.author_user_id,
+        name=plan.name,
+        amount_yen=plan.amount_yen,
+        stripe_price_id=plan.stripe_price_id,
+        is_active=bool(plan.is_active),
+    )
+
+
+@app.patch("/api/authors/me/support_plans/{plan_id}", response_model=SupportPlanAuthorOut)
+def update_support_plan(
+    plan_id: int,
+    payload: SupportPlanUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    plan = db.query(models.SupportPlan).get(plan_id)
+    if not plan or plan.author_user_id != user.id:
+        raise HTTPException(404, "プランが見つかりません")
+
+    if payload.name is not None:
+        plan.name = (payload.name or "").strip() or plan.name
+
+    if payload.stripe_price_id is not None:
+        stripe_price_id = (payload.stripe_price_id or "").strip()
+        if not stripe_price_id:
+            raise HTTPException(400, "stripe_price_id は必須です")
+        plan.stripe_price_id = stripe_price_id
+
+    if payload.amount_yen is not None:
+        amount_yen = int(payload.amount_yen)
+        if amount_yen < 100 or amount_yen > 100000 or (amount_yen % 100) != 0:
+            raise HTTPException(400, "amount_yen は100〜100000の100円刻みで指定してください")
+        target_active = bool(plan.is_active)
+        if payload.is_active is not None:
+            target_active = bool(payload.is_active)
+        if target_active:
+            duplicate = (
+                db.query(models.SupportPlan)
+                .filter(
+                    models.SupportPlan.author_user_id == user.id,
+                    models.SupportPlan.amount_yen == amount_yen,
+                    models.SupportPlan.is_active == True,
+                    models.SupportPlan.id != plan.id,
+                )
+                .first()
+            )
+            if duplicate:
+                raise HTTPException(409, "同額の有効プランが既に存在します")
+        plan.amount_yen = amount_yen
+        if not plan.name:
+            plan.name = f"月額{amount_yen}円"
+
+    if payload.is_active is not None:
+        if payload.is_active:
+            duplicate = (
+                db.query(models.SupportPlan)
+                .filter(
+                    models.SupportPlan.author_user_id == user.id,
+                    models.SupportPlan.amount_yen == plan.amount_yen,
+                    models.SupportPlan.is_active == True,
+                    models.SupportPlan.id != plan.id,
+                )
+                .first()
+            )
+            if duplicate:
+                raise HTTPException(409, "同額の有効プランが既に存在します")
+        plan.is_active = bool(payload.is_active)
+
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return SupportPlanAuthorOut(
+        id=plan.id,
+        author_user_id=plan.author_user_id,
+        name=plan.name,
+        amount_yen=plan.amount_yen,
+        stripe_price_id=plan.stripe_price_id,
+        is_active=bool(plan.is_active),
+    )
+
+
+@app.post("/api/authors/me/support_plans/{plan_id}/deactivate", response_model=SupportPlanAuthorOut)
+def deactivate_support_plan(
+    plan_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    plan = db.query(models.SupportPlan).get(plan_id)
+    if not plan or plan.author_user_id != user.id:
+        raise HTTPException(404, "プランが見つかりません")
+    plan.is_active = False
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return SupportPlanAuthorOut(
+        id=plan.id,
+        author_user_id=plan.author_user_id,
+        name=plan.name,
+        amount_yen=plan.amount_yen,
+        stripe_price_id=plan.stripe_price_id,
+        is_active=bool(plan.is_active),
+    )
+
+
+@app.post("/api/authors/me/support_plans/{plan_id}/activate", response_model=SupportPlanAuthorOut)
+def activate_support_plan(
+    plan_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    plan = db.query(models.SupportPlan).get(plan_id)
+    if not plan or plan.author_user_id != user.id:
+        raise HTTPException(404, "プランが見つかりません")
+    duplicate = (
+        db.query(models.SupportPlan)
+        .filter(
+            models.SupportPlan.author_user_id == user.id,
+            models.SupportPlan.amount_yen == plan.amount_yen,
+            models.SupportPlan.is_active == True,
+            models.SupportPlan.id != plan.id,
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(409, "同額の有効プランが既に存在します")
+    plan.is_active = True
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return SupportPlanAuthorOut(
+        id=plan.id,
+        author_user_id=plan.author_user_id,
+        name=plan.name,
+        amount_yen=plan.amount_yen,
+        stripe_price_id=plan.stripe_price_id,
+        is_active=bool(plan.is_active),
+    )
 
 
 @app.post("/api/memberships/checkout")
@@ -2000,6 +2352,7 @@ def get_author_balance(request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
     balance = get_or_create_author_balance(db, user.id)
     profile = get_or_create_payout_profile(db, user.id)
+    payout_minimum = max(3000, int(profile.payout_minimum_yen or 0))
 
     today = date.today()
     if today.month == 12:
@@ -2010,7 +2363,7 @@ def get_author_balance(request: Request, db: Session = Depends(get_db)):
     return {
         "available_yen": int(balance.available_yen or 0),
         "pending_yen": int(balance.pending_yen or 0),
-        "payout_minimum_yen": int(profile.payout_minimum_yen or 0),
+        "payout_minimum_yen": payout_minimum,
         "payout_enabled": bool(profile.payout_enabled),
         "next_payout_date": next_payout_date,
     }
@@ -2038,7 +2391,7 @@ def update_payout_profile(
     if req.bank_account_holder is not None:
         profile.bank_account_holder = req.bank_account_holder
     if req.payout_minimum_yen is not None:
-        profile.payout_minimum_yen = max(0, int(req.payout_minimum_yen))
+        profile.payout_minimum_yen = max(3000, int(req.payout_minimum_yen))
 
     db.add(profile)
     db.commit()
@@ -2048,6 +2401,254 @@ def update_payout_profile(
 # =========================================
 # Admin Payouts
 # =========================================
+@app.get("/api/admin/supports/timeline")
+def admin_supports_timeline(
+    request: Request,
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=50),
+    by: str = Query("author"),
+):
+    require_admin(request)
+    if by not in ("author", "supporter"):
+        raise HTTPException(400, "by は author または supporter を指定してください")
+
+    today = date.today()
+    start_date = today - timedelta(days=days - 1)
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(today + timedelta(days=1), datetime.min.time())
+
+    user_field = (
+        models.Support.author_user_id if by == "author" else models.Support.supporter_user_id
+    )
+    day_col = func.date(models.Support.paid_at)
+    base_query = db.query(
+        user_field.label("user_id"),
+        day_col.label("day"),
+        func.count(models.Support.id).label("count"),
+        func.sum(models.Support.amount_yen).label("amount"),
+    ).filter(
+        models.Support.status == "paid",
+        models.Support.paid_at >= start_dt,
+        models.Support.paid_at < end_dt,
+    )
+    if by == "supporter":
+        base_query = base_query.filter(models.Support.supporter_user_id.isnot(None))
+
+    rows = base_query.group_by(user_field, day_col).all()
+
+    user_series: dict[int, dict[str, list]] = {}
+    for user_id, day, count, amount in rows:
+        if not user_id or not day:
+            continue
+        day_index = (day - start_date).days
+        if day_index < 0 or day_index >= days:
+            continue
+        entry = user_series.setdefault(
+            int(user_id),
+            {
+                "amounts": [0] * days,
+                "counts": [0] * days,
+                "total_amount_yen": 0,
+                "total_count": 0,
+            },
+        )
+        entry["amounts"][day_index] = int(amount or 0)
+        entry["counts"][day_index] = int(count or 0)
+        entry["total_amount_yen"] += int(amount or 0)
+        entry["total_count"] += int(count or 0)
+
+    user_ids = list(user_series.keys())
+    name_map: dict[int, str] = {}
+    if user_ids:
+        for uid, username in db.query(models.User.id, models.User.username).filter(
+            models.User.id.in_(user_ids)
+        ):
+            name_map[int(uid)] = username
+
+    sorted_users = sorted(
+        user_series.items(),
+        key=lambda item: item[1]["total_amount_yen"],
+        reverse=True,
+    )[:limit]
+
+    return {
+        "by": by,
+        "start_date": start_date.isoformat(),
+        "days": days,
+        "users": [
+            {
+                "user_id": user_id,
+                "username": name_map.get(user_id, f"user:{user_id}"),
+                "amounts": data["amounts"],
+                "counts": data["counts"],
+                "total_amount_yen": data["total_amount_yen"],
+                "total_count": data["total_count"],
+            }
+            for user_id, data in sorted_users
+        ],
+    }
+
+
+@app.get("/api/admin/payouts/timeline")
+def admin_payouts_timeline(
+    request: Request,
+    db: Session = Depends(get_db),
+    days: int = Query(90, ge=1, le=365),
+):
+    require_admin(request)
+    today = date.today()
+    start_date = today - timedelta(days=days - 1)
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(today + timedelta(days=1), datetime.min.time())
+
+    day_col = func.date(models.Payout.paid_at)
+    paid_rows = (
+        db.query(
+            day_col.label("day"),
+            func.count(models.Payout.id).label("count"),
+            func.sum(models.Payout.amount_yen).label("amount"),
+        )
+        .filter(
+            models.Payout.status == "paid",
+            models.Payout.paid_at >= start_dt,
+            models.Payout.paid_at < end_dt,
+        )
+        .group_by(day_col)
+        .all()
+    )
+
+    amounts = [0] * days
+    counts = [0] * days
+    for day, count, amount in paid_rows:
+        if not day:
+            continue
+        day_index = (day - start_date).days
+        if day_index < 0 or day_index >= days:
+            continue
+        amounts[day_index] = int(amount or 0)
+        counts[day_index] = int(count or 0)
+
+    upcoming_rows = (
+        db.query(models.Payout, models.User.username)
+        .join(models.User, models.User.id == models.Payout.author_user_id)
+        .filter(models.Payout.status.in_(["scheduled", "processing"]))
+        .order_by(models.Payout.created_at.asc())
+        .limit(50)
+        .all()
+    )
+    upcoming = [
+        {
+            "payout_id": payout.id,
+            "author_user_id": payout.author_user_id,
+            "username": username,
+            "amount_yen": payout.amount_yen,
+            "status": payout.status,
+            "period_start": payout.period_start.isoformat(),
+            "period_end": payout.period_end.isoformat(),
+            "created_at": payout.created_at.isoformat() if payout.created_at else None,
+        }
+        for payout, username in upcoming_rows
+    ]
+
+    recent_paid_rows = (
+        db.query(models.Payout, models.User.username)
+        .join(models.User, models.User.id == models.Payout.author_user_id)
+        .filter(models.Payout.status == "paid")
+        .order_by(models.Payout.paid_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_paid = [
+        {
+            "payout_id": payout.id,
+            "author_user_id": payout.author_user_id,
+            "username": username,
+            "amount_yen": payout.amount_yen,
+            "paid_at": payout.paid_at.isoformat() if payout.paid_at else None,
+            "period_start": payout.period_start.isoformat(),
+            "period_end": payout.period_end.isoformat(),
+        }
+        for payout, username in recent_paid_rows
+    ]
+
+    return {
+        "start_date": start_date.isoformat(),
+        "days": days,
+        "paid_amounts": amounts,
+        "paid_counts": counts,
+        "upcoming": upcoming,
+        "recent_paid": recent_paid,
+        "payout_minimum_yen": 3000,
+    }
+
+
+@app.get("/api/admin/payouts")
+def admin_list_payouts(
+    request: Request,
+    db: Session = Depends(get_db),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    require_admin(request)
+    statuses = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    query = (
+        db.query(models.Payout, models.User.username)
+        .join(models.User, models.User.id == models.Payout.author_user_id)
+    )
+    if statuses:
+        query = query.filter(models.Payout.status.in_(statuses))
+
+    rows = (
+        query.order_by(models.Payout.created_at.desc(), models.Payout.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "payout_id": payout.id,
+                "author_user_id": payout.author_user_id,
+                "username": username,
+                "amount_yen": payout.amount_yen,
+                "status": payout.status,
+                "period_start": payout.period_start.isoformat(),
+                "period_end": payout.period_end.isoformat(),
+                "created_at": payout.created_at.isoformat() if payout.created_at else None,
+            }
+            for payout, username in rows
+        ]
+    }
+
+
+@app.get("/api/admin/authors/{author_user_id}/payout_profile")
+def admin_author_payout_profile(
+    author_user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    profile = get_or_create_payout_profile(db, author_user_id)
+    user = db.query(models.User).get(author_user_id)
+    if not user:
+        raise HTTPException(404, "ユーザーが見つかりません")
+
+    return {
+        "author_user_id": author_user_id,
+        "username": user.username,
+        "payout_enabled": bool(profile.payout_enabled),
+        "payout_minimum_yen": max(3000, int(profile.payout_minimum_yen or 0)),
+        "bank_name": profile.bank_name,
+        "bank_branch": profile.bank_branch,
+        "bank_account_type": profile.bank_account_type,
+        "bank_account_number": profile.bank_account_number,
+        "bank_account_holder": profile.bank_account_holder,
+    }
+
+
 @app.post("/api/admin/payouts/generate")
 def generate_payouts(
     period: str,
@@ -2108,13 +2709,14 @@ def generate_payouts(
         profile = get_or_create_payout_profile(db, author_id)
         if not profile.payout_enabled:
             continue
+        payout_minimum = max(3000, int(profile.payout_minimum_yen or 0))
 
         supports_list = items["supports"]
         invoices_list = items["invoices"]
         amount = sum(s.author_share_yen for s in supports_list) + sum(
             i.author_share_yen for i in invoices_list
         )
-        if amount <= 0 or amount < int(profile.payout_minimum_yen or 0):
+        if amount <= 0 or amount < payout_minimum:
             continue
 
         payout = models.Payout(
@@ -2153,6 +2755,119 @@ def generate_payouts(
 
     db.commit()
     return {"count": created_count, "total_amount_yen": total_amount}
+
+
+@app.get("/api/admin/payouts/preview")
+def preview_payouts(
+    period: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    period_start, period_end = parse_payout_period(period)
+    start_dt = datetime.combine(period_start, datetime.min.time())
+    end_dt = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
+
+    support_payout_subq = (
+        db.query(models.PayoutItem.source_id)
+        .filter(models.PayoutItem.source_type == "support")
+        .subquery()
+    )
+    supports = (
+        db.query(models.Support)
+        .filter(
+            models.Support.status == "paid",
+            models.Support.paid_at >= start_dt,
+            models.Support.paid_at < end_dt,
+            ~models.Support.id.in_(support_payout_subq),
+        )
+        .all()
+    )
+
+    invoice_payout_subq = (
+        db.query(models.PayoutItem.source_id)
+        .filter(models.PayoutItem.source_type == "membership_invoice")
+        .subquery()
+    )
+    invoice_rows = (
+        db.query(models.MembershipInvoice, models.Membership.author_user_id)
+        .join(models.Membership, models.Membership.id == models.MembershipInvoice.membership_id)
+        .filter(
+            models.MembershipInvoice.status == "paid",
+            models.MembershipInvoice.paid_at >= start_dt,
+            models.MembershipInvoice.paid_at < end_dt,
+            ~models.MembershipInvoice.id.in_(invoice_payout_subq),
+        )
+        .all()
+    )
+
+    author_items: dict[int, dict[str, list]] = {}
+    for support in supports:
+        author_items.setdefault(support.author_user_id, {"supports": [], "invoices": []})
+        author_items[support.author_user_id]["supports"].append(support)
+
+    for invoice, author_user_id in invoice_rows:
+        author_items.setdefault(author_user_id, {"supports": [], "invoices": []})
+        author_items[author_user_id]["invoices"].append(invoice)
+
+    authors = []
+    if author_items:
+        users = (
+            db.query(models.User.id, models.User.username)
+            .filter(models.User.id.in_(author_items.keys()))
+            .all()
+        )
+        user_map = {int(uid): username for uid, username in users}
+    else:
+        user_map = {}
+
+    for author_id, items in author_items.items():
+        profile = get_or_create_payout_profile(db, author_id)
+        payout_minimum = max(3000, int(profile.payout_minimum_yen or 0))
+
+        supports_list = items["supports"]
+        invoices_list = items["invoices"]
+        support_amount = sum(s.author_share_yen for s in supports_list)
+        invoice_amount = sum(i.author_share_yen for i in invoices_list)
+        amount = support_amount + invoice_amount
+
+        eligible = True
+        reason = ""
+        if not profile.payout_enabled:
+            eligible = False
+            reason = "payout_disabled"
+        elif amount <= 0:
+            eligible = False
+            reason = "zero_amount"
+        elif amount < payout_minimum:
+            eligible = False
+            reason = "below_minimum"
+
+        authors.append(
+            {
+                "author_user_id": author_id,
+                "username": user_map.get(author_id, f"user:{author_id}"),
+                "payout_enabled": bool(profile.payout_enabled),
+                "payout_minimum_yen": payout_minimum,
+                "support_amount_yen": int(support_amount),
+                "support_count": len(supports_list),
+                "invoice_amount_yen": int(invoice_amount),
+                "invoice_count": len(invoices_list),
+                "total_amount_yen": int(amount),
+                "eligible": eligible,
+                "reason": reason,
+            }
+        )
+
+    authors.sort(key=lambda row: row["total_amount_yen"], reverse=True)
+
+    return {
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "authors": authors,
+        "support_count": len(supports),
+        "invoice_count": len(invoice_rows),
+    }
 
 
 @app.post("/api/admin/payouts/{payout_id}/mark_paid")

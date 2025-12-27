@@ -229,6 +229,11 @@ export default function Mypage() {
             作者ダッシュボードを開く
           </Link>
         </div>
+        <div style={{ marginTop: 8 }}>
+          <Link className="btn btn-border" to="/me/support-plans">
+            月額支援プラン管理
+          </Link>
+        </div>
       </section>
 
       {/* 公開ページ */}

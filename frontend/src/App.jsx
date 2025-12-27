@@ -21,8 +21,13 @@ import AiLogsPage from "./pages/AiLogsPage";
 import DirectMessageThread from "./pages/DirectMessageThread";
 import ResetPassword from "./pages/ResetPassword";
 import CreatorDashboard from "./pages/CreatorDashboard";
+import AdminHome from "./pages/AdminHome";
 import AdminPayouts from "./pages/AdminPayouts";
+import AdminLogin from "./pages/AdminLogin";
+import AdminDashboard from "./pages/AdminDashboard";
 import SupportReturn from "./pages/SupportReturn";
+import SupportPlans from "./pages/SupportPlans";
+import StripePriceIdManual from "./pages/StripePriceIdManual";
 
 
 export default function App() {
@@ -196,7 +201,7 @@ export default function App() {
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
-        <Route path="/mypage/settings" element={<AccountSettings />} />
+          <Route path="/mypage/settings" element={<AccountSettings />} />
           <Route path="/" element={<Home query={query} />} />
           <Route path="/login" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -204,7 +209,12 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
+          <Route path="/me/support-plans" element={<SupportPlans />} />
+          <Route path="/me/support-plans/manual" element={<StripePriceIdManual />} />
+          <Route path="/admin" element={<AdminHome />} />
+          <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin/payouts" element={<AdminPayouts />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />
@@ -226,6 +236,19 @@ export default function App() {
           <Route path="/membership/cancel" element={<SupportReturn mode="cancel" label="月額支援" />} />
         </Routes>
       </main>
+
+      <footer
+        style={{
+          padding: "16px",
+          borderTop: "1px solid #eee",
+          display: "flex",
+          justifyContent: "center",
+        }}
+      >
+        <Link className="btn btn-border" to="/admin">
+          管理画面
+        </Link>
+      </footer>
     </div>
   );
 }

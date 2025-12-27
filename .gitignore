@@ -1,1 +1,7 @@
 .env
+
+# local venv
+.venv/
+
+# vite build output
+frontend/dist/
