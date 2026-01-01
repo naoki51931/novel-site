@@ -160,6 +160,8 @@ class Episode(Base):
     body = Column(Text)
     episode_number = Column(Integer, nullable=True)
     cover_image_url = Column(String(255))
+    status = Column(String(16), nullable=False, server_default="public")
+    is_public = Column(Boolean, nullable=False, default=True)
     view_count = Column(Integer, nullable=False, server_default="0")
     like_count = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now())

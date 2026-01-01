@@ -74,6 +74,7 @@ class EpisodeBase(BaseModel):
     title: str
     body: Optional[str] = None
     episode_number: Optional[int] = None
+    status: Literal["public", "draft"] = "public"
 
 
 class EpisodeIllustCreate(BaseModel):
@@ -96,6 +97,8 @@ class EpisodeUpdate(BaseModel):
     body: Optional[str] = None
     episode_number: Optional[int] = None
     tag_names: Optional[List[str]] = None
+    status: Optional[Literal["public", "draft"]] = None
+    is_public: Optional[bool] = None
 
 
 class Episode(BaseModel):
@@ -104,6 +107,8 @@ class Episode(BaseModel):
     body: Optional[str]
     episode_number: Optional[int]
     created_at: datetime
+    status: Literal["public", "draft"] = "public"
+    is_public: bool = True
 
     # エピソード詳細で返すタグ一覧
     tags: List[TagRead] = []

@@ -50,6 +50,7 @@ export default function EditEpisode() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState(""); // ★ タグ state
+  const [status, setStatus] = useState("public"); // "public" / "draft"
 
   // ★ 表紙・押絵用の state
   const [coverImageUrl, setCoverImageUrl] = useState("");
@@ -86,6 +87,7 @@ export default function EditEpisode() {
       if (draft.title) setTitle(draft.title);
       if (draft.body) setBody(draft.body);
       if (typeof draft.tags === "string") setTags(draft.tags);
+      if (draft.status) setStatus(draft.status);
     } catch (e) {
       console.error("failed to load edit episode draft", e);
     }
@@ -100,6 +102,7 @@ export default function EditEpisode() {
         title,
         body,
         tags,
+        status,
         saved_at: new Date().toISOString(),
       };
       try {
@@ -109,7 +112,7 @@ export default function EditEpisode() {
       }
     }, 1000);
     return () => clearTimeout(timer);
-  }, [id, episodeNumber, title, body, tags]);
+  }, [id, episodeNumber, title, body, tags, status]);
   // === auto-save edit episode draft end ===
 
   useEffect(() => {
@@ -158,6 +161,11 @@ export default function EditEpisode() {
             setTags(data.tags.map((t) => t.name).join(", "));
           } else {
             setTags("");
+          }
+          if (data.status === "draft" || data.is_public === false) {
+            setStatus("draft");
+          } else {
+            setStatus("public");
           }
         }
 
@@ -210,6 +218,8 @@ export default function EditEpisode() {
           episode_number: Number(episodeNumber),
           title,
           body,
+          status,
+          is_public: status === "public",
           // ★ 編集時も tag_names を送る
           tag_names: tags
             .split(",")
@@ -496,6 +506,21 @@ export default function EditEpisode() {
               placeholder="例: バトル, 日常, 百合"
               style={{ width: "100%", padding: 4 }}
             />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            公開ステータス
+            <br />
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+            >
+              <option value="public">公開</option>
+              <option value="draft">下書き</option>
+            </select>
           </label>
         </div>
 

@@ -43,6 +43,7 @@ export default function NewEpisode() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");          // タグ用 state
+  const [status, setStatus] = useState("public"); // "public" / "draft"
 
   // ★ 表紙・押絵（NewEpisode 用）
   const [coverFile, setCoverFile] = useState(null);
@@ -70,6 +71,7 @@ export default function NewEpisode() {
       if (draft.title) setTitle(draft.title);
       if (draft.body) setBody(draft.body);
       if (typeof draft.tags === "string") setTags(draft.tags);
+      if (draft.status) setStatus(draft.status);
     } catch (e) {
       console.error("failed to load episode draft", e);
     }
@@ -83,6 +85,7 @@ export default function NewEpisode() {
         title,
         body,
         tags,
+        status,
         saved_at: new Date().toISOString(),
       };
       try {
@@ -93,7 +96,7 @@ export default function NewEpisode() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [draftKey, episodeNumber, title, body, tags]);
+  }, [draftKey, episodeNumber, title, body, tags, status]);
   // === auto-save episode draft end ===
 
 
@@ -226,6 +229,8 @@ export default function NewEpisode() {
       episode_number: Number(episodeNumber),
       title,
       body,
+      status,
+      is_public: status === "public",
       tag_names: tags
         .split(",")
         .map((s) => s.trim())
@@ -324,6 +329,21 @@ export default function NewEpisode() {
               onChange={(e) => setTitle(e.target.value)}
               style={{ width: "100%", padding: 4 }}
             />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            公開ステータス
+            <br />
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+            >
+              <option value="public">公開</option>
+              <option value="draft">下書き</option>
+            </select>
           </label>
         </div>
 

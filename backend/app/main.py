@@ -143,6 +143,35 @@ def ensure_episode_illusts_table_columns():
 
 ensure_episode_illusts_table_columns()
 
+def ensure_episodes_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'episodes'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "status" not in existing:
+                alters.append("ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'public'")
+            if "is_public" not in existing:
+                alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 1")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE episodes {clause}"))
+    except Exception as e:
+        print("[db] ensure_episodes_table_columns failed:", repr(e))
+
+
+ensure_episodes_table_columns()
+
 def ensure_novels_table_columns():
     try:
         with engine.begin() as conn:
@@ -3520,12 +3549,19 @@ def get_novel_detail(
         bool(getattr(user, "is_premium", False)) if user else False
     )
 
-    episodes = (
-      db.query(models.Episode)
-      .filter(models.Episode.novel_id == novel_id)
-      .order_by(models.Episode.episode_number)
-      .all()
+    episode_q = (
+        db.query(models.Episode)
+        .filter(models.Episode.novel_id == novel_id)
     )
+    if user and novel.author_id == user.id:
+        episodes = episode_q.order_by(models.Episode.episode_number).all()
+    else:
+        episodes = (
+            episode_q.filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(models.Episode.episode_number)
+            .all()
+        )
 
     tags = [{"id": nt.tag.id, "name": nt.tag.name} for nt in novel.novel_tags]
 
@@ -4038,6 +4074,26 @@ def create_dm_message(
 # =========================================
 # Episode 作成（タグ対応）
 # =========================================
+def normalize_episode_status(
+    status_value: str | None, is_public_value: bool | None
+) -> tuple[str, bool]:
+    if status_value is not None:
+        normalized = str(status_value).strip().lower()
+        if normalized not in ("public", "draft"):
+            raise HTTPException(400, "status は public / draft のみ指定できます")
+        return normalized, normalized == "public"
+    if is_public_value is not None:
+        return ("public" if is_public_value else "draft"), bool(is_public_value)
+    return "public", True
+
+
+def is_episode_draft(ep: models.Episode) -> bool:
+    status_value = getattr(ep, "status", "public") or "public"
+    if status_value == "draft":
+        return True
+    return not bool(getattr(ep, "is_public", True))
+
+
 @app.post("/api/novels/{novel_id}/episodes")
 def create_episode(
     novel_id: int,
@@ -4068,11 +4124,18 @@ def create_episode(
         )
         raise HTTPException(403, "追加権限がありません")
 
-    ep = models.Episode(cover_image_url=payload.cover_image_url, 
+    status_value, is_public = normalize_episode_status(
+        getattr(payload, "status", None), None
+    )
+
+    ep = models.Episode(
+        cover_image_url=payload.cover_image_url,
         novel_id=novel_id,
         title=payload.title,
         body=payload.body,
         episode_number=payload.episode_number,
+        status=status_value,
+        is_public=is_public,
     )
     db.add(ep)
     db.commit()
@@ -4151,8 +4214,14 @@ def update_episode(
     if "body" in payload and payload["body"] is not None:
         ep.body = payload["body"]
 
-    if "is_public" in payload and payload["is_public"] is not None:
-        ep.is_public = bool(payload["is_public"])
+    if "status" in payload and payload["status"] is not None:
+        status_value, is_public = normalize_episode_status(payload["status"], None)
+        ep.status = status_value
+        ep.is_public = is_public
+    elif "is_public" in payload and payload["is_public"] is not None:
+        status_value, is_public = normalize_episode_status(None, payload["is_public"])
+        ep.status = status_value
+        ep.is_public = is_public
 
     # タグ更新（差し替え）
     tag_names = payload.get("tag_names")
@@ -4215,7 +4284,8 @@ def list_episodes(
         episodes = base_q.order_by(models.Episode.episode_number).all()
     else:
         episodes = (
-            base_q.filter(models.Episode.is_public == True)
+            base_q.filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
             .order_by(models.Episode.episode_number)
             .all()
         )
@@ -4578,6 +4648,8 @@ def get_episode_for_edit(
         "view_count": ep.view_count,
         "like_count": like_count,
         "is_liked": is_liked,
+        "status": getattr(ep, "status", "public"),
+        "is_public": bool(getattr(ep, "is_public", True)),
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
         "illusts": [
             {
@@ -4607,11 +4679,6 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
 
-    # 閲覧数を誰でもカウント
-    ep.view_count = (ep.view_count or 0) + 1
-    db.add(ep)
-    db.commit()
-
     try:
         user = require_current_user(request, db)
     except Exception:
@@ -4624,13 +4691,14 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
     )
 
     # 下書きエピソードは作者だけ
-    try:
-        user = require_current_user(request, db)
-    except Exception:
-        user = None
-    if False and ep.is_public:  # FIXME: episode draft/public not yet implemented
+    if is_episode_draft(ep):
         if not user or (novel and novel.author_id != user.id):
             raise HTTPException(404, "エピソードが存在しません")
+
+    # 閲覧数を誰でもカウント
+    ep.view_count = (ep.view_count or 0) + 1
+    db.add(ep)
+    db.commit()
 
     # 年齢チェック
     if not AGE_RESTRICTION_DISABLED and novel.age_limit in ("r15", "r18"):
@@ -4694,6 +4762,8 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "view_count": ep.view_count,
         "like_count": like_count,
         "is_liked": is_liked,
+        "status": getattr(ep, "status", "public"),
+        "is_public": bool(getattr(ep, "is_public", True)),
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
         "illusts": [
             {
@@ -4714,6 +4784,8 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
 def share_episode_page(episode_id: int, request: Request, db: Session = Depends(get_db)):
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    if is_episode_draft(ep):
         raise HTTPException(404, "エピソードが存在しません")
 
     novel = db.query(models.Novel).get(ep.novel_id)
@@ -4837,6 +4909,8 @@ def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
 
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    if is_episode_draft(ep):
         raise HTTPException(404, "エピソードが存在しません")
     if not ep.cover_image_url:
         raise HTTPException(404, "表紙画像が存在しません")
@@ -5074,6 +5148,9 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if is_episode_draft(ep) and (not novel or novel.author_id != user.id):
+        raise HTTPException(404, "エピソードが存在しません")
 
     # すでにいいね済みかチェック
     existing = (
@@ -5121,6 +5198,9 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
 
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if is_episode_draft(ep) and (not novel or novel.author_id != user.id):
         raise HTTPException(404, "エピソードが存在しません")
 
     like = (
