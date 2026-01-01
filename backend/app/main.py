@@ -99,6 +99,8 @@ def ensure_users_table_columns():
             existing = {r[0] for r in rows}
 
             alters: list[str] = []
+            if "email_notifications_enabled" not in existing:
+                alters.append("ADD COLUMN email_notifications_enabled TINYINT(1) NOT NULL DEFAULT 1")
             if "premium_checked_at" not in existing:
                 alters.append("ADD COLUMN premium_checked_at DATETIME NULL")
             if "stripe_customer_id" not in existing:
@@ -113,6 +115,37 @@ def ensure_users_table_columns():
 
 
 ensure_users_table_columns()
+
+def ensure_direct_messages_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'direct_messages'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "recipient_user_id" not in existing:
+                alters.append("ADD COLUMN recipient_user_id INT NULL")
+            if "is_read" not in existing:
+                alters.append("ADD COLUMN is_read TINYINT(1) NOT NULL DEFAULT 0")
+            if "read_at" not in existing:
+                alters.append("ADD COLUMN read_at DATETIME NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE direct_messages {clause}"))
+    except Exception as e:
+        print("[db] ensure_direct_messages_table_columns failed:", repr(e))
+
+
+ensure_direct_messages_table_columns()
 
 def ensure_episode_illusts_table_columns():
     try:
@@ -443,6 +476,80 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "no-reply@example.com")
+
+# =========================================
+# 通知ユーティリティ
+# =========================================
+def send_notification_email(to_email: str, subject: str, body: str) -> None:
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS or not to_email:
+        print(f"[notification] SMTP設定が不足しているためログにのみ出力: to={to_email}, subject={subject}")
+        return
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        print(f"[notification] メール送信成功 to={to_email}")
+    except Exception as e:
+        print(f"[notification] メール送信失敗 to={to_email}, err={e!r}")
+
+
+def create_notification(
+    db: Session,
+    *,
+    user_id: int,
+    notif_type: str,
+    title: str,
+    body: str | None = None,
+    link_url: str | None = None,
+    actor_user_id: int | None = None,
+) -> models.Notification:
+    notif = models.Notification(
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        type=notif_type,
+        title=title,
+        body=body,
+        link_url=link_url,
+    )
+    db.add(notif)
+    return notif
+
+
+def send_notification_email_if_enabled(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    body: str | None = None,
+    link_url: str | None = None,
+) -> None:
+    user = db.query(models.User).get(user_id)
+    if not user or not getattr(user, "email_notifications_enabled", True):
+        return
+    if not user.email:
+        return
+    full_link = None
+    if link_url:
+        if link_url.startswith("/"):
+            full_link = FRONTEND_ORIGIN.rstrip("/") + link_url
+        else:
+            full_link = link_url
+    email_body = body or title
+    if full_link:
+        email_body = f"{email_body}\n\n{full_link}"
+    send_notification_email(user.email, title, email_body)
+
+
+def _truncate_text(value: str, limit: int = 120) -> str:
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 # =========================================
 # 認証共通
@@ -2129,7 +2236,36 @@ async def stripe_webhook(
 
             db.add(support)
             apply_author_balance_delta(db, author_user_id, delta_available=share_yen)
+            supporter_user_id = support.supporter_user_id
+            supporter_name = "支援者"
+            if supporter_user_id:
+                supporter = db.query(models.User).get(supporter_user_id)
+                if supporter and supporter.username:
+                    supporter_name = supporter.username
+            link_url = "/me/creator"
+            if support.novel_id:
+                link_url = f"/novels/{support.novel_id}"
+            elif support.episode_id:
+                link_url = f"/episodes/{support.episode_id}"
+            title = "支援を受け取りました"
+            notif_body = f"{supporter_name}から{int(amount_total)}円の支援が届きました"
+            create_notification(
+                db,
+                user_id=author_user_id,
+                notif_type="support_paid",
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+                actor_user_id=supporter_user_id,
+            )
             db.commit()
+            send_notification_email_if_enabled(
+                db,
+                user_id=author_user_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+            )
             return {"ok": True}
 
         if meta_type == "membership":
@@ -2255,7 +2391,28 @@ async def stripe_webhook(
         )
         db.add(invoice)
         apply_author_balance_delta(db, author_user_id, delta_available=share_yen)
+        supporter = db.query(models.User).get(supporter_user_id) if supporter_user_id else None
+        supporter_name = supporter.username if supporter and supporter.username else "支援者"
+        title = "月額支援の支払いが完了しました"
+        notif_body = f"{supporter_name}の月額支援が更新されました（{int(amount_paid)}円）"
+        link_url = "/me/creator"
+        create_notification(
+            db,
+            user_id=author_user_id,
+            notif_type="membership_paid",
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=supporter_user_id,
+        )
         db.commit()
+        send_notification_email_if_enabled(
+            db,
+            user_id=author_user_id,
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+        )
         return {"ok": True}
 
     if event_type == "charge.refunded":
@@ -3463,8 +3620,34 @@ def post_comment(novel_id: int, payload: dict = Body(...), request: Request = No
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(400, "コメントが空です")
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
     c = models.NovelComment(novel_id=novel_id, user_id=user.id, body=body)
-    db.add(c); db.commit(); db.refresh(c)
+    db.add(c)
+    if novel.author_id != user.id:
+        title = "小説にコメントが届きました"
+        snippet = _truncate_text(body, 120)
+        notif_body = f"{user.username}が「{novel.title}」にコメントしました: {snippet}"
+        create_notification(
+            db,
+            user_id=novel.author_id,
+            notif_type="novel_comment",
+            title=title,
+            body=notif_body,
+            link_url=f"/novels/{novel.id}",
+            actor_user_id=user.id,
+        )
+    db.commit()
+    db.refresh(c)
+    if novel.author_id != user.id:
+        send_notification_email_if_enabled(
+            db,
+            user_id=novel.author_id,
+            title=title,
+            body=notif_body,
+            link_url=f"/novels/{novel.id}",
+        )
     return {"ok": True, "id": c.id}
 
 # 小説詳細（tags 付き）
@@ -4005,6 +4188,32 @@ def read_dm_thread(
         .order_by(models.DirectMessage.created_at.asc(), models.DirectMessage.id.asc())
         .all()
     )
+    now = datetime.utcnow()
+    needs_commit = False
+    for msg in messages:
+        if msg.recipient_user_id is None:
+            msg.recipient_user_id = (
+                thread.user1_id if msg.sender_id == thread.user2_id else thread.user2_id
+            )
+            db.add(msg)
+            needs_commit = True
+    if needs_commit:
+        db.commit()
+    updated = (
+        db.query(models.DirectMessage)
+        .filter(
+            models.DirectMessage.thread_id == thread_id,
+            models.DirectMessage.recipient_user_id == user.id,
+            models.DirectMessage.is_read == False,
+        )
+        .update({"is_read": True, "read_at": now})
+    )
+    if updated:
+        db.commit()
+        for msg in messages:
+            if msg.recipient_user_id == user.id and not msg.is_read:
+                msg.is_read = True
+                msg.read_at = now
 
     return {
         "thread": {
@@ -4014,13 +4223,17 @@ def read_dm_thread(
             "partner_username": partner.username if partner else None,
             "created_at": thread.created_at,
         },
+        "current_user_id": user.id,
         "messages": [
             {
                 "id": msg.id,
                 "thread_id": msg.thread_id,
                 "sender_id": msg.sender_id,
                 "sender_username": msg.sender.username if msg.sender else None,
+                "recipient_user_id": msg.recipient_user_id,
                 "body": msg.body,
+                "is_read": bool(msg.is_read),
+                "read_at": msg.read_at,
                 "created_at": msg.created_at,
             }
             for msg in messages
@@ -4054,19 +4267,50 @@ def create_dm_message(
     if not body:
         raise HTTPException(400, "メッセージを入力してください")
 
-    msg = models.DirectMessage(thread_id=thread_id, sender_id=user.id, body=body)
+    recipient_id = thread.user1_id if thread.user2_id == user.id else thread.user2_id
+    msg = models.DirectMessage(
+        thread_id=thread_id,
+        sender_id=user.id,
+        recipient_user_id=recipient_id,
+        body=body,
+        is_read=False,
+    )
     thread.updated_at = datetime.utcnow()
     db.add(msg)
     db.add(thread)
+    if recipient_id != user.id:
+        title = "新しいDMが届きました"
+        snippet = _truncate_text(body, 120)
+        notif_body = f"{user.username}からメッセージ: {snippet}"
+        create_notification(
+            db,
+            user_id=recipient_id,
+            notif_type="dm_message",
+            title=title,
+            body=notif_body,
+            link_url=f"/dms/{thread_id}",
+            actor_user_id=user.id,
+        )
     db.commit()
     db.refresh(msg)
+    if recipient_id != user.id:
+        send_notification_email_if_enabled(
+            db,
+            user_id=recipient_id,
+            title=title,
+            body=notif_body,
+            link_url=f"/dms/{thread_id}",
+        )
 
     return {
         "id": msg.id,
         "thread_id": msg.thread_id,
         "sender_id": msg.sender_id,
         "sender_username": user.username,
+        "recipient_user_id": msg.recipient_user_id,
         "body": msg.body,
+        "is_read": bool(msg.is_read),
+        "read_at": msg.read_at,
         "created_at": msg.created_at,
     }
 
@@ -5080,8 +5324,29 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     novel.like_count = (novel.like_count or 0) + 1
     db.add(novel)
 
+    if novel.author_id != user.id:
+        title = "小説にいいねが付きました"
+        notif_body = f"{user.username}が「{novel.title}」にいいねしました"
+        create_notification(
+            db,
+            user_id=novel.author_id,
+            notif_type="novel_like",
+            title=title,
+            body=notif_body,
+            link_url=f"/novels/{novel.id}",
+            actor_user_id=user.id,
+        )
+
     db.commit()
     db.refresh(novel)
+    if novel.author_id != user.id:
+        send_notification_email_if_enabled(
+            db,
+            user_id=novel.author_id,
+            title=title,
+            body=notif_body,
+            link_url=f"/novels/{novel.id}",
+        )
 
     return {
         "ok": True,
@@ -5179,6 +5444,19 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
         ep.like_count = (ep.like_count or 0) + 1
         db.add(ep)
 
+    if novel and novel.author_id != user.id:
+        title = "エピソードにいいねが付きました"
+        notif_body = f"{user.username}が「{ep.title}」にいいねしました"
+        create_notification(
+            db,
+            user_id=novel.author_id,
+            notif_type="episode_like",
+            title=title,
+            body=notif_body,
+            link_url=f"/episodes/{ep.id}",
+            actor_user_id=user.id,
+        )
+
     db.commit()
 
     like_count = (
@@ -5186,6 +5464,14 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
         .filter(models.EpisodeLike.episode_id == episode_id)
         .count()
     )
+    if novel and novel.author_id != user.id:
+        send_notification_email_if_enabled(
+            db,
+            user_id=novel.author_id,
+            title=title,
+            body=notif_body,
+            link_url=f"/episodes/{ep.id}",
+        )
     return {"ok": True, "liked": True, "like_count": like_count}
 
 
@@ -5290,6 +5576,9 @@ def read_profile(request: Request, db: Session = Depends(get_db)):
         "email": user.email,
         "birth_date": str(user.birth_date) if user.birth_date else None,
         "is_premium": bool(user.is_premium),
+        "email_notifications_enabled": bool(
+            getattr(user, "email_notifications_enabled", True)
+        ),
     }
 
 # ============================
@@ -5326,6 +5615,9 @@ def update_profile(
     if payload.birth_date is not None:
         user.birth_date = payload.birth_date
 
+    if payload.email_notifications_enabled is not None:
+        user.email_notifications_enabled = payload.email_notifications_enabled
+
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -5336,7 +5628,123 @@ def update_profile(
         "email": user.email,
         "birth_date": str(user.birth_date) if user.birth_date else None,
         "is_premium": bool(user.is_premium),
+        "email_notifications_enabled": bool(
+            getattr(user, "email_notifications_enabled", True)
+        ),
     }
+
+
+# ============================
+# 通知 API
+# ============================
+@app.get("/api/notifications", response_model=List[schemas.NotificationRead])
+def list_notifications(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    unread_only: bool = Query(False),
+):
+    user = require_current_user(request, db)
+    query = (
+        db.query(models.Notification)
+        .filter(models.Notification.user_id == user.id)
+        .options(selectinload(models.Notification.actor))
+        .order_by(models.Notification.created_at.desc(), models.Notification.id.desc())
+    )
+    if unread_only:
+        query = query.filter(models.Notification.is_read == False)
+    items = query.offset(offset).limit(limit).all()
+    return [
+        {
+            "id": n.id,
+            "user_id": n.user_id,
+            "actor_user_id": n.actor_user_id,
+            "actor_username": n.actor.username if n.actor else None,
+            "type": n.type,
+            "title": n.title,
+            "body": n.body,
+            "link_url": n.link_url,
+            "is_read": bool(n.is_read),
+            "created_at": n.created_at,
+        }
+        for n in items
+    ]
+
+
+@app.get("/api/notifications/unread_count")
+def unread_notification_count(request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    count = (
+        db.query(models.Notification)
+        .filter(
+            models.Notification.user_id == user.id,
+            models.Notification.is_read == False,
+        )
+        .count()
+    )
+    return {"count": count}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    notif = (
+        db.query(models.Notification)
+        .filter(
+            models.Notification.id == notification_id,
+            models.Notification.user_id == user.id,
+        )
+        .first()
+    )
+    if not notif:
+        raise HTTPException(404, "通知が見つかりません")
+    if not notif.is_read:
+        notif.is_read = True
+        db.add(notif)
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/notifications/read_all")
+def mark_all_notifications_read(request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    (
+        db.query(models.Notification)
+        .filter(
+            models.Notification.user_id == user.id,
+            models.Notification.is_read == False,
+        )
+        .update({"is_read": True})
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/notifications/{notification_id}")
+def delete_notification(
+    notification_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    notif = (
+        db.query(models.Notification)
+        .filter(
+            models.Notification.id == notification_id,
+            models.Notification.user_id == user.id,
+        )
+        .first()
+    )
+    if not notif:
+        raise HTTPException(404, "通知が見つかりません")
+    db.delete(notif)
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/novels/{novel_id}/favorite")

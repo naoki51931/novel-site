@@ -214,6 +214,11 @@ export default function Mypage() {
             設定を開く
           </Link>
         </div>
+        <div style={{ marginTop: 8 }}>
+          <Link className="btn btn-border" to="/notifications">
+            通知センター
+          </Link>
+        </div>
       </section>
 
       {/* 作者ダッシュボード */}

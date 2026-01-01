@@ -121,6 +121,7 @@ class ProfileRead(BaseModel):
     username: str
     email: Optional[str] = None
     birth_date: Optional[date] = None
+    email_notifications_enabled: Optional[bool] = None
 
     class Config:
         orm_mode = True
@@ -130,6 +131,7 @@ class ProfileUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     birth_date: Optional[date] = None
+    email_notifications_enabled: Optional[bool] = None
 
 
 # =========================
@@ -159,7 +161,28 @@ class DirectMessageRead(BaseModel):
     thread_id: int
     sender_id: int
     sender_username: Optional[str] = None
+    recipient_user_id: Optional[int] = None
     body: str
+    is_read: Optional[bool] = None
+    read_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =========================
+# Notifications
+# =========================
+class NotificationRead(BaseModel):
+    id: int
+    user_id: int
+    actor_user_id: Optional[int] = None
+    actor_username: Optional[str] = None
+    type: str
+    title: str
+    body: Optional[str] = None
+    link_url: Optional[str] = None
+    is_read: bool
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

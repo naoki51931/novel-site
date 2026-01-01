@@ -28,11 +28,15 @@ import AdminDashboard from "./pages/AdminDashboard";
 import SupportReturn from "./pages/SupportReturn";
 import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
+import Notifications from "./pages/Notifications";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBell } from "@fortawesome/free-regular-svg-icons";
 
 
 export default function App() {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
   const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
@@ -107,24 +111,40 @@ export default function App() {
   const hasToken =
     typeof window !== "undefined" ? !!localStorage.getItem("token") : false;
 
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token) {
+      setUnreadCount(0);
+      return;
+    }
+
+    const loadUnreadCount = async () => {
+      try {
+        const res = await fetch("/api/notifications/unread_count", {
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (res.status === 401) {
+          setUnreadCount(0);
+          return;
+        }
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        setUnreadCount(Math.max(0, Number(data.count) || 0));
+      } catch {
+        // ignore
+      }
+    };
+
+    loadUnreadCount();
+  }, [location.pathname, hasToken]);
+
   return (
     <div>
-      <header className="site-header">
+      <header className={`site-header ${menuOpen ? "menu-open" : ""}`}>
         <div className="site-header-left">
           <h1 className="site-title">小説投稿サイト</h1>
         </div>
-
-        {/* スマホ用ハンバーガー */}
-        <button
-          type="button"
-          className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""}`}
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-label="メニューを開く"
-        >
-          <span />
-          <span />
-          <span />
-        </button>
 
         {/* ナビゲーション */}
         <nav className={`nav-links ${menuOpen ? "nav-open" : ""}`}>
@@ -161,24 +181,51 @@ export default function App() {
           </Link>
         </nav>
 
-        <div className="login-status">
-          {hasToken ? (
-            <span>
-              ログイン中:{" "}
-              {username ? (
-                <Link
-                  className="user-link"
-                  to={`/users/${encodeURIComponent(username)}`}
-                >
-                  {username}
-                </Link>
-              ) : (
-                "ユーザー"
-              )}
-            </span>
-          ) : (
-            <span>未ログイン</span>
-          )}
+        <div className="header-right">
+          <div className="login-status">
+            {hasToken ? (
+              <span>
+                ログイン中:{" "}
+                {username ? (
+                  <Link
+                    className="user-link"
+                    to={`/users/${encodeURIComponent(username)}`}
+                  >
+                    {username}
+                  </Link>
+                ) : (
+                  "ユーザー"
+                )}
+              </span>
+            ) : (
+              <span>未ログイン</span>
+            )}
+          </div>
+          <Link
+            to="/notifications"
+            className="nav-bell"
+            aria-label="通知センター"
+            title="通知センター"
+            onClick={() => setMenuOpen(false)}
+          >
+            <FontAwesomeIcon icon={faBell} />
+            {unreadCount > 0 && (
+              <span className="nav-bell-badge">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </Link>
+          {/* スマホ用ハンバーガー */}
+          <button
+            type="button"
+            className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""}`}
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-label="メニューを開く"
+          >
+            <span />
+            <span />
+            <span />
+          </button>
         </div>
       </header>
 
@@ -208,6 +255,7 @@ export default function App() {
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
           <Route path="/mypage" element={<Mypage />} />
+          <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
           <Route path="/me/support-plans" element={<SupportPlans />} />
           <Route path="/me/support-plans/manual" element={<StripePriceIdManual />} />

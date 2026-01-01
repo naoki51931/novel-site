@@ -12,6 +12,7 @@ export default function DirectMessageThread() {
 
   const [thread, setThread] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -41,6 +42,7 @@ export default function DirectMessageThread() {
         }
         setThread(data.thread || null);
         setMessages(Array.isArray(data.messages) ? data.messages : []);
+        setCurrentUserId(data.current_user_id ?? null);
       } catch (e) {
         console.error(e);
         setError(e.message || "エラーが発生しました");
@@ -146,6 +148,11 @@ export default function DirectMessageThread() {
                   {msg.created_at
                     ? new Date(msg.created_at).toLocaleString()
                     : ""}
+                  {currentUserId && msg.sender_id === currentUserId && (
+                    <span style={{ marginLeft: 8 }}>
+                      {msg.is_read ? "既読" : "未読"}
+                    </span>
+                  )}
                 </div>
                 <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>
                   {msg.body}

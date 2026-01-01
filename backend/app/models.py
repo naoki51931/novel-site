@@ -14,6 +14,8 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=True)
     birth_date = Column(Date, nullable=True)
+    # 通知センター用: メール通知の送信可否
+    email_notifications_enabled = Column(Boolean, nullable=False, server_default="1")
     # 課金フラグ（Stripe 用）
     is_premium = Column(Boolean, nullable=False, server_default="0")
     # プレミアム状態の再確認（ログイン時などで更新）
@@ -513,11 +515,35 @@ class DirectMessage(Base):
         index=True,
     )
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    recipient_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     body = Column(Text, nullable=False)
+    is_read = Column(Boolean, nullable=False, server_default="0")
+    read_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     thread = relationship("DirectMessageThread", back_populates="messages")
-    sender = relationship("User")
+    sender = relationship("User", foreign_keys=[sender_id])
+    recipient = relationship("User", foreign_keys=[recipient_user_id])
+
+
+# =========================
+# Notifications
+# =========================
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    type = Column(String(32), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    link_url = Column(String(255), nullable=True)
+    is_read = Column(Boolean, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    user = relationship("User", foreign_keys=[user_id])
+    actor = relationship("User", foreign_keys=[actor_user_id])
 
 
 class AIGuestGenerateUsage(Base):

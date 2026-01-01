@@ -147,6 +147,13 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   gap: 8px;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
 .site-title {
   margin: 0;
   font-size: 22px;
@@ -184,6 +191,48 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   font-size: 12px;
   color: var(--muted-text);
   white-space: nowrap;
+}
+
+.nav-bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  transition: background 0.2s ease, border-color 0.2s ease;
+  font-size: 16px;
+  position: relative;
+}
+
+.nav-bell:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nav-bell svg {
+  color: currentColor;
+}
+
+.nav-bell-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #e53935;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-weight: 700;
+  box-shadow: 0 1px 2px var(--shadow);
 }
 
 /* ハンバーガーボタンの基本形（PCでは隠す） */
@@ -401,6 +450,28 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   .nav-link-accent {
     background: var(--primary);
     color: var(--on-primary);
+  }
+
+  .nav-bell {
+    display: none;
+  }
+
+  .site-header.menu-open .nav-bell {
+    display: inline-flex;
+  }
+
+  .nav-bell {
+    width: 28px;
+    height: 28px;
+  }
+
+  .nav-bell-badge {
+    top: -3px;
+    right: -3px;
+    min-width: 14px;
+    height: 14px;
+    line-height: 14px;
+    font-size: 9px;
   }
 
   .search-bar {
