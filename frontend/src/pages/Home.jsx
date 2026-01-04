@@ -1,15 +1,23 @@
 // frontend/src/pages/Home.jsx
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 
 const API_BASE = "";
 
 export default function Home({ query = "" }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [ranking, setRanking] = useState([]);
+  const [rankingSort, setRankingSort] = useState("likes");
+  const [rankingLoading, setRankingLoading] = useState(true);
+  const [rankingError, setRankingError] = useState("");
+  const [rankingEnabled, setRankingEnabled] = useState(false);
+  const [isPremium, setIsPremium] = useState(false);
+  const [premiumChecked, setPremiumChecked] = useState(false);
 
   useEffect(() => {
     const fetchNovels = async () => {
@@ -59,6 +67,86 @@ export default function Home({ query = "" }) {
     fetchNovels();
   }, [query, location.search]); // ← 検索語 or URL が変わるたびに再取得
 
+  useEffect(() => {
+    const fetchRanking = async () => {
+      if (!isPremium || !rankingEnabled) {
+        setRanking([]);
+        setRankingLoading(false);
+        return;
+      }
+
+      try {
+        setRankingLoading(true);
+        setRankingError("");
+
+        const params = new URLSearchParams(location.search);
+        const urlQuery = (params.get("q") ?? "").trim();
+        const urlTag = (params.get("tag") ?? "").trim();
+        const effectiveQuery = urlQuery || (query ?? "").trim();
+
+        const token =
+          localStorage.getItem("token") ||
+          localStorage.getItem("access_token");
+        const headers = token ? { Authorization: "Bearer " + token } : undefined;
+
+        const apiParams = new URLSearchParams();
+        apiParams.set("sort", rankingSort);
+        if (effectiveQuery) apiParams.set("q", effectiveQuery);
+        if (urlTag) apiParams.set("tag", urlTag);
+        const qs = apiParams.toString();
+        let url = `${API_BASE}/api/public/novels/ranking`;
+        if (qs) url += `?${qs}`;
+
+        const res = await fetch(
+          url,
+          headers ? { headers, cache: "no-store" } : { cache: "no-store" }
+        );
+        if (!res.ok) throw new Error("ランキングの取得に失敗しました");
+        const data = await res.json().catch(() => []);
+        setRanking(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        setRankingError(err.message || "ランキングの取得に失敗しました");
+      } finally {
+        setRankingLoading(false);
+      }
+    };
+
+    fetchRanking();
+  }, [rankingSort, isPremium, rankingEnabled, location.search, query]);
+
+  useEffect(() => {
+    const fetchPremium = async () => {
+      const token =
+        localStorage.getItem("token") || localStorage.getItem("access_token");
+      if (!token) {
+        setIsPremium(false);
+        setPremiumChecked(true);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/users/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          setIsPremium(false);
+          setPremiumChecked(true);
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        setIsPremium(!!data.is_premium);
+      } catch (err) {
+        console.error(err);
+        setIsPremium(false);
+      } finally {
+        setPremiumChecked(true);
+      }
+    };
+
+    fetchPremium();
+  }, [location.pathname]);
+
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
     return new Date(isoString).toLocaleString("ja-JP");
@@ -70,6 +158,98 @@ export default function Home({ query = "" }) {
     return text.slice(0, max) + "…";
   };
 
+  const applyNovelUpdate = (novelId, updater) => {
+    setNovels((prev) =>
+      prev.map((item) => (item.id === novelId ? updater(item) : item))
+    );
+    setRanking((prev) =>
+      prev.map((item) => (item.id === novelId ? updater(item) : item))
+    );
+  };
+
+  const requireToken = () => {
+    const token =
+      localStorage.getItem("token") || localStorage.getItem("access_token");
+    if (!token) {
+      alert("ログインが必要です。");
+      navigate("/login");
+      return null;
+    }
+    return token;
+  };
+
+  const toggleLike = async (novel) => {
+    const token = requireToken();
+    if (!token) return;
+
+    const prevLiked = !!novel.is_liked;
+    const method = prevLiked ? "DELETE" : "POST";
+
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/like`, {
+        method,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || "いいね操作に失敗しました");
+      }
+
+      applyNovelUpdate(novel.id, (item) => {
+        const nextLiked =
+          typeof data.liked === "boolean" ? data.liked : !prevLiked;
+        const delta =
+          nextLiked === prevLiked ? 0 : nextLiked ? 1 : -1;
+        const nextLikeCount =
+          typeof data.like_count === "number"
+            ? data.like_count
+            : Math.max(0, (item.like_count ?? 0) + delta);
+        return { ...item, is_liked: nextLiked, like_count: nextLikeCount };
+      });
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "いいね操作中にエラーが発生しました");
+    }
+  };
+
+  const toggleFavorite = async (novel) => {
+    const token = requireToken();
+    if (!token) return;
+
+    const prevFavorited = !!novel.is_favorited;
+    const method = prevFavorited ? "DELETE" : "POST";
+
+    try {
+      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
+        method,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || "ブックマーク操作に失敗しました");
+      }
+
+      applyNovelUpdate(novel.id, (item) => {
+        const nextFavorited =
+          typeof data.favorited === "boolean" ? data.favorited : !prevFavorited;
+        const delta =
+          nextFavorited === prevFavorited ? 0 : nextFavorited ? 1 : -1;
+        const nextFavoriteCount = Math.max(
+          0,
+          (item.favorite_count ?? 0) + delta
+        );
+        return {
+          ...item,
+          is_favorited: nextFavorited,
+          favorite_count: nextFavoriteCount,
+        };
+      });
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "ブックマーク操作中にエラーが発生しました");
+    }
+  };
+
   if (loading) return <p>読み込み中...</p>;
 
   return (
@@ -77,6 +257,192 @@ export default function Home({ query = "" }) {
       {error && (
         <p style={{ color: "red", marginTop: 8, marginBottom: 8 }}>{error}</p>
       )}
+
+      <section style={{ marginBottom: 24 }}>
+        <h3
+          style={{
+            borderBottom: "1px solid var(--border)",
+            paddingBottom: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          ランキング
+          <span
+            style={{
+              display: "inline-block",
+              padding: "2px 8px",
+              borderRadius: 999,
+              backgroundColor: "#1f2937",
+              color: "#fff",
+              fontSize: 12,
+              letterSpacing: "0.04em",
+            }}
+          >
+            PREMIUM
+          </span>
+          <label
+            style={{
+              marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: "var(--muted-text)",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={rankingEnabled}
+              onChange={(e) => setRankingEnabled(e.target.checked)}
+            />
+            ランキング表示
+          </label>
+        </h3>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          {[
+            { key: "likes", label: "いいね" },
+            { key: "favorites", label: "ブックマーク" },
+            { key: "views", label: "閲覧" },
+          ].map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className="btn btn-border"
+              onClick={() => setRankingSort(option.key)}
+              disabled={!rankingEnabled}
+              style={
+                rankingSort === option.key
+                  ? { borderColor: "#333", color: "#333" }
+                  : undefined
+              }
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        {!premiumChecked ? (
+          <p style={{ marginTop: 10 }}>プレミアム状態を確認中...</p>
+        ) : !isPremium ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              border: "1px dashed var(--border)",
+              borderRadius: 8,
+              color: "var(--muted-text)",
+            }}
+          >
+            ランキングはプレミアム会員限定の機能です。
+          </div>
+        ) : !rankingEnabled ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              border: "1px dashed var(--border)",
+              borderRadius: 8,
+              color: "var(--muted-text)",
+            }}
+          >
+            トグルをオンにするとランキングが表示されます。
+          </div>
+        ) : (
+          <>
+            {rankingError && (
+              <p style={{ color: "red", marginTop: 8 }}>{rankingError}</p>
+            )}
+
+            {rankingLoading ? (
+              <p style={{ marginTop: 10 }}>ランキングを読み込み中...</p>
+            ) : ranking.length === 0 ? (
+              <p style={{ marginTop: 10 }}>ランキングデータがありません。</p>
+            ) : (
+              <ol style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
+                {ranking.map((novel) => (
+                  <li
+                    key={novel.id}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      border: "1px solid var(--novel-card-border)",
+                      borderRadius: 8,
+                      padding: 12,
+                      marginBottom: 12,
+                      backgroundColor: "var(--novel-card-bg)",
+                      color: "var(--text)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span
+                        style={{
+                          fontWeight: "bold",
+                          minWidth: 48,
+                          color: "var(--novel-card-meta)",
+                        }}
+                      >
+                        #{novel.rank}
+                      </span>
+                      <Link to={`/novels/${novel.id}`} style={{ fontWeight: "bold" }}>
+                        {novel.title}
+                      </Link>
+                      {novel.author_username && (
+                        <span style={{ marginLeft: "auto", fontSize: 12 }}>
+                          作者:{" "}
+                          <Link
+                            className="user-link"
+                            to={`/users/${encodeURIComponent(novel.author_username)}`}
+                          >
+                            {novel.author_username}
+                          </Link>
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 10,
+                        fontSize: 12,
+                        color: "var(--novel-card-meta)",
+                      }}
+                    >
+                      <span>閲覧: {novel.view_count ?? 0}</span>
+                      <span>LIKE: {novel.like_count ?? 0}</span>
+                      <span>ブックマーク: {novel.favorite_count ?? 0}</span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        onClick={() => toggleLike(novel)}
+                      >
+                        {novel.is_liked ? "♥ いいね済み" : "♡ いいね"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        onClick={() => toggleFavorite(novel)}
+                      >
+                        {novel.is_favorited
+                          ? "★ ブックマーク済み"
+                          : "☆ ブックマーク"}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </>
+        )}
+      </section>
 
       {novels.length === 0 && <p>小説が見つかりません。</p>}
 
@@ -115,7 +481,22 @@ export default function Home({ query = "" }) {
               {shorten(novel.description, 120) || "説明がありません。"}
             </p>
 
-              <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 10,
+                fontSize: 12,
+                color: "var(--novel-card-meta)",
+                marginBottom: 8,
+              }}
+            >
+              <span>閲覧: {novel.view_count ?? 0}</span>
+              <span>LIKE: {novel.like_count ?? 0}</span>
+              <span>ブックマーク: {novel.favorite_count ?? 0}</span>
+            </div>
+
+            <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>
               <div>
                 作者:{" "}
                 {novel.author_username ? (
@@ -131,6 +512,23 @@ export default function Home({ query = "" }) {
                   : "不明"}
               </div>
               <div>作成日時: {formatDateTime(novel.created_at)}</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={() => toggleLike(novel)}
+              >
+                {novel.is_liked ? "♥ いいね済み" : "♡ いいね"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={() => toggleFavorite(novel)}
+              >
+                {novel.is_favorited ? "★ ブックマーク済み" : "☆ ブックマーク"}
+              </button>
             </div>
 
             <div

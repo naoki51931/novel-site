@@ -3923,6 +3923,42 @@ def list_public_novels(
 
     novels = query.order_by(models.Novel.created_at.desc()).all()
 
+    novel_ids = [novel.id for novel in novels]
+    favorite_counts = {}
+    if novel_ids:
+        favorite_rows = (
+            db.query(
+                models.NovelFavorite.novel_id,
+                func.count(models.NovelFavorite.id),
+            )
+            .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+            .group_by(models.NovelFavorite.novel_id)
+            .all()
+        )
+        favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+
+    liked_ids = set()
+    favorited_ids = set()
+    if user and novel_ids:
+        liked_ids = {
+            row[0]
+            for row in db.query(models.NovelLike.novel_id)
+            .filter(
+                models.NovelLike.user_id == user.id,
+                models.NovelLike.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+        favorited_ids = {
+            row[0]
+            for row in db.query(models.NovelFavorite.novel_id)
+            .filter(
+                models.NovelFavorite.user_id == user.id,
+                models.NovelFavorite.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+
     result = []
     for novel in novels:
         tag_names = [nt.tag.name for nt in novel.novel_tags]
@@ -3935,6 +3971,231 @@ def list_public_novels(
                 "author_id": novel.author_id,
                 "author_username": novel.author.username if novel.author else None,
                 "tag_names": tag_names,
+                "view_count": getattr(novel, "view_count", 0) or 0,
+                "like_count": getattr(novel, "like_count", 0) or 0,
+                "favorite_count": favorite_counts.get(novel.id, 0),
+                "is_liked": novel.id in liked_ids,
+                "is_favorited": novel.id in favorited_ids,
+            }
+        )
+    return result
+
+
+@app.get("/api/public/novels/ranking")
+def list_public_novel_rankings(
+    request: Request,
+    sort: str = Query("likes"),
+    limit: int = Query(10, ge=1, le=50),
+    q: str | None = None,
+    tag: str | None = None,
+    db: Session = Depends(get_db),
+):
+    if sort not in ("likes", "favorites", "views"):
+        raise HTTPException(400, "sort は likes / favorites / views のみ指定できます")
+    user = None
+    if FORCE_ALL_PREMIUM:
+        try:
+            user = require_current_user(request, db)
+        except Exception:
+            user = None
+    else:
+        user = require_current_user(request, db)
+        if not bool(getattr(user, "is_premium", False)):
+            raise HTTPException(403, "ランキングはプレミアム会員限定です")
+
+    user_age = None
+    if user and user.birth_date:
+        user_age = calc_age(user.birth_date)
+
+    query = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.author),
+        )
+        .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
+        .filter(models.Novel.is_public == True)
+    )
+
+    if not AGE_RESTRICTION_DISABLED:
+        if user_age is None:
+            query = query.filter(models.Novel.age_limit == "all")
+        else:
+            if user_age < 15:
+                query = query.filter(models.Novel.age_limit == "all")
+            elif user_age < 18:
+                query = query.filter(models.Novel.age_limit.in_(["all", "r15"]))
+
+    if q:
+        raw = q.strip()
+        if raw:
+            terms = [t for t in re.split(r"[\s,]+", raw) if t]
+
+            if terms and terms[0].startswith("@"):
+                username_term = terms[0][1:].strip()
+                if username_term:
+                    query = query.filter(models.User.username.ilike(f"%{username_term}%"))
+                terms = terms[1:]
+
+            def episode_match_exists(like: str):
+                return (
+                    db.query(models.Episode.id)
+                    .filter(models.Episode.novel_id == models.Novel.id)
+                    .filter(
+                        or_(
+                            models.Episode.title.ilike(like),
+                            models.Episode.body.ilike(like),
+                        )
+                    )
+                    .exists()
+                )
+
+            def novel_tag_match_exists(like: str):
+                return (
+                    db.query(models.NovelTag.novel_id)
+                    .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+                    .filter(models.NovelTag.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
+                )
+
+            def episode_tag_match_exists(like: str):
+                return (
+                    db.query(models.Episode.id)
+                    .join(
+                        models.EpisodeTag,
+                        models.EpisodeTag.episode_id == models.Episode.id,
+                    )
+                    .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+                    .filter(models.Episode.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
+                )
+
+            for term in terms:
+                like = f"%{term}%"
+                query = query.filter(
+                    or_(
+                        models.Novel.title.ilike(like),
+                        models.Novel.description.ilike(like),
+                        models.User.username.ilike(like),
+                        episode_match_exists(like),
+                        novel_tag_match_exists(like),
+                        episode_tag_match_exists(like),
+                    )
+                )
+
+    if tag:
+        raw = tag.strip()
+        if raw:
+            tag_terms = [t for t in re.split(r"[\s,]+", raw) if t]
+
+            def tag_match_exists(like: str):
+                novel_exists = (
+                    db.query(models.NovelTag.novel_id)
+                    .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+                    .filter(models.NovelTag.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
+                )
+                episode_exists = (
+                    db.query(models.Episode.id)
+                    .join(
+                        models.EpisodeTag,
+                        models.EpisodeTag.episode_id == models.Episode.id,
+                    )
+                    .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+                    .filter(models.Episode.novel_id == models.Novel.id)
+                    .filter(models.Tag.name.ilike(like))
+                    .exists()
+                )
+                return or_(novel_exists, episode_exists)
+
+            if tag_terms:
+                query = query.filter(or_(*[tag_match_exists(f"%{t}%") for t in tag_terms]))
+
+    if sort == "favorites":
+        query = (
+            query.outerjoin(
+                models.NovelFavorite,
+                models.NovelFavorite.novel_id == models.Novel.id,
+            )
+            .group_by(models.Novel.id)
+            .order_by(
+                func.count(models.NovelFavorite.id).desc(),
+                models.Novel.id.desc(),
+            )
+        )
+    elif sort == "views":
+        query = query.order_by(
+            models.Novel.view_count.desc(),
+            models.Novel.id.desc(),
+        )
+    else:
+        query = query.order_by(
+            models.Novel.like_count.desc(),
+            models.Novel.id.desc(),
+        )
+
+    novels = query.limit(limit).all()
+    novel_ids = [novel.id for novel in novels]
+
+    favorite_counts = {}
+    if novel_ids:
+        favorite_rows = (
+            db.query(
+                models.NovelFavorite.novel_id,
+                func.count(models.NovelFavorite.id),
+            )
+            .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+            .group_by(models.NovelFavorite.novel_id)
+            .all()
+        )
+        favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+
+    liked_ids = set()
+    favorited_ids = set()
+    if user and novel_ids:
+        liked_ids = {
+            row[0]
+            for row in db.query(models.NovelLike.novel_id)
+            .filter(
+                models.NovelLike.user_id == user.id,
+                models.NovelLike.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+        favorited_ids = {
+            row[0]
+            for row in db.query(models.NovelFavorite.novel_id)
+            .filter(
+                models.NovelFavorite.user_id == user.id,
+                models.NovelFavorite.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+
+    result = []
+    for idx, novel in enumerate(novels, start=1):
+        result.append(
+            {
+                "rank": idx,
+                "id": novel.id,
+                "title": novel.title,
+                "description": novel.description,
+                "created_at": novel.created_at,
+                "author_id": novel.author_id,
+                "author_username": novel.author.username if novel.author else None,
+                "view_count": getattr(novel, "view_count", 0) or 0,
+                "like_count": getattr(novel, "like_count", 0) or 0,
+                "favorite_count": favorite_counts.get(novel.id, 0),
+                "is_liked": novel.id in liked_ids,
+                "is_favorited": novel.id in favorited_ids,
+                "tags": [
+                    {"id": nt.tag.id, "name": nt.tag.name}
+                    for nt in (getattr(novel, "novel_tags", []) or [])
+                    if getattr(nt, "tag", None) is not None
+                ],
             }
         )
     return result
@@ -4978,6 +5239,42 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
 
     body_converted = ep.body if is_premium or (user and novel.author_id == user.id) else truncate_for_free(ep.body or "")
 
+    next_episode = None
+    prev_episode = None
+    current_number = get_episode_number(ep)
+    if current_number is not None:
+        next_q = (
+            db.query(models.Episode)
+            .filter(models.Episode.novel_id == ep.novel_id)
+            .filter(models.Episode.episode_number > current_number)
+        )
+        prev_q = (
+            db.query(models.Episode)
+            .filter(models.Episode.novel_id == ep.novel_id)
+            .filter(models.Episode.episode_number < current_number)
+        )
+        if not (user and novel and novel.author_id == user.id):
+            next_q = next_q.filter(models.Episode.status == "public").filter(
+                models.Episode.is_public == True
+            )
+            prev_q = prev_q.filter(models.Episode.status == "public").filter(
+                models.Episode.is_public == True
+            )
+        next_ep = next_q.order_by(models.Episode.episode_number.asc()).first()
+        prev_ep = prev_q.order_by(models.Episode.episode_number.desc()).first()
+        if next_ep:
+            next_episode = {
+                "id": next_ep.id,
+                "title": next_ep.title,
+                "episode_number": next_ep.episode_number,
+            }
+        if prev_ep:
+            prev_episode = {
+                "id": prev_ep.id,
+                "title": prev_ep.title,
+                "episode_number": prev_ep.episode_number,
+            }
+
     # いいね情報
     like_count = db.query(models.EpisodeLike).filter(
         models.EpisodeLike.episode_id == episode_id
@@ -5021,6 +5318,8 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
             for il in ep.illusts
         ],
         "is_premium_user": is_premium,
+        "next_episode": next_episode,
+        "prev_episode": prev_episode,
     }
 
 

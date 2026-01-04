@@ -230,6 +230,26 @@ export default function EpisodeDetail() {
     episode.body || "",
     illusts
   );
+  const prevEpisode = episode?.prev_episode || null;
+  const nextEpisode = episode?.next_episode || null;
+  const prevEpisodeTitle = prevEpisode
+    ? formatEpisodeDisplayTitle(
+        prevEpisode.episode_number ?? prevEpisode.number,
+        prevEpisode.title
+      )
+    : "";
+  const nextEpisodeTitle = nextEpisode
+    ? formatEpisodeDisplayTitle(
+        nextEpisode.episode_number ?? nextEpisode.number,
+        nextEpisode.title
+      )
+    : "";
+  const prevEpisodeLabel = prevEpisodeTitle
+    ? `前のエピソードへ：${prevEpisodeTitle}`
+    : "前のエピソードへ";
+  const nextEpisodeLabel = nextEpisodeTitle
+    ? `次のエピソードへ：${nextEpisodeTitle}`
+    : "次のエピソードへ";
 
   return (
     <div>
@@ -437,6 +457,21 @@ export default function EpisodeDetail() {
           <button className="btn btn-border" onClick={handleSubscribe}>
             課金して続きを読む
           </button>
+        </div>
+      )}
+
+      {(prevEpisode?.id || nextEpisode?.id) && (
+        <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {prevEpisode?.id && (
+            <Link to={`/episodes/${prevEpisode.id}`} className="btn btn-border">
+              {prevEpisodeLabel}
+            </Link>
+          )}
+          {nextEpisode?.id && (
+            <Link to={`/episodes/${nextEpisode.id}`} className="btn btn-border">
+              {nextEpisodeLabel}
+            </Link>
+          )}
         </div>
       )}
 
