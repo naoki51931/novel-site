@@ -22,6 +22,13 @@ export default function EpisodeDetail() {
 
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
+  const handleBackToNovel = () => {
+    if (episode?.novel_id != null) {
+      navigate(`/novels/${episode.novel_id}`);
+      return;
+    }
+    navigate("/");
+  };
 
   const handleShareToX = () => {
     if (!episode?.id) return;
@@ -148,7 +155,7 @@ export default function EpisodeDetail() {
     return (
       <div>
         <p style={{ color: "red" }}>{error}</p>
-        <button className="btn btn-border" onClick={() => navigate(-1)}>
+        <button className="btn btn-border" onClick={handleBackToNovel}>
           戻る
         </button>
       </div>
@@ -159,7 +166,7 @@ export default function EpisodeDetail() {
     return (
       <div>
         <p>エピソードが見つかりませんでした。</p>
-        <button className="btn btn-border" onClick={() => navigate(-1)}>
+        <button className="btn btn-border" onClick={handleBackToNovel}>
           戻る
         </button>
       </div>
@@ -253,7 +260,7 @@ export default function EpisodeDetail() {
 
   return (
     <div>
-      <button className="btn btn-border" onClick={() => navigate(-1)}>
+      <button className="btn btn-border" onClick={handleBackToNovel}>
         ← 戻る
       </button>
 

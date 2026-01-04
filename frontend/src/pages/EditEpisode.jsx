@@ -256,7 +256,7 @@ export default function EditEpisode() {
       if (targetNovelId != null) {
         navigate(`/novels/${targetNovelId}`);
       } else {
-        navigate(-1);
+        navigate("/");
       }
     } catch (err) {
       console.error(err);
@@ -270,7 +270,7 @@ export default function EditEpisode() {
     if (novelId != null) {
       navigate(`/novels/${novelId}`);
     } else {
-      navigate(-1);
+      navigate("/");
     }
   };
 
@@ -459,7 +459,7 @@ export default function EditEpisode() {
           <button
             className="btn btn-border"
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate("/")}
           >
             ← 戻る
           </button>

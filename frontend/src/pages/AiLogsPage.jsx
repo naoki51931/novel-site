@@ -90,7 +90,7 @@ export default function AiLogsPage() {
   return (
     <div>
       <div style={{ marginBottom: 12, display: "flex", gap: 8 }}>
-        <button className="btn btn-border" onClick={() => navigate(-1)}>
+        <button className="btn btn-border" onClick={() => navigate("/ai-novel")}>
           ← 戻る
         </button>
         <Link to="/" className="btn btn-border">

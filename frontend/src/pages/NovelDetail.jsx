@@ -468,7 +468,7 @@ export default function NovelDetail() {
     return (
       <div>
         <p style={{ color: "red" }}>{error}</p>
-        <button className="btn btn-border" onClick={() => navigate(-1)}>
+        <button className="btn btn-border" onClick={() => navigate("/")}>
           戻る
         </button>
       </div>
@@ -479,7 +479,7 @@ export default function NovelDetail() {
     return (
       <div>
         <p>小説が見つかりませんでした。</p>
-        <button className="btn btn-border" onClick={() => navigate(-1)}>
+        <button className="btn btn-border" onClick={() => navigate("/")}>
           戻る
         </button>
       </div>
@@ -491,7 +491,7 @@ export default function NovelDetail() {
 
   return (
     <div>
-      <button className="btn btn-border" onClick={() => navigate(-1)}>
+      <button className="btn btn-border" onClick={() => navigate("/")}>
         ← 一覧に戻る
       </button>
 
