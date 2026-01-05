@@ -3595,7 +3595,42 @@ def delete_novel(
         )
         raise HTTPException(403, "削除権限がありません")
 
-    # Episodes 削除（外部キー制約で cascade されているなら不要だが、安全のため）
+    # Episodes 配下の子テーブルを先に削除（FK 制約回避）
+    db.execute(
+        text(
+            "DELETE FROM episode_illusts "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
+        ),
+        {"nid": novel_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM episode_tags "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
+        ),
+        {"nid": novel_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM episode_likes "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
+        ),
+        {"nid": novel_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM supports "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
+        ),
+        {"nid": novel_id},
+    )
+    # Novel 直下の子テーブルを削除
+    db.execute(text("DELETE FROM novel_comments WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM novel_favorites WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM novel_tags WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM novel_likes WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM supports WHERE novel_id = :nid"), {"nid": novel_id})
+    # Episodes 削除
     db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
     # Novel 削除
     db.execute(text("DELETE FROM novels WHERE id = :nid"), {"nid": novel_id})
