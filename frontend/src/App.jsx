@@ -32,6 +32,7 @@ import Notifications from "./pages/Notifications";
 import AuthorLanding from "./pages/AuthorLanding";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
+import { trackPageView } from "./lib/analytics";
 
 
 export default function App() {
@@ -47,6 +48,11 @@ export default function App() {
     const params = new URLSearchParams(location.search);
     setQuery(params.get("q") ?? "");
   }, [location.search]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    trackPageView();
+  }, [location.pathname, location.search, location.hash]);
 
   useEffect(() => {
     const isLoginRoute = () => {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { trackEvent } from "../lib/analytics";
 
 const API_BASE = "";
 const DRAFT_KEY = "draft_new_novel";
@@ -105,9 +106,20 @@ export default function NewNovel() {
 
       if (data.id) {
         localStorage.removeItem(DRAFT_KEY);
+        trackEvent("novel_created", {
+          novel_id: data.id,
+          creative_type: creativeType,
+          age_limit: ageLimit,
+          is_ai_generated: isAIGenerated,
+        });
         navigate(`/novels/${data.id}`);
       } else {
         localStorage.removeItem(DRAFT_KEY);
+        trackEvent("novel_created", {
+          creative_type: creativeType,
+          age_limit: ageLimit,
+          is_ai_generated: isAIGenerated,
+        });
         navigate("/");
       }
     } catch (err) {

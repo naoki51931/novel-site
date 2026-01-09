@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
+import { trackEvent } from "../lib/analytics";
 
 export default function AuthorLanding() {
   useEffect(() => {
@@ -39,6 +40,14 @@ export default function AuthorLanding() {
     };
   }, []);
 
+  useEffect(() => {
+    trackEvent("author_lp_view", { page_path: "/authors" });
+  }, []);
+
+  const handleCtaClick = (label) => {
+    trackEvent("author_lp_cta_click", { label, page_path: "/authors" });
+  };
+
   return (
     <div className="author-lp">
       <section className="lp-hero">
@@ -60,7 +69,11 @@ export default function AuthorLanding() {
             書いた瞬間から、反応が返ってくる設計。
           </p>
           <div className="lp-cta-row">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary"
+              onClick={() => handleCtaClick("hero_primary")}
+            >
               今すぐ小説を書く
             </Link>
           </div>
@@ -111,7 +124,11 @@ export default function AuthorLanding() {
             ここは、そのための場所じゃありません。
           </p>
           <div className="lp-cta-block">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary"
+              onClick={() => handleCtaClick("section1")}
+            >
               1行だけ、書いてみる
             </Link>
             <p className="lp-note">※公開しなくて大丈夫。下書きから始められます。</p>
@@ -147,7 +164,11 @@ export default function AuthorLanding() {
             ※初投稿は新着枠に表示されます（公開・非公開はいつでも切替可）
           </p>
           <div className="lp-cta-block">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary"
+              onClick={() => handleCtaClick("section2")}
+            >
               初投稿を書いてみる
             </Link>
             <p className="lp-note">※非公開OK。まずは非公開の下書きでもOK</p>
@@ -176,7 +197,11 @@ export default function AuthorLanding() {
             「誰かが読んだ」という実感が、次の一文を連れてくる。
           </p>
           <div className="lp-cta-block">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary lp-cta-white">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary lp-cta-white"
+              onClick={() => handleCtaClick("section3")}
+            >
               感想がもらえる場所で書く
             </Link>
             <p className="lp-note">※非公開OK。まずは短編でも、1話でも</p>
@@ -212,7 +237,11 @@ export default function AuthorLanding() {
             書き始めるだけでいい。
           </p>
           <div className="lp-cta-block">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary"
+              onClick={() => handleCtaClick("section4")}
+            >
               下手でもいいから、書く
             </Link>
             <p className="lp-note">※非公開OK。非公開のまま練習できます</p>
@@ -241,7 +270,11 @@ export default function AuthorLanding() {
             あなたが書くための補助輪です。
           </p>
           <div className="lp-cta-block">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary"
+              onClick={() => handleCtaClick("section5")}
+            >
               詰まったらAIに頼って書く
             </Link>
             <p className="lp-note">※非公開OK。あなたの文章を主役にします</p>
@@ -286,7 +319,11 @@ export default function AuthorLanding() {
             </div>
           </div>
           <div className="lp-cta-block">
-            <Link to="/novels/new" className="lp-cta lp-cta-primary lp-cta-white">
+            <Link
+              to="/novels/new"
+              className="lp-cta lp-cta-primary lp-cta-white"
+              onClick={() => handleCtaClick("section7")}
+            >
               非公開で、今すぐ書き始める
             </Link>
             <p className="lp-note">※非公開OK。公開は後からでOK</p>
@@ -302,7 +339,11 @@ export default function AuthorLanding() {
             <br />
             明日も、書かれないままです。
           </p>
-          <Link to="/novels/new" className="lp-cta lp-cta-primary">
+          <Link
+            to="/novels/new"
+            className="lp-cta lp-cta-primary"
+            onClick={() => handleCtaClick("final")}
+          >
             今すぐ小説を書く
           </Link>
           <p className="lp-note">※初投稿まで最短3分（非公開OK）</p>
