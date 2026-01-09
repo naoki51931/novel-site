@@ -29,6 +29,7 @@ import SupportReturn from "./pages/SupportReturn";
 import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
 import Notifications from "./pages/Notifications";
+import AuthorLanding from "./pages/AuthorLanding";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 
@@ -52,6 +53,7 @@ export default function App() {
       const path = location.pathname;
       return (
         path === "/" ||
+        path === "/authors" ||
         path.startsWith("/ai-novel") ||
         path.startsWith("/novels/") ||
         path.startsWith("/episodes/") ||
@@ -152,6 +154,13 @@ export default function App() {
             トップ
           </Link>
           <Link
+            to="/authors"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            作者向け
+          </Link>
+          <Link
             to="/novels/new"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
@@ -250,6 +259,7 @@ export default function App() {
         <Routes>
           <Route path="/mypage/settings" element={<AccountSettings />} />
           <Route path="/" element={<Home query={query} />} />
+          <Route path="/authors" element={<AuthorLanding />} />
           <Route path="/login" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/oauth/callback" element={<OAuthCallback />} />

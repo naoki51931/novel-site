@@ -4080,6 +4080,7 @@ def list_public_novels(
                 "view_count": getattr(novel, "view_count", 0) or 0,
                 "like_count": getattr(novel, "like_count", 0) or 0,
                 "favorite_count": favorite_counts.get(novel.id, 0),
+                "age_limit": getattr(novel, "age_limit", "all") or "all",
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
             }

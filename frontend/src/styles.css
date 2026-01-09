@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Maru+Gothic:wght@500;700&display=swap");
 
 :root {
   color-scheme: light;
@@ -306,6 +307,23 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   border-color: var(--border-strong);
 }
 
+.age-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.age-chip-r18 {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #b91c1c;
+}
+
 /* 入力欄（タイトル／タグ） */
 .search-input,
 .search-tag-input {
@@ -493,3 +511,457 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
 /* ===== アクセントボタン専用デザイン ===== */
 .nav-link-accent { border: 2px solid var(--danger); color: var(--danger); background: var(--surface); font-weight: bold; }
 .nav-link-accent:hover { background: var(--danger); color: #fff !important; border-color: var(--danger); }
+
+/* ============================
+   Author Landing Page
+============================ */
+.author-lp {
+  --lp-ink: #1b1b1b;
+  --lp-muted: #4b463f;
+  --lp-accent: #e45b2c;
+  --lp-accent-soft: #f8b17e;
+  --lp-surface: #fff5ec;
+  --lp-surface-strong: #111111;
+  --lp-shadow: rgba(17, 17, 17, 0.12);
+  font-family: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  color: var(--lp-ink);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(248, 177, 126, 0.45), transparent 50%),
+    radial-gradient(circle at 82% 10%, rgba(70, 65, 57, 0.18), transparent 45%),
+    linear-gradient(135deg, #fdf3e9 0%, #f7efe7 60%, #f2e6db 100%);
+  border-radius: 28px;
+  padding: 48px 32px 96px;
+  margin: 24px auto 64px;
+  max-width: 1120px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 24px 60px var(--lp-shadow);
+}
+
+.author-lp::before,
+.author-lp::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  opacity: 0.25;
+  filter: blur(0.5px);
+  z-index: 0;
+}
+
+.author-lp::before {
+  width: 380px;
+  height: 380px;
+  background: radial-gradient(circle, var(--lp-accent-soft), transparent 70%);
+  top: -120px;
+  right: -160px;
+}
+
+.author-lp::after {
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, #f2c9a0, transparent 70%);
+  bottom: -140px;
+  left: -120px;
+}
+
+.lp-hero,
+.lp-section,
+.lp-cta-final {
+  position: relative;
+  z-index: 1;
+}
+
+.lp-hero {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 36px;
+  align-items: center;
+  padding: 24px 0 40px;
+}
+
+.lp-hero-content {
+  animation: lp-fade-up 0.8s ease both;
+}
+
+.lp-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  color: var(--lp-muted);
+  margin-bottom: 12px;
+}
+
+.lp-hero-title {
+  font-size: clamp(32px, 5vw, 54px);
+  line-height: 1.25;
+  margin: 0 0 18px;
+}
+
+.lp-hero-lead {
+  font-size: 18px;
+  line-height: 1.8;
+  margin: 0 0 12px;
+  color: var(--lp-muted);
+}
+
+.lp-hero-sub {
+  font-size: 17px;
+  line-height: 1.7;
+  margin: 0 0 24px;
+}
+
+.lp-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.author-lp .lp-cta {
+  font-family: "Zen Maru Gothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 12px 24px;
+  border: 2px solid transparent;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.author-lp .lp-cta.btn-border {
+  border: 2px solid transparent;
+  background: transparent;
+  color: var(--lp-ink);
+}
+
+.lp-cta-primary.btn-border,
+.lp-cta-primary {
+  background: var(--lp-accent);
+  color: #ffffff;
+  box-shadow: 0 12px 20px rgba(228, 91, 44, 0.28);
+}
+
+.lp-cta-primary:hover {
+  transform: translateY(-2px);
+  background: var(--lp-accent);
+  color: #ffffff;
+}
+
+.author-lp .lp-cta.lp-cta-white {
+  color: #ffffff;
+}
+
+.lp-cta-ghost.btn-border,
+.lp-cta-ghost {
+  border-color: var(--lp-ink);
+  background: transparent;
+  color: var(--lp-ink);
+}
+
+.lp-cta-ghost:hover {
+  background: var(--lp-ink);
+  color: #ffffff;
+}
+
+.lp-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--lp-muted);
+}
+
+.lp-cta-block {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.lp-section-dark .lp-cta-block .lp-note {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.lp-hero-art {
+  position: relative;
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+}
+
+.lp-orbit {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px dashed rgba(27, 27, 27, 0.18);
+  animation: lp-spin 16s linear infinite;
+}
+
+.lp-orbit-1 {
+  width: 300px;
+  height: 300px;
+}
+
+.lp-orbit-2 {
+  width: 220px;
+  height: 220px;
+  animation-direction: reverse;
+  animation-duration: 12s;
+}
+
+.lp-hero-card {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 18px 20px;
+  box-shadow: 0 18px 36px rgba(27, 27, 27, 0.18);
+  max-width: 240px;
+  animation: lp-float 4.5s ease-in-out infinite;
+}
+
+.lp-hero-card-secondary {
+  position: absolute;
+  bottom: 16px;
+  right: 12px;
+  animation-delay: 0.6s;
+}
+
+.lp-card-label {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+  margin-bottom: 6px;
+}
+
+.lp-card-title {
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.lp-card-text {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  color: var(--lp-muted);
+}
+
+.lp-section {
+  padding: 56px 0;
+}
+
+.lp-section-inner {
+  max-width: 920px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.lp-section-kicker {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+  margin-bottom: 10px;
+}
+
+.lp-section-title {
+  font-size: clamp(24px, 4vw, 36px);
+  margin: 0 0 28px;
+}
+
+.lp-section-lead {
+  margin: 24px 0 0;
+  color: var(--lp-muted);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.lp-section-strong {
+  margin-top: 26px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.lp-grid {
+  display: grid;
+  gap: 18px;
+  margin: 24px 0;
+}
+
+.lp-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.lp-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.lp-card,
+.lp-feature,
+.lp-quote {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 16px 30px rgba(27, 27, 27, 0.08);
+}
+
+.lp-feature h4 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.lp-feature p {
+  margin: 0;
+  color: var(--lp-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.lp-quote {
+  font-size: 15px;
+  line-height: 1.7;
+  position: relative;
+}
+
+.lp-quote::before {
+  content: "“";
+  font-size: 48px;
+  color: rgba(27, 27, 27, 0.18);
+  position: absolute;
+  top: -12px;
+  left: 12px;
+}
+
+.lp-section-muted {
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 24px;
+}
+
+.lp-section-dark {
+  background: var(--lp-surface-strong);
+  color: #ffffff;
+  border-radius: 24px;
+}
+
+.lp-section-dark .lp-section-kicker,
+.lp-section-dark .lp-section-lead {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.lp-section-dark .lp-card,
+.lp-section-dark .lp-feature {
+  background: #ffffff54;
+  color: #ffffff;
+  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.lp-card-dark {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.lp-cta-final {
+  padding: 64px 0 20px;
+}
+
+.lp-cta-inner {
+  text-align: center;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.lp-cta-inner h3 {
+  font-size: clamp(26px, 4vw, 40px);
+  margin-bottom: 16px;
+}
+
+.lp-cta-inner p {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--lp-muted);
+}
+
+@keyframes lp-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lp-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes lp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 960px) {
+  .author-lp {
+    padding: 36px 20px 72px;
+  }
+
+  .lp-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .lp-hero-art {
+    order: -1;
+  }
+
+  .lp-grid-3,
+  .lp-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .author-lp {
+    border-radius: 20px;
+    margin: 12px auto 40px;
+  }
+
+  .lp-hero-title {
+    font-size: 32px;
+  }
+
+  .lp-cta-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lp-grid-3,
+  .lp-grid-4 {
+    grid-template-columns: 1fr;
+  }
+
+  .lp-hero-card-secondary {
+    position: static;
+    margin-top: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-hero-content,
+  .lp-orbit,
+  .lp-hero-card {
+    animation: none;
+  }
+}

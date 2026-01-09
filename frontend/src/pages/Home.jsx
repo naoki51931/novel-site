@@ -465,9 +465,22 @@ export default function Home({ query = "" }) {
               color: "var(--text)",
             }}
           >
-            <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
-              <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
-            </h3>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+                margin: "0 0 8px 0",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 18 }}>
+                <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
+              </h3>
+              {novel.age_limit === "r18" && (
+                <span className="age-chip age-chip-r18">R18</span>
+              )}
+            </div>
 
             <p
               style={{
