@@ -11,6 +11,7 @@ import json
 import html
 import io
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import Optional, List
 
 import jwt
@@ -943,6 +944,75 @@ def truncate_for_free(body: str | None, ratio: float = 0.3) -> str | None:
         return body
     n = len(body)
     return body[: max(1, int(n * ratio))]
+
+
+@lru_cache(maxsize=8)
+def _jp_holidays(year: int) -> set[date]:
+    def nth_weekday(month: int, weekday: int, n: int) -> date:
+        first = date(year, month, 1)
+        offset = (weekday - first.weekday()) % 7
+        return first + timedelta(days=offset + 7 * (n - 1))
+
+    def vernal_equinox_day() -> int:
+        return int(20.8431 + 0.242194 * (year - 1980) - ((year - 1980) // 4))
+
+    def autumn_equinox_day() -> int:
+        return int(23.2488 + 0.242194 * (year - 1980) - ((year - 1980) // 4))
+
+    holidays = {
+        date(year, 1, 1),  # 元日
+        nth_weekday(1, 0, 2),  # 成人の日（第2月曜）
+        date(year, 2, 11),  # 建国記念の日
+        date(year, 2, 23),  # 天皇誕生日
+        date(year, 3, vernal_equinox_day()),  # 春分の日
+        date(year, 4, 29),  # 昭和の日
+        date(year, 5, 3),  # 憲法記念日
+        date(year, 5, 4),  # みどりの日
+        date(year, 5, 5),  # こどもの日
+        nth_weekday(7, 0, 3),  # 海の日（第3月曜）
+        date(year, 8, 11),  # 山の日
+        nth_weekday(9, 0, 3),  # 敬老の日（第3月曜）
+        date(year, 9, autumn_equinox_day()),  # 秋分の日
+        nth_weekday(10, 0, 2),  # スポーツの日（第2月曜）
+        date(year, 11, 3),  # 文化の日
+        date(year, 11, 23),  # 勤労感謝の日
+    }
+
+    observed = set(holidays)
+    for holiday in sorted(holidays):
+        if holiday.weekday() == 6:
+            substitute = holiday + timedelta(days=1)
+            while substitute in observed:
+                substitute += timedelta(days=1)
+            observed.add(substitute)
+
+    start = date(year, 1, 1)
+    end = date(year, 12, 31)
+    current = start
+    while current <= end:
+        if current not in observed:
+            if (
+                current.weekday() < 5
+                and (current - timedelta(days=1)) in observed
+                and (current + timedelta(days=1)) in observed
+            ):
+                observed.add(current)
+        current += timedelta(days=1)
+
+    return observed
+
+
+def is_jp_holiday(target_date: date) -> bool:
+    return target_date in _jp_holidays(target_date.year)
+
+
+def is_free_reading_time(now_utc: datetime | None = None) -> bool:
+    now_jst = (now_utc or datetime.utcnow()) + timedelta(hours=9)
+    current_date = now_jst.date()
+    is_weekend_or_holiday = current_date.weekday() >= 5 or is_jp_holiday(current_date)
+    start_hour = 14 if is_weekend_or_holiday else 17
+    current_hour = now_jst.hour + (now_jst.minute / 60)
+    return start_hour <= current_hour < 19
 
 
 def get_episode_number(ep):
@@ -3763,9 +3833,11 @@ def get_novel_detail(
             is not None
         )
 
-    is_premium = FORCE_ALL_PREMIUM or (
+    is_premium_user = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
+    is_free_time = is_free_reading_time()
+    can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
 
     episode_q = (
         db.query(models.Episode)
@@ -3794,7 +3866,8 @@ def get_novel_detail(
         "like_count": novel.like_count or 0,
         "is_liked": is_liked,
         "is_favorited": is_favorited,
-        "is_premium_user": is_premium,
+        "is_premium_user": is_premium_user,
+        "is_free_reading_time": is_free_time,
         "age_limit": novel.age_limit,
         "is_ai_generated": novel.is_ai_generated,
         "creative_type": getattr(novel, "creative_type", "original"),
@@ -3807,9 +3880,7 @@ def get_novel_detail(
                 "title": ep.title,
                 "cover_image_url": ep.cover_image_url,
                 "number": get_episode_number(ep),
-                "body": ep.body
-                if is_premium or (user and novel.author_id == user.id)
-                else truncate_for_free(ep.body or ""),
+                "body": ep.body if can_read_full else truncate_for_free(ep.body or ""),
                 "created_at": ep.created_at,
             }
             for ep in episodes
@@ -4811,9 +4882,11 @@ def list_episodes(
     except Exception:
         user = None
 
-    is_premium = FORCE_ALL_PREMIUM or (
+    is_premium_user = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
+    is_free_time = is_free_reading_time()
+    can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
 
     base_q = (
         db.query(models.Episode)
@@ -4836,9 +4909,7 @@ def list_episodes(
             "title": ep.title,
             "cover_image_url": ep.cover_image_url,
             "number": get_episode_number(ep),
-            "body": ep.body
-            if is_premium or (user and novel.author_id == user.id)
-            else truncate_for_free(ep.body or ""),
+            "body": ep.body if can_read_full else truncate_for_free(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes
@@ -5268,11 +5339,13 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
             is not None
         )
 
-    is_premium = FORCE_ALL_PREMIUM or (
+    is_premium_user = FORCE_ALL_PREMIUM or (
         bool(getattr(user, "is_premium", False)) if user else False
     )
+    is_free_time = is_free_reading_time()
+    can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
 
-    body_converted = ep.body if is_premium or (user and novel.author_id == user.id) else truncate_for_free(ep.body or "")
+    body_converted = ep.body if can_read_full else truncate_for_free(ep.body or "")
 
     next_episode = None
     prev_episode = None
@@ -5352,7 +5425,8 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
             }
             for il in ep.illusts
         ],
-        "is_premium_user": is_premium,
+        "is_premium_user": is_premium_user,
+        "is_free_reading_time": is_free_time,
         "next_episode": next_episode,
         "prev_episode": prev_episode,
     }

@@ -4,6 +4,8 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 
 const API_BASE = "";
+const FREE_READING_SCHEDULE =
+  "無料開放時間: 平日17:00-19:00 / 土日祝14:00-19:00（JST）";
 
 export default function EpisodeDetail() {
   const { id } = useParams(); // episode_id
@@ -22,6 +24,8 @@ export default function EpisodeDetail() {
 
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
+  const isPremiumUser = !!episode?.is_premium_user;
+  const isFreeReadingTime = !!episode?.is_free_reading_time;
   const handleBackToNovel = () => {
     if (episode?.novel_id != null) {
       navigate(`/novels/${episode.novel_id}`);
@@ -429,7 +433,7 @@ export default function EpisodeDetail() {
       </div>
 
       {/* 課金ブロック */}
-      {episode.is_premium_user ? (
+      {isPremiumUser ? (
         <div
           style={{
             marginTop: 16,
@@ -448,6 +452,26 @@ export default function EpisodeDetail() {
           >
             ★ あなたは課金済みユーザーです（PREMIUM）
           </p>
+          <p style={{ marginTop: 6, fontSize: 12, color: "var(--premium-text)" }}>
+            {FREE_READING_SCHEDULE}
+          </p>
+        </div>
+      ) : isFreeReadingTime ? (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 12,
+            border: "1px solid #0a6",
+            background: "#e8fff5",
+            borderRadius: 6,
+          }}
+        >
+          <p style={{ marginBottom: 6, fontWeight: "bold", color: "#0a6" }}>
+            ★ 今は無料開放時間のため全文を読めます
+          </p>
+          <p style={{ margin: 0, fontSize: 12, color: "#0a6" }}>
+            {FREE_READING_SCHEDULE}
+          </p>
         </div>
       ) : (
         <div
@@ -460,6 +484,9 @@ export default function EpisodeDetail() {
         >
           <p style={{ marginBottom: 8 }}>
             全文を読むには月額1000円のプレミアム購読が必要です。
+          </p>
+          <p style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>
+            {FREE_READING_SCHEDULE}
           </p>
           <button className="btn btn-border" onClick={handleSubscribe}>
             課金して続きを読む
