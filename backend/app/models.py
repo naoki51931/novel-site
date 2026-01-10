@@ -101,6 +101,7 @@ class Novel(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), index=True, nullable=False)
     description = Column(Text, nullable=True)
+    language = Column(String(8), nullable=False, server_default="ja")
     is_public = Column(Boolean, nullable=False, default=True)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
@@ -136,6 +137,11 @@ class Novel(Base):
         back_populates="novel",
         cascade="all, delete-orphan",
     )
+    translations = relationship(
+        "NovelTranslation",
+        back_populates="novel",
+        cascade="all, delete-orphan",
+    )
 
     likes = relationship(
         "NovelLike",
@@ -160,6 +166,7 @@ class Episode(Base):
     novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
     title = Column(String(200), nullable=False)
     body = Column(Text)
+    language = Column(String(8), nullable=False, server_default="ja")
     episode_number = Column(Integer, nullable=True)
     cover_image_url = Column(String(255))
     status = Column(String(16), nullable=False, server_default="public")
@@ -183,6 +190,48 @@ class Episode(Base):
         "EpisodeLike",
         back_populates="episode",
         cascade="all, delete-orphan",
+    )
+    translations = relationship(
+        "EpisodeTranslation",
+        back_populates="episode",
+        cascade="all, delete-orphan",
+    )
+
+
+class NovelTranslation(Base):
+    __tablename__ = "novel_translations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False, index=True)
+    language = Column(String(8), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    tag_names = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    novel = relationship("Novel", back_populates="translations")
+
+    __table_args__ = (
+        UniqueConstraint("novel_id", "language", name="uq_novel_translation_lang"),
+    )
+
+
+class EpisodeTranslation(Base):
+    __tablename__ = "episode_translations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), nullable=False, index=True)
+    language = Column(String(8), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    episode = relationship("Episode", back_populates="translations")
+
+    __table_args__ = (
+        UniqueConstraint("episode_id", "language", name="uq_episode_translation_lang"),
     )
 
 

@@ -30,6 +30,7 @@ class TagRead(TagBase):
 class NovelBase(BaseModel):
     title: str
     description: Optional[str] = None
+    language: Optional[str] = "ja"
     age_limit: Literal["all", "r15", "r18"] = "all"
     is_ai_generated: bool = False
     creative_type: Literal["original", "fanfic"] = "original"
@@ -44,6 +45,7 @@ class NovelCreate(NovelBase):
 class NovelUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    language: Optional[str] = None
     # 更新時、タグを全部差し替えるイメージ
     tag_names: Optional[List[str]] = None
     age_limit: Optional[Literal["all", "r15", "r18"]] = None
@@ -56,6 +58,7 @@ class Novel(BaseModel):
     id: int
     title: str
     description: Optional[str]
+    language: Optional[str] = None
     created_at: datetime
     author_id: int
     author_username: Optional[str] = None
@@ -73,6 +76,7 @@ class Novel(BaseModel):
 class EpisodeBase(BaseModel):
     title: str
     body: Optional[str] = None
+    language: Optional[str] = "ja"
     episode_number: Optional[int] = None
     status: Literal["public", "draft"] = "public"
 
@@ -95,6 +99,7 @@ class EpisodeCreate(EpisodeBase):
 class EpisodeUpdate(BaseModel):
     title: Optional[str] = None
     body: Optional[str] = None
+    language: Optional[str] = None
     episode_number: Optional[int] = None
     tag_names: Optional[List[str]] = None
     status: Optional[Literal["public", "draft"]] = None
@@ -105,6 +110,7 @@ class Episode(BaseModel):
     id: int
     title: str
     body: Optional[str]
+    language: Optional[str] = None
     episode_number: Optional[int]
     created_at: datetime
     status: Literal["public", "draft"] = "public"

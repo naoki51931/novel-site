@@ -206,6 +206,18 @@ def split_title_and_body(text: str) -> Tuple[str, str]:
     return title, body
 
 
+def _strip_code_fence(s: str) -> str:
+    s = (s or "").strip()
+    if not s.startswith("```"):
+        return s
+    lines = s.splitlines()
+    if lines and lines[0].lstrip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def _parse_title_and_body(raw: str) -> Tuple[str, str]:
     import json
     import re
@@ -214,18 +226,6 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
         return "タイトル未設定", ""
 
     text = raw.strip()
-
-    # よくある ```json ... ``` のコードフェンスを剥がす
-    def _strip_code_fence(s: str) -> str:
-        s = (s or "").strip()
-        if not s.startswith("```"):
-            return s
-        lines = s.splitlines()
-        if lines and lines[0].lstrip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
 
     text = _strip_code_fence(text)
 
@@ -326,6 +326,184 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
 
     return split_title_and_body(raw)
 
+
+def _parse_json_payload(raw: str) -> dict:
+    import json
+    import re
+
+    if not raw:
+        raise ValueError("empty response")
+
+    text = _strip_code_fence(raw.strip())
+
+    def _extract_dict(value) -> dict | None:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            return value[0]
+        return None
+
+    def _try_parse_dict(s: str) -> dict | None:
+        s = _strip_code_fence((s or "").strip())
+        if not s:
+            return None
+        try:
+            parsed = json.loads(s)
+            d = _extract_dict(parsed)
+            if d is not None:
+                return d
+            if isinstance(parsed, str):
+                inner = _strip_code_fence(parsed.strip())
+                try:
+                    parsed2 = json.loads(inner)
+                    d2 = _extract_dict(parsed2)
+                    if d2 is not None:
+                        return d2
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
+    d0 = _try_parse_dict(text)
+    if d0 is not None:
+        return d0
+
+    if '\\"' in text:
+        text_unescaped = text.replace('\\"', '"')
+        d1 = _try_parse_dict(text_unescaped)
+        if d1 is not None:
+            return d1
+        text = text_unescaped
+
+    try:
+        decoder = json.JSONDecoder()
+        start = 0
+        while True:
+            brace_index = text.find("{", start)
+            if brace_index < 0:
+                break
+            try:
+                parsed, _end = decoder.raw_decode(text[brace_index:])
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+            start = brace_index + 1
+    except Exception:
+        pass
+
+    try:
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if m:
+            d2 = _try_parse_dict(m.group(0))
+            if d2 is not None:
+                return d2
+    except Exception:
+        pass
+
+    raise ValueError("failed to parse json")
+
+
+async def call_ai_json(
+    prompt: str,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    system_instructions: str | None = None,
+) -> tuple[dict, int | None, str | None]:
+    if not prompt:
+        raise HTTPException(status_code=400, detail="プロンプトが空です。")
+
+    provider = (provider or "").strip().lower() or provider_from_model(model)
+    system_instructions = system_instructions or "JSON 1個のみを返してください。"
+
+    if provider == "deepseek":
+        if deepseek_client is None:
+            raise HTTPException(status_code=500, detail="DeepSeek の API キーが設定されていません。")
+        effective_model = (model or os.getenv("DEEPSEEK_MODEL_TEXT") or "").strip()
+        if effective_model.startswith("deepseek:"):
+            effective_model = effective_model.split(":", 1)[1].strip()
+        if not effective_model:
+            raise HTTPException(status_code=400, detail="モデルが指定されていません。")
+        try:
+            resp = deepseek_client.chat.completions.create(
+                model=effective_model,
+                messages=[
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=2048,
+            )
+        except Exception as e:
+            print("[ERROR] DeepSeek API 呼び出し失敗:", repr(e))
+            raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
+
+        raw = ""
+        try:
+            raw = resp.choices[0].message.content or ""
+        except Exception:
+            raw = ""
+    elif provider == "openrouter":
+        if openrouter_client is None:
+            raise HTTPException(status_code=500, detail="OpenRouter の API キーが設定されていません。")
+        effective_model = (model or os.getenv("OPENROUTER_MODEL_TEXT") or "").strip()
+        if not effective_model:
+            raise HTTPException(status_code=400, detail="モデルが指定されていません。")
+        try:
+            resp = openrouter_client.chat.completions.create(
+                model=effective_model,
+                messages=[
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=2048,
+            )
+        except Exception as e:
+            print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
+            raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
+
+        raw = ""
+        try:
+            raw = resp.choices[0].message.content or ""
+        except Exception:
+            raw = ""
+    else:
+        if client is None:
+            raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
+        effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
+        try:
+            resp = client.responses.create(
+                model=effective_model,
+                instructions=system_instructions,
+                input=prompt,
+                max_output_tokens=2048,
+            )
+        except Exception as e:
+            print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
+            raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
+
+        raw = ""
+        try:
+            raw = resp.output[0].content[0].text
+        except Exception:
+            raw = getattr(resp, "output_text", "") or ""
+
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    try:
+        data = _parse_json_payload(raw)
+    except Exception as e:
+        print("[ERROR] AI JSON parse failed:", repr(e))
+        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+
+    tokens: int | None = None
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", None)
+
+    return data, tokens, effective_model
 
 # ===== 実際に OpenAI API を叩く関数 =====
 

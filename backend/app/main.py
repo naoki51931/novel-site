@@ -1,10 +1,12 @@
 import os
+from pathlib import Path
 import base64
 import hashlib
 import hmac
 import secrets
 import re
 import time
+import asyncio
 import logging
 from urllib.parse import urlencode, quote, parse_qs, urlparse
 import json
@@ -46,9 +48,11 @@ from . import models, schemas
 import smtplib
 from email.mime.text import MIMEText  # type: ignore
 
-EPISODE_IMAGE_DIR = "/app/static/episode_images"
-import os
-os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parents[2]
+EPISODE_IMAGE_DIR = os.getenv(
+    "EPISODE_IMAGE_DIR",
+    str(BASE_DIR / "backend" / "app" / "static" / "episode_images"),
+)
 from fastapi import UploadFile, File
 from fastapi import Form
 
@@ -58,6 +62,7 @@ from .ai_novel import (
     AINovelRequest,
     AINovelResponse,
     build_ai_prompt,
+    call_ai_json,
     call_openai_novel_api,
     call_openrouter_novel_api,
     call_deepseek_novel_api,
@@ -197,6 +202,8 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'public'")
             if "is_public" not in existing:
                 alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 1")
+            if "language" not in existing:
+                alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE episodes {clause}"))
@@ -224,6 +231,8 @@ def ensure_novels_table_columns():
             alters: list[str] = []
             if "creative_type" not in existing:
                 alters.append("ADD COLUMN creative_type ENUM('original','fanfic') NOT NULL DEFAULT 'original'")
+            if "language" not in existing:
+                alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE novels {clause}"))
@@ -418,6 +427,48 @@ def deserialize_meta_tags(value: str | None) -> list[str]:
         return []
     return [t for t in value.split(",") if t]
 
+
+def normalize_language(value: str | None) -> str:
+    normalized = (value or "ja").strip().lower()
+    if normalized in ("ja", "jp", "jpn", "japanese"):
+        return "ja"
+    if normalized in ("en", "eng", "english"):
+        return "en"
+    raise HTTPException(400, "language は ja/en のみ指定できます")
+
+
+def other_language(language: str) -> str:
+    return "en" if language == "ja" else "ja"
+
+
+def serialize_tag_names(tag_names: list[str]) -> str | None:
+    if not tag_names:
+        return None
+    return json.dumps(tag_names, ensure_ascii=True)
+
+
+def deserialize_tag_names(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [str(v) for v in parsed if str(v).strip()]
+    except Exception:
+        pass
+    return [v for v in value.split(",") if v]
+
+
+def normalize_translated_tags(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        parts = [p.strip() for p in re.split(r"[,\n]", value) if p.strip()]
+        return parts
+    return []
+
 # =========================================
 # FastAPI
 # =========================================
@@ -434,6 +485,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def on_startup() -> None:
+    os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
 
 # =========================================
 # JWT / Stripe 設定
@@ -466,6 +521,10 @@ X_OAUTH_CONSUMER_KEY = os.getenv("X_OAUTH_CONSUMER_KEY", "")
 X_OAUTH_CONSUMER_SECRET = os.getenv("X_OAUTH_CONSUMER_SECRET", "")
 
 OAUTH_STATE_EXPIRE_MINUTES = int(os.getenv("OAUTH_STATE_EXPIRE_MINUTES", "10"))
+
+TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "").strip().lower()
+TRANSLATION_MODEL_TEXT = os.getenv("TRANSLATION_MODEL_TEXT", "").strip()
+AUTO_TRANSLATION_REQUIRED = os.getenv("AUTO_TRANSLATION_REQUIRED", "0") == "1"
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -1896,6 +1955,78 @@ def admin_me(request: Request):
         raise HTTPException(401, "未ログインです")
     verify_admin_token(admin_cookie)
     return {"is_admin": True}
+
+
+@app.post("/api/admin/translations/backfill")
+def admin_backfill_translations(
+    request: Request,
+    payload: dict = Body(default={}),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    limit = payload.get("limit")
+    try:
+        limit_value = int(limit) if limit is not None else None
+    except Exception:
+        raise HTTPException(400, "limit は数値で指定してください")
+
+    novels_done = 0
+    episodes_done = 0
+
+    novel_query = db.query(models.Novel).order_by(models.Novel.id.asc())
+    if limit_value:
+        novel_query = novel_query.limit(limit_value)
+    for novel in novel_query.all():
+        source_language = normalize_language(getattr(novel, "language", None))
+        target_language = other_language(source_language)
+        exists = (
+            db.query(models.NovelTranslation)
+            .filter(
+                models.NovelTranslation.novel_id == novel.id,
+                models.NovelTranslation.language == target_language,
+            )
+            .first()
+        )
+        if exists:
+            continue
+        tag_names = get_novel_tag_names(db, novel.id)
+        upsert_novel_translation(
+            db,
+            novel=novel,
+            source_language=source_language,
+            tag_names=tag_names,
+        )
+        db.commit()
+        novels_done += 1
+
+    episode_query = db.query(models.Episode).order_by(models.Episode.id.asc())
+    if limit_value:
+        episode_query = episode_query.limit(limit_value)
+    for episode in episode_query.all():
+        source_language = normalize_language(getattr(episode, "language", None))
+        target_language = other_language(source_language)
+        exists = (
+            db.query(models.EpisodeTranslation)
+            .filter(
+                models.EpisodeTranslation.episode_id == episode.id,
+                models.EpisodeTranslation.language == target_language,
+            )
+            .first()
+        )
+        if exists:
+            continue
+        upsert_episode_translation(
+            db,
+            episode=episode,
+            source_language=source_language,
+        )
+        db.commit()
+        episodes_done += 1
+
+    return {
+        "novels_translated": novels_done,
+        "episodes_translated": episodes_done,
+    }
 
 
 @app.get("/api/support_plans", response_model=List[SupportPlanOut])
@@ -3450,6 +3581,195 @@ async def generate_ai_episode_continue(
 # =========================================
 # Novel API（タグ対応）
 # =========================================
+def _run_async(coro):
+    try:
+        return asyncio.run(coro)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+def _translation_system_prompt(source_lang: str, target_lang: str) -> str:
+    return (
+        "You are a professional translator. "
+        f"Translate from {source_lang} to {target_lang}. "
+        "Return exactly one JSON object, no prose, no code fences."
+    )
+
+
+def _build_novel_translation_prompt(
+    source_lang: str,
+    target_lang: str,
+    title: str,
+    description: str | None,
+    tags: list[str],
+) -> str:
+    payload = {
+        "title": title or "",
+        "description": description or "",
+        "tags": tags or [],
+    }
+    return (
+        f"Translate the following novel fields from {source_lang} to {target_lang}.\n"
+        "Output JSON with keys: title, description, tags (array of strings).\n"
+        f"Input JSON:\n{json.dumps(payload, ensure_ascii=True)}"
+    )
+
+
+def _build_episode_translation_prompt(
+    source_lang: str,
+    target_lang: str,
+    title: str,
+    body: str | None,
+) -> str:
+    payload = {
+        "title": title or "",
+        "body": body or "",
+    }
+    return (
+        f"Translate the following episode fields from {source_lang} to {target_lang}.\n"
+        "Output JSON with keys: title, body.\n"
+        f"Input JSON:\n{json.dumps(payload, ensure_ascii=True)}"
+    )
+
+
+def _translation_provider() -> str | None:
+    if TRANSLATION_PROVIDER:
+        return TRANSLATION_PROVIDER
+    if TRANSLATION_MODEL_TEXT:
+        return provider_from_model(TRANSLATION_MODEL_TEXT)
+    return None
+
+
+def upsert_novel_translation(
+    db: Session,
+    *,
+    novel: models.Novel,
+    source_language: str,
+    tag_names: list[str],
+) -> None:
+    target_language = other_language(source_language)
+    prompt = _build_novel_translation_prompt(
+        source_language,
+        target_language,
+        novel.title,
+        novel.description,
+        tag_names,
+    )
+    provider = _translation_provider()
+    system_prompt = _translation_system_prompt(source_language, target_language)
+    try:
+        data, _tokens, _model = _run_async(
+            call_ai_json(
+                prompt,
+                model=TRANSLATION_MODEL_TEXT or None,
+                provider=provider,
+                system_instructions=system_prompt,
+            )
+        )
+    except Exception as e:
+        logger.warning("translation failed novel_id=%s err=%r", novel.id, e)
+        if AUTO_TRANSLATION_REQUIRED:
+            raise
+        return
+
+    title = str(data.get("title") or "").strip() or novel.title
+    description = str(data.get("description") or "").strip() or novel.description
+    tags = normalize_translated_tags(data.get("tags"))
+
+    translation = (
+        db.query(models.NovelTranslation)
+        .filter(
+            models.NovelTranslation.novel_id == novel.id,
+            models.NovelTranslation.language == target_language,
+        )
+        .first()
+    )
+    if not translation:
+        translation = models.NovelTranslation(
+            novel_id=novel.id,
+            language=target_language,
+            title=title,
+            description=description,
+            tag_names=serialize_tag_names(tags),
+        )
+        db.add(translation)
+    else:
+        translation.title = title
+        translation.description = description
+        translation.tag_names = serialize_tag_names(tags)
+
+
+def upsert_episode_translation(
+    db: Session,
+    *,
+    episode: models.Episode,
+    source_language: str,
+) -> None:
+    target_language = other_language(source_language)
+    prompt = _build_episode_translation_prompt(
+        source_language,
+        target_language,
+        episode.title,
+        episode.body,
+    )
+    provider = _translation_provider()
+    system_prompt = _translation_system_prompt(source_language, target_language)
+    try:
+        data, _tokens, _model = _run_async(
+            call_ai_json(
+                prompt,
+                model=TRANSLATION_MODEL_TEXT or None,
+                provider=provider,
+                system_instructions=system_prompt,
+            )
+        )
+    except Exception as e:
+        logger.warning("translation failed episode_id=%s err=%r", episode.id, e)
+        if AUTO_TRANSLATION_REQUIRED:
+            raise
+        return
+
+    title = str(data.get("title") or "").strip() or episode.title
+    body = str(data.get("body") or "").strip() or episode.body
+
+    translation = (
+        db.query(models.EpisodeTranslation)
+        .filter(
+            models.EpisodeTranslation.episode_id == episode.id,
+            models.EpisodeTranslation.language == target_language,
+        )
+        .first()
+    )
+    if not translation:
+        translation = models.EpisodeTranslation(
+            episode_id=episode.id,
+            language=target_language,
+            title=title,
+            body=body,
+        )
+        db.add(translation)
+    else:
+        translation.title = title
+        translation.body = body
+
+
+def get_novel_tag_names(db: Session, novel_id: int) -> list[str]:
+    rows = (
+        db.query(models.Tag.name)
+        .join(models.NovelTag, models.Tag.id == models.NovelTag.tag_id)
+        .filter(models.NovelTag.novel_id == novel_id)
+        .order_by(models.Tag.name.asc())
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
 @app.post("/api/novels/")
 @app.post("/api/novels")
 def create_novel(
@@ -3464,6 +3784,7 @@ def create_novel(
     """
     # ★ ログイン必須 → author_id に使う
     user = require_current_user(request, db)
+    language = normalize_language(getattr(payload, "language", None))
 
     novel = models.Novel(
         title=payload.title,
@@ -3474,6 +3795,7 @@ def create_novel(
         creative_type=getattr(payload, "creative_type", "original"),
         like_count=0,
         is_public=getattr(payload, "is_public", True),
+        language=language,
     )
     db.add(novel)
     db.commit()
@@ -3481,10 +3803,12 @@ def create_novel(
 
     # ★ タグ保存（tag_names がなくても動くように防御的に書く）
     tag_names = getattr(payload, "tag_names", []) or []
+    normalized_tag_names: list[str] = []
     for raw in tag_names:
         name = (raw or "").strip()
         if not name:
             continue
+        normalized_tag_names.append(name)
         tag = db.query(models.Tag).filter(models.Tag.name == name).first()
         if not tag:
             tag = models.Tag(name=name)
@@ -3495,6 +3819,12 @@ def create_novel(
         nt = models.NovelTag(novel_id=novel.id, tag_id=tag.id)
         db.add(nt)
 
+    upsert_novel_translation(
+        db,
+        novel=novel,
+        source_language=language,
+        tag_names=normalized_tag_names,
+    )
     db.commit()
     db.refresh(novel)
     return novel
@@ -3589,14 +3919,21 @@ def update_novel(
         )
         raise HTTPException(403, "編集権限がありません")
 
+    needs_translation = False
+    if payload.language is not None:
+        novel.language = normalize_language(payload.language)
+        needs_translation = True
+
     if payload.title is not None:
         novel.title = payload.title
+        needs_translation = True
     if payload.description is not None:
         if payload.age_limit is not None:
             novel.age_limit = payload.age_limit
         if payload.is_ai_generated is not None:
             novel.is_ai_generated = payload.is_ai_generated
         novel.description = payload.description
+        needs_translation = True
 
     if payload.is_public is not None:
         novel.is_public = payload.is_public
@@ -3604,15 +3941,18 @@ def update_novel(
         novel.creative_type = payload.creative_type
 
     # ★ タグ差し替え
+    updated_tag_names: list[str] | None = None
     if payload.tag_names is not None:
         db.query(models.NovelTag).filter(
             models.NovelTag.novel_id == novel_id
         ).delete()
 
+        updated_tag_names = []
         for tag_name in payload.tag_names:
             tag_name = tag_name.strip()
             if not tag_name:
                 continue
+            updated_tag_names.append(tag_name)
             tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
             if not tag:
                 tag = models.Tag(name=tag_name)
@@ -3622,7 +3962,20 @@ def update_novel(
 
             nt = models.NovelTag(novel_id=novel.id, tag_id=tag.id)
             db.add(nt)
+        needs_translation = True
 
+    if needs_translation:
+        tag_names_for_translation = (
+            updated_tag_names
+            if updated_tag_names is not None
+            else get_novel_tag_names(db, novel.id)
+        )
+        upsert_novel_translation(
+            db,
+            novel=novel,
+            source_language=normalize_language(getattr(novel, "language", None)),
+            tag_names=tag_names_for_translation,
+        )
     db.commit()
     db.refresh(novel)
     return novel
@@ -3689,6 +4042,13 @@ def delete_novel(
     )
     db.execute(
         text(
+            "DELETE FROM episode_translations "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
+        ),
+        {"nid": novel_id},
+    )
+    db.execute(
+        text(
             "DELETE FROM supports "
             "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
         ),
@@ -3699,6 +4059,7 @@ def delete_novel(
     db.execute(text("DELETE FROM novel_favorites WHERE novel_id = :nid"), {"nid": novel_id})
     db.execute(text("DELETE FROM novel_tags WHERE novel_id = :nid"), {"nid": novel_id})
     db.execute(text("DELETE FROM novel_likes WHERE novel_id = :nid"), {"nid": novel_id})
+    db.execute(text("DELETE FROM novel_translations WHERE novel_id = :nid"), {"nid": novel_id})
     db.execute(text("DELETE FROM supports WHERE novel_id = :nid"), {"nid": novel_id})
     # Episodes 削除
     db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
@@ -3859,6 +4220,7 @@ def get_novel_detail(
         "id": novel.id,
         "title": novel.title,
         "description": novel.description,
+        "language": getattr(novel, "language", "ja"),
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": novel.author.username if novel.author else None,
@@ -3885,6 +4247,34 @@ def get_novel_detail(
             }
             for ep in episodes
         ],
+    }
+
+
+@app.get("/api/novels/{novel_id}/translations/{lang}")
+def get_novel_translation(
+    novel_id: int,
+    lang: str,
+    db: Session = Depends(get_db),
+):
+    language = normalize_language(lang)
+    translation = (
+        db.query(models.NovelTranslation)
+        .filter(
+            models.NovelTranslation.novel_id == novel_id,
+            models.NovelTranslation.language == language,
+        )
+        .first()
+    )
+    if not translation:
+        raise HTTPException(404, "翻訳が存在しません")
+    return {
+        "novel_id": novel_id,
+        "language": language,
+        "title": translation.title,
+        "description": translation.description,
+        "tags": deserialize_tag_names(translation.tag_names),
+        "created_at": translation.created_at,
+        "updated_at": translation.updated_at,
     }
 
 
@@ -4739,6 +5129,9 @@ def create_episode(
     status_value, is_public = normalize_episode_status(
         getattr(payload, "status", None), None
     )
+    language = normalize_language(
+        getattr(payload, "language", None) or getattr(novel, "language", None)
+    )
 
     ep = models.Episode(
         cover_image_url=payload.cover_image_url,
@@ -4748,6 +5141,7 @@ def create_episode(
         episode_number=payload.episode_number,
         status=status_value,
         is_public=is_public,
+        language=language,
     )
     db.add(ep)
     db.commit()
@@ -4786,6 +5180,11 @@ def create_episode(
         et = models.EpisodeTag(episode_id=ep.id, tag_id=tag.id)
         db.add(et)
 
+    upsert_episode_translation(
+        db,
+        episode=ep,
+        source_language=language,
+    )
     db.commit()
     db.refresh(ep)
     return ep
@@ -4818,13 +5217,20 @@ def update_episode(
         )
         raise HTTPException(403, "編集権限がありません")
 
+    needs_translation = False
+    if "language" in payload and payload["language"] is not None:
+        ep.language = normalize_language(payload["language"])
+        needs_translation = True
+
     # 基本項目を更新
     if "episode_number" in payload and payload["episode_number"] is not None:
         ep.episode_number = int(payload["episode_number"])
     if "title" in payload and payload["title"] is not None:
         ep.title = payload["title"]
+        needs_translation = True
     if "body" in payload and payload["body"] is not None:
         ep.body = payload["body"]
+        needs_translation = True
 
     if "status" in payload and payload["status"] is not None:
         status_value, is_public = normalize_episode_status(payload["status"], None)
@@ -4859,6 +5265,12 @@ def update_episode(
             et = models.EpisodeTag(episode_id=ep.id, tag_id=tag.id)
             db.add(et)
 
+    if needs_translation:
+        upsert_episode_translation(
+            db,
+            episode=ep,
+            source_language=normalize_language(getattr(ep, "language", None)),
+        )
     db.commit()
     db.refresh(ep)
     return ep
@@ -5255,6 +5667,7 @@ def get_episode_for_edit(
         "title": ep.title,
         "cover_image_url": ep.cover_image_url,
         "body": ep.body,
+        "language": getattr(ep, "language", "ja"),
         "episode_number": ep.episode_number,
         "created_at": ep.created_at,
         "view_count": ep.view_count,
@@ -5407,6 +5820,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "title": ep.title,
         "cover_image_url": ep.cover_image_url,
         "body": body_converted,
+        "language": getattr(ep, "language", "ja"),
         "episode_number": ep.episode_number,
         "created_at": ep.created_at,
         "view_count": ep.view_count,
@@ -5430,6 +5844,33 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "is_free_reading_time": is_free_time,
         "next_episode": next_episode,
         "prev_episode": prev_episode,
+    }
+
+
+@app.get("/api/episodes/{episode_id}/translations/{lang}")
+def get_episode_translation(
+    episode_id: int,
+    lang: str,
+    db: Session = Depends(get_db),
+):
+    language = normalize_language(lang)
+    translation = (
+        db.query(models.EpisodeTranslation)
+        .filter(
+            models.EpisodeTranslation.episode_id == episode_id,
+            models.EpisodeTranslation.language == language,
+        )
+        .first()
+    )
+    if not translation:
+        raise HTTPException(404, "翻訳が存在しません")
+    return {
+        "episode_id": episode_id,
+        "language": language,
+        "title": translation.title,
+        "body": translation.body,
+        "created_at": translation.created_at,
+        "updated_at": translation.updated_at,
     }
 
 
