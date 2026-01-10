@@ -1,5 +1,6 @@
 import {useEffect, useState, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 const EDIT_EPISODE_DRAFT_PREFIX = "edit_episode_draft";
@@ -44,6 +45,7 @@ const formatIllustTag = (tag) => {
 export default function EditEpisode() {
   const { id } = useParams(); // episode_id
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   const [novelId, setNovelId] = useState(null);
   const [episodeNumber, setEpisodeNumber] = useState("");
@@ -138,7 +140,12 @@ export default function EditEpisode() {
           return;
         }
         if (!res.ok) {
-          throw new Error(`エピソード情報の取得に失敗しました (${res.status})`);
+          throw new Error(
+            t(
+              { ja: "エピソード情報の取得に失敗しました ({{status}})", en: "Failed to load episode info ({{status}})" },
+              { status: res.status }
+            )
+          );
         }
 
         const data = await res.json();
@@ -175,7 +182,9 @@ export default function EditEpisode() {
         setIllusts(Array.isArray(data.illusts) ? data.illusts : []);
       } catch (err) {
         console.error(err);
-        setError(err.message || "エピソード情報の取得中にエラーが発生しました");
+        setError(
+          err.message || t({ ja: "エピソード情報の取得中にエラーが発生しました", en: "An error occurred while loading episode info." })
+        );
       } finally {
         setLoading(false);
       }
@@ -189,15 +198,15 @@ export default function EditEpisode() {
     setError("");
 
     if (!episodeNumber || isNaN(Number(episodeNumber))) {
-      setError("話数は数字で入力してください。");
+      setError(t({ ja: "話数は数字で入力してください。", en: "Episode number must be a number." }));
       return;
     }
     if (!title.trim()) {
-      setError("タイトルは必須です。");
+      setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
       return;
     }
     if (!body.trim()) {
-      setError("本文は必須です。");
+      setError(t({ ja: "本文は必須です。", en: "Body is required." }));
       return;
     }
 
@@ -205,7 +214,7 @@ export default function EditEpisode() {
     try {
       const token = localStorage.getItem("token");
       if (!token) {
-        throw new Error("ログインが必要です。");
+        throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       }
 
       const res = await fetch(`${API_BASE}/api/episodes/${id}`, {
@@ -238,7 +247,9 @@ export default function EditEpisode() {
         return;
       }
       if (!res.ok) {
-        throw new Error(data.detail || "エピソードの更新に失敗しました");
+        throw new Error(
+          data.detail || t({ ja: "エピソードの更新に失敗しました", en: "Failed to update episode." })
+        );
       }
 
       // 更新成功したので、このエピソードの下書きを削除
@@ -260,7 +271,9 @@ export default function EditEpisode() {
       }
     } catch (err) {
       console.error(err);
-      setError(err.message || "エピソードの更新中にエラーが発生しました");
+      setError(
+        err.message || t({ ja: "エピソードの更新中にエラーが発生しました", en: "An error occurred while updating the episode." })
+      );
     } finally {
       setSaving(false);
     }
@@ -285,13 +298,13 @@ export default function EditEpisode() {
 
   const handleCoverUpload = async () => {
     if (!coverFile) {
-      alert("表紙画像ファイルを選択してください");
+      alert(t({ ja: "表紙画像ファイルを選択してください", en: "Please select a cover image file." }));
       return;
     }
 
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("ログインが必要です。");
+      alert(t({ ja: "ログインが必要です。", en: "Login required." }));
       navigate("/login");
       return;
     }
@@ -312,16 +325,20 @@ export default function EditEpisode() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "表紙のアップロードに失敗しました");
+        throw new Error(
+          data.detail || t({ ja: "表紙のアップロードに失敗しました", en: "Failed to upload cover image." })
+        );
       }
 
       const data = await res.json();
       setCoverImageUrl(data.cover_image_url || "");
       setCoverFile(null);
-      alert("表紙画像を更新しました");
+      alert(t({ ja: "表紙画像を更新しました", en: "Cover image updated." }));
     } catch (e) {
       console.error(e);
-      alert(e.message || "表紙のアップロード中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "表紙のアップロード中にエラーが発生しました", en: "An error occurred while uploading the cover image." })
+      );
     } finally {
       setIsUploadingCover(false);
     }
@@ -330,10 +347,10 @@ export default function EditEpisode() {
   const handleCoverDelete = async () => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("ログインが必要です");
+      alert(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
-    if (!window.confirm("本当に表紙を削除しますか？")) return;
+    if (!window.confirm(t({ ja: "本当に表紙を削除しますか？", en: "Delete the cover image?" }))) return;
 
     const res = await fetch(`${API_BASE}/api/episodes/${id}/cover-image`, {
       method: "DELETE",
@@ -341,12 +358,12 @@ export default function EditEpisode() {
     });
 
     if (!res.ok) {
-      alert("削除に失敗しました");
+      alert(t({ ja: "削除に失敗しました", en: "Failed to delete." }));
       return;
     }
 
     setCoverImageUrl("");
-    alert("表紙を削除しました");
+    alert(t({ ja: "表紙を削除しました", en: "Cover image deleted." }));
   };
 
   // =========================
@@ -368,18 +385,23 @@ export default function EditEpisode() {
 
   const handleIllustUpload = async () => {
     if (!illustFile) {
-      alert("押絵画像ファイルを選択してください");
+      alert(t({ ja: "押絵画像ファイルを選択してください", en: "Please select an illustration file." }));
       return;
     }
     const normalizedTag = normalizeIllustTag(illustTag);
     if (!normalizedTag) {
-      alert("illustタグは [[illust:12345678]] の形式で指定してください");
+      alert(
+        t({
+          ja: "illustタグは [[illust:12345678]] の形式で指定してください",
+          en: "Illust tags must be in the form [[illust:12345678]].",
+        })
+      );
       return;
     }
 
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("ログインが必要です。");
+      alert(t({ ja: "ログインが必要です。", en: "Login required." }));
       navigate("/login");
       return;
     }
@@ -403,7 +425,9 @@ export default function EditEpisode() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "押絵のアップロードに失敗しました");
+        throw new Error(
+          data.detail || t({ ja: "押絵のアップロードに失敗しました", en: "Failed to upload illustration." })
+        );
       }
 
       const newIllust = await res.json();
@@ -412,10 +436,12 @@ export default function EditEpisode() {
       setIllustCaption("");
       setIllustTag("");
       setIllustMetaTags("");
-      alert("押絵を追加しました");
+      alert(t({ ja: "押絵を追加しました", en: "Illustration added." }));
     } catch (e) {
       console.error(e);
-      alert(e.message || "押絵のアップロード中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "押絵のアップロード中にエラーが発生しました", en: "An error occurred while uploading the illustration." })
+      );
     } finally {
       setIsUploadingIllust(false);
     }
@@ -424,10 +450,10 @@ export default function EditEpisode() {
   const handleIllustDelete = async (illustId) => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("ログインが必要です");
+      alert(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
-    if (!window.confirm("押絵を削除しますか？")) return;
+    if (!window.confirm(t({ ja: "押絵を削除しますか？", en: "Delete this illustration?" }))) return;
 
     const res = await fetch(
       `${API_BASE}/api/episodes/${id}/illusts/${illustId}`,
@@ -438,40 +464,42 @@ export default function EditEpisode() {
     );
 
     if (!res.ok) {
-      alert("削除に失敗しました");
+      alert(t({ ja: "削除に失敗しました", en: "Failed to delete." }));
       return;
     }
 
     setIllusts((prev) => prev.filter((ill) => ill.id !== illustId));
-    alert("押絵を削除しました");
+    alert(t({ ja: "押絵を削除しました", en: "Illustration deleted." }));
   };
 
   if (loading) {
-    return <p>読み込み中...</p>;
+    return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
   }
 
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
         {novelId != null ? (
-          <Link to={`/novels/${novelId}`}>← 小説詳細に戻る</Link>
+          <Link to={`/novels/${novelId}`}>
+            {t({ ja: "← 小説詳細に戻る", en: "← Back to Novel" })}
+          </Link>
         ) : (
           <button
             className="btn btn-border"
             type="button"
             onClick={() => navigate("/")}
           >
-            ← 戻る
+            {t({ ja: "← 戻る", en: "← Back" })}
           </button>
         )}
       </div>
 
-      <h2>エピソードを編集</h2>
+      <h2>{t({ ja: "エピソードを編集", en: "Edit Episode" })}</h2>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
-            話数（例: 1, 2, 3）
+            {t({ ja: "話数（例: 1, 2, 3）", en: "Episode number (e.g., 1, 2, 3)" })}
             <br />
             <input
               type="number"
@@ -484,7 +512,7 @@ export default function EditEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            タイトル
+            {t({ ja: "タイトル", en: "Title" })}
             <br />
             <input
               type="text"
@@ -497,13 +525,13 @@ export default function EditEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            タグ (カンマ区切り)
+            {t({ ja: "タグ (カンマ区切り)", en: "Tags (comma-separated)" })}
             <br />
             <input
               type="text"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
-              placeholder="例: バトル, 日常, 百合"
+              placeholder={t({ ja: "例: バトル, 日常, 百合", en: "e.g., Battle, Slice of Life, Yuri" })}
               style={{ width: "100%", padding: 4 }}
             />
           </label>
@@ -511,22 +539,22 @@ export default function EditEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            公開ステータス
+            {t({ ja: "公開ステータス", en: "Visibility" })}
             <br />
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               style={{ width: "100%", padding: 4 }}
             >
-              <option value="public">公開</option>
-              <option value="draft">下書き</option>
+              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
+              <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
             </select>
           </label>
         </div>
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            本文
+            {t({ ja: "本文", en: "Body" })}
             <br />
             <textarea
               value={body}
@@ -545,14 +573,14 @@ export default function EditEpisode() {
 
         <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
           <button className="btn btn-border" type="submit" disabled={saving}>
-            {saving ? "更新中..." : "更新する"}
+            {saving ? t({ ja: "更新中...", en: "Updating..." }) : t({ ja: "更新する", en: "Update" })}
           </button>
           <button
             className="btn btn-border"
             type="button"
             onClick={handleCancel}
           >
-            キャンセル
+            {t({ ja: "キャンセル", en: "Cancel" })}
           </button>
         </div>
       </form>
@@ -569,13 +597,13 @@ export default function EditEpisode() {
           border: "1px solid #ddd",
         }}
       >
-        <h3 style={{ marginTop: 0 }}>表紙画像</h3>
+        <h3 style={{ marginTop: 0 }}>{t({ ja: "表紙画像", en: "Cover image" })}</h3>
 
         {coverImageUrl ? (
           <div style={{ marginBottom: 12 }}>
             <img
               src={coverImageUrl}
-              alt="表紙画像"
+              alt={t({ ja: "表紙画像", en: "Cover image" })}
               style={{ maxWidth: "100%", borderRadius: 8 }}
             />
             <div style={{ marginTop: 8 }}>
@@ -584,12 +612,14 @@ export default function EditEpisode() {
                 className="btn btn-border"
                 onClick={handleCoverDelete}
               >
-                表紙を削除
+                {t({ ja: "表紙を削除", en: "Delete cover" })}
               </button>
             </div>
           </div>
         ) : (
-          <p style={{ color: "#777" }}>表紙画像はまだ設定されていません。</p>
+          <p style={{ color: "#777" }}>
+            {t({ ja: "表紙画像はまだ設定されていません。", en: "No cover image set yet." })}
+          </p>
         )}
 
         <div
@@ -607,7 +637,9 @@ export default function EditEpisode() {
             onClick={handleCoverUpload}
             disabled={isUploadingCover || !coverFile}
           >
-            {isUploadingCover ? "アップロード中..." : "表紙としてアップロード"}
+            {isUploadingCover
+              ? t({ ja: "アップロード中...", en: "Uploading..." })
+              : t({ ja: "表紙としてアップロード", en: "Upload as cover" })}
           </button>
         </div>
       </div>
@@ -624,7 +656,7 @@ export default function EditEpisode() {
           border: "1px solid #ddd",
         }}
       >
-        <h3 style={{ marginTop: 0 }}>押絵</h3>
+        <h3 style={{ marginTop: 0 }}>{t({ ja: "押絵", en: "Illustrations" })}</h3>
 
         {illusts.length > 0 ? (
           <div
@@ -647,7 +679,7 @@ export default function EditEpisode() {
               >
                 <img
                   src={illust.image_url}
-                  alt={illust.caption || "押絵"}
+                  alt={illust.caption || t({ ja: "押絵", en: "Illustration" })}
                   style={{ maxWidth: "100%", borderRadius: 4 }}
                 />
                 {illust.illust_tag && (
@@ -672,14 +704,16 @@ export default function EditEpisode() {
                     style={{ marginTop: 6 }}
                     onClick={() => handleIllustDelete(illust.id)}
                   >
-                    押絵を削除
+                    {t({ ja: "押絵を削除", en: "Delete illustration" })}
                   </button>
                 )}
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ color: "#777" }}>まだ押絵が登録されていません。</p>
+          <p style={{ color: "#777" }}>
+            {t({ ja: "まだ押絵が登録されていません。", en: "No illustrations yet." })}
+          </p>
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -690,19 +724,19 @@ export default function EditEpisode() {
           />
           <input
             type="text"
-            placeholder="キャプション（任意）"
+            placeholder={t({ ja: "キャプション（任意）", en: "Caption (optional)" })}
             value={illustCaption}
             onChange={(e) => setIllustCaption(e.target.value)}
           />
           <input
             type="text"
-            placeholder="必須タグ（例: [[illust:12345678]]）"
+            placeholder={t({ ja: "必須タグ（例: [[illust:12345678]]）", en: "Required tag (e.g., [[illust:12345678]])" })}
             value={illustTag}
             onChange={(e) => setIllustTag(e.target.value)}
           />
           <input
             type="text"
-            placeholder="補助タグ（例: type:scene, mood:soft）"
+            placeholder={t({ ja: "補助タグ（例: type:scene, mood:soft）", en: "Optional tags (e.g., type:scene, mood:soft)" })}
             value={illustMetaTags}
             onChange={(e) => setIllustMetaTags(e.target.value)}
           />
@@ -712,7 +746,9 @@ export default function EditEpisode() {
             onClick={handleIllustUpload}
             disabled={isUploadingIllust || !illustFile}
           >
-            {isUploadingIllust ? "アップロード中..." : "押絵を追加"}
+            {isUploadingIllust
+              ? t({ ja: "アップロード中...", en: "Uploading..." })
+              : t({ ja: "押絵を追加", en: "Add illustration" })}
           </button>
         </div>
       </div>

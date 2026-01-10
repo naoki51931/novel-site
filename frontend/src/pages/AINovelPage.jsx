@@ -1,6 +1,7 @@
 // frontend/src/pages/AINovelPage.jsx
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
 
 /**
  * 既存プロジェクトで JWT をどこに保存しているかに合わせてここを調整する
@@ -85,7 +86,7 @@ function normalizeAINovelResponse(data) {
     parsed.title ||
     parsed.generated_title ||
     parsed.generatedTitle ||
-    "タイトル未設定";
+    translate({ ja: "タイトル未設定", en: "Untitled" }, getStoredLanguage());
   const body = parsed.body || parsed.text || parsed.content || parsed.story || data.body;
 
   return { ...data, generated_title: title, body };
@@ -111,6 +112,7 @@ function getJwtUserId(token) {
 }
 
 export default function AINovelPage() {
+  const { t, lang } = useI18n();
   const [titleHint, setTitleHint] = useState("");
   const [genre, setGenre] = useState("");
   const [characters, setCharacters] = useState("");
@@ -240,7 +242,8 @@ export default function AINovelPage() {
     const errMsg = consumePendingAiPostError();
     if (errMsg) setError(errMsg);
     setResult({
-      generated_title: pending.generated_title || pending.title || "AI生成小説",
+      generated_title:
+        pending.generated_title || pending.title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
       body: pending.body,
     });
   }, []);
@@ -261,7 +264,12 @@ export default function AINovelPage() {
       try {
         const token = getAuthToken();
         if (!token) {
-          setContinueInfoError("ログインが必要です。ログイン後にもう一度お試しください。");
+          setContinueInfoError(
+            t({
+              ja: "ログインが必要です。ログイン後にもう一度お試しください。",
+              en: "Login required. Please sign in and try again.",
+            })
+          );
           setCanPostToContinueNovel(false);
           return;
         }
@@ -273,7 +281,13 @@ export default function AINovelPage() {
         if (!res.ok) {
           console.warn("failed to load episode for continue mode", res.status);
           setContinueInfoError(
-            `続き生成元のエピソード情報を取得できませんでした (status=${res.status})`
+            t(
+              {
+                ja: "続き生成元のエピソード情報を取得できませんでした (status={{status}})",
+                en: "Failed to load the source episode (status={{status}})",
+              },
+              { status: res.status }
+            )
           );
           setCanPostToContinueNovel(false);
           return;
@@ -282,7 +296,12 @@ export default function AINovelPage() {
 
         // タイトルのイメージに「◯話の続き」っぽい文言を入れておく
         if (data?.title) {
-          setTitleHint(`「${data.title}」の続き`);
+          setTitleHint(
+            t(
+              { ja: "「{{title}}」の続き", en: "Continuation of \"{{title}}\"" },
+              { title: data.title }
+            )
+          );
         }
         if (typeof data?.novel_id === "number") setContinueNovelId(data.novel_id);
         if (typeof data?.episode_number === "number") setContinueEpisodeNumber(data.episode_number);
@@ -291,7 +310,9 @@ export default function AINovelPage() {
         // 既存小説へ投稿できるか（作者か）を判定
         const novelId = typeof data?.novel_id === "number" ? data.novel_id : null;
         if (!novelId) {
-          setContinueInfoError("投稿先の小説IDを取得できませんでした。");
+          setContinueInfoError(
+            t({ ja: "投稿先の小説IDを取得できませんでした。", en: "Could not get destination novel ID." })
+          );
           setCanPostToContinueNovel(false);
           return;
         }
@@ -307,7 +328,13 @@ export default function AINovelPage() {
         if (!novelRes.ok) {
           setCanPostToContinueNovel(false);
           setContinueInfoError(
-            `投稿先の小説情報を取得できませんでした (status=${novelRes.status})`
+            t(
+              {
+                ja: "投稿先の小説情報を取得できませんでした (status={{status}})",
+                en: "Failed to load destination novel (status={{status}})",
+              },
+              { status: novelRes.status }
+            )
           );
           return;
         }
@@ -315,18 +342,33 @@ export default function AINovelPage() {
         const authorId = typeof novelData?.author_id === "number" ? novelData.author_id : null;
         if (!authorId) {
           setCanPostToContinueNovel(false);
-          setContinueInfoError("投稿先の小説の author_id を取得できませんでした。");
+          setContinueInfoError(
+            t({
+              ja: "投稿先の小説の author_id を取得できませんでした。",
+              en: "Could not get the destination novel's author ID.",
+            })
+          );
           return;
         }
         if (authorId !== meId) {
           setCanPostToContinueNovel(false);
-          setContinueInfoError("この小説はあなたの作品ではないため、既存小説への続き投稿はできません。");
+          setContinueInfoError(
+            t({
+              ja: "この小説はあなたの作品ではないため、既存小説への続き投稿はできません。",
+              en: "This novel isn't yours, so you can't post a continuation.",
+            })
+          );
           return;
         }
         setCanPostToContinueNovel(true);
       } catch (e) {
         console.error(e);
-        setContinueInfoError("続き生成の準備中にエラーが発生しました。");
+        setContinueInfoError(
+          t({
+            ja: "続き生成の準備中にエラーが発生しました。",
+            en: "An error occurred while preparing continuation.",
+          })
+        );
         setCanPostToContinueNovel(false);
       }
     })();
@@ -335,7 +377,7 @@ export default function AINovelPage() {
   useEffect(() => {
     if (!result) return;
     if (isContinueMode) {
-      setPostEpisodeTitle(result.generated_title || "続き");
+      setPostEpisodeTitle(result.generated_title || t({ ja: "続き", en: "Continuation" }));
       return;
     }
     setPostEpisodeTitle("");
@@ -393,7 +435,12 @@ export default function AINovelPage() {
 
     const token = getAuthToken();
     if (episodeId && !token) {
-      setError("ログインが必要です。ログイン画面へ移動します。");
+      setError(
+        t({
+          ja: "ログインが必要です。ログイン画面へ移動します。",
+          en: "Login required. Redirecting to the login page.",
+        })
+      );
       setTimeout(() => {
         navigate("/login"); // 既存のログインパスに合わせて変更
       }, 800);
@@ -436,14 +483,24 @@ export default function AINovelPage() {
       });
 
       if (res.status === 401 && token) {
-        setError("ログインの有効期限が切れています。再ログインしてください。");
+        setError(
+          t({
+            ja: "ログインの有効期限が切れています。再ログインしてください。",
+            en: "Your session has expired. Please log in again.",
+          })
+        );
         setTimeout(() => navigate("/login"), 800);
         setLoading(false);
         return;
       }
 
       if (res.status === 402) {
-        setPremiumError("この機能は有料プラン専用です。マイページからプランをご確認ください。");
+        setPremiumError(
+          t({
+            ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
+            en: "This feature is for paid plans only. Check your plan on My Page.",
+          })
+        );
         setLoading(false);
         return;
       }
@@ -451,7 +508,11 @@ export default function AINovelPage() {
       if (res.status === 429) {
         const data = await res.json().catch(() => ({}));
         setQuotaError(
-          data.detail || "本日の AI 小説生成の上限回数に達しました。明日またお試しください。"
+          data.detail ||
+            t({
+              ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
+              en: "You've reached today's AI generation limit. Please try again tomorrow.",
+            })
         );
         setLoading(false);
         return;
@@ -459,7 +520,13 @@ export default function AINovelPage() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `生成に失敗しました (status=${res.status})`);
+        throw new Error(
+          data.detail ||
+            t(
+              { ja: "生成に失敗しました (status={{status}})", en: "Generation failed (status={{status}})" },
+              { status: res.status }
+            )
+        );
       }
 
       const data = await res.json();
@@ -477,7 +544,9 @@ export default function AINovelPage() {
       setResult(normalizeAINovelResponse(data));
     } catch (err) {
       console.error(err);
-      setError(err.message || "生成中にエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
+      );
     } finally {
       setLoading(false);
     }
@@ -526,14 +595,24 @@ export default function AINovelPage() {
       });
 
       if (res.status === 401 && token) {
-        setError("ログインの有効期限が切れています。再ログインしてください。");
+        setError(
+          t({
+            ja: "ログインの有効期限が切れています。再ログインしてください。",
+            en: "Your session has expired. Please log in again.",
+          })
+        );
         setTimeout(() => navigate("/login"), 800);
         setContinuing(false);
         return;
       }
 
       if (res.status === 402) {
-        setPremiumError("この機能は有料プラン専用です。マイページからプランをご確認ください。");
+        setPremiumError(
+          t({
+            ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
+            en: "This feature is for paid plans only. Check your plan on My Page.",
+          })
+        );
         setContinuing(false);
         return;
       }
@@ -541,7 +620,11 @@ export default function AINovelPage() {
       if (res.status === 429) {
         const data = await res.json().catch(() => ({}));
         setQuotaError(
-          data.detail || "本日の AI 小説生成の上限回数に達しました。明日またお試しください。"
+          data.detail ||
+            t({
+              ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
+              en: "You've reached today's AI generation limit. Please try again tomorrow.",
+            })
         );
         setContinuing(false);
         return;
@@ -549,7 +632,13 @@ export default function AINovelPage() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `生成に失敗しました (status=${res.status})`);
+        throw new Error(
+          data.detail ||
+            t(
+              { ja: "生成に失敗しました (status={{status}})", en: "Generation failed (status={{status}})" },
+              { status: res.status }
+            )
+        );
       }
 
       const data = normalizeAINovelResponse(await res.json());
@@ -569,7 +658,9 @@ export default function AINovelPage() {
       }
     } catch (err) {
       console.error(err);
-      setError(err.message || "生成中にエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
+      );
     } finally {
       setContinuing(false);
     }
@@ -594,12 +685,17 @@ export default function AINovelPage() {
     if (!token) {
       savePendingAiPost({
         kind: "new_novel",
-        generated_title: result.generated_title || "AI生成小説",
+        generated_title: result.generated_title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
         body: combinedBody,
         age_limit: isR18 ? "r18" : "all",
         createdAt: Date.now(),
       });
-      setError("投稿にはログインが必要です。ログイン画面へ移動します。");
+      setError(
+        t({
+          ja: "投稿にはログインが必要です。ログイン画面へ移動します。",
+          en: "Login required to post. Redirecting to the login page.",
+        })
+      );
       setTimeout(() => navigate("/login"), 200);
       setPosting(false);
       return;
@@ -607,8 +703,8 @@ export default function AINovelPage() {
 
     try {
       const novelPayload = {
-        title: result.generated_title || "AI生成小説",
-        description: "AI生成",
+        title: result.generated_title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
+        description: t({ ja: "AI生成", en: "AI-generated" }),
         age_limit: isR18 ? "r18" : "all",
         is_ai_generated: true,
         tag_names: [],
@@ -624,16 +720,24 @@ export default function AINovelPage() {
       });
       const novelData = await novelRes.json().catch(() => ({}));
       if (!novelRes.ok) {
-        throw new Error(novelData.detail || `小説の作成に失敗しました (status=${novelRes.status})`);
+        throw new Error(
+          novelData.detail ||
+            t(
+              { ja: "小説の作成に失敗しました (status={{status}})", en: "Failed to create novel (status={{status}})" },
+              { status: novelRes.status }
+            )
+        );
       }
       const novelId = novelData?.id;
       if (!novelId) {
-        throw new Error("小説IDが取得できませんでした。");
+        throw new Error(
+          t({ ja: "小説IDが取得できませんでした。", en: "Could not get novel ID." })
+        );
       }
 
       const episodePayload = {
         episode_number: 1,
-        title: "第1話",
+        title: t({ ja: "第1話", en: "Episode 1" }),
         body: combinedBody,
         tag_names: [],
       };
@@ -647,13 +751,21 @@ export default function AINovelPage() {
       });
       const epData = await epRes.json().catch(() => ({}));
       if (!epRes.ok) {
-        throw new Error(epData.detail || `第1話の投稿に失敗しました (status=${epRes.status})`);
+        throw new Error(
+          epData.detail ||
+            t(
+              { ja: "第1話の投稿に失敗しました (status={{status}})", en: "Failed to post Episode 1 (status={{status}})" },
+              { status: epRes.status }
+            )
+        );
       }
 
       navigate(`/novels/${novelId}`);
     } catch (err) {
       console.error(err);
-      setError(err.message || "投稿中にエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "投稿中にエラーが発生しました。", en: "An error occurred while posting." })
+      );
     } finally {
       setPosting(false);
     }
@@ -662,11 +774,19 @@ export default function AINovelPage() {
   const handlePostAsNextEpisode = async () => {
     if (!result?.body) return;
     if (!continueNovelId) {
-      setError("投稿先の小説が特定できません（novel_id が取得できませんでした）。");
+      setError(
+        t({
+          ja: "投稿先の小説が特定できません（novel_id が取得できませんでした）。",
+          en: "Could not identify the destination novel (novel_id missing).",
+        })
+      );
       return;
     }
     if (canPostToContinueNovel === false) {
-      setError(continueInfoError || "既存小説への投稿権限がありません。");
+      setError(
+        continueInfoError ||
+          t({ ja: "既存小説への投稿権限がありません。", en: "You don't have permission to post here." })
+      );
       return;
     }
     setPosting(true);
@@ -682,11 +802,16 @@ export default function AINovelPage() {
         kind: "next_episode",
         continue_novel_id: continueNovelId,
         post_episode_title: postEpisodeTitle || "",
-        generated_title: result.generated_title || "続き",
+        generated_title: result.generated_title || t({ ja: "続き", en: "Continuation" }),
         body: combinedBody,
         createdAt: Date.now(),
       });
-      setError("投稿にはログインが必要です。ログイン画面へ移動します。");
+      setError(
+        t({
+          ja: "投稿にはログインが必要です。ログイン画面へ移動します。",
+          en: "Login required to post. Redirecting to the login page.",
+        })
+      );
       setTimeout(() => navigate("/login"), 200);
       setPosting(false);
       return;
@@ -700,7 +825,13 @@ export default function AINovelPage() {
       if (!listRes.ok) {
         throw new Error(
           (listData && listData.detail) ||
-            `エピソード一覧の取得に失敗しました (status=${listRes.status})`
+            t(
+              {
+                ja: "エピソード一覧の取得に失敗しました (status={{status}})",
+                en: "Failed to fetch episode list (status={{status}})",
+              },
+              { status: listRes.status }
+            )
         );
       }
 
@@ -712,7 +843,9 @@ export default function AINovelPage() {
 
       const episodePayload = {
         episode_number: nextNumber,
-        title: (postEpisodeTitle || "").trim() || `第${nextNumber}話`,
+        title:
+          (postEpisodeTitle || "").trim() ||
+          t({ ja: "第{{num}}話", en: "Episode {{num}}" }, { num: nextNumber }),
         body: combinedBody,
         tag_names: [],
       };
@@ -725,17 +858,30 @@ export default function AINovelPage() {
         body: JSON.stringify(episodePayload),
       });
       if (epRes.status === 403) {
-        throw new Error("この小説にエピソードを追加する権限がありません（作者のみ投稿できます）。");
+        throw new Error(
+          t({
+            ja: "この小説にエピソードを追加する権限がありません（作者のみ投稿できます）。",
+            en: "You don't have permission to add episodes (authors only).",
+          })
+        );
       }
       const epData = await epRes.json().catch(() => ({}));
       if (!epRes.ok) {
-        throw new Error(epData.detail || `エピソードの投稿に失敗しました (status=${epRes.status})`);
+        throw new Error(
+          epData.detail ||
+            t(
+              { ja: "エピソードの投稿に失敗しました (status={{status}})", en: "Failed to post episode (status={{status}})" },
+              { status: epRes.status }
+            )
+        );
       }
 
       navigate(`/novels/${continueNovelId}`);
     } catch (err) {
       console.error(err);
-      setError(err.message || "投稿中にエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "投稿中にエラーが発生しました。", en: "An error occurred while posting." })
+      );
     } finally {
       setPosting(false);
     }
@@ -746,9 +892,14 @@ export default function AINovelPage() {
     const text = `${result.generated_title}\n\n${getCombinedBody()}`;
     try {
       await navigator.clipboard.writeText(text);
-      alert("クリップボードにコピーしました。");
+      alert(t({ ja: "クリップボードにコピーしました。", en: "Copied to clipboard." }));
     } catch (e) {
-      alert("コピーに失敗しました。手動で選択してコピーしてください。");
+      alert(
+        t({
+          ja: "コピーに失敗しました。手動で選択してコピーしてください。",
+          en: "Copy failed. Please select the text and copy manually.",
+        })
+      );
     }
   };
 
@@ -786,7 +937,9 @@ export default function AINovelPage() {
     }
 
     if (!parsed) {
-      setError("JSON形式の修正に失敗しました。");
+      setError(
+        t({ ja: "JSON形式の修正に失敗しました。", en: "Failed to fix JSON output." })
+      );
       return;
     }
 
@@ -804,7 +957,7 @@ export default function AINovelPage() {
 
     setResult((prev) => ({
       ...(prev || {}),
-      generated_title: nextTitle || "タイトル未設定",
+      generated_title: nextTitle || t({ ja: "タイトル未設定", en: "Untitled" }),
       body: nextBody || "",
     }));
   };
@@ -814,7 +967,12 @@ export default function AINovelPage() {
     const c = (characters || "").trim();
     const t = (titleHint || "").trim();
     if (!q && !c && !t) {
-      setAutoFillError("タイトルのイメージ、ジャンル、登場人物・設定のいずれかを入力してください。");
+      setAutoFillError(
+        t({
+          ja: "タイトルのイメージ、ジャンル、登場人物・設定のいずれかを入力してください。",
+          en: "Enter a title idea, genre, or characters/settings.",
+        })
+      );
       return;
     }
     setAutoFillLoading(true);
@@ -827,7 +985,13 @@ export default function AINovelPage() {
       const res = await fetch(`/api/ai/novels/auto-fill?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || `自動補完に失敗しました (status=${res.status})`);
+        throw new Error(
+          data.detail ||
+            t(
+              { ja: "自動補完に失敗しました (status={{status}})", en: "Auto-fill failed (status={{status}})" },
+              { status: res.status }
+            )
+        );
       }
       const appendGenre = (data.genre_append || "").trim();
       const appendCharacters = (data.characters_append || "").trim();
@@ -844,7 +1008,12 @@ export default function AINovelPage() {
         });
       }
       if (!appendGenre && !appendCharacters) {
-        setAutoFillError("検索結果から補完できる要素が見つかりませんでした。");
+        setAutoFillError(
+          t({
+            ja: "検索結果から補完できる要素が見つかりませんでした。",
+            en: "No elements were found to auto-fill.",
+          })
+        );
       }
       setAutoFillPreview({
         query: data.query || q,
@@ -856,7 +1025,9 @@ export default function AINovelPage() {
       });
     } catch (e) {
       console.error(e);
-      setAutoFillError(e.message || "自動補完中にエラーが発生しました。");
+      setAutoFillError(
+        e.message || t({ ja: "自動補完中にエラーが発生しました。", en: "An error occurred during auto-fill." })
+      );
     } finally {
       setAutoFillLoading(false);
     }
@@ -865,20 +1036,39 @@ export default function AINovelPage() {
   return (
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "1.5rem" }}>
       <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>
-        {isContinueMode ? "AI小説：エピソードの続き生成" : "AI小説生成（未ログインは10回まで）"}
+        {isContinueMode
+          ? t({ ja: "AI小説：エピソードの続き生成", en: "AI Novel: Continue an Episode" })
+          : t({ ja: "AI小説生成（未ログインは10回まで）", en: "AI Novel Generation (up to 10 for guests)" })}
       </h1>
 
       {isContinueMode ? (
         <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
-          選択したエピソードの<strong>続き</strong>を AI が生成します。
+          {lang === "ja" ? (
+            <>
+              選択したエピソードの<strong>続き</strong>を AI が生成します。
+            </>
+          ) : (
+            <>
+              AI will generate a <strong>continuation</strong> of the selected episode.
+            </>
+          )}
           <br />
-          必要であれば、雰囲気や追加したい展開を下のフォームに書き足してから「AI小説を生成する」を押してください。
+          {t({
+            ja: "必要であれば、雰囲気や追加したい展開を下のフォームに書き足してから「AI小説を生成する」を押してください。",
+            en: "If needed, add tone or plot details below, then click “Generate AI novel.”",
+          })}
         </p>
       ) : (
         <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
-          お題や登場人物を入力して、「AI小説を生成する」を押すとお試し小説を生成します。
+          {t({
+            ja: "お題や登場人物を入力して、「AI小説を生成する」を押すとお試し小説を生成します。",
+            en: "Enter a theme and characters, then click “Generate AI novel” to create a sample story.",
+          })}
           <br />
-          生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。
+          {t({
+            ja: "生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。",
+            en: "You can edit the result later and post it as a novel or episode.",
+          })}
         </p>
       )}
 
@@ -893,7 +1083,10 @@ export default function AINovelPage() {
             fontSize: "0.9rem",
           }}
         >
-          ゲストの AI生成 残り回数: {guestRemaining}
+          {t(
+            { ja: "ゲストの AI生成 残り回数: {{count}}", en: "Guest AI generations left: {{count}}" },
+            { count: guestRemaining }
+          )}
         </div>
       )}
       {typeof userRemaining === "number" && (
@@ -907,7 +1100,10 @@ export default function AINovelPage() {
             fontSize: "0.9rem",
           }}
         >
-          ユーザーの AI生成 残り回数: {userRemaining}
+          {t(
+            { ja: "ユーザーの AI生成 残り回数: {{count}}", en: "User AI generations left: {{count}}" },
+            { count: userRemaining }
+          )}
         </div>
       )}
 
@@ -924,7 +1120,7 @@ export default function AINovelPage() {
       >
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            タイトルのイメージ（任意）
+            {t({ ja: "タイトルのイメージ（任意）", en: "Title idea (optional)" })}
           </label>
           <input
             type="text"
@@ -932,8 +1128,14 @@ export default function AINovelPage() {
             onChange={(e) => setTitleHint(e.target.value)}
             placeholder={
               isContinueMode
-                ? "例: 前話の雰囲気を引き継ぎつつ、二人の関係をもう一歩進めてほしい など"
-                : "例: 月夜の喫茶店で始まる物語"
+                ? t({
+                    ja: "例: 前話の雰囲気を引き継ぎつつ、二人の関係をもう一歩進めてほしい など",
+                    en: "e.g., Keep the previous episode's mood and advance their relationship one step",
+                  })
+                : t({
+                    ja: "例: 月夜の喫茶店で始まる物語",
+                    en: "e.g., A story that begins in a moonlit cafe",
+                  })
             }
             style={{ width: "100%", padding: "0.5rem" }}
           />
@@ -942,13 +1144,16 @@ export default function AINovelPage() {
         {!isContinueMode && (
           <div>
             <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-              ジャンル（任意）
+              {t({ ja: "ジャンル（任意）", en: "Genre (optional)" })}
             </label>
             <input
               type="text"
               value={genre}
               onChange={(e) => setGenre(e.target.value)}
-              placeholder="例: ファンタジー / 日常 / SF / ラブコメ"
+              placeholder={t({
+                ja: "例: ファンタジー / 日常 / SF / ラブコメ",
+                en: "e.g., Fantasy / Slice of Life / Sci-Fi / Romcom",
+              })}
               style={{ width: "100%", padding: "0.5rem" }}
             />
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
@@ -958,14 +1163,19 @@ export default function AINovelPage() {
                 disabled={autoFillLoading || loading}
                 className="btn btn-border"
               >
-                {autoFillLoading ? "調査中..." : "ジャンル/設定を自動補完"}
+                {autoFillLoading
+                  ? t({ ja: "調査中...", en: "Searching..." })
+                  : t({ ja: "ジャンル/設定を自動補完", en: "Auto-fill genre/settings" })}
               </button>
               <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
-                入力したジャンルを検索して反映
+                {t({ ja: "入力したジャンルを検索して反映", en: "Search and apply the genre you entered" })}
               </span>
             </div>
             <div style={{ marginTop: "0.4rem", fontSize: "0.8rem", color: "var(--muted-text)" }}>
-              ※ 登場人物・設定で「"キャラ名"」のようにダブルクォートで囲むと、分割せずそのまま検索します。
+              {t({
+                ja: "※ 登場人物・設定で「\"キャラ名\"」のようにダブルクォートで囲むと、分割せずそのまま検索します。",
+                en: "Tip: Wrap character names in double quotes to search without splitting.",
+              })}
             </div>
             {autoFillError && (
               <div style={{ marginTop: "0.5rem", color: "#842029", fontSize: "0.9rem" }}>
@@ -981,28 +1191,35 @@ export default function AINovelPage() {
                   borderRadius: "6px",
                   backgroundColor: "var(--ai-result-surface)",
                 }}
-              >
-                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
-                  自動補完で追加した内容
-                </div>
+                >
+                  <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                  {t({ ja: "自動補完で追加した内容", en: "Added by auto-fill" })}
+                  </div>
                 {autoFillPreview.terms && autoFillPreview.terms.length > 0 && (
                   <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
-                    検索語: {autoFillPreview.terms.join(" / ")}
+                    {t(
+                      { ja: "検索語: {{terms}}", en: "Search terms: {{terms}}" },
+                      { terms: autoFillPreview.terms.join(" / ") }
+                    )}
                   </div>
                 )}
                 {autoFillPreview.charactersQuery && (
                   <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
-                    登場人物・設定の検索元: {autoFillPreview.charactersQuery}
+                    {t(
+                      { ja: "登場人物・設定の検索元: {{query}}", en: "Characters/settings search: {{query}}" },
+                      { query: autoFillPreview.charactersQuery }
+                    )}
                   </div>
                 )}
                 {autoFillPreview.genreAppend && (
                   <div style={{ marginBottom: "0.5rem" }}>
-                    <strong>ジャンルに追加:</strong> {autoFillPreview.genreAppend}
+                    <strong>{t({ ja: "ジャンルに追加:", en: "Added to genre:" })}</strong>{" "}
+                    {autoFillPreview.genreAppend}
                   </div>
                 )}
                 {autoFillPreview.charactersAppend && (
                   <div style={{ marginBottom: "0.5rem" }}>
-                    <strong>登場人物・設定に追加:</strong>
+                    <strong>{t({ ja: "登場人物・設定に追加:", en: "Added to characters/settings:" })}</strong>
                     <pre
                       style={{
                         marginTop: "0.35rem",
@@ -1022,7 +1239,7 @@ export default function AINovelPage() {
                 )}
                 {autoFillPreview.sources && autoFillPreview.sources.length > 0 && (
                   <div style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
-                    参照:
+                    {t({ ja: "参照:", en: "Sources:" })}
                     <ul style={{ marginTop: "0.35rem", paddingLeft: "1.2rem" }}>
                       {autoFillPreview.sources.map((s, idx) => (
                         <li key={`${s.link || s.title || "source"}-${idx}`}>
@@ -1041,7 +1258,9 @@ export default function AINovelPage() {
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            {isContinueMode ? "登場人物・設定（変更/追加したい場合）" : "登場人物・設定"}
+            {isContinueMode
+              ? t({ ja: "登場人物・設定（変更/追加したい場合）", en: "Characters & settings (optional changes)" })
+              : t({ ja: "登場人物・設定", en: "Characters & settings" })}
           </label>
           <textarea
             value={characters}
@@ -1049,8 +1268,14 @@ export default function AINovelPage() {
             rows={3}
             placeholder={
               isContinueMode
-                ? "例: 新キャラ「◯◯」を追加。主人公は「◯◯」とは旧知の仲。口調は丁寧に。など"
-                : "例: 大学生の主人公と、不思議な店主がいる深夜の喫茶店。主人公は最近よく見る夢の話を打ち明ける。"
+                ? t({
+                    ja: "例: 新キャラ「◯◯」を追加。主人公は「◯◯」とは旧知の仲。口調は丁寧に。など",
+                    en: "e.g., Add a new character “XX”. The protagonist already knows them. Use polite speech.",
+                  })
+                : t({
+                    ja: "例: 大学生の主人公と、不思議な店主がいる深夜の喫茶店。主人公は最近よく見る夢の話を打ち明ける。",
+                    en: "e.g., A college student visits a midnight cafe run by a mysterious owner and shares recurring dreams.",
+                  })
             }
             style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
           />
@@ -1059,13 +1284,16 @@ export default function AINovelPage() {
         {!isContinueMode && (
           <div>
             <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-              雰囲気・トーン（任意）
+              {t({ ja: "雰囲気・トーン（任意）", en: "Tone (optional)" })}
             </label>
             <input
               type="text"
               value={tone}
               onChange={(e) => setTone(e.target.value)}
-              placeholder="例: ほのぼの / 少し切ない / ダーク寄り など"
+              placeholder={t({
+                ja: "例: ほのぼの / 少し切ない / ダーク寄り など",
+                en: "e.g., Lighthearted / A little bittersweet / Dark",
+              })}
               style={{ width: "100%", padding: "0.5rem" }}
             />
           </div>
@@ -1073,22 +1301,22 @@ export default function AINovelPage() {
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            長さ
+            {t({ ja: "長さ", en: "Length" })}
           </label>
           <select
             value={length}
             onChange={(e) => setLength(e.target.value)}
             style={{ width: "100%", padding: "0.5rem" }}
           >
-            <option value="short">短め（800〜1200文字程度）</option>
-            <option value="medium">ふつう（2000〜3000文字程度）</option>
-            <option value="long">長め（4000〜6000文字程度）</option>
+            <option value="short">{t({ ja: "短め（800〜1200文字程度）", en: "Short (800–1200 chars)" })}</option>
+            <option value="medium">{t({ ja: "ふつう（2000〜3000文字程度）", en: "Medium (2000–3000 chars)" })}</option>
+            <option value="long">{t({ ja: "長め（4000〜6000文字程度）", en: "Long (4000–6000 chars)" })}</option>
           </select>
         </div>
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            年齢区分
+            {t({ ja: "年齢区分", en: "Age rating" })}
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
             <input
@@ -1096,32 +1324,32 @@ export default function AINovelPage() {
               checked={isR18}
               onChange={(e) => setIsR18(e.target.checked)}
             />
-            R-18（成人向け・性的描写あり）
+            {t({ ja: "R-18（成人向け・性的描写あり）", en: "R-18 (adult content, sexual depictions)" })}
           </label>
         </div>
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            使用モデル
+            {t({ ja: "使用モデル", en: "Model" })}
           </label>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
             style={{ width: "100%", padding: "0.5rem" }}
           >
-            <option value="gpt-4.1-mini">GPT-4.1 Mini（高速・低コスト）</option>
-            <option value="gpt-4.1">GPT-4.1（高品質）</option>
-            <option value="gpt-4.1-preview">GPT-4.1 Preview（長文向け）</option>
+            <option value="gpt-4.1-mini">{t({ ja: "GPT-4.1 Mini（高速・低コスト）", en: "GPT-4.1 Mini (fast, low cost)" })}</option>
+            <option value="gpt-4.1">{t({ ja: "GPT-4.1（高品質）", en: "GPT-4.1 (high quality)" })}</option>
+            <option value="gpt-4.1-preview">{t({ ja: "GPT-4.1 Preview（長文向け）", en: "GPT-4.1 Preview (long-form)" })}</option>
             <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="gpt-4o">GPT-4o</option>
-            <option value="openai/chatgpt-4o-latest">ChatGPT（OpenRouter / chatgpt-4o-latest）</option>
-            <option value="z-ai/glm-4.6">GLM 4.6（OpenRouter / z-ai/glm-4.6）</option>
-            <option value="moonshotai/kimi-k2">Kimi（OpenRouter / kimi-k2）</option>
-            <option value="deepseek/deepseek-chat">DeepSeek（OpenRouter / deepseek-chat）</option>
-            <option value="deepseek:deepseek-chat">DeepSeek（公式 / deepseek-chat）</option>
-            <option value="deepseek:deepseek-reasoner">DeepSeek（公式 / deepseek-reasoner）</option>
-            <option value="google/gemini-2.0-flash-001">Gemini（OpenRouter / gemini-2.0-flash）</option>
-            <option value="anthropic/claude-3.5-sonnet">Claude（OpenRouter / claude-3.5-sonnet）</option>
+            <option value="openai/chatgpt-4o-latest">{t({ ja: "ChatGPT（OpenRouter / chatgpt-4o-latest）", en: "ChatGPT (OpenRouter / chatgpt-4o-latest)" })}</option>
+            <option value="z-ai/glm-4.6">{t({ ja: "GLM 4.6（OpenRouter / z-ai/glm-4.6）", en: "GLM 4.6 (OpenRouter / z-ai/glm-4.6)" })}</option>
+            <option value="moonshotai/kimi-k2">{t({ ja: "Kimi（OpenRouter / kimi-k2）", en: "Kimi (OpenRouter / kimi-k2)" })}</option>
+            <option value="deepseek/deepseek-chat">{t({ ja: "DeepSeek（OpenRouter / deepseek-chat）", en: "DeepSeek (OpenRouter / deepseek-chat)" })}</option>
+            <option value="deepseek:deepseek-chat">{t({ ja: "DeepSeek（公式 / deepseek-chat）", en: "DeepSeek (official / deepseek-chat)" })}</option>
+            <option value="deepseek:deepseek-reasoner">{t({ ja: "DeepSeek（公式 / deepseek-reasoner）", en: "DeepSeek (official / deepseek-reasoner)" })}</option>
+            <option value="google/gemini-2.0-flash-001">{t({ ja: "Gemini（OpenRouter / gemini-2.0-flash）", en: "Gemini (OpenRouter / gemini-2.0-flash)" })}</option>
+            <option value="anthropic/claude-3.5-sonnet">{t({ ja: "Claude（OpenRouter / claude-3.5-sonnet）", en: "Claude (OpenRouter / claude-3.5-sonnet)" })}</option>
           </select>
         </div>
 
@@ -1139,17 +1367,17 @@ export default function AINovelPage() {
           }}
         >
           {loading
-            ? "生成中..."
+            ? t({ ja: "生成中...", en: "Generating..." })
             : isContinueMode
-            ? "このエピソードの続きを生成する"
-            : "AI小説を生成する"}
+            ? t({ ja: "このエピソードの続きを生成する", en: "Generate continuation for this episode" })
+            : t({ ja: "AI小説を生成する", en: "Generate AI novel" })}
         </button>
         <button
           type="button"
           className="btn btn-border"
           onClick={() => navigate("/ai-logs")}
         >
-          利用履歴を見る
+          {t({ ja: "利用履歴を見る", en: "View usage history" })}
         </button>
       </form>
 
@@ -1210,7 +1438,7 @@ export default function AINovelPage() {
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
             <h2 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>
-              {result.generated_title || "生成された小説"}
+              {result.generated_title || t({ ja: "生成された小説", en: "Generated Novel" })}
             </h2>
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <button
@@ -1225,7 +1453,7 @@ export default function AINovelPage() {
                   cursor: "pointer",
                 }}
               >
-                JSON出力を修正
+                {t({ ja: "JSON出力を修正", en: "Fix JSON output" })}
               </button>
               <button
                 type="button"
@@ -1239,15 +1467,15 @@ export default function AINovelPage() {
                   cursor: "pointer",
                 }}
               >
-                文章をコピー
+                {t({ ja: "文章をコピー", en: "Copy text" })}
               </button>
             </div>
           </div>
 
           <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
-            {result.model && <span>モデル: {result.model} / </span>}
+            {result.model && <span>{t({ ja: "モデル", en: "Model" })}: {result.model} / </span>}
             {typeof result.used_tokens === "number" && (
-              <span>使用トークン: {result.used_tokens}</span>
+              <span>{t({ ja: "使用トークン", en: "Tokens used" })}: {result.used_tokens}</span>
             )}
           </div>
 
@@ -1279,9 +1507,14 @@ export default function AINovelPage() {
                   backgroundColor: "var(--ai-result-surface)",
                 }}
               >
-                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>続きを作成する</div>
+                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                  {t({ ja: "続きを作成する", en: "Generate continuation" })}
+                </div>
                 <div style={{ fontSize: "0.9rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
-                  直前の生成結果と入力項目（タイトルのイメージ〜使用モデル）を使って続き部分を生成します。
+                  {t({
+                    ja: "直前の生成結果と入力項目（タイトルのイメージ〜使用モデル）を使って続き部分を生成します。",
+                    en: "Generate a continuation using the latest result and input fields.",
+                  })}
                 </div>
                 <button
                   type="button"
@@ -1296,7 +1529,9 @@ export default function AINovelPage() {
                     opacity: continuing ? 0.7 : 1,
                   }}
                 >
-                  {continuing ? "続き生成中..." : "続きを作成する"}
+                  {continuing
+                    ? t({ ja: "続き生成中...", en: "Generating continuation..." })
+                    : t({ ja: "続きを作成する", en: "Generate continuation" })}
                 </button>
                 {continuationBody && (
                   <button
@@ -1313,7 +1548,7 @@ export default function AINovelPage() {
                       marginLeft: "0.5rem",
                     }}
                   >
-                    続き生成をやり直す
+                    {t({ ja: "続き生成をやり直す", en: "Redo continuation" })}
                   </button>
                 )}
               </div>
@@ -1326,7 +1561,9 @@ export default function AINovelPage() {
                 backgroundColor: "var(--ai-result-surface)",
               }}
             >
-              <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>投稿する</div>
+              <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                {t({ ja: "投稿する", en: "Post" })}
+              </div>
 
               {isContinueMode && (
                 <div style={{ marginBottom: "0.5rem" }}>
@@ -1337,7 +1574,10 @@ export default function AINovelPage() {
                       marginBottom: "0.25rem",
                     }}
                   >
-                    既存小説に「続き」を新しいエピソードとして投稿します。
+                    {t({
+                      ja: "既存小説に「続き」を新しいエピソードとして投稿します。",
+                      en: "Post this continuation as a new episode to the existing novel.",
+                    })}
                   </div>
                   {continueInfoError && (
                     <div style={{ fontSize: "0.9rem", color: "#842029", marginBottom: "0.5rem" }}>
@@ -1345,24 +1585,29 @@ export default function AINovelPage() {
                     </div>
                   )}
                   <label style={{ display: "block", fontSize: "0.9rem", marginBottom: "0.25rem" }}>
-                    エピソードタイトル（任意）
+                    {t({ ja: "エピソードタイトル（任意）", en: "Episode title (optional)" })}
                   </label>
                   <input
                     type="text"
                     value={postEpisodeTitle}
                     onChange={(e) => setPostEpisodeTitle(e.target.value)}
-                    placeholder="例: ふたりの約束"
+                    placeholder={t({ ja: "例: ふたりの約束", en: "e.g., A Promise Between Two" })}
                     style={{ width: "100%", padding: "0.5rem" }}
                     disabled={posting}
                   />
                   <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
                     {continueNovelId ? (
                       <span>
-                        投稿先: novel_id={continueNovelId}
-                        {typeof continueEpisodeNumber === "number" ? `（前話: 第${continueEpisodeNumber}話）` : ""}
+                        {t({ ja: "投稿先", en: "Destination" })}: novel_id={continueNovelId}
+                        {typeof continueEpisodeNumber === "number"
+                          ? t(
+                              { ja: "（前話: 第{{num}}話）", en: " (Previous: Episode {{num}})" },
+                              { num: continueEpisodeNumber }
+                            )
+                          : ""}
                       </span>
                     ) : (
-                      <span>投稿先: 読み込み中...</span>
+                      <span>{t({ ja: "投稿先: 読み込み中...", en: "Destination: loading..." })}</span>
                     )}
                   </div>
                 </div>
@@ -1380,10 +1625,12 @@ export default function AINovelPage() {
                       borderRadius: "6px",
                       border: "1px solid #ccc",
                       cursor: posting ? "default" : "pointer",
-                      opacity: posting ? 0.7 : 1,
-                    }}
-                  >
-                    {posting ? "投稿中..." : "この続きを新しいエピソードとして投稿"}
+                    opacity: posting ? 0.7 : 1,
+                  }}
+                >
+                    {posting
+                      ? t({ ja: "投稿中...", en: "Posting..." })
+                      : t({ ja: "この続きを新しいエピソードとして投稿", en: "Post this continuation as a new episode" })}
                   </button>
                 )}
                 <button
@@ -1399,7 +1646,9 @@ export default function AINovelPage() {
                     opacity: posting ? 0.7 : 1,
                   }}
                 >
-                  {posting ? "投稿中..." : "新しい小説として投稿（第1話）"}
+                  {posting
+                    ? t({ ja: "投稿中...", en: "Posting..." })
+                    : t({ ja: "新しい小説として投稿（第1話）", en: "Post as a new novel (Episode 1)" })}
                 </button>
               </div>
             </div>

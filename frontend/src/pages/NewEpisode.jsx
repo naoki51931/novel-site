@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 const EP_DRAFT_KEY_PREFIX = "draft_new_episode"; // 作品ごとの下書き用プレフィックス
@@ -38,6 +39,7 @@ const generateIllustTag = (usedTags) => {
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   const [episodeNumber, setEpisodeNumber] = useState(1);
   const [title, setTitle] = useState("");
@@ -166,7 +168,9 @@ export default function NewEpisode() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "表紙のアップロードに失敗しました");
+        throw new Error(
+          data.detail || t({ ja: "表紙のアップロードに失敗しました", en: "Failed to upload cover image." })
+        );
       }
     } finally {
       setIsUploadingCover(false);
@@ -181,7 +185,12 @@ export default function NewEpisode() {
       for (const item of illustItems) {
         const normalizedTag = normalizeIllustTag(item.illustTag);
         if (!normalizedTag) {
-          throw new Error("illustタグは [[illust:12345678]] の形式で指定してください");
+          throw new Error(
+            t({
+              ja: "illustタグは [[illust:12345678]] の形式で指定してください",
+              en: "Illust tags must be in the form [[illust:12345678]].",
+            })
+          );
         }
         const formData = new FormData();
         formData.append("file", item.file);
@@ -197,7 +206,9 @@ export default function NewEpisode() {
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.detail || "押絵のアップロードに失敗しました");
+          throw new Error(
+            data.detail || t({ ja: "押絵のアップロードに失敗しました", en: "Failed to upload illustration." })
+          );
         }
       }
     } finally {
@@ -211,17 +222,17 @@ export default function NewEpisode() {
     setError("");
 
     if (!title.trim()) {
-      setError("タイトルは必須です。");
+      setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
       return;
     }
     if (!body.trim()) {
-      setError("本文は必須です。");
+      setError(t({ ja: "本文は必須です。", en: "Body is required." }));
       return;
     }
 
     const token = localStorage.getItem("token");
     if (!token) {
-      setError("ログインが必要です。");
+      setError(t({ ja: "ログインが必要です。", en: "Login required." }));
       return;
     }
 
@@ -261,7 +272,10 @@ export default function NewEpisode() {
       if (!res.ok) {
         throw new Error(
           (data && data.detail) ||
-            `エピソードの投稿に失敗しました (status=${res.status})`
+            t(
+              { ja: "エピソードの投稿に失敗しました (status={{status}})", en: "Failed to post episode (status={{status}})" },
+              { status: res.status }
+            )
         );
       }
 
@@ -272,7 +286,12 @@ export default function NewEpisode() {
 
       if (!createdEpisodeId) {
         // ここまで成功してるので、少なくとも小説詳細には戻す
-        console.warn("episode_id がレスポンスから取得できませんでした。アップロードはスキップします。");
+        console.warn(
+          t({
+            ja: "episode_id がレスポンスから取得できませんでした。アップロードはスキップします。",
+            en: "episode_id was missing from the response. Skipping uploads.",
+          })
+        );
         localStorage.removeItem(draftKey);
         navigate(`/novels/${id}`);
         return;
@@ -293,7 +312,9 @@ export default function NewEpisode() {
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error("❌ NewEpisode error:", err);
-      setError(err.message || "投稿中にエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "投稿中にエラーが発生しました。", en: "An error occurred while posting." })
+      );
     } finally {
       setLoading(false);
     }
@@ -304,11 +325,11 @@ export default function NewEpisode() {
 
   return (
     <div>
-      <h2>新しいエピソードを投稿</h2>
+      <h2>{t({ ja: "新しいエピソードを投稿", en: "Post New Episode" })}</h2>
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
-            話数
+            {t({ ja: "話数", en: "Episode number" })}
             <br />
             <input
               type="number"
@@ -321,7 +342,7 @@ export default function NewEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            タイトル
+            {t({ ja: "タイトル", en: "Title" })}
             <br />
             <input
               type="text"
@@ -334,15 +355,15 @@ export default function NewEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            公開ステータス
+            {t({ ja: "公開ステータス", en: "Visibility" })}
             <br />
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               style={{ width: "100%", padding: 4 }}
             >
-              <option value="public">公開</option>
-              <option value="draft">下書き</option>
+              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
+              <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
             </select>
           </label>
         </div>
@@ -362,16 +383,16 @@ export default function NewEpisode() {
             border: "1px solid #ddd",
           }}
         >
-          <h3 style={{ marginTop: 0 }}>表紙画像（任意）</h3>
+          <h3 style={{ marginTop: 0 }}>{t({ ja: "表紙画像（任意）", en: "Cover image (optional)" })}</h3>
           <input type="file" accept="image/*" onChange={handleCoverFileChange} />
           {coverFile && (
             <div style={{ marginTop: 6, fontSize: 12, color: "#555" }}>
-              選択中: {coverFile.name}
+              {t({ ja: "選択中: {{name}}", en: "Selected: {{name}}" }, { name: coverFile.name })}
             </div>
           )}
           {isUploadingCover && (
             <div style={{ marginTop: 6, fontSize: 12, color: "#777" }}>
-              表紙アップロード中...
+              {t({ ja: "表紙アップロード中...", en: "Uploading cover..." })}
             </div>
           )}
         </div>
@@ -385,7 +406,9 @@ export default function NewEpisode() {
             border: "1px solid #ddd",
           }}
         >
-          <h3 style={{ marginTop: 0 }}>押絵（任意・複数）</h3>
+          <h3 style={{ marginTop: 0 }}>
+            {t({ ja: "押絵（任意・複数）", en: "Illustrations (optional, multiple)" })}
+          </h3>
 
           <input
             type="file"
@@ -412,21 +435,27 @@ export default function NewEpisode() {
                   </div>
                   <input
                     type="text"
-                    placeholder="キャプション（任意）"
+                    placeholder={t({ ja: "キャプション（任意）", en: "Caption (optional)" })}
                     value={it.caption || ""}
                     onChange={(e) => updateIllustCaption(idx, e.target.value)}
                     style={{ width: "100%", padding: 6 }}
                   />
                   <input
                     type="text"
-                    placeholder="必須タグ（例: [[illust:12345678]]）"
+                    placeholder={t({
+                      ja: "必須タグ（例: [[illust:12345678]]）",
+                      en: "Required tag (e.g., [[illust:12345678]])",
+                    })}
                     value={it.illustTag || ""}
                     onChange={(e) => updateIllustTag(idx, e.target.value)}
                     style={{ width: "100%", padding: 6 }}
                   />
                   <input
                     type="text"
-                    placeholder="補助タグ（例: type:scene, mood:soft）"
+                    placeholder={t({
+                      ja: "補助タグ（例: type:scene, mood:soft）",
+                      en: "Optional tags (e.g., type:scene, mood:soft)",
+                    })}
                     value={it.metaTags || ""}
                     onChange={(e) => updateIllustMetaTags(idx, e.target.value)}
                     style={{ width: "100%", padding: 6 }}
@@ -436,33 +465,33 @@ export default function NewEpisode() {
                     className="btn btn-border"
                     onClick={() => removeIllustItem(idx)}
                   >
-                    この押絵を外す
+                    {t({ ja: "この押絵を外す", en: "Remove illustration" })}
                   </button>
                 </div>
               ))}
             </div>
           ) : (
             <p style={{ marginTop: 10, color: "#777", fontSize: 13 }}>
-              まだ押絵は選択されていません。
+              {t({ ja: "まだ押絵は選択されていません。", en: "No illustrations selected yet." })}
             </p>
           )}
 
           {isUploadingIllust && (
             <div style={{ marginTop: 6, fontSize: 12, color: "#777" }}>
-              押絵アップロード中...
+              {t({ ja: "押絵アップロード中...", en: "Uploading illustrations..." })}
             </div>
           )}
         </div>
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            タグ (カンマ区切り)
+            {t({ ja: "タグ (カンマ区切り)", en: "Tags (comma-separated)" })}
             <br />
             <input
               type="text"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
-              placeholder="例: バトル, 日常, 百合"
+              placeholder={t({ ja: "例: バトル, 日常, 百合", en: "e.g., Battle, Slice of Life, Yuri" })}
               style={{ width: "100%", padding: 4 }}
             />
           </label>
@@ -470,7 +499,7 @@ export default function NewEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            本文
+            {t({ ja: "本文", en: "Body" })}
             <br />
             <textarea
               value={body}
@@ -484,7 +513,7 @@ export default function NewEpisode() {
         {error && <p style={{ color: "red" }}>{error}</p>}
 
         <button className="btn btn-border" type="submit" disabled={loading}>
-          {loading ? "投稿中..." : "投稿する"}
+          {loading ? t({ ja: "投稿中...", en: "Posting..." }) : t({ ja: "投稿する", en: "Post" })}
         </button>
       </form>
     </div>

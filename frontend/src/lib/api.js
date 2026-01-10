@@ -1,3 +1,5 @@
+import { getStoredLanguage, translate } from "./i18n";
+
 const API_BASE = "";
 
 const getToken = () => {
@@ -27,7 +29,10 @@ export async function apiFetch(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = data?.detail || data?.message || "API エラーが発生しました";
+    const message =
+      data?.detail ||
+      data?.message ||
+      translate({ ja: "API エラーが発生しました", en: "API error occurred." }, getStoredLanguage());
     const err = new Error(message);
     err.status = res.status;
     err.data = data;

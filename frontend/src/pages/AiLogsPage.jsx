@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 // 要約などの長文を折りたたみ/展開するコンポーネント
 function ExpandableText({ text, max = 120 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
 
   if (!text) return <span>-</span>;
@@ -28,7 +30,7 @@ function ExpandableText({ text, max = 120 }) {
             background: "#fafafa",
           }}
         >
-          {open ? "閉じる ▲" : "全文を見る ▼"}
+          {open ? t({ ja: "閉じる ▲", en: "Close ▲" }) : t({ ja: "全文を見る ▼", en: "View all ▼" })}
         </button>
       )}
     </div>
@@ -37,6 +39,7 @@ function ExpandableText({ text, max = 120 }) {
 
 export default function AiLogsPage() {
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -44,7 +47,7 @@ export default function AiLogsPage() {
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
-      setError("ログインが必要です。");
+      setError(t({ ja: "ログインが必要です。", en: "Login required." }));
       setLoading(false);
       return;
     }
@@ -63,7 +66,11 @@ export default function AiLogsPage() {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(
-            data.detail || `AI利用履歴の取得に失敗しました (status=${res.status})`
+            data.detail ||
+              t(
+                { ja: "AI利用履歴の取得に失敗しました (status={{status}})", en: "Failed to load AI usage history (status={{status}})" },
+                { status: res.status }
+              )
           );
         }
 
@@ -75,7 +82,10 @@ export default function AiLogsPage() {
         }
       } catch (e) {
         console.error(e);
-        setError(e.message || "AI利用履歴の取得中にエラーが発生しました");
+        setError(
+          e.message ||
+            t({ ja: "AI利用履歴の取得中にエラーが発生しました", en: "An error occurred while loading AI history." })
+        );
       } finally {
         setLoading(false);
       }
@@ -84,29 +94,32 @@ export default function AiLogsPage() {
 
   const formatDateTime = (iso) => {
     if (!iso) return "";
-    return new Date(iso).toLocaleString("ja-JP");
+    return new Date(iso).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
   };
 
   return (
     <div>
       <div style={{ marginBottom: 12, display: "flex", gap: 8 }}>
         <button className="btn btn-border" onClick={() => navigate("/ai-novel")}>
-          ← 戻る
+          {t({ ja: "← 戻る", en: "← Back" })}
         </button>
         <Link to="/" className="btn btn-border">
-          トップへ
+          {t({ ja: "トップへ", en: "Home" })}
         </Link>
         <Link to="/ai-novel" className="btn btn-border">
-          AI小説生成へ
+          {t({ ja: "AI小説生成へ", en: "Go to AI Novel" })}
         </Link>
       </div>
 
-      <h2>AI利用履歴</h2>
+      <h2>{t({ ja: "AI利用履歴", en: "AI Usage History" })}</h2>
       <p style={{ fontSize: "0.9rem", color: "#666" }}>
-        過去に実行した AI 小説生成の履歴です。日付・モデル・要約を確認できます。
+        {t({
+          ja: "過去に実行した AI 小説生成の履歴です。日付・モデル・要約を確認できます。",
+          en: "History of AI novel generations. Check date, model, and summary.",
+        })}
       </p>
 
-      {loading && <p>読み込み中...</p>}
+      {loading && <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>}
 
       {error && (
         <p style={{ color: "red", marginTop: 8, marginBottom: 8 }}>{error}</p>
@@ -114,7 +127,7 @@ export default function AiLogsPage() {
 
       {!loading && !error && logs.length === 0 && (
         <p style={{ marginTop: 12, color: "#666" }}>
-          まだ AI 小説生成の履歴がありません。
+          {t({ ja: "まだ AI 小説生成の履歴がありません。", en: "No AI generation history yet." })}
         </p>
       )}
 
@@ -137,7 +150,7 @@ export default function AiLogsPage() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  日時
+                  {t({ ja: "日時", en: "Date" })}
                 </th>
                 <th
                   style={{
@@ -147,7 +160,7 @@ export default function AiLogsPage() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  モデル
+                  {t({ ja: "モデル", en: "Model" })}
                 </th>
                 <th
                   style={{
@@ -157,7 +170,7 @@ export default function AiLogsPage() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  トークン数
+                  {t({ ja: "トークン数", en: "Tokens" })}
                 </th>
                 <th
                   style={{
@@ -166,7 +179,7 @@ export default function AiLogsPage() {
                     textAlign: "left",
                   }}
                 >
-                  利用要約
+                  {t({ ja: "利用要約", en: "Summary" })}
                 </th>
               </tr>
             </thead>

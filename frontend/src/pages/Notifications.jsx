@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 export default function Notifications() {
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -28,7 +30,9 @@ export default function Notifications() {
         }
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.detail || "通知設定の取得に失敗しました");
+          throw new Error(
+            data.detail || t({ ja: "通知設定の取得に失敗しました", en: "Failed to load notification settings." })
+          );
         }
         const profile = await res.json();
         setEmailNotificationsEnabled(
@@ -44,12 +48,16 @@ export default function Notifications() {
         }
         if (!resNotifications.ok) {
           const data = await resNotifications.json().catch(() => ({}));
-          throw new Error(data.detail || "通知の取得に失敗しました");
+          throw new Error(
+            data.detail || t({ ja: "通知の取得に失敗しました", en: "Failed to load notifications." })
+          );
         }
         const items = await resNotifications.json();
         setNotifications(items || []);
       } catch (e) {
-        setError(e.message || "通知の取得に失敗しました");
+        setError(
+          e.message || t({ ja: "通知の取得に失敗しました", en: "Failed to load notifications." })
+        );
       } finally {
         setLoading(false);
       }
@@ -66,7 +74,7 @@ export default function Notifications() {
 
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
 
       const res = await fetch("/api/users/me", {
         method: "PUT",
@@ -86,12 +94,12 @@ export default function Notifications() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "保存に失敗しました");
+        throw new Error(data.detail || t({ ja: "保存に失敗しました", en: "Failed to save." }));
       }
 
-      setMessage("保存しました。");
+      setMessage(t({ ja: "保存しました。", en: "Saved." }));
     } catch (e) {
-      setError(e.message || "保存に失敗しました");
+      setError(e.message || t({ ja: "保存に失敗しました", en: "Failed to save." }));
     } finally {
       setSaving(false);
     }
@@ -100,14 +108,14 @@ export default function Notifications() {
   const handleMarkRead = async (notificationId) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       const res = await fetch(`/api/notifications/${notificationId}/read`, {
         method: "POST",
         headers: { Authorization: "Bearer " + token },
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "既読に失敗しました");
+        throw new Error(data.detail || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
       }
       setNotifications((prev) =>
         prev.map((n) =>
@@ -115,51 +123,51 @@ export default function Notifications() {
         )
       );
     } catch (e) {
-      setError(e.message || "既読に失敗しました");
+      setError(e.message || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
     }
   };
 
   const handleMarkAllRead = async () => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       const res = await fetch("/api/notifications/read_all", {
         method: "POST",
         headers: { Authorization: "Bearer " + token },
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "既読に失敗しました");
+        throw new Error(data.detail || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
       }
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     } catch (e) {
-      setError(e.message || "既読に失敗しました");
+      setError(e.message || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
     }
   };
 
   const handleDelete = async (notificationId) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       const res = await fetch(`/api/notifications/${notificationId}`, {
         method: "DELETE",
         headers: { Authorization: "Bearer " + token },
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "削除に失敗しました");
+        throw new Error(data.detail || t({ ja: "削除に失敗しました", en: "Failed to delete." }));
       }
       setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
     } catch (e) {
-      setError(e.message || "削除に失敗しました");
+      setError(e.message || t({ ja: "削除に失敗しました", en: "Failed to delete." }));
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
-      <h2>通知センター</h2>
+      <h2>{t({ ja: "通知センター", en: "Notifications" })}</h2>
 
       <section
         style={{
@@ -169,10 +177,12 @@ export default function Notifications() {
           borderRadius: 8,
         }}
       >
-        <h3 style={{ margin: 0, marginBottom: 8 }}>サイト内通知</h3>
+        <h3 style={{ margin: 0, marginBottom: 8 }}>
+          {t({ ja: "サイト内通知", en: "Site notifications" })}
+        </h3>
         {notifications.length === 0 ? (
           <p style={{ margin: 0, color: "var(--muted-text)" }}>
-            まだ通知はありません。
+            {t({ ja: "まだ通知はありません。", en: "No notifications yet." })}
           </p>
         ) : (
           <div>
@@ -182,7 +192,7 @@ export default function Notifications() {
               onClick={handleMarkAllRead}
               style={{ marginBottom: 8 }}
             >
-              すべて既読にする
+              {t({ ja: "すべて既読にする", en: "Mark all as read" })}
             </button>
             <div style={{ display: "grid", gap: 10 }}>
               {notifications.map((n) => (
@@ -216,7 +226,7 @@ export default function Notifications() {
                             fontSize: 11,
                           }}
                         >
-                          未読
+                          {t({ ja: "未読", en: "Unread" })}
                         </span>
                       )}
                       {n.link_url ? (
@@ -227,7 +237,7 @@ export default function Notifications() {
                     </div>
                     <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                       {n.created_at
-                        ? new Date(n.created_at).toLocaleString()
+                        ? new Date(n.created_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP")
                         : ""}
                     </div>
                   </div>
@@ -243,7 +253,7 @@ export default function Notifications() {
                         className="btn btn-border"
                         onClick={() => handleMarkRead(n.id)}
                       >
-                        既読にする
+                        {t({ ja: "既読にする", en: "Mark as read" })}
                       </button>
                     )}
                     <button
@@ -251,7 +261,7 @@ export default function Notifications() {
                       className="btn btn-border"
                       onClick={() => handleDelete(n.id)}
                     >
-                      削除
+                      {t({ ja: "削除", en: "Delete" })}
                     </button>
                   </div>
                 </div>
@@ -269,7 +279,9 @@ export default function Notifications() {
           borderRadius: 8,
         }}
       >
-        <h3 style={{ margin: 0, marginBottom: 8 }}>メール通知</h3>
+        <h3 style={{ margin: 0, marginBottom: 8 }}>
+          {t({ ja: "メール通知", en: "Email notifications" })}
+        </h3>
         <form onSubmit={handleSave}>
           <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input
@@ -277,15 +289,15 @@ export default function Notifications() {
               checked={emailNotificationsEnabled}
               onChange={(e) => setEmailNotificationsEnabled(e.target.checked)}
             />
-            メール通知を受け取る
+            {t({ ja: "メール通知を受け取る", en: "Receive email notifications" })}
           </label>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted-text)" }}>
-            アカウントに紐づいたメールに通知を送ります。
+            {t({ ja: "アカウントに紐づいたメールに通知を送ります。", en: "Notifications will be sent to your account email." })}
           </div>
           {error && <p style={{ color: "red" }}>{error}</p>}
           {message && <p style={{ color: "green" }}>{message}</p>}
           <button className="btn btn-border" type="submit" disabled={saving}>
-            {saving ? "保存中..." : "保存する"}
+            {saving ? t({ ja: "保存中...", en: "Saving..." }) : t({ ja: "保存する", en: "Save" })}
           </button>
         </form>
       </section>

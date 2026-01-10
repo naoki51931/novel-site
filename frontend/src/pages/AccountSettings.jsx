@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getSavedTheme, setTheme } from "../theme";
+import { useI18n } from "../lib/i18n";
 
 export default function AccountSettings() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
@@ -33,7 +35,9 @@ export default function AccountSettings() {
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.detail || "プロフィール取得に失敗しました");
+          throw new Error(
+            data.detail || t({ ja: "プロフィール取得に失敗しました", en: "Failed to load profile." })
+          );
         }
 
         return res.json();
@@ -44,7 +48,9 @@ export default function AccountSettings() {
         setEmail(data.email || "");
         setBirthDate(data.birth_date || "");
       })
-      .catch((e) => setError(e.message || "プロフィール取得に失敗しました"))
+      .catch((e) =>
+        setError(e.message || t({ ja: "プロフィール取得に失敗しました", en: "Failed to load profile." }))
+      )
       .finally(() => setLoading(false));
   }, [navigate]);
 
@@ -64,7 +70,7 @@ export default function AccountSettings() {
 
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
 
       const res = await fetch(`/api/users/me`, {
         method: "PUT",
@@ -79,7 +85,7 @@ export default function AccountSettings() {
         }),
       });
 
-      let msg = "保存しました。";
+      let msg = t({ ja: "保存しました。", en: "Saved." });
       if (res.status === 401) {
         navigate("/login");
         return;
@@ -90,30 +96,33 @@ export default function AccountSettings() {
           const d = await res.json();
           if (d && d.detail) msg = d.detail;
         } catch (_) {
-          msg = `保存に失敗しました (HTTP ${res.status})`;
+          msg = t(
+            { ja: "保存に失敗しました (HTTP {{status}})", en: "Failed to save (HTTP {{status}})" },
+            { status: res.status }
+          );
         }
         throw new Error(msg);
       }
 
       localStorage.setItem("username", username);
-      alert("保存しました。");
+      alert(t({ ja: "保存しました。", en: "Saved." }));
     } catch (e) {
-      setError(e.message || "保存に失敗しました");
+      setError(e.message || t({ ja: "保存に失敗しました", en: "Failed to save." }));
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div>
-      <h2>マイページ設定</h2>
+      <h2>{t({ ja: "マイページ設定", en: "Account Settings" })}</h2>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 16 }}>
           <fieldset style={{ padding: 12, border: "1px solid var(--border)" }}>
-            <legend>テーマ</legend>
+            <legend>{t({ ja: "テーマ", en: "Theme" })}</legend>
             <label style={{ marginRight: 12 }}>
               <input
                 type="radio"
@@ -122,7 +131,7 @@ export default function AccountSettings() {
                 checked={theme === "light"}
                 onChange={() => handleChangeTheme("light")}
               />{" "}
-              ライト
+              {t({ ja: "ライト", en: "Light" })}
             </label>
             <label>
               <input
@@ -132,17 +141,17 @@ export default function AccountSettings() {
                 checked={theme === "dark"}
                 onChange={() => handleChangeTheme("dark")}
               />{" "}
-              ダーク
+              {t({ ja: "ダーク", en: "Dark" })}
             </label>
             <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted-text)" }}>
-              テーマ設定はこのブラウザに保存されます。
+              {t({ ja: "テーマ設定はこのブラウザに保存されます。", en: "Theme settings are saved in this browser." })}
             </div>
           </fieldset>
         </div>
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            ユーザー名<br />
+            {t({ ja: "ユーザー名", en: "Username" })}<br />
             <input
               type="text"
               value={username}
@@ -155,7 +164,7 @@ export default function AccountSettings() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            メールアドレス<br />
+            {t({ ja: "メールアドレス", en: "Email" })}<br />
             <input
               type="email"
               value={email}
@@ -167,7 +176,7 @@ export default function AccountSettings() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            生年月日<br />
+            {t({ ja: "生年月日", en: "Birth date" })}<br />
             <input
               type="date"
               value={birthDate}
@@ -180,7 +189,7 @@ export default function AccountSettings() {
         {error && <p style={{ color:"red" }}>{error}</p>}
 
         <button className="btn btn-border" type="submit" disabled={saving}>
-          {saving ? "保存中..." : "保存する"}
+          {saving ? t({ ja: "保存中...", en: "Saving..." }) : t({ ja: "保存する", en: "Save" })}
         </button>
       </form>
     </div>

@@ -1,16 +1,23 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { trackEvent } from "../lib/analytics";
+import { useI18n } from "../lib/i18n";
 
 export default function AuthorLanding() {
+  const { t, lang } = useI18n();
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     const previousTitle = document.title;
     const metaDescription = document.querySelector('meta[name="description"]');
     const previousDescription = metaDescription?.getAttribute("content");
-    const nextTitle = "作者向けLP｜小説投稿サイト";
-    const nextDescription =
-      "初投稿でも埋もれない設計。評価やコメントが返ってくる、小説を書く人のための投稿サイト。無料・非公開OK・途中保存可。";
+    const nextTitle = t({
+      ja: "作者向けLP｜小説投稿サイト",
+      en: "For Authors | Novel Submission Site",
+    });
+    const nextDescription = t({
+      ja: "初投稿でも埋もれない設計。評価やコメントが返ってくる、小説を書く人のための投稿サイト。無料・非公開OK・途中保存可。",
+      en: "A posting site built for writers. First posts don't get buried, and feedback returns. Free, private OK, drafts supported.",
+    });
     let createdMeta = null;
 
     document.title = nextTitle;
@@ -38,7 +45,7 @@ export default function AuthorLanding() {
         }
       }
     };
-  }, []);
+  }, [lang, t]);
 
   useEffect(() => {
     trackEvent("author_lp_view", { page_path: "/authors" });
@@ -52,21 +59,24 @@ export default function AuthorLanding() {
     <div className="author-lp">
       <section className="lp-hero">
         <div className="lp-hero-content">
-          <p className="lp-eyebrow">作者向けランディング</p>
+          <p className="lp-eyebrow">{t({ ja: "作者向けランディング", en: "For Authors" })}</p>
           <h2 className="lp-hero-title">
-            あなたの小説、
+            {t({ ja: "あなたの小説、", en: "Your novel," })}
             <br />
-            発表しませんか。
+            {t({ ja: "発表しませんか。", en: "ready to publish?" })}
           </h2>
           <p className="lp-hero-lead">
-            書いたまま、下書きの中に眠らせていませんか。
+            {t({
+              ja: "書いたまま、下書きの中に眠らせていませんか。",
+              en: "Are your drafts just sitting there?",
+            })}
             <br />
-            ここは、書く人のための投稿サイトです。
+            {t({ ja: "ここは、書く人のための投稿サイトです。", en: "This is a posting site for writers." })}
           </p>
           <p className="lp-hero-sub">
-            初投稿でも埋もれない。
+            {t({ ja: "初投稿でも埋もれない。", en: "Even your first post won't get buried." })}
             <br />
-            書いた瞬間から、反応が返ってくる設計。
+            {t({ ja: "書いた瞬間から、反応が返ってくる設計。", en: "Get responses from the moment you post." })}
           </p>
           <div className="lp-cta-row">
             <Link
@@ -74,54 +84,69 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary"
               onClick={() => handleCtaClick("hero_primary")}
             >
-              今すぐ小説を書く
+              {t({ ja: "今すぐ小説を書く", en: "Start writing now" })}
             </Link>
           </div>
-          <p className="lp-note">※無料・非公開OK・途中保存できます（公開は後からでOK）</p>
+          <p className="lp-note">
+            {t({
+              ja: "※無料・非公開OK・途中保存できます（公開は後からでOK）",
+              en: "Free. Private OK. Drafts supported (publish later).",
+            })}
+          </p>
         </div>
         <div className="lp-hero-art" aria-hidden="true">
           <div className="lp-orbit lp-orbit-1" />
           <div className="lp-orbit lp-orbit-2" />
           <div className="lp-hero-card">
-            <p className="lp-card-label">初投稿専用</p>
-            <p className="lp-card-title">今、書き始める入口</p>
+            <p className="lp-card-label">{t({ ja: "初投稿専用", en: "First Post" })}</p>
+            <p className="lp-card-title">{t({ ja: "今、書き始める入口", en: "A place to start now" })}</p>
             <p className="lp-card-text">
-              迷っているなら、まず1行。下書きから始められます。
+              {t({
+                ja: "迷っているなら、まず1行。下書きから始められます。",
+                en: "If you're hesitating, start with one line. Drafts welcome.",
+              })}
             </p>
           </div>
           <div className="lp-hero-card lp-hero-card-secondary">
-            <p className="lp-card-label">反応の文化</p>
-            <p className="lp-card-title">作者同士が支え合う</p>
-            <p className="lp-card-text">感想が、書き続ける力になる。</p>
+            <p className="lp-card-label">{t({ ja: "反応の文化", en: "Culture of feedback" })}</p>
+            <p className="lp-card-title">{t({ ja: "作者同士が支え合う", en: "Writers support each other" })}</p>
+            <p className="lp-card-text">
+              {t({ ja: "感想が、書き続ける力になる。", en: "Feedback keeps you writing." })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-section lp-section-muted">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション1：共感と代弁</p>
-          <h3 className="lp-section-title">書きたい気持ちは、ある。でも――</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション1：共感と代弁", en: "Section 1: Empathy" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "書きたい気持ちは、ある。でも――", en: "You want to write, but..." })}
+          </h3>
           <div className="lp-grid lp-grid-4">
             <div className="lp-card">
-              <p>完成していない気がする</p>
+              <p>{t({ ja: "完成していない気がする", en: "It feels unfinished" })}</p>
             </div>
             <div className="lp-card">
-              <p>下手だと思われそう</p>
+              <p>{t({ ja: "下手だと思われそう", en: "People might think it's bad" })}</p>
             </div>
             <div className="lp-card">
-              <p>どう始めればいいか分からない</p>
+              <p>{t({ ja: "どう始めればいいか分からない", en: "Not sure how to start" })}</p>
             </div>
             <div className="lp-card">
-              <p>投稿する場所が分からない</p>
+              <p>{t({ ja: "投稿する場所が分からない", en: "Don't know where to post" })}</p>
             </div>
           </div>
           <p className="lp-section-lead">
-            その迷いのせいで、
+            {t({ ja: "その迷いのせいで、", en: "Because of that hesitation," })}
             <br />
-            書いた言葉が、誰にも届かないまま消えていく。
+            {t({
+              ja: "書いた言葉が、誰にも届かないまま消えていく。",
+              en: "your words disappear without reaching anyone.",
+            })}
           </p>
           <p className="lp-section-strong">
-            ここは、そのための場所じゃありません。
+            {t({ ja: "ここは、そのための場所じゃありません。", en: "This isn't that kind of place." })}
           </p>
           <div className="lp-cta-block">
             <Link
@@ -129,39 +154,51 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary"
               onClick={() => handleCtaClick("section1")}
             >
-              1行だけ、書いてみる
+              {t({ ja: "1行だけ、書いてみる", en: "Write just one line" })}
             </Link>
-            <p className="lp-note">※公開しなくて大丈夫。下書きから始められます。</p>
+            <p className="lp-note">
+              {t({
+                ja: "※公開しなくて大丈夫。下書きから始められます。",
+                en: "No need to publish. Start with a draft.",
+              })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-section">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション2：価値提示（断言）</p>
-          <h3 className="lp-section-title">初投稿でも、ちゃんと見てもらえる理由があります。</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション2：価値提示（断言）", en: "Section 2: Value" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "初投稿でも、ちゃんと見てもらえる理由があります。", en: "Reasons your first post gets seen." })}
+          </h3>
           <div className="lp-grid lp-grid-3">
             <div className="lp-feature">
-              <h4>初投稿・新着専用の露出枠</h4>
-              <p>最初の一作が、埋もれない設計。</p>
+              <h4>{t({ ja: "初投稿・新着専用の露出枠", en: "Visibility slots for first & new posts" })}</h4>
+              <p>{t({ ja: "最初の一作が、埋もれない設計。", en: "Designed so your first work isn't buried." })}</p>
             </div>
             <div className="lp-feature">
-              <h4>ランキングに依存しない表示設計</h4>
-              <p>数字よりも、作品の新鮮さを優先。</p>
+              <h4>{t({ ja: "ランキングに依存しない表示設計", en: "A feed that doesn't rely on rankings" })}</h4>
+              <p>{t({ ja: "数字よりも、作品の新鮮さを優先。", en: "Freshness over numbers." })}</p>
             </div>
             <div className="lp-feature">
-              <h4>作者同士が反応し合う文化</h4>
-              <p>読む側も、書く側も、近い距離で。</p>
+              <h4>{t({ ja: "作者同士が反応し合う文化", en: "A culture of mutual feedback" })}</h4>
+              <p>{t({ ja: "読む側も、書く側も、近い距離で。", en: "Readers and writers stay close." })}</p>
             </div>
           </div>
           <p className="lp-section-strong">
-            有名じゃなくていい。完璧じゃなくていい。
+            {t({ ja: "有名じゃなくていい。完璧じゃなくていい。", en: "You don't need to be famous or perfect." })}
             <br />
-            「最初の一作」が届く導線があります。
+            {t({ ja: "「最初の一作」が届く導線があります。", en: "There are paths for your first work to be found." })}
           </p>
-          <p className="lp-section-lead">初投稿が見られる導線を、最初から用意しています。</p>
+          <p className="lp-section-lead">
+            {t({ ja: "初投稿が見られる導線を、最初から用意しています。", en: "Discovery paths are ready from the start." })}
+          </p>
           <p className="lp-note">
-            ※初投稿は新着枠に表示されます（公開・非公開はいつでも切替可）
+            {t({
+              ja: "※初投稿は新着枠に表示されます（公開・非公開はいつでも切替可）",
+              en: "First posts appear in new arrivals (toggle public/private anytime).",
+            })}
           </p>
           <div className="lp-cta-block">
             <Link
@@ -169,32 +206,39 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary"
               onClick={() => handleCtaClick("section2")}
             >
-              初投稿を書いてみる
+              {t({ ja: "初投稿を書いてみる", en: "Write your first post" })}
             </Link>
-            <p className="lp-note">※非公開OK。まずは非公開の下書きでもOK</p>
+            <p className="lp-note">
+              {t({ ja: "※非公開OK。まずは非公開の下書きでもOK", en: "Private OK. Start with a private draft." })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-section lp-section-dark">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション3：承認欲求の直撃</p>
-          <h3 className="lp-section-title">反応があるから、書き続けられる。</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション3：承認欲求の直撃", en: "Section 3: Real Feedback" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "反応があるから、書き続けられる。", en: "Feedback helps you keep writing." })}
+          </h3>
           <div className="lp-grid lp-grid-3">
             <div className="lp-card lp-card-dark">
-              <p>読まれたら分かる</p>
+              <p>{t({ ja: "読まれたら分かる", en: "You can tell when it's read" })}</p>
             </div>
             <div className="lp-card lp-card-dark">
-              <p>いいねやコメントが届く</p>
+              <p>{t({ ja: "いいねやコメントが届く", en: "Likes and comments arrive" })}</p>
             </div>
             <div className="lp-card lp-card-dark">
-              <p>感想が、作者に直接返ってくる</p>
+              <p>{t({ ja: "感想が、作者に直接返ってくる", en: "Feedback reaches you directly" })}</p>
             </div>
           </div>
           <p className="lp-section-lead">
-            数字じゃない。
+            {t({ ja: "数字じゃない。", en: "It's not about numbers." })}
             <br />
-            「誰かが読んだ」という実感が、次の一文を連れてくる。
+            {t({
+              ja: "「誰かが読んだ」という実感が、次の一文を連れてくる。",
+              en: "The feeling of being read brings the next line.",
+            })}
           </p>
           <div className="lp-cta-block">
             <Link
@@ -202,39 +246,43 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary lp-cta-white"
               onClick={() => handleCtaClick("section3")}
             >
-              感想がもらえる場所で書く
+              {t({ ja: "感想がもらえる場所で書く", en: "Write where feedback comes back" })}
             </Link>
-            <p className="lp-note">※非公開OK。まずは短編でも、1話でも</p>
+            <p className="lp-note">
+              {t({ ja: "※非公開OK。まずは短編でも、1話でも", en: "Private OK. Start with a short story or one episode." })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-section">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション4：ハードル破壊</p>
-          <h3 className="lp-section-title">書くのに、才能はいりません。</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション4：ハードル破壊", en: "Section 4: Lower the barrier" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "書くのに、才能はいりません。", en: "You don't need talent to write." })}
+          </h3>
           <div className="lp-grid lp-grid-4">
             <div className="lp-feature">
-              <h4>スマホでも書ける</h4>
-              <p>思いついた瞬間に、すぐ書ける。</p>
+              <h4>{t({ ja: "スマホでも書ける", en: "Write on your phone" })}</h4>
+              <p>{t({ ja: "思いついた瞬間に、すぐ書ける。", en: "Write the moment inspiration hits." })}</p>
             </div>
             <div className="lp-feature">
-              <h4>途中保存できる</h4>
-              <p>書きかけでも、安心して止められる。</p>
+              <h4>{t({ ja: "途中保存できる", en: "Save midway" })}</h4>
+              <p>{t({ ja: "書きかけでも、安心して止められる。", en: "Pause safely even mid-draft." })}</p>
             </div>
             <div className="lp-feature">
-              <h4>何度でも書き直せる</h4>
-              <p>下書きから公開まで、やり直し自由。</p>
+              <h4>{t({ ja: "何度でも書き直せる", en: "Rewrite anytime" })}</h4>
+              <p>{t({ ja: "下書きから公開まで、やり直し自由。", en: "Revise freely from draft to publish." })}</p>
             </div>
             <div className="lp-feature">
-              <h4>公開・非公開はいつでも切替</h4>
-              <p>公開タイミングは自分で選べる。</p>
+              <h4>{t({ ja: "公開・非公開はいつでも切替", en: "Toggle public/private anytime" })}</h4>
+              <p>{t({ ja: "公開タイミングは自分で選べる。", en: "Choose your own publishing timing." })}</p>
             </div>
           </div>
           <p className="lp-section-strong">
-            うまく書こうとしなくていい。
+            {t({ ja: "うまく書こうとしなくていい。", en: "You don't have to be perfect." })}
             <br />
-            書き始めるだけでいい。
+            {t({ ja: "書き始めるだけでいい。", en: "Just start writing." })}
           </p>
           <div className="lp-cta-block">
             <Link
@@ -242,32 +290,36 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary"
               onClick={() => handleCtaClick("section4")}
             >
-              下手でもいいから、書く
+              {t({ ja: "下手でもいいから、書く", en: "Write anyway" })}
             </Link>
-            <p className="lp-note">※非公開OK。非公開のまま練習できます</p>
+            <p className="lp-note">
+              {t({ ja: "※非公開OK。非公開のまま練習できます", en: "Private OK. Practice without publishing." })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-section lp-section-muted">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション5：AI補助</p>
-          <h3 className="lp-section-title">詰まったら、AIに頼っていい。</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション5：AI補助", en: "Section 5: AI assistance" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "詰まったら、AIに頼っていい。", en: "When you're stuck, lean on AI." })}
+          </h3>
           <div className="lp-grid lp-grid-3">
             <div className="lp-card">
-              <p>プロットの相談</p>
+              <p>{t({ ja: "プロットの相談", en: "Plot brainstorming" })}</p>
             </div>
             <div className="lp-card">
-              <p>表現の言い換え</p>
+              <p>{t({ ja: "表現の言い換え", en: "Rewrite wording" })}</p>
             </div>
             <div className="lp-card">
-              <p>続きのアイデア出し</p>
+              <p>{t({ ja: "続きのアイデア出し", en: "Ideas for what comes next" })}</p>
             </div>
           </div>
           <p className="lp-section-lead">
-            AIは代わりに書きません。
+            {t({ ja: "AIは代わりに書きません。", en: "AI doesn't write for you." })}
             <br />
-            あなたが書くための補助輪です。
+            {t({ ja: "あなたが書くための補助輪です。", en: "It's training wheels for your writing." })}
           </p>
           <div className="lp-cta-block">
             <Link
@@ -275,26 +327,45 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary"
               onClick={() => handleCtaClick("section5")}
             >
-              詰まったらAIに頼って書く
+              {t({ ja: "詰まったらAIに頼って書く", en: "Write with AI when stuck" })}
             </Link>
-            <p className="lp-note">※非公開OK。あなたの文章を主役にします</p>
+            <p className="lp-note">
+              {t({ ja: "※非公開OK。あなたの文章を主役にします", en: "Private OK. Your words stay center stage." })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-section">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション6：作者の声</p>
-          <h3 className="lp-section-title">短い言葉が、背中を押す。</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション6：作者の声", en: "Section 6: Voices" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "短い言葉が、背中を押す。", en: "A few words can push you forward." })}
+          </h3>
           <div className="lp-grid lp-grid-3">
             <div className="lp-quote">
-              <p>初投稿で、ちゃんとコメントがついた。それだけで救われた。</p>
+              <p>
+                {t({
+                  ja: "初投稿で、ちゃんとコメントがついた。それだけで救われた。",
+                  en: "On my first post, I got comments. That alone saved me.",
+                })}
+              </p>
             </div>
             <div className="lp-quote">
-              <p>他の場所より、反応が早かった。「書いていいんだ」と思えた。</p>
+              <p>
+                {t({
+                  ja: "他の場所より、反応が早かった。「書いていいんだ」と思えた。",
+                  en: "Responses came faster than elsewhere. I felt it was okay to write.",
+                })}
+              </p>
             </div>
             <div className="lp-quote">
-              <p>完璧じゃないまま出したけど、それでも読んでもらえた。</p>
+              <p>
+                {t({
+                  ja: "完璧じゃないまま出したけど、それでも読んでもらえた。",
+                  en: "I posted before it was perfect, and people still read it.",
+                })}
+              </p>
             </div>
           </div>
         </div>
@@ -302,20 +373,22 @@ export default function AuthorLanding() {
 
       <section className="lp-section lp-section-dark">
         <div className="lp-section-inner">
-          <p className="lp-section-kicker">セクション7：安心材料</p>
-          <h3 className="lp-section-title">始めるのに、リスクはありません。</h3>
+          <p className="lp-section-kicker">{t({ ja: "セクション7：安心材料", en: "Section 7: Peace of mind" })}</p>
+          <h3 className="lp-section-title">
+            {t({ ja: "始めるのに、リスクはありません。", en: "No risk to begin." })}
+          </h3>
           <div className="lp-grid lp-grid-4">
             <div className="lp-card lp-card-dark">
-              <p>完全無料</p>
+              <p>{t({ ja: "完全無料", en: "Completely free" })}</p>
             </div>
             <div className="lp-card lp-card-dark">
-              <p>匿名OK</p>
+              <p>{t({ ja: "匿名OK", en: "Anonymous OK" })}</p>
             </div>
             <div className="lp-card lp-card-dark">
-              <p>やめたくなったら、いつでもやめられる</p>
+              <p>{t({ ja: "やめたくなったら、いつでもやめられる", en: "Quit anytime" })}</p>
             </div>
             <div className="lp-card lp-card-dark">
-              <p>残るのは、書いた言葉だけ</p>
+              <p>{t({ ja: "残るのは、書いた言葉だけ", en: "Only your words remain" })}</p>
             </div>
           </div>
           <div className="lp-cta-block">
@@ -324,29 +397,33 @@ export default function AuthorLanding() {
               className="lp-cta lp-cta-primary lp-cta-white"
               onClick={() => handleCtaClick("section7")}
             >
-              非公開で、今すぐ書き始める
+              {t({ ja: "非公開で、今すぐ書き始める", en: "Start writing privately now" })}
             </Link>
-            <p className="lp-note">※非公開OK。公開は後からでOK</p>
+            <p className="lp-note">
+              {t({ ja: "※非公開OK。公開は後からでOK", en: "Private OK. Publish later if you want." })}
+            </p>
           </div>
         </div>
       </section>
 
       <section className="lp-cta-final">
         <div className="lp-cta-inner">
-          <h3>書くか、また先延ばしにするか。</h3>
+          <h3>{t({ ja: "書くか、また先延ばしにするか。", en: "Write now, or postpone again." })}</h3>
           <p>
-            今日書かなかった一文は、
+            {t({ ja: "今日書かなかった一文は、", en: "The line you don't write today" })}
             <br />
-            明日も、書かれないままです。
+            {t({ ja: "明日も、書かれないままです。", en: "won't be written tomorrow either." })}
           </p>
           <Link
             to="/novels/new"
             className="lp-cta lp-cta-primary"
             onClick={() => handleCtaClick("final")}
           >
-            今すぐ小説を書く
+            {t({ ja: "今すぐ小説を書く", en: "Start writing now" })}
           </Link>
-          <p className="lp-note">※初投稿まで最短3分（非公開OK）</p>
+          <p className="lp-note">
+            {t({ ja: "※初投稿まで最短3分（非公開OK）", en: "First post in as little as 3 minutes (private OK)." })}
+          </p>
         </div>
       </section>
     </div>

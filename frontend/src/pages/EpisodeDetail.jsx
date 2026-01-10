@@ -2,14 +2,18 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
-const FREE_READING_SCHEDULE =
-  "無料開放時間: 平日17:00-19:00 / 土日祝14:00-19:00（JST）";
+const FREE_READING_SCHEDULE = {
+  ja: "無料開放時間: 平日17:00-19:00 / 土日祝14:00-19:00（JST）",
+  en: "Free reading hours: Weekdays 17:00-19:00 / Weekends & holidays 14:00-19:00 (JST)",
+};
 
 export default function EpisodeDetail() {
   const { id } = useParams(); // episode_id
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
 
   const isXInAppBrowser =
     typeof navigator !== "undefined" && /Twitter/i.test(navigator.userAgent);
@@ -43,7 +47,9 @@ export default function EpisodeDetail() {
       episode.number || episode.episode_number,
       episode.title
     );
-    const text = displayTitle ? `${displayTitle}` : "エピソードを読みました";
+    const text = displayTitle
+      ? `${displayTitle}`
+      : t({ ja: "エピソードを読みました", en: "I read this episode" });
     const intentUrl = `https://x.com/intent/tweet?url=${encodeURIComponent(
       shareUrl
     )}&text=${encodeURIComponent(text)}`;
@@ -62,7 +68,9 @@ export default function EpisodeDetail() {
         body: JSON.stringify({}),
       });
       if (!res.ok) {
-        throw new Error("決済セッションの作成に失敗しました");
+        throw new Error(
+          t({ ja: "決済セッションの作成に失敗しました", en: "Failed to create checkout session." })
+        );
       }
       const data = await res.json();
       if (data.url) {
@@ -70,11 +78,11 @@ export default function EpisodeDetail() {
         sessionStorage.setItem("stripe_return_to", returnTo);
         window.location.href = data.url;
       } else {
-        alert("決済URLを取得できませんでした。");
+        alert(t({ ja: "決済URLを取得できませんでした。", en: "Could not get checkout URL." }));
       }
     } catch (e) {
       console.error(e);
-      alert("決済処理中にエラーが発生しました");
+      alert(t({ ja: "決済処理中にエラーが発生しました", en: "An error occurred during payment." }));
     }
   };
 
@@ -89,7 +97,12 @@ export default function EpisodeDetail() {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) {
-          throw new Error("エピソードの取得に失敗しました (" + res.status + ")");
+          throw new Error(
+            t(
+              { ja: "エピソードの取得に失敗しました ({{status}})", en: "Failed to load episode ({{status}})" },
+              { status: res.status }
+            )
+          );
         }
 
         const data = await res.json();
@@ -104,7 +117,9 @@ export default function EpisodeDetail() {
         }
       } catch (err) {
         console.error(err);
-        setError(err.message || "エピソードの取得中にエラーが発生しました");
+        setError(
+          err.message || t({ ja: "エピソードの取得中にエラーが発生しました", en: "An error occurred while loading the episode." })
+        );
       } finally {
         setLoading(false);
       }
@@ -117,7 +132,7 @@ export default function EpisodeDetail() {
   const handleToggleLike = async () => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("いいねするにはログインが必要です。");
+      alert(t({ ja: "いいねするにはログインが必要です。", en: "Login required to like." }));
       navigate("/login");
       return;
     }
@@ -136,7 +151,7 @@ export default function EpisodeDetail() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "いいね操作に失敗しました");
+        throw new Error(data.detail || t({ ja: "いいね操作に失敗しました", en: "Failed to like." }));
       }
 
       if (typeof data.like_count === "number") {
@@ -147,12 +162,14 @@ export default function EpisodeDetail() {
       setIsLiked((prev) => !prev);
     } catch (e) {
       console.error(e);
-      alert(e.message || "いいね操作中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "いいね操作中にエラーが発生しました", en: "An error occurred while liking." })
+      );
     }
   };
 
   if (loading) {
-    return <div>読み込み中...</div>;
+    return <div>{t({ ja: "読み込み中...", en: "Loading..." })}</div>;
   }
 
   if (error) {
@@ -160,7 +177,7 @@ export default function EpisodeDetail() {
       <div>
         <p style={{ color: "red" }}>{error}</p>
         <button className="btn btn-border" onClick={handleBackToNovel}>
-          戻る
+          {t({ ja: "戻る", en: "Back" })}
         </button>
       </div>
     );
@@ -169,9 +186,9 @@ export default function EpisodeDetail() {
   if (!episode) {
     return (
       <div>
-        <p>エピソードが見つかりませんでした。</p>
+        <p>{t({ ja: "エピソードが見つかりませんでした。", en: "Episode not found." })}</p>
         <button className="btn btn-border" onClick={handleBackToNovel}>
-          戻る
+          {t({ ja: "戻る", en: "Back" })}
         </button>
       </div>
     );
@@ -182,7 +199,7 @@ export default function EpisodeDetail() {
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
-    return new Date(isoString).toLocaleString("ja-JP");
+    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
   };
 
   const titleStartsWithEpisodePrefix = (title) => {
@@ -194,6 +211,9 @@ export default function EpisodeDetail() {
     const cleanTitle = typeof title === "string" ? title.trim() : "";
     if (cleanTitle && titleStartsWithEpisodePrefix(cleanTitle)) return cleanTitle;
     if (episodeNumber == null || episodeNumber === "") return cleanTitle;
+    if (lang === "en") {
+      return cleanTitle ? `Episode ${episodeNumber}: ${cleanTitle}` : `Episode ${episodeNumber}`;
+    }
     return cleanTitle ? `第${episodeNumber}話 ${cleanTitle}` : `第${episodeNumber}話`;
   };
 
@@ -256,16 +276,16 @@ export default function EpisodeDetail() {
       )
     : "";
   const prevEpisodeLabel = prevEpisodeTitle
-    ? `前のエピソードへ：${prevEpisodeTitle}`
-    : "前のエピソードへ";
+    ? t({ ja: "前のエピソードへ：{{title}}", en: "Previous episode: {{title}}" }, { title: prevEpisodeTitle })
+    : t({ ja: "前のエピソードへ", en: "Previous episode" });
   const nextEpisodeLabel = nextEpisodeTitle
-    ? `次のエピソードへ：${nextEpisodeTitle}`
-    : "次のエピソードへ";
+    ? t({ ja: "次のエピソードへ：{{title}}", en: "Next episode: {{title}}" }, { title: nextEpisodeTitle })
+    : t({ ja: "次のエピソードへ", en: "Next episode" });
 
   return (
     <div>
       <button className="btn btn-border" onClick={handleBackToNovel}>
-        ← 戻る
+        {t({ ja: "← 戻る", en: "← Back" })}
       </button>
 
       <h2 style={{ marginTop: 12 }}>
@@ -298,7 +318,7 @@ export default function EpisodeDetail() {
       >
         {episode.author_username ? (
           <span>
-            作者:{" "}
+            {t({ ja: "作者", en: "Author" })}:{" "}
             <Link
               className="user-link"
               to={`/users/${encodeURIComponent(episode.author_username)}`}
@@ -307,19 +327,19 @@ export default function EpisodeDetail() {
             </Link>
           </span>
         ) : (
-          <span>小説ID: {episode.novel_id}</span>
+          <span>{t({ ja: "小説ID", en: "Novel ID" })}: {episode.novel_id}</span>
         )}
         {episode.created_at && (
-          <span>作成日時: {formatDateTime(episode.created_at)}</span>
+          <span>{t({ ja: "作成日時", en: "Created" })}: {formatDateTime(episode.created_at)}</span>
         )}
         {typeof episode.view_count === "number" && (
-          <span>閲覧数: {episode.view_count}</span>
+          <span>{t({ ja: "閲覧数", en: "Views" })}: {episode.view_count}</span>
         )}
 	<Link
           to={`/ai-novel?episode_id=${episode.id}`}
           className="btn btn-border"
         >
-          AIで続きを生成
+          {t({ ja: "AIで続きを生成", en: "Generate continuation with AI" })}
         </Link>
 
         <button
@@ -327,7 +347,7 @@ export default function EpisodeDetail() {
           className="btn btn-border"
           onClick={handleShareToX}
         >
-          Xで共有
+          {t({ ja: "Xで共有", en: "Share on X" })}
         </button>
 
         <button
@@ -336,7 +356,9 @@ export default function EpisodeDetail() {
           onClick={handleToggleLike}
           style={{ marginLeft: "auto" }}
         >
-          {isLiked ? "♥ いいね済み" : "♡ いいね"} ({likeCount})
+          {isLiked
+            ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+            : t({ ja: "♡ いいね", en: "♡ Like" })} ({likeCount})
         </button>
       </div>
 
@@ -345,17 +367,17 @@ export default function EpisodeDetail() {
           authorUserId={episode.author_id}
           novelId={episode.novel_id}
           episodeId={episode.id}
-          authorName={episode.author_username || "作者"}
+          authorName={episode.author_username || t({ ja: "作者", en: "Author" })}
         />
       )}
 
       {/* 表紙画像 */}
       {episode.cover_image_url && (
         <div style={{ margin: "12px 0" }}>
-          <p style={{ marginBottom: 4 }}>表紙:</p>
+          <p style={{ marginBottom: 4 }}>{t({ ja: "表紙:", en: "Cover:" })}</p>
           <img
             src={API_BASE + episode.cover_image_url}
-            alt="表紙画像"
+            alt={t({ ja: "表紙画像", en: "Cover image" })}
             style={{
               maxWidth: "260px",
               ...(isXInAppBrowser ? { maxHeight: "45vh", objectFit: "contain" } : {}),
@@ -384,11 +406,11 @@ export default function EpisodeDetail() {
           }
           if (!segment.illust) {
             return (
-              <span
-                key={`missing-${segment.tag}-${index}`}
-                style={{ color: "#888" }}
-              >
-                {`[[${segment.tag}]]`}
+                <span
+                  key={`missing-${segment.tag}-${index}`}
+                  style={{ color: "#888" }}
+                >
+                  {`[[${segment.tag}]]`}
               </span>
             );
           }
@@ -402,7 +424,7 @@ export default function EpisodeDetail() {
             >
               <img
                 src={API_BASE + segment.illust.image_url}
-                alt={segment.illust.caption || "挿絵"}
+                alt={segment.illust.caption || t({ ja: "挿絵", en: "Illustration" })}
                 style={{
                   maxWidth: "100%",
                   maxHeight: "70vh",
@@ -450,10 +472,10 @@ export default function EpisodeDetail() {
               fontWeight: "bold",
             }}
           >
-            ★ あなたは課金済みユーザーです（PREMIUM）
+            {t({ ja: "★ あなたは課金済みユーザーです（PREMIUM）", en: "★ You are a paid user (PREMIUM)" })}
           </p>
           <p style={{ marginTop: 6, fontSize: 12, color: "var(--premium-text)" }}>
-            {FREE_READING_SCHEDULE}
+            {t(FREE_READING_SCHEDULE)}
           </p>
         </div>
       ) : isFreeReadingTime ? (
@@ -467,10 +489,10 @@ export default function EpisodeDetail() {
           }}
         >
           <p style={{ marginBottom: 6, fontWeight: "bold", color: "#0a6" }}>
-            ★ 今は無料開放時間のため全文を読めます
+            {t({ ja: "★ 今は無料開放時間のため全文を読めます", en: "★ It's free reading time, so you can read the full text" })}
           </p>
           <p style={{ margin: 0, fontSize: 12, color: "#0a6" }}>
-            {FREE_READING_SCHEDULE}
+            {t(FREE_READING_SCHEDULE)}
           </p>
         </div>
       ) : (
@@ -483,13 +505,13 @@ export default function EpisodeDetail() {
           }}
         >
           <p style={{ marginBottom: 8 }}>
-            全文を読むには月額1000円のプレミアム購読が必要です。
+            {t({ ja: "全文を読むには月額1000円のプレミアム購読が必要です。", en: "A ¥1000/month premium subscription is required to read the full text." })}
           </p>
           <p style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>
-            {FREE_READING_SCHEDULE}
+            {t(FREE_READING_SCHEDULE)}
           </p>
           <button className="btn btn-border" onClick={handleSubscribe}>
-            課金して続きを読む
+            {t({ ja: "課金して続きを読む", en: "Subscribe to read full" })}
           </button>
         </div>
       )}
@@ -511,7 +533,7 @@ export default function EpisodeDetail() {
 
       <div style={{ marginTop: 24 }}>
         <Link to={"/novels/" + episode.novel_id} className="btn btn-border">
-          小説詳細へ戻る
+          {t({ ja: "小説詳細へ戻る", en: "Back to novel" })}
         </Link>
       </div>
 
@@ -541,7 +563,7 @@ export default function EpisodeDetail() {
           >
             <img
               src={modalImageUrl}
-              alt="拡大画像"
+              alt={t({ ja: "拡大画像", en: "Zoomed image" })}
               style={{
                 maxWidth: "100%",
                 maxHeight: isXInAppBrowser ? "70vh" : "80vh",
@@ -560,7 +582,7 @@ export default function EpisodeDetail() {
                 marginLeft: "auto",
               }}
             >
-              閉じる
+              {t({ ja: "閉じる", en: "Close" })}
             </button>
           </div>
         </div>

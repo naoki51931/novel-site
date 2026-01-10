@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { trackEvent } from "../lib/analytics";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 const DRAFT_KEY = "draft_new_novel";
 
 export default function NewNovel() {
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -66,7 +68,7 @@ export default function NewNovel() {
     setError("");
 
     if (!title.trim()) {
-      setError("タイトルは必須です。");
+      setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
       return;
     }
 
@@ -74,7 +76,7 @@ export default function NewNovel() {
     try {
       const token = localStorage.getItem("token");
       if (!token) {
-        throw new Error("ログインが必要です。");
+        throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       }
 
       const payload = {
@@ -101,7 +103,7 @@ export default function NewNovel() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "小説の作成に失敗しました");
+        throw new Error(data.detail || t({ ja: "小説の作成に失敗しました", en: "Failed to create novel." }));
       }
 
       if (data.id) {
@@ -124,7 +126,9 @@ export default function NewNovel() {
       }
     } catch (err) {
       console.error(err);
-      setError(err.message || "小説の作成中にエラーが発生しました");
+      setError(
+        err.message || t({ ja: "小説の作成中にエラーが発生しました", en: "An error occurred while creating the novel." })
+      );
     } finally {
       setSaving(false);
     }
@@ -133,10 +137,10 @@ export default function NewNovel() {
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">← 小説一覧に戻る</Link>
+        <Link to="/">{t({ ja: "← 小説一覧に戻る", en: "← Back to novel list" })}</Link>
       </div>
 
-      <h2>新しい小説を作成</h2>
+      <h2>{t({ ja: "新しい小説を作成", en: "Create New Novel" })}</h2>
 
       {/* 🔹 AI小説生成ページへのショートカットボタン */}
       <div style={{ marginBottom: 16 }}>
@@ -145,14 +149,14 @@ export default function NewNovel() {
           className="btn btn-border"
           onClick={handleOpenAINovel}
         >
-          AI小説生成ページへ
+          {t({ ja: "AI小説生成ページへ", en: "Go to AI Novel Generator" })}
         </button>
       </div>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
-            タイトル
+            {t({ ja: "タイトル", en: "Title" })}
             <br />
             <input
               type="text"
@@ -165,7 +169,7 @@ export default function NewNovel() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            説明（あらすじ）
+            {t({ ja: "説明（あらすじ）", en: "Description (summary)" })}
             <br />
             <textarea
               value={description}
@@ -178,21 +182,21 @@ export default function NewNovel() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            タグ（カンマ区切り）
+            {t({ ja: "タグ（カンマ区切り）", en: "Tags (comma-separated)" })}
             <br />
             <input
               type="text"
               value={tagNamesInput}
               onChange={(e) => setTagNamesInput(e.target.value)}
               style={{ width: "100%", padding: 4 }}
-              placeholder="例: ファンタジー, バトル, 百合"
+              placeholder={t({ ja: "例: ファンタジー, バトル, 百合", en: "e.g., Fantasy, Battle, Yuri" })}
             />
           </label>
         </div>
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            作品種別
+            {t({ ja: "作品種別", en: "Work type" })}
             <br />
             <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
               <label>
@@ -204,7 +208,7 @@ export default function NewNovel() {
                   onChange={(e) => setCreativeType(e.target.value)}
                   style={{ marginRight: 4 }}
                 />
-                オリジナル
+                {t({ ja: "オリジナル", en: "Original" })}
               </label>
               <label>
                 <input
@@ -215,7 +219,7 @@ export default function NewNovel() {
                   onChange={(e) => setCreativeType(e.target.value)}
                   style={{ marginRight: 4 }}
                 />
-                二次創作
+                {t({ ja: "二次創作", en: "Fanfiction" })}
               </label>
             </div>
           </label>
@@ -223,14 +227,14 @@ export default function NewNovel() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            年齢区分
+            {t({ ja: "年齢区分", en: "Age rating" })}
             <br />
             <select
               value={ageLimit}
               onChange={(e) => setAgeLimit(e.target.value)}
               style={{ width: "100%", padding: 4 }}
             >
-              <option value="all">全年齢</option>
+              <option value="all">{t({ ja: "全年齢", en: "All ages" })}</option>
               <option value="r15">R15</option>
               <option value="r18">R18</option>
             </select>
@@ -245,7 +249,7 @@ export default function NewNovel() {
               onChange={(e) => setIsAIGenerated(e.target.checked)}
               style={{ marginRight: 4 }}
             />
-            AI創作
+            {t({ ja: "AI創作", en: "AI-generated" })}
           </label>
         </div>
 
@@ -259,14 +263,14 @@ export default function NewNovel() {
             type="submit"
             disabled={saving}
           >
-            {saving ? "作成中..." : "作成する"}
+            {saving ? t({ ja: "作成中...", en: "Creating..." }) : t({ ja: "作成する", en: "Create" })}
           </button>
           <button
             className="btn btn-border"
             type="button"
             onClick={() => navigate("/")}
           >
-            キャンセル
+            {t({ ja: "キャンセル", en: "Cancel" })}
           </button>
         </div>
       </form>

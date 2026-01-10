@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useI18n } from "../lib/i18n";
 
 export default function AuthorBalanceCard() {
+  const { t } = useI18n();
   const [balance, setBalance] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -13,7 +15,9 @@ export default function AuthorBalanceCard() {
       const data = await apiFetch("/api/authors/me/balance", { auth: true });
       setBalance(data);
     } catch (e) {
-      setError(e.message || "残高の取得に失敗しました");
+      setError(
+        e.message || t({ ja: "残高の取得に失敗しました", en: "Failed to load balance." })
+      );
     } finally {
       setLoading(false);
     }
@@ -33,9 +37,9 @@ export default function AuthorBalanceCard() {
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>売上残高</h3>
+        <h3 style={{ margin: 0 }}>{t({ ja: "売上残高", en: "Revenue Balance" })}</h3>
         <button type="button" className="btn btn-border" onClick={fetchBalance}>
-          {loading ? "更新中..." : "更新"}
+          {loading ? t({ ja: "更新中...", en: "Refreshing..." }) : t({ ja: "更新", en: "Refresh" })}
         </button>
       </div>
 
@@ -44,15 +48,24 @@ export default function AuthorBalanceCard() {
       {balance && (
         <div style={{ marginTop: 12 }}>
           <p style={{ margin: 0, fontSize: 20, fontWeight: "bold" }}>
-            {Number(balance.available_yen ?? 0).toLocaleString()} 円
+            {t(
+              { ja: "{{amount}} 円", en: "¥{{amount}}" },
+              { amount: Number(balance.available_yen ?? 0).toLocaleString() }
+            )}
           </p>
           {Number(balance.pending_yen ?? 0) > 0 && (
             <p style={{ margin: "4px 0", color: "#666" }}>
-              確定待ち: {Number(balance.pending_yen ?? 0).toLocaleString()} 円
+              {t(
+                { ja: "確定待ち: {{amount}} 円", en: "Pending: ¥{{amount}}" },
+                { amount: Number(balance.pending_yen ?? 0).toLocaleString() }
+              )}
             </p>
           )}
           <p style={{ margin: "8px 0 0", fontSize: 12, color: "#666" }}>
-            精算は運営が月次で行います。
+            {t({
+              ja: "精算は運営が月次で行います。",
+              en: "Payouts are processed monthly by the admin.",
+            })}
           </p>
         </div>
       )}

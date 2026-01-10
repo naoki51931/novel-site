@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { useI18n } from "../lib/i18n";
 
-const yen = (value) => new Intl.NumberFormat("ja-JP").format(value || 0);
+const yen = (value, locale) =>
+  new Intl.NumberFormat(locale || "ja-JP").format(value || 0);
 
 function SparkBars({ data, width = 260, height = 46, color = "#2f6f6d" }) {
   const max = useMemo(() => Math.max(...data, 1), [data]);
@@ -31,6 +33,8 @@ function SparkBars({ data, width = 260, height = 46, color = "#2f6f6d" }) {
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
+  const locale = lang === "en" ? "en-US" : "ja-JP";
   const [supports, setSupports] = useState(null);
   const [payouts, setPayouts] = useState(null);
   const [supportBy, setSupportBy] = useState("author");
@@ -61,7 +65,7 @@ export default function AdminDashboard() {
           navigate("/admin/login", { replace: true });
           return;
         }
-        setError(e.message || "データ取得に失敗しました");
+        setError(e.message || t({ ja: "データ取得に失敗しました", en: "Failed to load data." }));
       } finally {
         setLoading(false);
       }
@@ -78,32 +82,45 @@ export default function AdminDashboard() {
       });
       setSelectedProfile(data);
     } catch (e) {
-      setProfileError(e.message || "口座情報の取得に失敗しました");
+      setProfileError(
+        e.message || t({ ja: "口座情報の取得に失敗しました", en: "Failed to load bank details." })
+      );
     } finally {
       setProfileLoading(false);
     }
   };
 
   const supportWindow = supports
-    ? `${supports.start_date} 〜 (${supports.days}日)`
+    ? t(
+        { ja: "{{start}} 〜 ({{days}}日)", en: "{{start}} – ({{days}} days)" },
+        { start: supports.start_date, days: supports.days }
+      )
     : "";
   const payoutWindow = payouts
-    ? `${payouts.start_date} 〜 (${payouts.days}日)`
+    ? t(
+        { ja: "{{start}} 〜 ({{days}}日)", en: "{{start}} – ({{days}} days)" },
+        { start: payouts.start_date, days: payouts.days }
+      )
     : "";
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/admin">← 管理画面に戻る</Link>
+        <Link to="/admin">{t({ ja: "← 管理画面に戻る", en: "← Back to Admin" })}</Link>
       </div>
 
-      <h2 style={{ marginBottom: 8 }}>支援・振込ダッシュボード</h2>
+      <h2 style={{ marginBottom: 8 }}>
+        {t({ ja: "支援・振込ダッシュボード", en: "Support & Payout Dashboard" })}
+      </h2>
       <p style={{ marginTop: 0, marginBottom: 16, color: "#555" }}>
-        支援発生と振込タイミングを直近の流れで確認できます。
+        {t({
+          ja: "支援発生と振込タイミングを直近の流れで確認できます。",
+          en: "Review recent support activity and payout timing.",
+        })}
       </p>
 
       {error && <p style={{ color: "red" }}>{error}</p>}
-      {loading && <p>読み込み中...</p>}
+      {loading && <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>}
 
       {!loading && (
         <>
@@ -117,16 +134,18 @@ export default function AdminDashboard() {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <h3 style={{ marginTop: 0 }}>支援タイミング（ユーザー別）</h3>
+              <h3 style={{ marginTop: 0 }}>
+                {t({ ja: "支援タイミング（ユーザー別）", en: "Support timing (by user)" })}
+              </h3>
               <label style={{ fontSize: 13, color: "#666" }}>
-                表示対象
+                {t({ ja: "表示対象", en: "View by" })}
                 <select
                   value={supportBy}
                   onChange={(e) => setSupportBy(e.target.value)}
                   style={{ marginLeft: 8 }}
                 >
-                  <option value="author">作者（受け取り）</option>
-                  <option value="supporter">支援者</option>
+                  <option value="author">{t({ ja: "作者（受け取り）", en: "Author (recipient)" })}</option>
+                  <option value="supporter">{t({ ja: "支援者", en: "Supporter" })}</option>
                 </select>
               </label>
             </div>
@@ -149,7 +168,10 @@ export default function AdminDashboard() {
                     <div>
                       <div style={{ fontWeight: 600 }}>{user.username}</div>
                       <div style={{ fontSize: 12, color: "#666" }}>
-                        合計 {yen(user.total_amount_yen)}円 / {user.total_count}件
+                        {t(
+                          { ja: "合計 {{amount}}円 / {{count}}件", en: "Total ¥{{amount}} / {{count}} items" },
+                          { amount: yen(user.total_amount_yen, locale), count: user.total_count }
+                        )}
                       </div>
                     </div>
                     <SparkBars data={user.amounts} />
@@ -158,7 +180,7 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <div style={{ color: "#666", fontSize: 14 }}>
-                該当期間の支援データがありません。
+                {t({ ja: "該当期間の支援データがありません。", en: "No support data for this period." })}
               </div>
             )}
           </section>
@@ -168,18 +190,23 @@ export default function AdminDashboard() {
               border: "1px solid #ddd",
               borderRadius: 10,
               padding: 16,
-              background: "#fff",
-            }}
-          >
-            <h3 style={{ marginTop: 0 }}>振込タイミング</h3>
+            background: "#fff",
+          }}
+        >
+            <h3 style={{ marginTop: 0 }}>{t({ ja: "振込タイミング", en: "Payout timing" })}</h3>
             <div style={{ fontSize: 12, color: "#777", marginBottom: 12 }}>
-              {payoutWindow} / 振込最低額 {yen(payouts?.payout_minimum_yen)}円
+              {payoutWindow} /{" "}
+              {t({ ja: "振込最低額", en: "Minimum payout" })}{" "}
+              {t(
+                { ja: "{{amount}}円", en: "¥{{amount}}" },
+                { amount: yen(payouts?.payout_minimum_yen, locale) }
+              )}
             </div>
 
             {payouts && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>
-                  振込完了（合計金額）
+                  {t({ ja: "振込完了（合計金額）", en: "Completed payouts (total)" })}
                 </div>
                 <SparkBars data={payouts.paid_amounts} color="#3b5b7a" />
               </div>
@@ -187,7 +214,9 @@ export default function AdminDashboard() {
 
             <div style={{ display: "grid", gap: 16 }}>
               <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>振込待ち</div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                  {t({ ja: "振込待ち", en: "Pending payouts" })}
+                </div>
                 {payouts?.upcoming?.length ? (
                   <div style={{ display: "grid", gap: 6 }}>
                     {payouts.upcoming.map((item) => (
@@ -202,9 +231,10 @@ export default function AdminDashboard() {
                       >
                         <div>#{item.payout_id}</div>
                         <div>
-                          {item.username} / {yen(item.amount_yen)}円
+                          {item.username} /{" "}
+                          {t({ ja: "{{amount}}円", en: "¥{{amount}}" }, { amount: yen(item.amount_yen, locale) })}
                           <div style={{ color: "#666", fontSize: 12 }}>
-                            {item.period_start} 〜 {item.period_end}
+                            {item.period_start} – {item.period_end}
                           </div>
                           <button
                             type="button"
@@ -220,7 +250,7 @@ export default function AdminDashboard() {
                               fontSize: 12,
                             }}
                           >
-                            口座情報を見る
+                            {t({ ja: "口座情報を見る", en: "View bank details" })}
                           </button>
                         </div>
                         <div style={{ textTransform: "uppercase", color: "#666" }}>
@@ -231,11 +261,13 @@ export default function AdminDashboard() {
                   </div>
                 ) : (
                   <div style={{ color: "#666", fontSize: 13 }}>
-                    振込待ちのデータがありません。
+                    {t({ ja: "振込待ちのデータがありません。", en: "No pending payouts." })}
                   </div>
                 )}
                 {profileLoading && (
-                  <div style={{ marginTop: 12, fontSize: 13 }}>口座情報を取得中...</div>
+                  <div style={{ marginTop: 12, fontSize: 13 }}>
+                    {t({ ja: "口座情報を取得中...", en: "Loading bank details..." })}
+                  </div>
                 )}
                 {profileError && (
                   <div style={{ marginTop: 12, fontSize: 13, color: "red" }}>
@@ -252,23 +284,49 @@ export default function AdminDashboard() {
                       background: "#f9fbfc",
                       fontSize: 13,
                     }}
-                  >
+                    >
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                      {selectedProfile.username} の振込先
+                      {t(
+                        { ja: "{{name}} の振込先", en: "Payout destination for {{name}}" },
+                        { name: selectedProfile.username }
+                      )}
                     </div>
-                    <div>振込有効: {selectedProfile.payout_enabled ? "有効" : "無効"}</div>
-                    <div>最低振込額: {yen(selectedProfile.payout_minimum_yen)}円</div>
-                    <div>銀行名: {selectedProfile.bank_name || "-"}</div>
-                    <div>支店名: {selectedProfile.bank_branch || "-"}</div>
-                    <div>口座種別: {selectedProfile.bank_account_type || "-"}</div>
-                    <div>口座番号: {selectedProfile.bank_account_number || "-"}</div>
-                    <div>口座名義: {selectedProfile.bank_account_holder || "-"}</div>
+                    <div>
+                      {t({ ja: "振込有効", en: "Payout enabled" })}:{" "}
+                      {selectedProfile.payout_enabled
+                        ? t({ ja: "有効", en: "Enabled" })
+                        : t({ ja: "無効", en: "Disabled" })}
+                    </div>
+                    <div>
+                      {t({ ja: "最低振込額", en: "Minimum payout" })}:{" "}
+                      {t(
+                        { ja: "{{amount}}円", en: "¥{{amount}}" },
+                        { amount: yen(selectedProfile.payout_minimum_yen, locale) }
+                      )}
+                    </div>
+                    <div>
+                      {t({ ja: "銀行名", en: "Bank name" })}: {selectedProfile.bank_name || "-"}
+                    </div>
+                    <div>
+                      {t({ ja: "支店名", en: "Branch name" })}: {selectedProfile.bank_branch || "-"}
+                    </div>
+                    <div>
+                      {t({ ja: "口座種別", en: "Account type" })}: {selectedProfile.bank_account_type || "-"}
+                    </div>
+                    <div>
+                      {t({ ja: "口座番号", en: "Account number" })}: {selectedProfile.bank_account_number || "-"}
+                    </div>
+                    <div>
+                      {t({ ja: "口座名義", en: "Account holder" })}: {selectedProfile.bank_account_holder || "-"}
+                    </div>
                   </div>
                 )}
               </div>
 
               <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>最近の振込</div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                  {t({ ja: "最近の振込", en: "Recent payouts" })}
+                </div>
                 {payouts?.recent_paid?.length ? (
                   <div style={{ display: "grid", gap: 6 }}>
                     {payouts.recent_paid.map((item) => (
@@ -283,9 +341,10 @@ export default function AdminDashboard() {
                       >
                         <div>#{item.payout_id}</div>
                         <div>
-                          {item.username} / {yen(item.amount_yen)}円
+                          {item.username} /{" "}
+                          {t({ ja: "{{amount}}円", en: "¥{{amount}}" }, { amount: yen(item.amount_yen, locale) })}
                           <div style={{ color: "#666", fontSize: 12 }}>
-                            {item.period_start} 〜 {item.period_end}
+                            {item.period_start} – {item.period_end}
                           </div>
                         </div>
                         <div style={{ color: "#666" }}>
@@ -296,7 +355,7 @@ export default function AdminDashboard() {
                   </div>
                 ) : (
                   <div style={{ color: "#666", fontSize: 13 }}>
-                    振込履歴がありません。
+                    {t({ ja: "振込履歴がありません。", en: "No payout history." })}
                   </div>
                 )}
               </div>

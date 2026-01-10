@@ -194,6 +194,12 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
   white-space: nowrap;
 }
 
+.lang-toggle {
+  font-size: 12px;
+  padding: 6px 8px;
+  min-width: 44px;
+}
+
 .nav-bell {
   display: inline-flex;
   align-items: center;

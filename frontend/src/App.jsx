@@ -33,6 +33,7 @@ import AuthorLanding from "./pages/AuthorLanding";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
+import { useI18n } from "./lib/i18n";
 
 
 export default function App() {
@@ -41,6 +42,7 @@ export default function App() {
   const [unreadCount, setUnreadCount] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
+  const { t, lang, setLang } = useI18n();
   const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
   const LOGIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -151,56 +153,71 @@ export default function App() {
     <div>
       <header className={`site-header ${menuOpen ? "menu-open" : ""}`}>
         <div className="site-header-left">
-          <h1 className="site-title">小説投稿サイト</h1>
+          <h1 className="site-title">
+            {t({ ja: "小説投稿サイト", en: "Novel Submission Site" })}
+          </h1>
         </div>
 
         {/* ナビゲーション */}
         <nav className={`nav-links ${menuOpen ? "nav-open" : ""}`}>
           <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
-            トップ
+            {t({ ja: "トップ", en: "Home" })}
           </Link>
           <Link
             to="/authors"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            作者向け
+            {t({ ja: "作者向け", en: "For Authors" })}
           </Link>
           <Link
             to="/novels/new"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            新規小説投稿
+            {t({ ja: "新規小説投稿", en: "Post New Novel" })}
           </Link>
           <Link
             to="/mypage"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            マイページ
+            {t({ ja: "マイページ", en: "My Page" })}
           </Link>
           <Link
             to="/login"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            ログイン
+            {t({ ja: "ログイン", en: "Login" })}
           </Link>
           <Link
             to="/register"
             className="nav-link nav-link-accent"
             onClick={() => setMenuOpen(false)}
           >
-            Register
+            {t({ ja: "新規登録", en: "Register" })}
           </Link>
         </nav>
 
         <div className="header-right">
+          <button
+            type="button"
+            className="lang-toggle btn btn-border"
+            onClick={() => setLang(lang === "ja" ? "en" : "ja")}
+            aria-label={t({ ja: "言語を切り替える", en: "Switch language" })}
+            title={
+              lang === "ja"
+                ? t({ ja: "Englishへ切り替え", en: "Switch to English" })
+                : t({ ja: "日本語へ切り替え", en: "Switch to Japanese" })
+            }
+          >
+            {lang === "ja" ? "EN" : "JP"}
+          </button>
           <div className="login-status">
             {hasToken ? (
               <span>
-                ログイン中:{" "}
+                {t({ ja: "ログイン中", en: "Logged in" })}:{" "}
                 {username ? (
                   <Link
                     className="user-link"
@@ -209,18 +226,18 @@ export default function App() {
                     {username}
                   </Link>
                 ) : (
-                  "ユーザー"
+                  t({ ja: "ユーザー", en: "User" })
                 )}
               </span>
             ) : (
-              <span>未ログイン</span>
+              <span>{t({ ja: "未ログイン", en: "Not logged in" })}</span>
             )}
           </div>
           <Link
             to="/notifications"
             className="nav-bell"
-            aria-label="通知センター"
-            title="通知センター"
+            aria-label={t({ ja: "通知センター", en: "Notifications" })}
+            title={t({ ja: "通知センター", en: "Notifications" })}
             onClick={() => setMenuOpen(false)}
           >
             <FontAwesomeIcon icon={faBell} />
@@ -235,7 +252,7 @@ export default function App() {
             type="button"
             className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""}`}
             onClick={() => setMenuOpen((v) => !v)}
-            aria-label="メニューを開く"
+            aria-label={t({ ja: "メニューを開く", en: "Open menu" })}
           >
             <span />
             <span />
@@ -294,10 +311,42 @@ export default function App() {
             path="/stripe/success"
             element={<StripeReturn mode="success" />}
           />
-          <Route path="/support/success" element={<SupportReturn mode="success" label="支援" />} />
-          <Route path="/support/cancel" element={<SupportReturn mode="cancel" label="支援" />} />
-          <Route path="/membership/success" element={<SupportReturn mode="success" label="月額支援" />} />
-          <Route path="/membership/cancel" element={<SupportReturn mode="cancel" label="月額支援" />} />
+          <Route
+            path="/support/success"
+            element={
+              <SupportReturn
+                mode="success"
+                label={t({ ja: "支援", en: "Support" })}
+              />
+            }
+          />
+          <Route
+            path="/support/cancel"
+            element={
+              <SupportReturn
+                mode="cancel"
+                label={t({ ja: "支援", en: "Support" })}
+              />
+            }
+          />
+          <Route
+            path="/membership/success"
+            element={
+              <SupportReturn
+                mode="success"
+                label={t({ ja: "月額支援", en: "Monthly Support" })}
+              />
+            }
+          />
+          <Route
+            path="/membership/cancel"
+            element={
+              <SupportReturn
+                mode="cancel"
+                label={t({ ja: "月額支援", en: "Monthly Support" })}
+              />
+            }
+          />
         </Routes>
       </main>
 
@@ -310,7 +359,7 @@ export default function App() {
         }}
       >
         <Link className="btn btn-border" to="/admin">
-          管理画面
+          {t({ ja: "管理画面", en: "Admin" })}
         </Link>
       </footer>
     </div>

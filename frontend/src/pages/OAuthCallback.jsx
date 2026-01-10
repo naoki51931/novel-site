@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
 
 export default function OAuthCallback() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -18,7 +20,12 @@ export default function OAuthCallback() {
 
     const token = params.get("token");
     if (!token) {
-      setError("ログインに必要な情報が不足しています。");
+      setError(
+        t({
+          ja: "ログインに必要な情報が不足しています。",
+          en: "Missing information required to log in.",
+        })
+      );
       return;
     }
 
@@ -29,7 +36,9 @@ export default function OAuthCallback() {
         localStorage.setItem("username", username);
       }
     } catch {
-      setError("ログイン情報の保存に失敗しました。");
+      setError(
+        t({ ja: "ログイン情報の保存に失敗しました。", en: "Failed to save login info." })
+      );
       return;
     }
 
@@ -53,10 +62,10 @@ export default function OAuthCallback() {
   if (error) {
     return (
       <div style={{ maxWidth: 480, margin: "2rem auto", textAlign: "center" }}>
-        <h2>ログインに失敗しました</h2>
+        <h2>{t({ ja: "ログインに失敗しました", en: "Login failed" })}</h2>
         <p style={{ color: "var(--muted-text)" }}>{error}</p>
         <Link to="/login" className="btn btn-border">
-          ログイン画面へ戻る
+          {t({ ja: "ログイン画面へ戻る", en: "Back to login" })}
         </Link>
       </div>
     );
@@ -64,8 +73,10 @@ export default function OAuthCallback() {
 
   return (
     <div style={{ maxWidth: 480, margin: "2rem auto", textAlign: "center" }}>
-      <h2>ログイン処理中...</h2>
-      <p style={{ color: "var(--muted-text)" }}>少々お待ちください。</p>
+      <h2>{t({ ja: "ログイン処理中...", en: "Signing you in..." })}</h2>
+      <p style={{ color: "var(--muted-text)" }}>
+        {t({ ja: "少々お待ちください。", en: "Please wait a moment." })}
+      </p>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
@@ -45,6 +46,7 @@ function consumePostLoginRedirect() {
 
 export default function Login() {
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   const [step, setStep] = useState(1); // 1: ユーザー名+パスワード / 2: 6桁コード入力
   const [username, setUsername] = useState("");
@@ -66,7 +68,12 @@ export default function Login() {
     setInfo("");
 
     if (!username.trim() || !password.trim()) {
-      setError("ユーザー名とパスワードを入力してください。");
+      setError(
+        t({
+          ja: "ユーザー名とパスワードを入力してください。",
+          en: "Please enter your username and password.",
+        })
+      );
       return;
     }
 
@@ -83,15 +90,23 @@ export default function Login() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "ログインに失敗しました。");
+        throw new Error(data.detail || t({ ja: "ログインに失敗しました。", en: "Login failed." }));
       }
 
       // ここまで来たら 6桁コードが発行済み
       setStep(2);
-      setInfo("認証コードをメールで送信しました。(SMTP未設定の場合はサーバーログに表示されます)");
+      setInfo(
+        t({
+          ja: "認証コードをメールで送信しました。(SMTP未設定の場合はサーバーログに表示されます)",
+          en: "We sent a verification code by email. (If SMTP isn't configured, it appears in server logs.)",
+        })
+      );
     } catch (err) {
       console.error(err);
-      setError(err.message || "ログイン中にエラーが発生しました。");
+      setError(
+        err.message ||
+          t({ ja: "ログイン中にエラーが発生しました。", en: "An error occurred during login." })
+      );
     } finally {
       setLoading(false);
     }
@@ -104,7 +119,7 @@ export default function Login() {
     setInfo("");
 
     if (!code.trim()) {
-      setError("認証コードを入力してください。");
+      setError(t({ ja: "認証コードを入力してください。", en: "Please enter the verification code." }));
       return;
     }
 
@@ -121,11 +136,14 @@ export default function Login() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "認証コードの検証に失敗しました。");
+        throw new Error(
+          data.detail ||
+            t({ ja: "認証コードの検証に失敗しました。", en: "Failed to verify the code." })
+        );
       }
 
       if (!data.access_token) {
-        throw new Error("トークンの取得に失敗しました。");
+        throw new Error(t({ ja: "トークンの取得に失敗しました。", en: "Failed to obtain token." }));
       }
 
       // トークンとユーザー名を保存
@@ -143,15 +161,20 @@ export default function Login() {
         return;
       }
 
-      setInfo("ログイン完了。保存していた AI 小説を投稿しています…");
+      setInfo(
+        t({
+          ja: "ログイン完了。保存していた AI 小説を投稿しています…",
+          en: "Login complete. Posting your saved AI novel...",
+        })
+      );
 
       try {
         const token = data.access_token;
 
         if (pending.kind === "new_novel") {
           const novelPayload = {
-            title: pending.generated_title || "AI生成小説",
-            description: "AI生成",
+            title: pending.generated_title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
+            description: t({ ja: "AI生成", en: "AI-generated" }),
             age_limit: pending.age_limit === "r18" ? "r18" : "all",
             is_ai_generated: true,
             tag_names: [],
@@ -167,16 +190,27 @@ export default function Login() {
           });
           const novelData = await novelRes.json().catch(() => ({}));
           if (!novelRes.ok) {
-            throw new Error(novelData.detail || `小説の作成に失敗しました (status=${novelRes.status})`);
+            throw new Error(
+              novelData.detail ||
+                t(
+                  {
+                    ja: "小説の作成に失敗しました (status={{status}})",
+                    en: "Failed to create novel (status={{status}})",
+                  },
+                  { status: novelRes.status }
+                )
+            );
           }
           const novelId = novelData?.id;
           if (!novelId) {
-            throw new Error("小説IDが取得できませんでした。");
+            throw new Error(
+              t({ ja: "小説IDが取得できませんでした。", en: "Could not get novel ID." })
+            );
           }
 
           const episodePayload = {
             episode_number: 1,
-            title: "第1話",
+            title: t({ ja: "第1話", en: "Episode 1" }),
             body: pending.body,
             tag_names: [],
           };
@@ -190,7 +224,16 @@ export default function Login() {
           });
           const epData = await epRes.json().catch(() => ({}));
           if (!epRes.ok) {
-            throw new Error(epData.detail || `第1話の投稿に失敗しました (status=${epRes.status})`);
+            throw new Error(
+              epData.detail ||
+                t(
+                  {
+                    ja: "第1話の投稿に失敗しました (status={{status}})",
+                    en: "Failed to post Episode 1 (status={{status}})",
+                  },
+                  { status: epRes.status }
+                )
+            );
           }
 
           clearPendingAiPost();
@@ -201,7 +244,12 @@ export default function Login() {
         if (pending.kind === "next_episode") {
           const novelId = pending.continue_novel_id;
           if (!novelId) {
-            throw new Error("投稿先の小説IDが取得できませんでした。");
+            throw new Error(
+              t({
+                ja: "投稿先の小説IDが取得できませんでした。",
+                en: "Could not get destination novel ID.",
+              })
+            );
           }
 
           const listRes = await fetch(`${API_BASE}/api/novels/${novelId}/episodes`, {
@@ -211,7 +259,13 @@ export default function Login() {
           if (!listRes.ok) {
             throw new Error(
               (listData && listData.detail) ||
-                `エピソード一覧の取得に失敗しました (status=${listRes.status})`
+                t(
+                  {
+                    ja: "エピソード一覧の取得に失敗しました (status={{status}})",
+                    en: "Failed to fetch episode list (status={{status}})",
+                  },
+                  { status: listRes.status }
+                )
             );
           }
 
@@ -225,7 +279,12 @@ export default function Login() {
 
           const episodePayload = {
             episode_number: nextNumber,
-            title: (pending.post_episode_title || "").trim() || `第${nextNumber}話`,
+            title:
+              (pending.post_episode_title || "").trim() ||
+              t(
+                { ja: "第{{num}}話", en: "Episode {{num}}" },
+                { num: nextNumber }
+              ),
             body: pending.body,
             tag_names: [],
           };
@@ -239,7 +298,16 @@ export default function Login() {
           });
           const epData = await epRes.json().catch(() => ({}));
           if (!epRes.ok) {
-            throw new Error(epData.detail || `エピソードの投稿に失敗しました (status=${epRes.status})`);
+            throw new Error(
+              epData.detail ||
+                t(
+                  {
+                    ja: "エピソードの投稿に失敗しました (status={{status}})",
+                    en: "Failed to post episode (status={{status}})",
+                  },
+                  { status: epRes.status }
+                )
+            );
           }
 
           clearPendingAiPost();
@@ -251,13 +319,19 @@ export default function Login() {
       } catch (e2) {
         console.error(e2);
         savePendingAiPostError(
-          e2?.message || "保存していた AI 小説の投稿に失敗しました。"
+          e2?.message ||
+            t({
+              ja: "保存していた AI 小説の投稿に失敗しました。",
+              en: "Failed to post your saved AI novel.",
+            })
         );
         navigate("/ai-novel?restore_pending=1");
       }
     } catch (err) {
       console.error(err);
-      setError(err.message || "認証中にエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "認証中にエラーが発生しました。", en: "An error occurred during verification." })
+      );
     } finally {
       setLoading(false);
     }
@@ -277,12 +351,16 @@ export default function Login() {
       const res = await fetch(`${API_BASE}/api/auth/oauth/${provider}/start`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.auth_url) {
-        throw new Error(data.detail || "OAuth の開始に失敗しました。");
+        throw new Error(
+          data.detail || t({ ja: "OAuth の開始に失敗しました。", en: "Failed to start OAuth." })
+        );
       }
       window.location.href = data.auth_url;
     } catch (err) {
       console.error(err);
-      setError(err.message || "OAuth でエラーが発生しました。");
+      setError(
+        err.message || t({ ja: "OAuth でエラーが発生しました。", en: "An error occurred during OAuth." })
+      );
       setOauthLoading(false);
     }
   };
@@ -290,10 +368,10 @@ export default function Login() {
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">← トップに戻る</Link>
+        <Link to="/">{t({ ja: "← トップに戻る", en: "← Back to Home" })}</Link>
       </div>
 
-      <h2>ログイン（二段階認証）</h2>
+      <h2>{t({ ja: "ログイン（二段階認証）", en: "Login (2FA)" })}</h2>
 
       <div style={{ marginBottom: 16, display: "grid", gap: 8 }}>
         <button
@@ -302,7 +380,7 @@ export default function Login() {
           disabled={oauthLoading}
           onClick={() => handleOAuth("google")}
         >
-          Googleでログイン
+          {t({ ja: "Googleでログイン", en: "Login with Google" })}
         </button>
         <button
           type="button"
@@ -310,10 +388,10 @@ export default function Login() {
           disabled={oauthLoading}
           onClick={() => handleOAuth("x")}
         >
-          Xでログイン
+          {t({ ja: "Xでログイン", en: "Login with X" })}
         </button>
         <div style={{ textAlign: "center", color: "var(--muted-text)" }}>
-          または
+          {t({ ja: "または", en: "or" })}
         </div>
       </div>
 
@@ -328,14 +406,17 @@ export default function Login() {
             fontSize: 14,
           }}
         >
-          <div>現在ログイン中: {savedUsername || "不明なユーザー"}</div>
+          <div>
+            {t({ ja: "現在ログイン中", en: "Currently logged in" })}:{" "}
+            {savedUsername || t({ ja: "不明なユーザー", en: "Unknown user" })}
+          </div>
           <button
             type="button"
             className="btn btn-border"
             style={{ marginTop: 8 }}
             onClick={handleLogout}
           >
-            ログアウトする
+            {t({ ja: "ログアウトする", en: "Log out" })}
           </button>
         </div>
       )}
@@ -344,7 +425,7 @@ export default function Login() {
         <form onSubmit={handleStart}>
           <div style={{ marginBottom: 8 }}>
             <label>
-              ユーザー名
+              {t({ ja: "ユーザー名", en: "Username" })}
               <br />
               <input
                 type="text"
@@ -357,7 +438,7 @@ export default function Login() {
 
           <div style={{ marginBottom: 8 }}>
             <label>
-              パスワード
+              {t({ ja: "パスワード", en: "Password" })}
               <br />
               <input
                 type={showPassword ? "text" : "password"}
@@ -374,7 +455,7 @@ export default function Login() {
                   onChange={(e) => setShowPassword(e.target.checked)}
                   style={{ marginRight: 6 }}
                 />
-                パスワードを表示
+                {t({ ja: "パスワードを表示", en: "Show password" })}
               </label>
             </div>
           </div>
@@ -391,11 +472,15 @@ export default function Login() {
           )}
 
           <button className="btn btn-border" type="submit" disabled={loading}>
-            {loading ? "送信中..." : "認証コードを送信"}
+            {loading
+              ? t({ ja: "送信中...", en: "Sending..." })
+              : t({ ja: "認証コードを送信", en: "Send verification code" })}
           </button>
 
           <div style={{ marginTop: 12, fontSize: 12 }}>
-            <Link to="/reset-password">パスワードを忘れた場合</Link>
+            <Link to="/reset-password">
+              {t({ ja: "パスワードを忘れた場合", en: "Forgot password?" })}
+            </Link>
           </div>
         </form>
       )}
@@ -404,12 +489,18 @@ export default function Login() {
         <form onSubmit={handleVerify}>
           <div style={{ marginBottom: 8 }}>
             <p style={{ marginBottom: 4 }}>
-              メールに届いた 6 桁の認証コードを入力してください。
+              {t({
+                ja: "メールに届いた 6 桁の認証コードを入力してください。",
+                en: "Enter the 6-digit verification code sent to your email.",
+              })}
               <br />
-              ※ SMTP 未設定の場合は、サーバーログにコードが表示されます。
+              {t({
+                ja: "※ SMTP 未設定の場合は、サーバーログにコードが表示されます。",
+                en: "If SMTP isn't configured, the code appears in server logs.",
+              })}
             </p>
             <label>
-              認証コード（6桁）
+              {t({ ja: "認証コード（6桁）", en: "Verification code (6 digits)" })}
               <br />
               <input
                 type="text"
@@ -433,7 +524,7 @@ export default function Login() {
           )}
 
           <button className="btn btn-border" type="submit" disabled={loading}>
-            {loading ? "認証中..." : "ログイン"}
+            {loading ? t({ ja: "認証中...", en: "Verifying..." }) : t({ ja: "ログイン", en: "Login" })}
           </button>
 
           <div style={{ marginTop: 8, fontSize: 12 }}>
@@ -448,7 +539,10 @@ export default function Login() {
                 setError("");
               }}
             >
-              ユーザー名・パスワード入力からやり直す
+              {t({
+                ja: "ユーザー名・パスワード入力からやり直す",
+                en: "Start over with username and password",
+              })}
             </button>
           </div>
         </form>

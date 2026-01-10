@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { useI18n } from "../lib/i18n";
 
 const DEFAULT_CREATE = {
   name: "",
@@ -9,6 +10,7 @@ const DEFAULT_CREATE = {
 };
 
 export default function SupportPlans() {
+  const { t } = useI18n();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -24,7 +26,7 @@ export default function SupportPlans() {
       const data = await apiFetch("/api/authors/me/support_plans", { auth: true });
       setPlans(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(e.message || "プランの取得に失敗しました");
+      setError(e.message || t({ ja: "プランの取得に失敗しました", en: "Failed to load plans." }));
     } finally {
       setLoading(false);
     }
@@ -38,11 +40,13 @@ export default function SupportPlans() {
     e.preventDefault();
     const amount = Number(createForm.amount_yen);
     if (!Number.isFinite(amount) || amount < 100 || amount > 100000 || amount % 100 !== 0) {
-      setError("月額は100〜100000の100円刻みで入力してください");
+      setError(
+        t({ ja: "月額は100〜100000の100円刻みで入力してください", en: "Monthly amount must be 100–100000 in 100 JPY steps." })
+      );
       return;
     }
     if (!createForm.stripe_price_id.trim()) {
-      setError("stripe_price_id は必須です");
+      setError(t({ ja: "stripe_price_id は必須です", en: "stripe_price_id is required." }));
       return;
     }
     try {
@@ -60,7 +64,7 @@ export default function SupportPlans() {
       setCreateForm(DEFAULT_CREATE);
       await fetchPlans();
     } catch (e) {
-      setError(e.message || "プランの作成に失敗しました");
+      setError(e.message || t({ ja: "プランの作成に失敗しました", en: "Failed to create plan." }));
     } finally {
       setSaving(false);
     }
@@ -84,11 +88,13 @@ export default function SupportPlans() {
     if (!editForm || !editId) return;
     const amount = Number(editForm.amount_yen);
     if (!Number.isFinite(amount) || amount < 100 || amount > 100000 || amount % 100 !== 0) {
-      setError("月額は100〜100000の100円刻みで入力してください");
+      setError(
+        t({ ja: "月額は100〜100000の100円刻みで入力してください", en: "Monthly amount must be 100–100000 in 100 JPY steps." })
+      );
       return;
     }
     if (!editForm.stripe_price_id.trim()) {
-      setError("stripe_price_id は必須です");
+      setError(t({ ja: "stripe_price_id は必須です", en: "stripe_price_id is required." }));
       return;
     }
     try {
@@ -106,7 +112,7 @@ export default function SupportPlans() {
       cancelEdit();
       await fetchPlans();
     } catch (e) {
-      setError(e.message || "プランの更新に失敗しました");
+      setError(e.message || t({ ja: "プランの更新に失敗しました", en: "Failed to update plan." }));
     } finally {
       setSaving(false);
     }
@@ -114,8 +120,8 @@ export default function SupportPlans() {
 
   const handleToggleActive = async (plan, toActive) => {
     const action = toActive ? "activate" : "deactivate";
-    const label = toActive ? "有効化" : "無効化";
-    if (!window.confirm(`${label}しますか？`)) return;
+    const label = toActive ? t({ ja: "有効化", en: "Activate" }) : t({ ja: "無効化", en: "Deactivate" });
+    if (!window.confirm(t({ ja: "{{label}}しますか？", en: "{{label}} this plan?" }, { label }))) return;
     try {
       setSaving(true);
       setError("");
@@ -125,7 +131,7 @@ export default function SupportPlans() {
       });
       await fetchPlans();
     } catch (e) {
-      setError(e.message || `${label}に失敗しました`);
+      setError(e.message || t({ ja: "{{label}}に失敗しました", en: "{{label}} failed." }, { label }));
     } finally {
       setSaving(false);
     }
@@ -134,10 +140,14 @@ export default function SupportPlans() {
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/me/creator">← 作者ダッシュボードへ戻る</Link>
+        <Link to="/me/creator">
+          {t({ ja: "← 作者ダッシュボードへ戻る", en: "← Back to Creator Dashboard" })}
+        </Link>
       </div>
 
-      <h2 style={{ marginBottom: 16 }}>月額支援プラン管理</h2>
+      <h2 style={{ marginBottom: 16 }}>
+        {t({ ja: "月額支援プラン管理", en: "Monthly Support Plans" })}
+      </h2>
 
       <section
         style={{
@@ -148,32 +158,34 @@ export default function SupportPlans() {
           marginBottom: 16,
         }}
       >
-        <h3 style={{ marginTop: 0 }}>新規作成</h3>
+        <h3 style={{ marginTop: 0 }}>{t({ ja: "新規作成", en: "Create new" })}</h3>
         {error && <p style={{ color: "red" }}>{error}</p>}
         <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
-          stripe_price_id は Stripe で作成した Price ID を入力してください。
-          価格を変更する場合は Stripe で新しい Price を作成し、ここで更新します。
+          {t({
+            ja: "stripe_price_id は Stripe で作成した Price ID を入力してください。価格を変更する場合は Stripe で新しい Price を作成し、ここで更新します。",
+            en: "Enter the Price ID created in Stripe. If you change the price, create a new Price in Stripe and update it here.",
+          })}
         </div>
         <div style={{ marginBottom: 10 }}>
           <Link className="btn btn-border" to="/me/support-plans/manual">
-            stripe_price_id マニュアルを見る
+            {t({ ja: "stripe_price_id マニュアルを見る", en: "View stripe_price_id guide" })}
           </Link>
         </div>
         <form onSubmit={handleCreate} style={{ display: "grid", gap: 10 }}>
           <label>
-            プラン名 (任意)
+            {t({ ja: "プラン名 (任意)", en: "Plan name (optional)" })}
             <input
               type="text"
               value={createForm.name}
               onChange={(e) =>
                 setCreateForm((prev) => ({ ...prev, name: e.target.value }))
               }
-              placeholder="月額300"
+              placeholder={t({ ja: "月額300", en: "Monthly 300" })}
               style={{ width: "100%" }}
             />
           </label>
           <label>
-            月額 (円)
+            {t({ ja: "月額 (円)", en: "Monthly (JPY)" })}
             <input
               type="number"
               min={100}
@@ -187,7 +199,7 @@ export default function SupportPlans() {
             />
           </label>
           <label>
-            stripe_price_id (必須)
+            {t({ ja: "stripe_price_id (必須)", en: "stripe_price_id (required)" })}
             <input
               type="text"
               value={createForm.stripe_price_id}
@@ -199,7 +211,7 @@ export default function SupportPlans() {
             />
           </label>
           <button type="submit" className="btn btn-border" disabled={saving}>
-            {saving ? "作成中..." : "作成"}
+            {saving ? t({ ja: "作成中...", en: "Creating..." }) : t({ ja: "作成", en: "Create" })}
           </button>
         </form>
       </section>
@@ -212,28 +224,30 @@ export default function SupportPlans() {
           background: "#fff",
         }}
       >
-        <h3 style={{ marginTop: 0 }}>登録済みプラン</h3>
+        <h3 style={{ marginTop: 0 }}>{t({ ja: "登録済みプラン", en: "Existing plans" })}</h3>
         {loading ? (
-          <p>読み込み中...</p>
+          <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>
         ) : plans.length === 0 ? (
-          <p>プランがありません。</p>
+          <p>{t({ ja: "プランがありません。", en: "No plans yet." })}</p>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                  名前
+                  {t({ ja: "名前", en: "Name" })}
                 </th>
                 <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                  月額
+                  {t({ ja: "月額", en: "Monthly" })}
                 </th>
                 <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                  状態
+                  {t({ ja: "状態", en: "Status" })}
                 </th>
                 <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
                   stripe_price_id
                 </th>
-                <th style={{ borderBottom: "1px solid #eee" }}>操作</th>
+                <th style={{ borderBottom: "1px solid #eee" }}>
+                  {t({ ja: "操作", en: "Actions" })}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -270,11 +284,13 @@ export default function SupportPlans() {
                           }
                         />
                       ) : (
-                        `${plan.amount_yen}円`
+                        t({ ja: "{{amount}}円", en: "¥{{amount}}" }, { amount: plan.amount_yen })
                       )}
                     </td>
                     <td style={{ padding: "8px 4px" }}>
-                      {plan.is_active ? "active" : "inactive"}
+                      {plan.is_active
+                        ? t({ ja: "active", en: "Active" })
+                        : t({ ja: "inactive", en: "Inactive" })}
                     </td>
                     <td style={{ padding: "8px 4px" }}>
                       {isEditing ? (
@@ -301,7 +317,7 @@ export default function SupportPlans() {
                             onClick={handleUpdate}
                             disabled={saving}
                           >
-                            保存
+                            {t({ ja: "保存", en: "Save" })}
                           </button>
                           <button
                             type="button"
@@ -310,7 +326,7 @@ export default function SupportPlans() {
                             disabled={saving}
                             style={{ marginLeft: 6 }}
                           >
-                            取消
+                            {t({ ja: "取消", en: "Cancel" })}
                           </button>
                         </>
                       ) : (
@@ -320,7 +336,7 @@ export default function SupportPlans() {
                             className="btn btn-border"
                             onClick={() => beginEdit(plan)}
                           >
-                            編集
+                            {t({ ja: "編集", en: "Edit" })}
                           </button>
                           {plan.is_active ? (
                             <button
@@ -330,7 +346,7 @@ export default function SupportPlans() {
                               style={{ marginLeft: 6 }}
                               disabled={saving}
                             >
-                              無効化
+                              {t({ ja: "無効化", en: "Deactivate" })}
                             </button>
                           ) : (
                             <button
@@ -340,7 +356,7 @@ export default function SupportPlans() {
                               style={{ marginLeft: 6 }}
                               disabled={saving}
                             >
-                              有効化
+                              {t({ ja: "有効化", en: "Activate" })}
                             </button>
                           )}
                         </>
@@ -353,7 +369,10 @@ export default function SupportPlans() {
           </table>
         )}
         <p style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
-          プラン無効化は新規支援の受付停止です。既存の購読は別途管理してください。
+          {t({
+            ja: "プラン無効化は新規支援の受付停止です。既存の購読は別途管理してください。",
+            en: "Deactivating a plan stops new support. Manage existing subscriptions separately.",
+          })}
         </p>
       </section>
     </div>

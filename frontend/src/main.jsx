@@ -5,6 +5,7 @@ import App from "./App";
 import "./styles.css";
 import AiLogsPage from "./pages/AiLogsPage";
 import { initTheme } from "./theme";
+import { LanguageProvider } from "./lib/i18n";
 
 // すべての <a> と <button> に自動で btn btn-border を付ける
 function applyGlobalButtonClasses() {
@@ -26,8 +27,10 @@ initTheme();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <LanguageProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </LanguageProvider>
   </React.StrictMode>
 );

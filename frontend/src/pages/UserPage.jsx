@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 export default function UserPage() {
   const { username: usernameParam } = useParams();
   const username = useMemo(() => (usernameParam ?? "").trim(), [usernameParam]);
+  const { t } = useI18n();
 
   const [profile, setProfile] = useState(null);
   const [novels, setNovels] = useState([]);
@@ -40,13 +42,19 @@ export default function UserPage() {
         const favoritesData = await resFavorites.json().catch(() => []);
 
         if (!resProfile.ok) {
-          throw new Error(profileData.detail || "ユーザー情報の取得に失敗しました");
+          throw new Error(
+            profileData.detail || t({ ja: "ユーザー情報の取得に失敗しました", en: "Failed to load user info." })
+          );
         }
         if (!resNovels.ok) {
-          throw new Error(novelsData.detail || "小説一覧の取得に失敗しました");
+          throw new Error(
+            novelsData.detail || t({ ja: "小説一覧の取得に失敗しました", en: "Failed to load novels." })
+          );
         }
         if (!resFavorites.ok) {
-          throw new Error(favoritesData.detail || "お気に入りの取得に失敗しました");
+          throw new Error(
+            favoritesData.detail || t({ ja: "お気に入りの取得に失敗しました", en: "Failed to load favorites." })
+          );
         }
 
         setProfile(profileData);
@@ -54,14 +62,14 @@ export default function UserPage() {
         setFavorites(Array.isArray(favoritesData) ? favoritesData : []);
       } catch (e) {
         console.error(e);
-        setError(e.message || "エラーが発生しました");
+        setError(e.message || t({ ja: "エラーが発生しました", en: "An error occurred." }));
       } finally {
         setLoading(false);
       }
     };
 
     if (!username) {
-      setError("ユーザー名が指定されていません");
+      setError(t({ ja: "ユーザー名が指定されていません", en: "No username specified." }));
       setLoading(false);
       return;
     }
@@ -69,13 +77,13 @@ export default function UserPage() {
     fetchAll();
   }, [username]);
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   if (error) {
     return (
       <div style={{ maxWidth: 800, margin: "0 auto" }}>
         <div style={{ marginBottom: 12 }}>
-          <Link to="/">← トップに戻る</Link>
+          <Link to="/">{t({ ja: "← トップに戻る", en: "← Back to Home" })}</Link>
         </div>
         <p style={{ color: "red" }}>{error}</p>
       </div>
@@ -95,11 +103,11 @@ export default function UserPage() {
     const token =
       typeof window !== "undefined" ? localStorage.getItem("token") : null;
     if (!token) {
-      setDmError("ログインが必要です");
+      setDmError(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
     if (!trimmedDisplayName) {
-      setDmError("送信先ユーザーが見つかりません");
+      setDmError(t({ ja: "送信先ユーザーが見つかりません", en: "Recipient user not found." }));
       return;
     }
 
@@ -116,12 +124,12 @@ export default function UserPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "DMの作成に失敗しました");
+        throw new Error(data.detail || t({ ja: "DMの作成に失敗しました", en: "Failed to create DM." }));
       }
       navigate(`/dms/${data.id}`);
     } catch (e) {
       console.error(e);
-      setDmError(e.message || "エラーが発生しました");
+      setDmError(e.message || t({ ja: "エラーが発生しました", en: "An error occurred." }));
     } finally {
       setDmLoading(false);
     }
@@ -130,7 +138,7 @@ export default function UserPage() {
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">← トップに戻る</Link>
+        <Link to="/">{t({ ja: "← トップに戻る", en: "← Back to Home" })}</Link>
       </div>
 
       <h2
@@ -142,7 +150,7 @@ export default function UserPage() {
           flexWrap: "wrap",
         }}
       >
-        {displayName} さんのページ
+        {t({ ja: "{{name}} さんのページ", en: "{{name}}'s page" }, { name: displayName })}
         {isPremium && (
           <span
             style={{
@@ -162,7 +170,7 @@ export default function UserPage() {
             type="button"
             onClick={handleCreateDm}
             disabled={dmLoading}
-            title="DMを送る"
+            title={t({ ja: "DMを送る", en: "Send DM" })}
             className="dm-icon-button"
             style={{
               display: "inline-flex",
@@ -173,7 +181,7 @@ export default function UserPage() {
               borderRadius: 999,
               padding: 0,
             }}
-            aria-label="DMを送る"
+            aria-label={t({ ja: "DMを送る", en: "Send DM" })}
           >
             <svg
               width="16"
@@ -197,17 +205,19 @@ export default function UserPage() {
       {profile?.id && (
         <SupportPanel
           authorUserId={profile.id}
-          authorName={displayName || "作者"}
+          authorName={displayName || t({ ja: "作者", en: "Author" })}
         />
       )}
 
       <section style={{ marginTop: "1.5rem" }}>
         <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
-          公開中の小説
+          {t({ ja: "公開中の小説", en: "Published novels" })}
         </h3>
 
         {novels.length === 0 ? (
-          <p style={{ marginTop: 10 }}>公開中の小説がありません。</p>
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "公開中の小説がありません。", en: "No published novels." })}
+          </p>
         ) : (
           <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
             {novels.map((novel) => (
@@ -236,16 +246,18 @@ export default function UserPage() {
                     marginBottom: 8,
                   }}
                 >
-                  <span>閲覧: {novel.view_count ?? 0}</span>
-                  <span>LIKE: {novel.like_count ?? 0}</span>
-                  <span>お気に入り: {novel.favorite_count ?? 0}</span>
+                  <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                  <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                  <span>{t({ ja: "お気に入り", en: "Favorites" })}: {novel.favorite_count ?? 0}</span>
                   <span className="tag-chip-row">
                     {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
                       novel.tags.map((t) => (
                         <TagChipLink key={t.id ?? t.name} name={t.name} />
                       ))
                     ) : (
-                      <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
+                      <span style={{ color: "var(--muted-text)" }}>
+                        {t({ ja: "タグ: なし", en: "Tags: none" })}
+                      </span>
                     )}
                   </span>
                 </div>
@@ -261,11 +273,13 @@ export default function UserPage() {
 
       <section style={{ marginTop: "3rem" }}>
         <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
-          お気に入り小説
+          {t({ ja: "お気に入り小説", en: "Favorite novels" })}
         </h3>
 
         {favorites.length === 0 ? (
-          <p style={{ marginTop: 10 }}>お気に入りはまだありません。</p>
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "お気に入りはまだありません。", en: "No favorites yet." })}
+          </p>
         ) : (
           <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
             {favorites.map((novel) => (
@@ -294,16 +308,18 @@ export default function UserPage() {
                     marginBottom: 8,
                   }}
                 >
-                  <span>閲覧: {novel.view_count ?? 0}</span>
-                  <span>LIKE: {novel.like_count ?? 0}</span>
-                  <span>お気に入り: {novel.favorite_count ?? 0}</span>
+                  <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                  <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                  <span>{t({ ja: "お気に入り", en: "Favorites" })}: {novel.favorite_count ?? 0}</span>
                   <span className="tag-chip-row">
                     {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
                       novel.tags.map((t) => (
                         <TagChipLink key={t.id ?? t.name} name={t.name} />
                       ))
                     ) : (
-                      <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
+                      <span style={{ color: "var(--muted-text)" }}>
+                        {t({ ja: "タグ: なし", en: "Tags: none" })}
+                      </span>
                     )}
                   </span>
                 </div>

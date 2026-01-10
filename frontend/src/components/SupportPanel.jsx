@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, authTokenExists } from "../lib/api";
+import { useI18n } from "../lib/i18n";
 
 const SUPPORT_PRESETS = [100, 300, 500, 1000];
 const MIN_AMOUNT = 100;
@@ -10,9 +11,10 @@ export default function SupportPanel({
   authorUserId,
   novelId = null,
   episodeId = null,
-  authorName = "作者",
+  authorName = null,
 }) {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [amount, setAmount] = useState(500);
   const [customAmount, setCustomAmount] = useState("");
   const [supportLoading, setSupportLoading] = useState(false);
@@ -27,6 +29,7 @@ export default function SupportPanel({
     const parsed = Number(customAmount);
     return Number.isFinite(parsed) ? parsed : NaN;
   }, [amount, customAmount]);
+  const displayAuthorName = authorName || t({ ja: "作者", en: "Author" });
 
   useEffect(() => {
     if (!authorUserId) return;
@@ -46,7 +49,9 @@ export default function SupportPanel({
       } catch (e) {
         if (!mounted) return;
         setPlans([]);
-        setPlansError(e.message || "月額プランの取得に失敗しました");
+        setPlansError(
+          e.message || t({ ja: "月額プランの取得に失敗しました", en: "Failed to load monthly plans." })
+        );
       }
     };
 
@@ -58,13 +63,22 @@ export default function SupportPanel({
 
   const validateAmount = () => {
     if (!Number.isFinite(effectiveAmount)) {
-      return "金額は数字で入力してください";
+      return t({
+        ja: "金額は数字で入力してください",
+        en: "Please enter a numeric amount.",
+      });
     }
     if (effectiveAmount < MIN_AMOUNT) {
-      return `金額は${MIN_AMOUNT}円以上で入力してください`;
+      return t(
+        { ja: "金額は{{amount}}円以上で入力してください", en: "Please enter at least {{amount}} JPY." },
+        { amount: MIN_AMOUNT }
+      );
     }
     if (effectiveAmount > MAX_AMOUNT) {
-      return `金額は${MAX_AMOUNT}円以下で入力してください`;
+      return t(
+        { ja: "金額は{{amount}}円以下で入力してください", en: "Please enter no more than {{amount}} JPY." },
+        { amount: MAX_AMOUNT }
+      );
     }
     return "";
   };
@@ -96,9 +110,13 @@ export default function SupportPanel({
         window.location.href = data.checkout_url;
         return;
       }
-      throw new Error("決済URLが取得できませんでした");
+      throw new Error(
+        t({ ja: "決済URLが取得できませんでした", en: "Could not get the checkout URL." })
+      );
     } catch (e) {
-      setError(e.message || "支援処理中にエラーが発生しました");
+      setError(
+        e.message || t({ ja: "支援処理中にエラーが発生しました", en: "An error occurred during support." })
+      );
     } finally {
       setSupportLoading(false);
     }
@@ -106,7 +124,7 @@ export default function SupportPanel({
 
   const handleMembership = async () => {
     if (!authorUserId || !selectedPlanId) {
-      setError("月額プランを選択してください");
+      setError(t({ ja: "月額プランを選択してください", en: "Please select a monthly plan." }));
       return;
     }
     if (!authTokenExists()) {
@@ -126,9 +144,13 @@ export default function SupportPanel({
         window.location.href = data.checkout_url;
         return;
       }
-      throw new Error("決済URLが取得できませんでした");
+      throw new Error(
+        t({ ja: "決済URLが取得できませんでした", en: "Could not get the checkout URL." })
+      );
     } catch (e) {
-      setError(e.message || "支援処理中にエラーが発生しました");
+      setError(
+        e.message || t({ ja: "支援処理中にエラーが発生しました", en: "An error occurred during support." })
+      );
     } finally {
       setMembershipLoading(false);
     }
@@ -146,7 +168,7 @@ export default function SupportPanel({
       }}
     >
       <h3 style={{ marginTop: 0, marginBottom: 12 }}>
-        {authorName} さんを支援する
+        {t({ ja: "{{name}} さんを支援する", en: "Support {{name}}" }, { name: displayAuthorName })}
       </h3>
 
       {error && (
@@ -155,25 +177,29 @@ export default function SupportPanel({
 
       <div style={{ display: "grid", gap: 12 }}>
         <div>
-          <div style={{ fontWeight: "bold", marginBottom: 6 }}>投げ銭 (単発)</div>
+          <div style={{ fontWeight: "bold", marginBottom: 6 }}>
+            {t({ ja: "投げ銭 (単発)", en: "Tip (one-time)" })}
+          </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {SUPPORT_PRESETS.map((preset) => (
               <button
                 key={preset}
                 type="button"
                 className="btn btn-border"
-                onClick={() => {
-                  setAmount(preset);
-                  setCustomAmount("");
-                }}
-              >
-                {preset}円
-              </button>
+              onClick={() => {
+                setAmount(preset);
+                setCustomAmount("");
+              }}
+            >
+              {t({ ja: "{{amount}}円", en: "¥{{amount}}" }, { amount: preset })}
+            </button>
             ))}
           </div>
 
           <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-            <label htmlFor="support-amount">任意金額</label>
+            <label htmlFor="support-amount">
+              {t({ ja: "任意金額", en: "Custom amount" })}
+            </label>
             <input
               id="support-amount"
               type="number"
@@ -185,7 +211,7 @@ export default function SupportPanel({
               onChange={(e) => setCustomAmount(e.target.value)}
               style={{ width: 140 }}
             />
-            <span>円</span>
+            <span>{t({ ja: "円", en: "JPY" })}</span>
           </div>
 
           <button
@@ -195,17 +221,21 @@ export default function SupportPanel({
             disabled={supportLoading}
             style={{ marginTop: 8 }}
           >
-            {supportLoading ? "処理中..." : "支援する"}
+            {supportLoading ? t({ ja: "処理中...", en: "Processing..." }) : t({ ja: "支援する", en: "Support" })}
           </button>
         </div>
 
         <div>
-          <div style={{ fontWeight: "bold", marginBottom: 6 }}>月額支援</div>
+          <div style={{ fontWeight: "bold", marginBottom: 6 }}>
+            {t({ ja: "月額支援", en: "Monthly support" })}
+          </div>
           {plansError && (
             <p style={{ color: "red", marginTop: 0, marginBottom: 8 }}>{plansError}</p>
           )}
           {plans.length === 0 ? (
-            <p style={{ marginTop: 0, color: "#666" }}>月額プランがありません。</p>
+            <p style={{ marginTop: 0, color: "#666" }}>
+              {t({ ja: "月額プランがありません。", en: "No monthly plans available." })}
+            </p>
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               {plans.map((plan) => (
@@ -229,7 +259,11 @@ export default function SupportPanel({
                     onChange={() => setSelectedPlanId(plan.id)}
                   />
                   <span>
-                    {plan.name} / {plan.price_yen ?? plan.amount_yen ?? ""}円
+                    {plan.name} /{" "}
+                    {t(
+                      { ja: "{{amount}}円", en: "¥{{amount}}" },
+                      { amount: plan.price_yen ?? plan.amount_yen ?? "" }
+                    )}
                   </span>
                 </label>
               ))}
@@ -243,15 +277,22 @@ export default function SupportPanel({
             disabled={membershipLoading || plans.length === 0}
             style={{ marginTop: 8 }}
           >
-            {membershipLoading ? "処理中..." : "月額で支援"}
+            {membershipLoading
+              ? t({ ja: "処理中...", en: "Processing..." })
+              : t({ ja: "月額で支援", en: "Support monthly" })}
           </button>
         </div>
       </div>
 
       <div style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
-        <p style={{ margin: 0 }}>決済は Stripe に移動します。</p>
         <p style={{ margin: 0 }}>
-          支援の反映は数秒〜数分かかる場合があります (Webhook 反映)。
+          {t({ ja: "決済は Stripe に移動します。", en: "Payment is handled on Stripe." })}
+        </p>
+        <p style={{ margin: 0 }}>
+          {t({
+            ja: "支援の反映は数秒〜数分かかる場合があります (Webhook 反映)。",
+            en: "Support may take a few seconds to a few minutes to reflect (via webhook).",
+          })}
         </p>
       </div>
     </section>

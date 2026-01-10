@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 export default function ResetPassword() {
   const location = useLocation();
+  const { t } = useI18n();
   const [token, setToken] = useState("");
   const [email, setEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -28,7 +30,7 @@ export default function ResetPassword() {
     setInfo("");
 
     if (!email.trim()) {
-      setError("メールアドレスを入力してください。");
+      setError(t({ ja: "メールアドレスを入力してください。", en: "Please enter your email." }));
       return;
     }
 
@@ -41,12 +43,17 @@ export default function ResetPassword() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "送信に失敗しました。");
+        throw new Error(data.detail || t({ ja: "送信に失敗しました。", en: "Failed to send." }));
       }
-      setInfo("再設定用のリンクを送信しました。受信トレイをご確認ください。");
+      setInfo(
+        t({
+          ja: "再設定用のリンクを送信しました。受信トレイをご確認ください。",
+          en: "We sent a reset link. Please check your inbox.",
+        })
+      );
     } catch (err) {
       console.error(err);
-      setError(err.message || "送信中にエラーが発生しました。");
+      setError(err.message || t({ ja: "送信中にエラーが発生しました。", en: "An error occurred while sending." }));
     } finally {
       setLoading(false);
     }
@@ -58,11 +65,11 @@ export default function ResetPassword() {
     setInfo("");
 
     if (!newPassword.trim()) {
-      setError("新しいパスワードを入力してください。");
+      setError(t({ ja: "新しいパスワードを入力してください。", en: "Please enter a new password." }));
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError("パスワードが一致しません。");
+      setError(t({ ja: "パスワードが一致しません。", en: "Passwords do not match." }));
       return;
     }
 
@@ -75,14 +82,16 @@ export default function ResetPassword() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "再設定に失敗しました。");
+        throw new Error(data.detail || t({ ja: "再設定に失敗しました。", en: "Reset failed." }));
       }
-      setInfo("パスワードを更新しました。ログインしてください。");
+      setInfo(
+        t({ ja: "パスワードを更新しました。ログインしてください。", en: "Password updated. Please log in." })
+      );
       setNewPassword("");
       setConfirmPassword("");
     } catch (err) {
       console.error(err);
-      setError(err.message || "再設定中にエラーが発生しました。");
+      setError(err.message || t({ ja: "再設定中にエラーが発生しました。", en: "An error occurred during reset." }));
     } finally {
       setLoading(false);
     }
@@ -93,16 +102,16 @@ export default function ResetPassword() {
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/login">← ログインに戻る</Link>
+        <Link to="/login">{t({ ja: "← ログインに戻る", en: "← Back to login" })}</Link>
       </div>
 
-      <h2>パスワード再設定</h2>
+      <h2>{t({ ja: "パスワード再設定", en: "Reset Password" })}</h2>
 
       {!isResetMode && (
         <form onSubmit={handleRequest}>
           <div style={{ marginBottom: 8 }}>
             <label>
-              登録メールアドレス
+              {t({ ja: "登録メールアドレス", en: "Registered email" })}
               <br />
               <input
                 type="email"
@@ -121,7 +130,7 @@ export default function ResetPassword() {
           )}
 
           <button className="btn btn-border" type="submit" disabled={loading}>
-            {loading ? "送信中..." : "再設定リンクを送信"}
+            {loading ? t({ ja: "送信中...", en: "Sending..." }) : t({ ja: "再設定リンクを送信", en: "Send reset link" })}
           </button>
         </form>
       )}
@@ -130,7 +139,7 @@ export default function ResetPassword() {
         <form onSubmit={handleReset}>
           <div style={{ marginBottom: 8 }}>
             <label>
-              新しいパスワード
+              {t({ ja: "新しいパスワード", en: "New password" })}
               <br />
               <input
                 type={showPassword ? "text" : "password"}
@@ -143,7 +152,7 @@ export default function ResetPassword() {
 
           <div style={{ marginBottom: 8 }}>
             <label>
-              新しいパスワード（確認）
+              {t({ ja: "新しいパスワード（確認）", en: "Confirm new password" })}
               <br />
               <input
                 type={showPassword ? "text" : "password"}
@@ -160,7 +169,7 @@ export default function ResetPassword() {
                   onChange={(e) => setShowPassword(e.target.checked)}
                   style={{ marginRight: 6 }}
                 />
-                パスワードを表示
+                {t({ ja: "パスワードを表示", en: "Show password" })}
               </label>
             </div>
           </div>
@@ -173,7 +182,7 @@ export default function ResetPassword() {
           )}
 
           <button className="btn btn-border" type="submit" disabled={loading}>
-            {loading ? "更新中..." : "パスワードを更新"}
+            {loading ? t({ ja: "更新中...", en: "Updating..." }) : t({ ja: "パスワードを更新", en: "Update password" })}
           </button>
         </form>
       )}

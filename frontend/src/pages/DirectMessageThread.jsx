@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 export default function DirectMessageThread() {
   const { threadId } = useParams();
+  const { t } = useI18n();
   const normalizedThreadId = useMemo(
     () => (threadId ? String(threadId).trim() : ""),
     [threadId]
@@ -23,7 +25,7 @@ export default function DirectMessageThread() {
       const token =
         typeof window !== "undefined" ? localStorage.getItem("token") : null;
       if (!token) {
-        setError("ログインが必要です");
+        setError(t({ ja: "ログインが必要です", en: "Login required." }));
         setLoading(false);
         return;
       }
@@ -38,21 +40,25 @@ export default function DirectMessageThread() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(data.detail || "DMの取得に失敗しました");
+          throw new Error(
+            data.detail || t({ ja: "DMの取得に失敗しました", en: "Failed to load DMs." })
+          );
         }
         setThread(data.thread || null);
         setMessages(Array.isArray(data.messages) ? data.messages : []);
         setCurrentUserId(data.current_user_id ?? null);
       } catch (e) {
         console.error(e);
-        setError(e.message || "エラーが発生しました");
+        setError(
+          e.message || t({ ja: "エラーが発生しました", en: "An error occurred." })
+        );
       } finally {
         setLoading(false);
       }
     };
 
     if (!normalizedThreadId) {
-      setError("DMが指定されていません");
+      setError(t({ ja: "DMが指定されていません", en: "No DM specified." }));
       setLoading(false);
       return;
     }
@@ -65,7 +71,7 @@ export default function DirectMessageThread() {
     const token =
       typeof window !== "undefined" ? localStorage.getItem("token") : null;
     if (!token) {
-      setError("ログインが必要です");
+      setError(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
     const trimmed = body.trim();
@@ -87,24 +93,26 @@ export default function DirectMessageThread() {
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "送信に失敗しました");
+        throw new Error(data.detail || t({ ja: "送信に失敗しました", en: "Failed to send." }));
       }
       setMessages((prev) => [...prev, data]);
       setBody("");
     } catch (e) {
       console.error(e);
-      setError(e.message || "エラーが発生しました");
+      setError(
+        e.message || t({ ja: "エラーが発生しました", en: "An error occurred." })
+      );
     } finally {
       setSending(false);
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">← トップに戻る</Link>
+        <Link to="/">{t({ ja: "← トップに戻る", en: "← Back to Home" })}</Link>
       </div>
 
       {error && (
@@ -113,8 +121,11 @@ export default function DirectMessageThread() {
 
       <h2 style={{ marginBottom: "1rem" }}>
         {thread?.partner_username
-          ? `${thread.partner_username} とのDM`
-          : "DM"}
+          ? t(
+              { ja: "{{name}} とのDM", en: "DM with {{name}}" },
+              { name: thread.partner_username }
+            )
+          : t({ ja: "DM", en: "Direct Messages" })}
       </h2>
 
       <div
@@ -129,7 +140,7 @@ export default function DirectMessageThread() {
       >
         {messages.length === 0 ? (
           <p style={{ color: "var(--muted-text)" }}>
-            まだメッセージがありません。
+            {t({ ja: "まだメッセージがありません。", en: "No messages yet." })}
           </p>
         ) : (
           <div style={{ display: "grid", gap: 10 }}>
@@ -144,13 +155,13 @@ export default function DirectMessageThread() {
                 }}
               >
                 <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
-                  {msg.sender_username || "ユーザー"} /{" "}
+                  {msg.sender_username || t({ ja: "ユーザー", en: "User" })} /{" "}
                   {msg.created_at
                     ? new Date(msg.created_at).toLocaleString()
                     : ""}
                   {currentUserId && msg.sender_id === currentUserId && (
                     <span style={{ marginLeft: 8 }}>
-                      {msg.is_read ? "既読" : "未読"}
+                      {msg.is_read ? t({ ja: "既読", en: "Read" }) : t({ ja: "未読", en: "Unread" })}
                     </span>
                   )}
                 </div>
@@ -168,7 +179,7 @@ export default function DirectMessageThread() {
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={4}
-          placeholder="メッセージを入力"
+          placeholder={t({ ja: "メッセージを入力", en: "Type a message" })}
           style={{
             width: "100%",
             padding: 10,
@@ -178,7 +189,7 @@ export default function DirectMessageThread() {
           }}
         />
         <button type="submit" disabled={sending || !body.trim()}>
-          {sending ? "送信中..." : "送信"}
+          {sending ? t({ ja: "送信中...", en: "Sending..." }) : t({ ja: "送信", en: "Send" })}
         </button>
       </form>
     </div>

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useI18n } from "../lib/i18n";
 
 export default function PayoutProfileForm() {
+  const { t } = useI18n();
   const [form, setForm] = useState({
     bank_name: "",
     bank_branch: "",
@@ -28,9 +30,9 @@ export default function PayoutProfileForm() {
         body: form,
         auth: true,
       });
-      setSuccess("保存しました");
+      setSuccess(t({ ja: "保存しました", en: "Saved." }));
     } catch (e2) {
-      setError(e2.message || "保存に失敗しました");
+      setError(e2.message || t({ ja: "保存に失敗しました", en: "Failed to save." }));
     } finally {
       setSaving(false);
     }
@@ -46,13 +48,15 @@ export default function PayoutProfileForm() {
         background: "#fff",
       }}
     >
-      <h3 style={{ marginTop: 0 }}>精算設定 (銀行口座)</h3>
+      <h3 style={{ marginTop: 0 }}>
+        {t({ ja: "精算設定 (銀行口座)", en: "Payout Settings (Bank Account)" })}
+      </h3>
       {error && <p style={{ color: "red" }}>{error}</p>}
       {success && <p style={{ color: "#0a0" }}>{success}</p>}
 
       <div style={{ display: "grid", gap: 10 }}>
         <label>
-          銀行名
+          {t({ ja: "銀行名", en: "Bank name" })}
           <input
             type="text"
             value={form.bank_name}
@@ -62,7 +66,7 @@ export default function PayoutProfileForm() {
         </label>
 
         <label>
-          支店名
+          {t({ ja: "支店名", en: "Branch name" })}
           <input
             type="text"
             value={form.bank_branch}
@@ -72,19 +76,19 @@ export default function PayoutProfileForm() {
         </label>
 
         <label>
-          口座種別
+          {t({ ja: "口座種別", en: "Account type" })}
           <select
             value={form.bank_account_type}
             onChange={(e) => handleChange("bank_account_type", e.target.value)}
             style={{ width: "100%" }}
           >
-            <option value="ordinary">普通</option>
-            <option value="current">当座</option>
+            <option value="ordinary">{t({ ja: "普通", en: "Savings" })}</option>
+            <option value="current">{t({ ja: "当座", en: "Checking" })}</option>
           </select>
         </label>
 
         <label>
-          口座番号
+          {t({ ja: "口座番号", en: "Account number" })}
           <input
             type="text"
             value={form.bank_account_number}
@@ -94,7 +98,7 @@ export default function PayoutProfileForm() {
         </label>
 
         <label>
-          口座名義 (カナ)
+          {t({ ja: "口座名義 (カナ)", en: "Account holder (Kana)" })}
           <input
             type="text"
             value={form.bank_account_holder}
@@ -110,7 +114,7 @@ export default function PayoutProfileForm() {
         disabled={saving}
         style={{ marginTop: 12 }}
       >
-        {saving ? "保存中..." : "保存"}
+        {saving ? t({ ja: "保存中...", en: "Saving..." }) : t({ ja: "保存", en: "Save" })}
       </button>
     </form>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 const NOVEL_DRAFT_KEY_PREFIX = "draft_edit_novel"; // 作品ごとの編集下書き用プレフィックス
@@ -8,6 +9,7 @@ const NOVEL_DRAFT_KEY_PREFIX = "draft_edit_novel"; // 作品ごとの編集下�
 export default function EditNovel() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -46,7 +48,12 @@ const [loading, setLoading] = useState(true);
           headers: { Authorization: "Bearer " + token },
         });
         if (!res.ok) {
-          throw new Error(`小説情報の取得に失敗しました (${res.status})`);
+          throw new Error(
+            t(
+              { ja: "小説情報の取得に失敗しました ({{status}})", en: "Failed to load novel info ({{status}})" },
+              { status: res.status }
+            )
+          );
         }
 
         const data = await res.json();
@@ -72,7 +79,9 @@ const [loading, setLoading] = useState(true);
         }
       } catch (err) {
         console.error(err);
-        setError(err.message || "小説情報の取得中にエラーが発生しました");
+        setError(
+          err.message || t({ ja: "小説情報の取得中にエラーが発生しました", en: "An error occurred while loading novel info." })
+        );
       } finally {
         setLoading(false);
       }
@@ -132,14 +141,14 @@ if (draft.title) setTitle(draft.title);
     setError("");
 
     if (!title.trim()) {
-      setError("タイトルは必須です。");
+      setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
       return;
     }
 
     setSaving(true);
     try {
       const token = localStorage.getItem("token");
-      if (!token) throw new Error("ログインが必要です。");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
 
       // ★ "A, B" → ["A","B"]
       const tagNames = (tagsInput || "")
@@ -168,7 +177,11 @@ if (draft.title) setTitle(draft.title);
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "小説の更新に失敗しました");
+      if (!res.ok) {
+        throw new Error(
+          data.detail || t({ ja: "小説の更新に失敗しました", en: "Failed to update novel." })
+        );
+      }
 
       // 更新に成功したら、この小説の編集下書きを削除
       try {
@@ -180,26 +193,30 @@ if (draft.title) setTitle(draft.title);
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error(err);
-      setError(err.message || "小説の更新中にエラーが発生しました");
+      setError(
+        err.message || t({ ja: "小説の更新中にエラーが発生しました", en: "An error occurred while updating the novel." })
+      );
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Link to={`/novels/${id}`}>← 小説詳細に戻る</Link>
+        <Link to={`/novels/${id}`}>
+          {t({ ja: "← 小説詳細に戻る", en: "← Back to Novel" })}
+        </Link>
       </div>
 
-      <h2>小説を編集</h2>
+      <h2>{t({ ja: "小説を編集", en: "Edit Novel" })}</h2>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
           <label>
-            タイトル
+            {t({ ja: "タイトル", en: "Title" })}
             <br />
             <input
               type="text"
@@ -212,7 +229,7 @@ if (draft.title) setTitle(draft.title);
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            説明（あらすじ）
+            {t({ ja: "説明（あらすじ）", en: "Description (summary)" })}
             <br />
             <textarea
               value={description}
@@ -226,24 +243,24 @@ if (draft.title) setTitle(draft.title);
         {/* ★ タグ編集 */}
         <div style={{ marginBottom: 8 }}>
           <label>
-            タグ（カンマ区切り）
+            {t({ ja: "タグ（カンマ区切り）", en: "Tags (comma-separated)" })}
             <br />
             <input
               type="text"
               value={tagsInput}
               onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="例: ファンタジー, バトル, 百合"
+              placeholder={t({ ja: "例: ファンタジー, バトル, 百合", en: "e.g., Fantasy, Battle, Yuri" })}
               style={{ width: "100%", padding: 4 }}
             />
           </label>
           <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
-            ※ カンマ区切りで複数指定できます
+            {t({ ja: "※ カンマ区切りで複数指定できます", en: "Tip: separate multiple tags with commas." })}
           </div>
         </div>
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            作品種別
+            {t({ ja: "作品種別", en: "Work type" })}
             <br />
             <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
               <label>
@@ -255,7 +272,7 @@ if (draft.title) setTitle(draft.title);
                   onChange={(e) => setCreativeType(e.target.value)}
                   style={{ marginRight: 4 }}
                 />
-                オリジナル
+                {t({ ja: "オリジナル", en: "Original" })}
               </label>
               <label>
                 <input
@@ -266,7 +283,7 @@ if (draft.title) setTitle(draft.title);
                   onChange={(e) => setCreativeType(e.target.value)}
                   style={{ marginRight: 4 }}
                 />
-                二次創作
+                {t({ ja: "二次創作", en: "Fanfiction" })}
               </label>
             </div>
           </label>
@@ -274,14 +291,14 @@ if (draft.title) setTitle(draft.title);
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            年齢区分
+            {t({ ja: "年齢区分", en: "Age rating" })}
             <br />
             <select
               value={ageLimit}
               onChange={(e) => setAgeLimit(e.target.value)}
               style={{ width: "100%", padding: 4 }}
             >
-              <option value="all">全年齢</option>
+              <option value="all">{t({ ja: "全年齢", en: "All ages" })}</option>
               <option value="r15">R15</option>
               <option value="r18">R18</option>
             </select>
@@ -290,15 +307,15 @@ if (draft.title) setTitle(draft.title);
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            公開ステータス
+            {t({ ja: "公開ステータス", en: "Visibility" })}
             <br />
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               style={{ width: "100%", padding: 4 }}
             >
-              <option value="public">公開</option>
-              <option value="draft">下書き</option>
+              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
+              <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
             </select>
           </label>
         </div>
@@ -311,7 +328,7 @@ if (draft.title) setTitle(draft.title);
               onChange={(e) => setIsAIGenerated(e.target.checked)}
               style={{ marginRight: 4 }}
             />
-            AI創作
+            {t({ ja: "AI創作", en: "AI-generated" })}
           </label>
         </div>
 
@@ -319,14 +336,14 @@ if (draft.title) setTitle(draft.title);
 
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-border" type="submit" disabled={saving}>
-            {saving ? "更新中..." : "更新する"}
+            {saving ? t({ ja: "更新中...", en: "Updating..." }) : t({ ja: "更新する", en: "Update" })}
           </button>
           <button
             className="btn btn-border"
             type="button"
             onClick={() => navigate(`/novels/${id}`)}
           >
-            キャンセル
+            {t({ ja: "キャンセル", en: "Cancel" })}
           </button>
         </div>
       </form>

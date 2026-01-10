@@ -2,12 +2,14 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 export default function Home({ query = "" }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -45,7 +47,11 @@ export default function Home({ query = "" }) {
           url,
           headers ? { headers, cache: "no-store" } : { cache: "no-store" }
         );
-        if (!res.ok) throw new Error("小説一覧の取得に失敗しました");
+        if (!res.ok) {
+          throw new Error(
+            t({ ja: "小説一覧の取得に失敗しました", en: "Failed to load novels." })
+          );
+        }
 
         const data = await res.json();
 
@@ -58,7 +64,7 @@ export default function Home({ query = "" }) {
         setNovels(sorted);
       } catch (err) {
         console.error(err);
-        setError(err.message || "エラーが発生しました");
+        setError(err.message || t({ ja: "エラーが発生しました", en: "An error occurred." }));
       } finally {
         setLoading(false);
       }
@@ -101,12 +107,18 @@ export default function Home({ query = "" }) {
           url,
           headers ? { headers, cache: "no-store" } : { cache: "no-store" }
         );
-        if (!res.ok) throw new Error("ランキングの取得に失敗しました");
+        if (!res.ok) {
+          throw new Error(
+            t({ ja: "ランキングの取得に失敗しました", en: "Failed to load ranking." })
+          );
+        }
         const data = await res.json().catch(() => []);
         setRanking(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error(err);
-        setRankingError(err.message || "ランキングの取得に失敗しました");
+        setRankingError(
+          err.message || t({ ja: "ランキングの取得に失敗しました", en: "Failed to load ranking." })
+        );
       } finally {
         setRankingLoading(false);
       }
@@ -149,7 +161,7 @@ export default function Home({ query = "" }) {
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
-    return new Date(isoString).toLocaleString("ja-JP");
+    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
   };
 
   const shorten = (text, max = 120) => {
@@ -171,7 +183,7 @@ export default function Home({ query = "" }) {
     const token =
       localStorage.getItem("token") || localStorage.getItem("access_token");
     if (!token) {
-      alert("ログインが必要です。");
+      alert(t({ ja: "ログインが必要です。", en: "Login required." }));
       navigate("/login");
       return null;
     }
@@ -192,7 +204,7 @@ export default function Home({ query = "" }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "いいね操作に失敗しました");
+        throw new Error(data.detail || t({ ja: "いいね操作に失敗しました", en: "Failed to like." }));
       }
 
       applyNovelUpdate(novel.id, (item) => {
@@ -208,7 +220,9 @@ export default function Home({ query = "" }) {
       });
     } catch (err) {
       console.error(err);
-      alert(err.message || "いいね操作中にエラーが発生しました");
+      alert(
+        err.message || t({ ja: "いいね操作中にエラーが発生しました", en: "An error occurred while liking." })
+      );
     }
   };
 
@@ -226,7 +240,9 @@ export default function Home({ query = "" }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "ブックマーク操作に失敗しました");
+        throw new Error(
+          data.detail || t({ ja: "ブックマーク操作に失敗しました", en: "Failed to bookmark." })
+        );
       }
 
       applyNovelUpdate(novel.id, (item) => {
@@ -246,11 +262,14 @@ export default function Home({ query = "" }) {
       });
     } catch (err) {
       console.error(err);
-      alert(err.message || "ブックマーク操作中にエラーが発生しました");
+      alert(
+        err.message ||
+          t({ ja: "ブックマーク操作中にエラーが発生しました", en: "An error occurred while bookmarking." })
+      );
     }
   };
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div>
@@ -269,7 +288,7 @@ export default function Home({ query = "" }) {
             flexWrap: "wrap",
           }}
         >
-          ランキング
+          {t({ ja: "ランキング", en: "Ranking" })}
           <span
             style={{
               display: "inline-block",
@@ -299,14 +318,14 @@ export default function Home({ query = "" }) {
               checked={rankingEnabled}
               onChange={(e) => setRankingEnabled(e.target.checked)}
             />
-            ランキング表示
+            {t({ ja: "ランキング表示", en: "Show ranking" })}
           </label>
         </h3>
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
           {[
-            { key: "likes", label: "いいね" },
-            { key: "favorites", label: "ブックマーク" },
-            { key: "views", label: "閲覧" },
+            { key: "likes", label: t({ ja: "いいね", en: "Likes" }) },
+            { key: "favorites", label: t({ ja: "ブックマーク", en: "Bookmarks" }) },
+            { key: "views", label: t({ ja: "閲覧", en: "Views" }) },
           ].map((option) => (
             <button
               key={option.key}
@@ -326,7 +345,9 @@ export default function Home({ query = "" }) {
         </div>
 
         {!premiumChecked ? (
-          <p style={{ marginTop: 10 }}>プレミアム状態を確認中...</p>
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "プレミアム状態を確認中...", en: "Checking premium status..." })}
+          </p>
         ) : !isPremium ? (
           <div
             style={{
@@ -337,7 +358,7 @@ export default function Home({ query = "" }) {
               color: "var(--muted-text)",
             }}
           >
-            ランキングはプレミアム会員限定の機能です。
+            {t({ ja: "ランキングはプレミアム会員限定の機能です。", en: "Ranking is a premium-only feature." })}
           </div>
         ) : !rankingEnabled ? (
           <div
@@ -349,7 +370,7 @@ export default function Home({ query = "" }) {
               color: "var(--muted-text)",
             }}
           >
-            トグルをオンにするとランキングが表示されます。
+            {t({ ja: "トグルをオンにするとランキングが表示されます。", en: "Turn on the toggle to show rankings." })}
           </div>
         ) : (
           <>
@@ -358,9 +379,13 @@ export default function Home({ query = "" }) {
             )}
 
             {rankingLoading ? (
-              <p style={{ marginTop: 10 }}>ランキングを読み込み中...</p>
+              <p style={{ marginTop: 10 }}>
+                {t({ ja: "ランキングを読み込み中...", en: "Loading ranking..." })}
+              </p>
             ) : ranking.length === 0 ? (
-              <p style={{ marginTop: 10 }}>ランキングデータがありません。</p>
+              <p style={{ marginTop: 10 }}>
+                {t({ ja: "ランキングデータがありません。", en: "No ranking data available." })}
+              </p>
             ) : (
               <ol style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
                 {ranking.map((novel) => (
@@ -393,7 +418,7 @@ export default function Home({ query = "" }) {
                       </Link>
                       {novel.author_username && (
                         <span style={{ marginLeft: "auto", fontSize: 12 }}>
-                          作者:{" "}
+                          {t({ ja: "作者", en: "Author" })}:{" "}
                           <Link
                             className="user-link"
                             to={`/users/${encodeURIComponent(novel.author_username)}`}
@@ -413,9 +438,9 @@ export default function Home({ query = "" }) {
                         color: "var(--novel-card-meta)",
                       }}
                     >
-                      <span>閲覧: {novel.view_count ?? 0}</span>
-                      <span>LIKE: {novel.like_count ?? 0}</span>
-                      <span>ブックマーク: {novel.favorite_count ?? 0}</span>
+                      <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                      <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                      <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
                     </div>
 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -424,7 +449,9 @@ export default function Home({ query = "" }) {
                         className="btn btn-border"
                         onClick={() => toggleLike(novel)}
                       >
-                        {novel.is_liked ? "♥ いいね済み" : "♡ いいね"}
+                        {novel.is_liked
+                          ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+                          : t({ ja: "♡ いいね", en: "♡ Like" })}
                       </button>
                       <button
                         type="button"
@@ -432,8 +459,8 @@ export default function Home({ query = "" }) {
                         onClick={() => toggleFavorite(novel)}
                       >
                         {novel.is_favorited
-                          ? "★ ブックマーク済み"
-                          : "☆ ブックマーク"}
+                          ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
+                          : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
                       </button>
                     </div>
                   </li>
@@ -444,7 +471,9 @@ export default function Home({ query = "" }) {
         )}
       </section>
 
-      {novels.length === 0 && <p>小説が見つかりません。</p>}
+      {novels.length === 0 && (
+        <p>{t({ ja: "小説が見つかりません。", en: "No novels found." })}</p>
+      )}
 
       <div
         style={{
@@ -491,7 +520,8 @@ export default function Home({ query = "" }) {
                 minHeight: "3.5em",
               }}
             >
-              {shorten(novel.description, 120) || "説明がありません。"}
+              {shorten(novel.description, 120) ||
+                t({ ja: "説明がありません。", en: "No description." })}
             </p>
 
             <div
@@ -504,14 +534,14 @@ export default function Home({ query = "" }) {
                 marginBottom: 8,
               }}
             >
-              <span>閲覧: {novel.view_count ?? 0}</span>
-              <span>LIKE: {novel.like_count ?? 0}</span>
-              <span>ブックマーク: {novel.favorite_count ?? 0}</span>
+              <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+              <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+              <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
             </div>
 
             <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>
               <div>
-                作者:{" "}
+                {t({ ja: "作者", en: "Author" })}:{" "}
                 {novel.author_username ? (
                   <Link
                     className="user-link"
@@ -521,10 +551,12 @@ export default function Home({ query = "" }) {
                   </Link>
                 )
                   : novel.author_id
-                  ? `ユーザーID: ${novel.author_id}`
-                  : "不明"}
+                  ? t({ ja: "ユーザーID: {{id}}", en: "User ID: {{id}}" }, { id: novel.author_id })
+                  : t({ ja: "不明", en: "Unknown" })}
               </div>
-              <div>作成日時: {formatDateTime(novel.created_at)}</div>
+              <div>
+                {t({ ja: "作成日時", en: "Created" })}: {formatDateTime(novel.created_at)}
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
@@ -533,14 +565,18 @@ export default function Home({ query = "" }) {
                 className="btn btn-border"
                 onClick={() => toggleLike(novel)}
               >
-                {novel.is_liked ? "♥ いいね済み" : "♡ いいね"}
+                {novel.is_liked
+                  ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+                  : t({ ja: "♡ いいね", en: "♡ Like" })}
               </button>
               <button
                 type="button"
                 className="btn btn-border"
                 onClick={() => toggleFavorite(novel)}
               >
-                {novel.is_favorited ? "★ ブックマーク済み" : "☆ ブックマーク"}
+                {novel.is_favorited
+                  ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
+                  : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
               </button>
             </div>
 
@@ -557,7 +593,7 @@ export default function Home({ query = "" }) {
 
             <div style={{ textAlign: "right" }}>
               <Link to={`/novels/${novel.id}`} className="btn btn-border">
-                続きを読む
+                {t({ ja: "続きを読む", en: "Read more" })}
               </Link>
             </div>
           </div>

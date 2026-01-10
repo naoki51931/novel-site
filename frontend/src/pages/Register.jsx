@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 export default function Register() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState(""); // ← 追加
   const [password, setPassword] = useState("");
@@ -27,7 +29,7 @@ export default function Register() {
       });
 
       if (!res.ok) {
-        let msg = "ユーザー登録に失敗しました";
+        let msg = t({ ja: "ユーザー登録に失敗しました", en: "Registration failed." });
         try {
           const data = await res.json();
           if (data?.detail) msg = data.detail;
@@ -44,20 +46,23 @@ export default function Register() {
 
     } catch (e) {
       console.error(e);
-      setError(e.message || "登録処理中にエラーが発生しました");
+      setError(
+        e.message ||
+          t({ ja: "登録処理中にエラーが発生しました", en: "An error occurred during registration." })
+      );
     }
   };
 
   return (
     <div className="register-container">
-      <h2 className="register-title">ユーザー登録</h2>
+      <h2 className="register-title">{t({ ja: "ユーザー登録", en: "Register" })}</h2>
 
       {error && <p className="register-error">{error}</p>}
 
       <form onSubmit={handleSubmit} className="register-form">
 
         <div className="form-group">
-          <label>ユーザー名</label>
+          <label>{t({ ja: "ユーザー名", en: "Username" })}</label>
           <input
             type="text"
             value={username}
@@ -68,7 +73,7 @@ export default function Register() {
         </div>
 
         <div className="form-group">
-          <label>メールアドレス</label>
+          <label>{t({ ja: "メールアドレス", en: "Email" })}</label>
           <input
             type="email"
             value={email}
@@ -79,7 +84,7 @@ export default function Register() {
         </div>
 
         <div className="form-group">
-          <label>パスワード</label>
+          <label>{t({ ja: "パスワード", en: "Password" })}</label>
           <input
             type={showPassword ? "text" : "password"}
             value={password}
@@ -94,18 +99,18 @@ export default function Register() {
               onChange={(e) => setShowPassword(e.target.checked)}
               style={{ marginRight: 6 }}
             />
-            パスワードを表示
+            {t({ ja: "パスワードを表示", en: "Show password" })}
           </label>
         </div>
 
         <button type="submit" className="btn-primary">
-          登録する
+          {t({ ja: "登録する", en: "Register" })}
         </button>
       </form>
 
       <div className="register-footer">
-        すでにアカウントをお持ちですか？{" "}
-        <Link to="/login">ログインはこちら</Link>
+        {t({ ja: "すでにアカウントをお持ちですか？", en: "Already have an account?" })}{" "}
+        <Link to="/login">{t({ ja: "ログインはこちら", en: "Log in here" })}</Link>
       </div>
     </div>
   );

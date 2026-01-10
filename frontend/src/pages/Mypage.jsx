@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
+import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
@@ -8,7 +9,7 @@ async function startStripeCheckout() {
   try {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("ログインが必要です。");
+      alert(translate({ ja: "ログインが必要です。", en: "Login required." }, getStoredLanguage()));
       return;
     }
 
@@ -25,30 +26,40 @@ async function startStripeCheckout() {
     if (!res.ok) {
       throw new Error(
         data.detail ||
-          `決済セッションの作成に失敗しました (${res.status})`
+          translate(
+            { ja: "決済セッションの作成に失敗しました ({{status}})", en: "Failed to create checkout session ({{status}})" },
+            getStoredLanguage(),
+            { status: res.status }
+          )
       );
     }
 
     if (data.url) {
       window.location.href = data.url;
     } else {
-      throw new Error("決済URLが取得できませんでした。");
+      throw new Error(
+        translate({ ja: "決済URLが取得できませんでした。", en: "Could not get checkout URL." }, getStoredLanguage())
+      );
     }
   } catch (err) {
     console.error(err);
-    alert(err.message || "決済の開始に失敗しました。");
+    alert(
+      err.message ||
+        translate({ ja: "決済の開始に失敗しました。", en: "Failed to start payment." }, getStoredLanguage())
+    );
   }
 }
 
 export default function Mypage() {
+  const { t } = useI18n();
   const [novels, setNovels] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [username, setUsername] = useState(() => {
-    if (typeof window === "undefined") return "ユーザー";
-    return localStorage.getItem("username") || "ユーザー";
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("username") || "";
   });
   const navigate = useNavigate();
 
@@ -74,7 +85,9 @@ export default function Mypage() {
         const data = await res.json().catch(() => []);
 
         if (!res.ok) {
-          throw new Error(data.detail || "マイページの取得に失敗しました");
+          throw new Error(
+            data.detail || t({ ja: "マイページの取得に失敗しました", en: "Failed to load My Page." })
+          );
         }
 
         const sorted = (data || []).slice().sort((a, b) => {
@@ -85,7 +98,9 @@ export default function Mypage() {
         setNovels(sorted);
       } catch (err) {
         console.error(err);
-        setError(err.message || "マイページの取得中にエラーが発生しました");
+        setError(
+          err.message || t({ ja: "マイページの取得中にエラーが発生しました", en: "An error occurred while loading My Page." })
+        );
       } finally {
         setLoading(false);
       }
@@ -141,12 +156,12 @@ export default function Mypage() {
     fetchFavoritesAndProfile();
   }, [token]);
 
-  if (loading) return <p>読み込み中...</p>;
+  if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">← トップに戻る</Link>
+        <Link to="/">{t({ ja: "← トップに戻る", en: "← Back to Home" })}</Link>
       </div>
 
       <h2
@@ -158,9 +173,9 @@ export default function Mypage() {
         }}
       >
         <Link className="user-link" to={`/users/${encodeURIComponent(username)}`}>
-          {username}
+          {username || t({ ja: "ユーザー", en: "User" })}
         </Link>{" "}
-        さんのマイページ
+        {t({ ja: "さんのマイページ", en: "'s My Page" })}
         {isPremium && (
           <span
             style={{
@@ -180,10 +195,13 @@ export default function Mypage() {
       {/* プレミアム会員セクション */}
       <section style={{ marginBottom: 24 }}>
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
-          プレミアム会員
+          {t({ ja: "プレミアム会員", en: "Premium" })}
         </h3>
         <p style={{ marginBottom: 8, lineHeight: 1.6 }}>
-          長文の全文表示などの追加機能を利用するには、プレミアム登録が必要です。
+          {t({
+            ja: "長文の全文表示などの追加機能を利用するには、プレミアム登録が必要です。",
+            en: "Premium is required for extra features like full text display.",
+          })}
         </p>
 
         {!isPremium && (
@@ -192,13 +210,13 @@ export default function Mypage() {
             className="btn btn-border"
             onClick={startStripeCheckout}
           >
-            プレミアム会員になる（決済ページへ）
+            {t({ ja: "プレミアム会員になる（決済ページへ）", en: "Become Premium (go to payment)" })}
           </button>
         )}
 
         {isPremium && (
           <p style={{ marginTop: 8, color: "#0a0", fontWeight: "bold" }}>
-            現在プレミアム会員中です。
+            {t({ ja: "現在プレミアム会員中です。", en: "You are currently Premium." })}
           </p>
         )}
       </section>
@@ -206,17 +224,17 @@ export default function Mypage() {
       {/* マイページ設定 */}
       <section style={{ marginTop: "2.5rem" }}>
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
-          マイページ設定
+          {t({ ja: "マイページ設定", en: "My Page settings" })}
         </h3>
 
         <div style={{ marginTop: 12 }}>
           <Link className="btn btn-border" to="/mypage/settings">
-            設定を開く
+            {t({ ja: "設定を開く", en: "Open settings" })}
           </Link>
         </div>
         <div style={{ marginTop: 8 }}>
           <Link className="btn btn-border" to="/notifications">
-            通知センター
+            {t({ ja: "通知センター", en: "Notifications" })}
           </Link>
         </div>
       </section>
@@ -224,19 +242,22 @@ export default function Mypage() {
       {/* 作者ダッシュボード */}
       <section style={{ marginTop: "2.5rem" }}>
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
-          作者ダッシュボード
+          {t({ ja: "作者ダッシュボード", en: "Creator Dashboard" })}
         </h3>
         <p style={{ marginTop: 8, lineHeight: 1.6 }}>
-          支援の売上残高や精算設定を確認できます。
+          {t({
+            ja: "支援の売上残高や精算設定を確認できます。",
+            en: "Check support revenue balances and payout settings.",
+          })}
         </p>
         <div style={{ marginTop: 12 }}>
           <Link className="btn btn-border" to="/me/creator">
-            作者ダッシュボードを開く
+            {t({ ja: "作者ダッシュボードを開く", en: "Open creator dashboard" })}
           </Link>
         </div>
         <div style={{ marginTop: 8 }}>
           <Link className="btn btn-border" to="/me/support-plans">
-            月額支援プラン管理
+            {t({ ja: "月額支援プラン管理", en: "Manage monthly plans" })}
           </Link>
         </div>
       </section>
@@ -244,14 +265,14 @@ export default function Mypage() {
       {/* 公開ページ */}
       <section style={{ marginTop: "2.5rem" }}>
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
-          公開ページ
+          {t({ ja: "公開ページ", en: "Public page" })}
         </h3>
         <p style={{ marginTop: 8, lineHeight: 1.6 }}>
-          他のユーザーから閲覧できるあなたのページです。
+          {t({ ja: "他のユーザーから閲覧できるあなたのページです。", en: "Your page visible to other users." })}
         </p>
         <div style={{ marginTop: 12 }}>
           <Link className="btn btn-border" to={`/users/${encodeURIComponent(username)}`}>
-            公開ページを見る
+            {t({ ja: "公開ページを見る", en: "View public page" })}
           </Link>
         </div>
       </section>
@@ -259,11 +280,13 @@ export default function Mypage() {
       {/* お気に入り小説 */}
       <section style={{ marginTop: "2.5rem" }}>
         <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
-          お気に入り小説
+          {t({ ja: "お気に入り小説", en: "Favorite novels" })}
         </h3>
 
         {favorites.length === 0 ? (
-          <p style={{ marginTop: 10 }}>お気に入りはまだありません。</p>
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "お気に入りはまだありません。", en: "No favorites yet." })}
+          </p>
         ) : (
           <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
             {favorites.map((novel) => (
@@ -292,16 +315,18 @@ export default function Mypage() {
                     marginBottom: 8,
                   }}
                 >
-                  <span>閲覧: {novel.view_count ?? 0}</span>
-                  <span>LIKE: {novel.like_count ?? 0}</span>
-                  <span>お気に入り: {novel.favorite_count ?? 0}</span>
+                  <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                  <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                  <span>{t({ ja: "お気に入り", en: "Favorites" })}: {novel.favorite_count ?? 0}</span>
                   <span className="tag-chip-row">
                     {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
                       novel.tags.map((t) => (
                         <TagChipLink key={t.id ?? t.name} name={t.name} />
                       ))
                     ) : (
-                      <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
+                      <span style={{ color: "var(--muted-text)" }}>
+                        {t({ ja: "タグ: なし", en: "Tags: none" })}
+                      </span>
                     )}
                   </span>
                 </div>
@@ -318,13 +343,15 @@ export default function Mypage() {
       {/* 作成した小説 */}
       <section style={{ marginTop: "3rem" }}>
         <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
-          作成した小説
+          {t({ ja: "作成した小説", en: "Your novels" })}
         </h3>
 
         {error && <p style={{ color: "red" }}>{error}</p>}
 
         {novels.length === 0 && (
-          <p style={{ marginTop: 10 }}>まだ作成した小説がありません。</p>
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "まだ作成した小説がありません。", en: "You haven't created any novels yet." })}
+          </p>
         )}
 
         <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
@@ -353,17 +380,19 @@ export default function Mypage() {
                   color: "var(--novel-card-meta)",
                   marginBottom: 8,
                 }}
-              >
-                <span>閲覧: {novel.view_count ?? 0}</span>
-                <span>LIKE: {novel.like_count ?? 0}</span>
-                <span>お気に入り: {novel.favorite_count ?? 0}</span>
+                >
+                <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                <span>{t({ ja: "お気に入り", en: "Favorites" })}: {novel.favorite_count ?? 0}</span>
                 <span className="tag-chip-row">
                   {Array.isArray(novel.tags) && novel.tags.length > 0 ? (
                     novel.tags.map((t) => (
                       <TagChipLink key={t.id ?? t.name} name={t.name} />
                     ))
                   ) : (
-                    <span style={{ color: "var(--muted-text)" }}>タグ: なし</span>
+                    <span style={{ color: "var(--muted-text)" }}>
+                      {t({ ja: "タグ: なし", en: "Tags: none" })}
+                    </span>
                   )}
                 </span>
               </div>
@@ -381,13 +410,13 @@ export default function Mypage() {
 
               <div style={{ display: "flex", gap: 10 }}>
                 <Link className="btn btn-border" to={`/novels/${novel.id}`}>
-                  詳細を見る
+                  {t({ ja: "詳細を見る", en: "View details" })}
                 </Link>
                 <Link
                   className="btn btn-border"
                   to={`/novels/${novel.id}/edit`}
                 >
-                  編集する
+                  {t({ ja: "編集する", en: "Edit" })}
                 </Link>
               </div>
             </div>

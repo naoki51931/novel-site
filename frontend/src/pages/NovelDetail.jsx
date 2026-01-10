@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = "";
 
 export default function NovelDetail() {
   const { id } = useParams(); // novel_id
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
 
   const [novel, setNovel] = useState(null);
   const [comments, setComments] = useState([]);
@@ -26,7 +28,7 @@ export default function NovelDetail() {
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
-    return new Date(isoString).toLocaleString("ja-JP");
+    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
   };
 
   const titleStartsWithEpisodePrefix = (title) => {
@@ -38,27 +40,30 @@ export default function NovelDetail() {
     const cleanTitle = typeof title === "string" ? title.trim() : "";
     if (cleanTitle && titleStartsWithEpisodePrefix(cleanTitle)) return cleanTitle;
     if (episodeNumber == null || episodeNumber === "") return cleanTitle;
+    if (lang === "en") {
+      return cleanTitle ? `Episode ${episodeNumber}: ${cleanTitle}` : `Episode ${episodeNumber}`;
+    }
     return cleanTitle ? `第${episodeNumber}話 ${cleanTitle}` : `第${episodeNumber}話`;
   };
 
   const AGE_LABELS = {
-    all: "全年齢",
+    all: t({ ja: "全年齢", en: "All ages" }),
     r15: "R15",
     r18: "R18",
   };
 
   const getAgeLabel = (ageLimit) => {
-    if (!ageLimit) return "全年齢";
+    if (!ageLimit) return t({ ja: "全年齢", en: "All ages" });
     return AGE_LABELS[ageLimit] ?? ageLimit;
   };
 
   const CREATIVE_TYPE_LABELS = {
-    original: "オリジナル",
-    fanfic: "二次創作",
+    original: t({ ja: "オリジナル", en: "Original" }),
+    fanfic: t({ ja: "二次創作", en: "Fanfiction" }),
   };
 
   const getCreativeTypeLabel = (creativeType) => {
-    if (!creativeType) return "オリジナル";
+    if (!creativeType) return t({ ja: "オリジナル", en: "Original" });
     return CREATIVE_TYPE_LABELS[creativeType] ?? creativeType;
   };
 
@@ -66,7 +71,7 @@ export default function NovelDetail() {
   const toggleFavorite = async () => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("お気に入りにするにはログインが必要です。");
+      alert(t({ ja: "お気に入りにするにはログインが必要です。", en: "Login required to favorite." }));
       navigate("/login");
       return;
     }
@@ -85,7 +90,9 @@ export default function NovelDetail() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "お気に入りの操作に失敗しました");
+        throw new Error(
+          data.detail || t({ ja: "お気に入りの操作に失敗しました", en: "Failed to update favorite." })
+        );
       }
 
       if (typeof data.favorited === "boolean") {
@@ -95,7 +102,9 @@ export default function NovelDetail() {
       }
     } catch (e) {
       console.error(e);
-      alert(e.message || "お気に入り操作中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "お気に入り操作中にエラーが発生しました", en: "An error occurred while updating favorite." })
+      );
     }
   };
 
@@ -108,7 +117,7 @@ export default function NovelDetail() {
         const token = localStorage.getItem("token");
   const toggleFavorite = async () => {
     if (!token) {
-      alert("ログインが必要です");
+      alert(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
     if (!novel) return;
@@ -136,7 +145,12 @@ export default function NovelDetail() {
         });
 
         if (!res.ok) {
-          throw new Error(`小説の取得に失敗しました (${res.status})`);
+          throw new Error(
+            t(
+              { ja: "小説の取得に失敗しました ({{status}})", en: "Failed to load novel ({{status}})" },
+              { status: res.status }
+            )
+          );
         }
 
         const data = await res.json();
@@ -153,7 +167,9 @@ export default function NovelDetail() {
         }
       } catch (e) {
         console.error(e);
-        setError(e.message || "小説の取得中にエラーが発生しました");
+        setError(
+          e.message || t({ ja: "小説の取得中にエラーが発生しました", en: "An error occurred while loading the novel." })
+        );
       } finally {
         setLoading(false);
       }
@@ -170,12 +186,12 @@ export default function NovelDetail() {
   const handlePostComment = async () => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("コメントするにはログインが必要です。");
+      alert(t({ ja: "コメントするにはログインが必要です。", en: "Login required to comment." }));
       return;
     }
     const body = (commentBody || "").trim();
     if (!body) {
-      alert("コメントを入力してください。");
+      alert(t({ ja: "コメントを入力してください。", en: "Please enter a comment." }));
       return;
     }
     try {
@@ -189,7 +205,7 @@ export default function NovelDetail() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "コメント投稿に失敗しました");
+        throw new Error(data.detail || t({ ja: "コメント投稿に失敗しました", en: "Failed to post comment." }));
       }
       setCommentBody("");
       const listRes = await fetch(`${API_BASE}/api/novels/${id}/comments`);
@@ -197,7 +213,9 @@ export default function NovelDetail() {
       setComments(Array.isArray(listData) ? listData : []);
     } catch (e) {
       console.error(e);
-      alert(e.message || "コメント投稿中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "コメント投稿中にエラーが発生しました", en: "An error occurred while posting comment." })
+      );
     }
   };
 
@@ -206,7 +224,7 @@ export default function NovelDetail() {
     const token = localStorage.getItem("token");
   const toggleFavorite = async () => {
     if (!token) {
-      alert("ログインが必要です");
+      alert(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
     if (!novel) return;
@@ -230,7 +248,7 @@ export default function NovelDetail() {
     }
   };
     if (!token) {
-      alert("いいねするにはログインが必要です。");
+      alert(t({ ja: "いいねするにはログインが必要です。", en: "Login required to like." }));
       navigate("/login");
       return;
     }
@@ -249,7 +267,7 @@ export default function NovelDetail() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "いいね操作に失敗しました");
+        throw new Error(data.detail || t({ ja: "いいね操作に失敗しました", en: "Failed to like." }));
       }
 
       if (typeof data.like_count === "number") {
@@ -260,7 +278,9 @@ export default function NovelDetail() {
       setIsLiked((prev) => !prev);
     } catch (e) {
       console.error(e);
-      alert(e.message || "いいね操作中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "いいね操作中にエラーが発生しました", en: "An error occurred while liking." })
+      );
     }
   };
 
@@ -271,13 +291,13 @@ export default function NovelDetail() {
 
   // ★ 小説削除ボタン
   const handleDeleteNovel = async () => {
-    if (!window.confirm("この小説と全エピソードを削除します。よろしいですか？")) {
+    if (!window.confirm(t({ ja: "この小説と全エピソードを削除します。よろしいですか？", en: "Delete this novel and all episodes?" }))) {
       return;
     }
     const token = localStorage.getItem("token");
   const toggleFavorite = async () => {
     if (!token) {
-      alert("ログインが必要です");
+      alert(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
     if (!novel) return;
@@ -301,7 +321,7 @@ export default function NovelDetail() {
     }
   };
     if (!token) {
-      alert("削除するにはログインが必要です。");
+      alert(t({ ja: "削除するにはログインが必要です。", en: "Login required to delete." }));
       navigate("/login");
       return;
     }
@@ -317,25 +337,25 @@ export default function NovelDetail() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "小説の削除に失敗しました");
+        throw new Error(data.detail || t({ ja: "小説の削除に失敗しました", en: "Failed to delete novel." }));
       }
 
-      alert("小説を削除しました。");
+      alert(t({ ja: "小説を削除しました。", en: "Novel deleted." }));
       navigate("/");
     } catch (e) {
       console.error(e);
-      alert(e.message || "削除中にエラーが発生しました");
+      alert(e.message || t({ ja: "削除中にエラーが発生しました", en: "An error occurred while deleting." }));
     }
   };
 
     const handleDeleteComment = async (commentId) => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("コメントを削除するにはログインが必要です。");
+      alert(t({ ja: "コメントを削除するにはログインが必要です。", en: "Login required to delete comments." }));
       navigate("/login");
       return;
     }
-    if (!window.confirm("このコメントを削除します。よろしいですか？")) {
+    if (!window.confirm(t({ ja: "このコメントを削除します。よろしいですか？", en: "Delete this comment?" }))) {
       return;
     }
 
@@ -352,14 +372,16 @@ export default function NovelDetail() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || "コメントの削除に失敗しました");
+        throw new Error(data.detail || t({ ja: "コメントの削除に失敗しました", en: "Failed to delete comment." }));
       }
 
       // ローカル状態からも削除
       setComments((prev) => prev.filter((c) => c.id !== commentId));
     } catch (e) {
       console.error(e);
-      alert(e.message || "コメント削除中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "コメント削除中にエラーが発生しました", en: "An error occurred while deleting comment." })
+      );
     }
   };
 
@@ -376,14 +398,14 @@ export default function NovelDetail() {
   };
 
   const handleDeleteEpisode = async (episodeId) => {
-    if (!window.confirm("このエピソードを削除します。よろしいですか？")) {
+    if (!window.confirm(t({ ja: "このエピソードを削除します。よろしいですか？", en: "Delete this episode?" }))) {
       return;
     }
 
     const token = localStorage.getItem("token");
   const toggleFavorite = async () => {
     if (!token) {
-      alert("ログインが必要です");
+      alert(t({ ja: "ログインが必要です", en: "Login required." }));
       return;
     }
     if (!novel) return;
@@ -407,7 +429,7 @@ export default function NovelDetail() {
     }
   };
     if (!token) {
-      alert("削除するにはログインが必要です。");
+      alert(t({ ja: "削除するにはログインが必要です。", en: "Login required to delete." }));
       navigate("/login");
       return;
     }
@@ -423,7 +445,7 @@ export default function NovelDetail() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.detail || "エピソードの削除に失敗しました");
+        throw new Error(data.detail || t({ ja: "エピソードの削除に失敗しました", en: "Failed to delete episode." }));
       }
 
       // ローカル状態からも削除
@@ -436,10 +458,12 @@ export default function NovelDetail() {
         };
       });
 
-      alert("エピソードを削除しました。");
+      alert(t({ ja: "エピソードを削除しました。", en: "Episode deleted." }));
     } catch (e) {
       console.error(e);
-      alert(e.message || "削除中にエラーが発生しました");
+      alert(
+        e.message || t({ ja: "削除中にエラーが発生しました", en: "An error occurred while deleting." })
+      );
     }
   };
 
@@ -461,7 +485,7 @@ export default function NovelDetail() {
   }, []);
 
   if (loading) {
-    return <div>読み込み中...</div>;
+    return <div>{t({ ja: "読み込み中...", en: "Loading..." })}</div>;
   }
 
   if (error) {
@@ -469,7 +493,7 @@ export default function NovelDetail() {
       <div>
         <p style={{ color: "red" }}>{error}</p>
         <button className="btn btn-border" onClick={() => navigate("/")}>
-          戻る
+          {t({ ja: "戻る", en: "Back" })}
         </button>
       </div>
     );
@@ -478,9 +502,9 @@ export default function NovelDetail() {
   if (!novel) {
     return (
       <div>
-        <p>小説が見つかりませんでした。</p>
+        <p>{t({ ja: "小説が見つかりませんでした。", en: "Novel not found." })}</p>
         <button className="btn btn-border" onClick={() => navigate("/")}>
-          戻る
+          {t({ ja: "戻る", en: "Back" })}
         </button>
       </div>
     );
@@ -492,7 +516,7 @@ export default function NovelDetail() {
   return (
     <div>
       <button className="btn btn-border" onClick={() => navigate("/")}>
-        ← 一覧に戻る
+        {t({ ja: "← 一覧に戻る", en: "← Back to list" })}
       </button>
 
       <div
@@ -513,7 +537,7 @@ export default function NovelDetail() {
             className="btn btn-border"
             onClick={handleEditNovel}
           >
-            小説を編集
+            {t({ ja: "小説を編集", en: "Edit novel" })}
           </button>
           <button
             type="button"
@@ -521,7 +545,7 @@ export default function NovelDetail() {
             style={{ borderColor: "#c00", color: "#c00" }}
             onClick={handleDeleteNovel}
           >
-            小説を削除
+            {t({ ja: "小説を削除", en: "Delete novel" })}
           </button>
         </div>
       </div>
@@ -568,7 +592,7 @@ export default function NovelDetail() {
               border: "1px solid #888",
             }}
           >
-            AI創作
+            {t({ ja: "AI創作", en: "AI-generated" })}
           </span>
         )}
       </div>
@@ -588,7 +612,7 @@ export default function NovelDetail() {
       >
           {authorName && (
             <span>
-              作者:{" "}
+              {t({ ja: "作者", en: "Author" })}:{" "}
               <Link
                 className="user-link"
                 to={`/users/${encodeURIComponent(authorName)}`}
@@ -598,10 +622,10 @@ export default function NovelDetail() {
             </span>
           )}
 	{novel.created_at && (
-          <span>作成日時: {formatDateTime(novel.created_at)}</span>
+          <span>{t({ ja: "作成日時", en: "Created" })}: {formatDateTime(novel.created_at)}</span>
         )}
         {typeof novel.view_count === "number" && (
-          <span>閲覧数: {novel.view_count}</span>
+          <span>{t({ ja: "閲覧数", en: "Views" })}: {novel.view_count}</span>
         )}
         {/* お気に入りボタン */}
         <button
@@ -609,7 +633,9 @@ export default function NovelDetail() {
           className="btn btn-border"
           onClick={toggleFavorite}
         >
-          {isFavorited ? "★ お気に入り済み" : "☆ お気に入りに追加"}
+          {isFavorited
+            ? t({ ja: "★ お気に入り済み", en: "★ Favorited" })
+            : t({ ja: "☆ お気に入りに追加", en: "☆ Add to favorites" })}
         </button>
 
         <button
@@ -618,7 +644,9 @@ export default function NovelDetail() {
           onClick={handleToggleLike}
           style={{ marginLeft: "auto" }}
         >
-          {isLiked ? "♥ いいね済み" : "♡ いいね"} ({likeCount})
+          {isLiked
+            ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+            : t({ ja: "♡ いいね", en: "♡ Like" })} ({likeCount})
         </button>
       </div>
 
@@ -626,7 +654,7 @@ export default function NovelDetail() {
         <SupportPanel
           authorUserId={novel.author_id}
           novelId={novel.id}
-          authorName={authorName || "作者"}
+          authorName={authorName || t({ ja: "作者", en: "Author" })}
         />
       )}
 
@@ -657,7 +685,7 @@ export default function NovelDetail() {
       
 
       {/* エピソード一覧 */}
-      <h3 style={{ marginTop: 16 }}>エピソード一覧</h3>
+      <h3 style={{ marginTop: 16 }}>{t({ ja: "エピソード一覧", en: "Episodes" })}</h3>
 
       {/* エピソード追加ボタン */}
       <div style={{ marginTop: 8, marginBottom: 8 }}>
@@ -666,12 +694,12 @@ export default function NovelDetail() {
           className="btn btn-border"
           onClick={handleCreateEpisode}
         >
-          ＋ エピソードを追加
+          {t({ ja: "＋ エピソードを追加", en: "+ Add episode" })}
         </button>
       </div>
 
       {episodes.length === 0 ? (
-        <p>まだエピソードがありません。</p>
+        <p>{t({ ja: "まだエピソードがありません。", en: "No episodes yet." })}</p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
           {episodes.map((ep) => (
@@ -709,7 +737,7 @@ export default function NovelDetail() {
                   className="btn btn-border"
                   onClick={() => handleEditEpisode(ep.id)}
                 >
-                  編集
+                  {t({ ja: "編集", en: "Edit" })}
                 </button>
                 <button
                   type="button"
@@ -717,7 +745,7 @@ export default function NovelDetail() {
                   style={{ borderColor: "#c00", color: "#c00" }}
                   onClick={() => handleDeleteEpisode(ep.id)}
                 >
-                  削除
+                  {t({ ja: "削除", en: "Delete" })}
                 </button>
               </div>
 
@@ -731,10 +759,10 @@ export default function NovelDetail() {
                 }}
               >
                 {ep.created_at && (
-                  <span>作成日時: {formatDateTime(ep.created_at)}</span>
+                  <span>{t({ ja: "作成日時", en: "Created" })}: {formatDateTime(ep.created_at)}</span>
                 )}
                 {typeof ep.view_count === "number" && (
-                  <span>閲覧数: {ep.view_count}</span>
+                  <span>{t({ ja: "閲覧数", en: "Views" })}: {ep.view_count}</span>
                 )}
               </div>
             </li>
@@ -744,11 +772,14 @@ export default function NovelDetail() {
 
       {/* ---- コメント欄 ---- */}
       <div style={{ marginTop: "2rem" }}>
-        <h3>コメント</h3>
+        <h3>{t({ ja: "コメント", en: "Comments" })}</h3>
 
         {comments.length === 0 ? (
           <p style={{ fontSize: "0.9rem", color: "#666" }}>
-            まだコメントはありません。最初の感想を書いてみましょう。
+            {t({
+              ja: "まだコメントはありません。最初の感想を書いてみましょう。",
+              en: "No comments yet. Share the first impression.",
+            })}
           </p>
         ) : (
           <div>
@@ -771,8 +802,8 @@ export default function NovelDetail() {
                   }}
                 >
                   <strong>
-                    {c.username || "匿名"}
-                    {myUserId && c.user_id === myUserId ? "（あなた）" : ""}
+                    {c.username || t({ ja: "匿名", en: "Anonymous" })}
+                    {myUserId && c.user_id === myUserId ? t({ ja: "（あなた）", en: " (you)" }) : ""}
                   </strong>
 
                   {myUserId && c.user_id === myUserId && (
@@ -786,7 +817,7 @@ export default function NovelDetail() {
                       }}
                       onClick={() => handleDeleteComment(c.id)}
                     >
-                      削除
+                      {t({ ja: "削除", en: "Delete" })}
                     </button>
                   )}
                 </div>
@@ -802,7 +833,7 @@ export default function NovelDetail() {
           <textarea
             value={commentBody}
             onChange={(e) => setCommentBody(e.target.value)}
-            placeholder="感想や一言コメントを書いてください"
+            placeholder={t({ ja: "感想や一言コメントを書いてください", en: "Write your thoughts or a short comment" })}
             style={{
               width: "100%",
               height: "70px",
@@ -816,7 +847,7 @@ export default function NovelDetail() {
             style={{ marginTop: 8 }}
             onClick={handlePostComment}
           >
-            コメント投稿
+            {t({ ja: "コメント投稿", en: "Post comment" })}
           </button>
         </div>
       </div>
