@@ -128,11 +128,16 @@ export default function AINovelPage() {
   const [continueEpisodeNumber, setContinueEpisodeNumber] = useState(null);
   const [canPostToContinueNovel, setCanPostToContinueNovel] = useState(null); // null=判定中, true/false
   const [continueInfoError, setContinueInfoError] = useState("");
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editSourceBody, setEditSourceBody] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [polishing, setPolishing] = useState(false);
+  const [polishIntensity, setPolishIntensity] = useState(50);
+  const [lastPolishBaseBody, setLastPolishBaseBody] = useState("");
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
@@ -375,6 +380,56 @@ export default function AINovelPage() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("episode_id")) return;
+    const editEid = params.get("edit_episode_id");
+    if (!editEid) return;
+
+    setIsEditMode(true);
+    setError("");
+
+    (async () => {
+      try {
+        const token = getAuthToken();
+        if (!token) {
+          setError(
+            t({
+              ja: "ログインが必要です。ログイン後にもう一度お試しください。",
+              en: "Login required. Please sign in and try again.",
+            })
+          );
+          return;
+        }
+        const res = await fetch(`/api/episodes/${editEid}/edit`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          throw new Error(
+            t(
+              {
+                ja: "編集対象のエピソードを取得できませんでした (status={{status}})",
+                en: "Failed to load the episode for editing (status={{status}})",
+              },
+              { status: res.status }
+            )
+          );
+        }
+        const data = await res.json().catch(() => ({}));
+        const title = data?.title || t({ ja: "タイトル未設定", en: "Untitled" });
+        const body = data?.body || "";
+        setEditSourceBody(body);
+        setResult({ generated_title: title, body });
+      } catch (e) {
+        console.error(e);
+        setError(
+          e.message ||
+            t({ ja: "編集用エピソードの読み込み中にエラーが発生しました。", en: "Failed to load episode for edit." })
+        );
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     if (!result) return;
     if (isContinueMode) {
       setPostEpisodeTitle(result.generated_title || t({ ja: "続き", en: "Continuation" }));
@@ -423,6 +478,82 @@ export default function AINovelPage() {
     ].join("\n");
   };
 
+  const buildEditPrompt = (baseBody, params) => {
+    const lengthMap = {
+      short: "800〜1200文字程度",
+      medium: "2000〜3000文字程度",
+      long: "4000〜6000文字程度",
+    };
+    const lengthText = lengthMap[params.length || "medium"] || lengthMap.medium;
+    const r18Note = params.isR18
+      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
+      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
+    const titleHintText = params.titleHint || "指定なし";
+    const genreText = params.genre || "指定なし";
+    const toneText = params.tone || "指定なし";
+    const charactersText = params.characters || "指定なし";
+
+    return [
+      "あなたは日本語の小説編集者です。",
+      "以下の本文を、内容の整合性を保ちながら読みやすく整えてください。",
+      "語尾の揺れや冗長な表現を適宜調整し、自然な文体にしてください。",
+      r18Note,
+      "",
+      "【本文】",
+      baseBody,
+      "",
+      "【参考情報】",
+      `- 編集方針・指示: ${titleHintText}`,
+      `- ジャンル: ${genreText}`,
+      `- 雰囲気: ${toneText}`,
+      `- 登場人物・設定: ${charactersText}`,
+      `- 文字数の目安: ${lengthText}`,
+      "",
+      "出力は JSON の body に修正文のみを書いてください（タイトルは変更しない）。",
+    ].join("\n");
+  };
+
+  const buildPolishPrompt = (baseBody, params, intensity) => {
+    const r18Note = params.isR18
+      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
+      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
+    const toneText = params.tone || "指定なし";
+    const genreText = params.genre || "指定なし";
+    const charactersText = params.characters || "指定なし";
+    const level = Math.min(100, Math.max(0, Number(intensity) || 0));
+    const strengthText =
+      level <= 20
+        ? "極めて軽い添削（誤字・表記ゆれ中心）"
+        : level <= 40
+        ? "軽めの添削（重複や違和感を軽く調整）"
+        : level <= 60
+        ? "標準の添削（読みやすさを中心に整える）"
+        : level <= 80
+        ? "強めのリライト（文の組み替えや表現の刷新も可）"
+        : "非常に強いリライト（構成の再整理まで許可）";
+
+    return [
+      "あなたは日本語の小説編集者です。",
+      "以下の本文について、重複表現や不自然な箇所を修正し、読みやすく整えてください。",
+      "意味やストーリーは保ちつつ、文章の流れを滑らかにします。",
+      `添削の強さ: ${strengthText}`,
+      level >= 70
+        ? "必要なら文の並び替えや言い回しの大きな変更も行ってください。"
+        : "大幅な改変や新規の内容追加は避けてください。",
+      r18Note,
+      "",
+      "【本文】",
+      baseBody,
+      "",
+      "【参考情報】",
+      `- ジャンル: ${genreText}`,
+      `- 雰囲気: ${toneText}`,
+      `- 登場人物・設定: ${charactersText}`,
+      "",
+      "出力は JSON の body に修正文のみを書いてください（タイトルは変更しない）。",
+    ].join("\n");
+  };
+
   const handleGenerate = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -430,6 +561,9 @@ export default function AINovelPage() {
     setQuotaError("");
     setPremiumError("");
     setAutoFillError("");
+    const baseBodyForEdit = isEditMode
+      ? (result?.body || editSourceBody || "").trim()
+      : "";
     setResult(null);
     setContinuationBody("");
 
@@ -444,6 +578,16 @@ export default function AINovelPage() {
       setTimeout(() => {
         navigate("/login"); // 既存のログインパスに合わせて変更
       }, 800);
+      setLoading(false);
+      return;
+    }
+    if (isEditMode && !baseBodyForEdit) {
+      setError(
+        t({
+          ja: "編集対象の本文が空です。エピソード本文を確認してください。",
+          en: "The source body is empty. Please check the episode text.",
+        })
+      );
       setLoading(false);
       return;
     }
@@ -462,6 +606,10 @@ export default function AINovelPage() {
       const endpoint = episodeId
         ? `/api/ai/episodes/${episodeId}/continue`
         : "/api/ai/novels/generate";
+      const prompt =
+        isEditMode && baseBodyForEdit
+          ? buildEditPrompt(baseBodyForEdit, params)
+          : null;
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -479,6 +627,7 @@ export default function AINovelPage() {
           length: length || "medium",
           model: model || "gpt-4.1-mini",
           r18: isR18,
+          prompt,
         }),
       });
 
@@ -670,6 +819,123 @@ export default function AINovelPage() {
     if (!result?.body) return;
     setContinuationBody("");
     await handleGenerateContinuation(result.body);
+  };
+
+  const handlePolishText = async (overrideBaseBody = null) => {
+    const baseBody = typeof overrideBaseBody === "string" ? overrideBaseBody : getCombinedBody();
+    if (!baseBody) return;
+    setPolishing(true);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+    setAutoFillError("");
+
+    const token = getAuthToken();
+    const params = lastGenerateParams || {
+      titleHint,
+      genre,
+      characters,
+      tone,
+      length,
+      model,
+      isR18,
+    };
+
+    try {
+      setLastPolishBaseBody(baseBody);
+      const prompt = buildPolishPrompt(baseBody, params, polishIntensity);
+      const res = await fetch("/api/ai/novels/generate", {
+        method: "POST",
+        headers: token
+          ? {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            }
+          : { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title_hint: params.titleHint || null,
+          genre: params.genre || null,
+          characters: params.characters || null,
+          tone: params.tone || null,
+          length: params.length || "medium",
+          model: params.model || "gpt-4.1-mini",
+          r18: params.isR18,
+          prompt,
+        }),
+      });
+
+      if (res.status === 401 && token) {
+        setError(
+          t({
+            ja: "ログインの有効期限が切れています。再ログインしてください。",
+            en: "Your session has expired. Please log in again.",
+          })
+        );
+        setTimeout(() => navigate("/login"), 800);
+        setPolishing(false);
+        return;
+      }
+
+      if (res.status === 402) {
+        setPremiumError(
+          t({
+            ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
+            en: "This feature is for paid plans only. Check your plan on My Page.",
+          })
+        );
+        setPolishing(false);
+        return;
+      }
+
+      if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        setQuotaError(
+          data.detail ||
+            t({
+              ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
+              en: "You've reached today's AI generation limit. Please try again tomorrow.",
+            })
+        );
+        setPolishing(false);
+        return;
+      }
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          data.detail ||
+            t(
+              { ja: "生成に失敗しました (status={{status}})", en: "Generation failed (status={{status}})" },
+              { status: res.status }
+            )
+        );
+      }
+
+      const data = normalizeAINovelResponse(await res.json());
+      if (typeof data?.guest_remaining === "number") {
+        setGuestRemaining(data.guest_remaining);
+      } else {
+        setGuestRemaining(null);
+      }
+      if (typeof data?.user_remaining === "number") {
+        setUserRemaining(data.user_remaining);
+      } else {
+        setUserRemaining(null);
+      }
+      const nextBody = (data?.body || "").trim();
+      setResult((prev) => ({
+        ...(prev || {}),
+        body: nextBody || (prev?.body || ""),
+      }));
+      setContinuationBody("");
+    } catch (err) {
+      console.error(err);
+      setError(
+        err.message || t({ ja: "添削中にエラーが発生しました。", en: "An error occurred during polishing." })
+      );
+    } finally {
+      setPolishing(false);
+    }
   };
 
   const handlePostAsNewNovel = async () => {
@@ -1036,12 +1302,21 @@ export default function AINovelPage() {
   return (
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "1.5rem" }}>
       <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>
-        {isContinueMode
+        {isEditMode
+          ? t({ ja: "AI小説：エピソード編集", en: "AI Novel: Edit an Episode" })
+          : isContinueMode
           ? t({ ja: "AI小説：エピソードの続き生成", en: "AI Novel: Continue an Episode" })
           : t({ ja: "AI小説生成（未ログインは10回まで）", en: "AI Novel Generation (up to 10 for guests)" })}
       </h1>
 
-      {isContinueMode ? (
+      {isEditMode ? (
+        <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
+          {t({
+            ja: "選択したエピソードの本文を、AIが読みやすく整えます。",
+            en: "AI will polish the selected episode text for readability.",
+          })}
+        </p>
+      ) : isContinueMode ? (
         <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
           {lang === "ja" ? (
             <>
@@ -1120,14 +1395,21 @@ export default function AINovelPage() {
       >
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
-            {t({ ja: "タイトルのイメージ（任意）", en: "Title idea (optional)" })}
+            {isEditMode
+              ? t({ ja: "編集方針・指示（任意）", en: "Edit direction (optional)" })
+              : t({ ja: "タイトルのイメージ（任意）", en: "Title idea (optional)" })}
           </label>
           <input
             type="text"
             value={titleHint}
             onChange={(e) => setTitleHint(e.target.value)}
             placeholder={
-              isContinueMode
+              isEditMode
+                ? t({
+                    ja: "例: テンポを良くして、語尾の重複を減らす など",
+                    en: "e.g., Improve pacing and reduce repetitive endings",
+                  })
+                : isContinueMode
                 ? t({
                     ja: "例: 前話の雰囲気を引き継ぎつつ、二人の関係をもう一歩進めてほしい など",
                     en: "e.g., Keep the previous episode's mood and advance their relationship one step",
@@ -1368,6 +1650,8 @@ export default function AINovelPage() {
         >
           {loading
             ? t({ ja: "生成中...", en: "Generating..." })
+            : isEditMode
+            ? t({ ja: "AIで編集する", en: "Edit with AI" })
             : isContinueMode
             ? t({ ja: "このエピソードの続きを生成する", en: "Generate continuation for this episode" })
             : t({ ja: "AI小説を生成する", en: "Generate AI novel" })}
@@ -1443,6 +1727,40 @@ export default function AINovelPage() {
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <button
                 type="button"
+                onClick={handlePolishText}
+                disabled={polishing || loading || continuing}
+                style={{
+                  height: "2.2rem",
+                  alignSelf: "center",
+                  padding: "0.3rem 0.8rem",
+                  borderRadius: "4px",
+                  border: "1px solid var(--border)",
+                  cursor: polishing ? "default" : "pointer",
+                  opacity: polishing ? 0.7 : 1,
+                }}
+              >
+                {polishing
+                  ? t({ ja: "AI添削中...", en: "Polishing..." })
+                  : t({ ja: "AI添削", en: "Polish with AI" })}
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePolishText(lastPolishBaseBody)}
+                disabled={polishing || loading || continuing || !lastPolishBaseBody}
+                style={{
+                  height: "2.2rem",
+                  alignSelf: "center",
+                  padding: "0.3rem 0.8rem",
+                  borderRadius: "4px",
+                  border: "1px solid var(--border)",
+                  cursor: polishing ? "default" : "pointer",
+                  opacity: polishing ? 0.7 : 1,
+                }}
+              >
+                {t({ ja: "添削し直す", en: "Redo polish" })}
+              </button>
+              <button
+                type="button"
                 onClick={handleFixJsonOutput}
                 style={{
                   height: "2.2rem",
@@ -1498,7 +1816,31 @@ export default function AINovelPage() {
           </pre>
 
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
-            {!isContinueMode && (
+            <div
+              style={{
+                padding: "0.75rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                backgroundColor: "var(--ai-result-surface)",
+              }}
+            >
+              <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                {t({ ja: "AI添削の強さ", en: "Polish intensity" })}
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={polishIntensity}
+                onChange={(e) => setPolishIntensity(Number(e.target.value))}
+                style={{ width: "100%" }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "var(--muted-text)" }}>
+                <span>{t({ ja: "軽め", en: "Light" })}</span>
+                <span>{t({ ja: "強め", en: "Heavy" })}</span>
+              </div>
+            </div>
+            {!isEditMode && (
               <div
                 style={{
                   padding: "0.75rem",

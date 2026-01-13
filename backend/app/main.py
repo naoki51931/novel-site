@@ -5275,6 +5275,57 @@ def update_episode(
     db.refresh(ep)
     return ep
 
+@app.delete("/api/episodes/{episode_id}")
+def delete_episode(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+
+    ep = (
+        db.query(models.Episode)
+        .options(selectinload(models.Episode.illusts))
+        .get(episode_id)
+    )
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+
+    novel = db.query(models.Novel).get(ep.novel_id)
+    if not novel or novel.author_id != user.id:
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "削除権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
+        raise HTTPException(403, "削除権限がありません")
+
+    file_paths: list[str] = []
+    if ep.cover_image_url:
+        file_paths.append(ep.cover_image_url)
+    for ill in ep.illusts:
+        if ill.image_url:
+            file_paths.append(ill.image_url)
+
+    db.delete(ep)
+    db.commit()
+
+    for url in file_paths:
+        rel_path = (url or "").lstrip("/")
+        if not rel_path:
+            continue
+        file_path = os.path.join("/app", rel_path)
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            print("delete episode file error:", repr(e))
+
+    return {"ok": True, "message": "エピソードを削除しました"}
+
 
 
 # =========================================

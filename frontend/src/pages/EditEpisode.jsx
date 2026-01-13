@@ -495,6 +495,14 @@ export default function EditEpisode() {
       </div>
 
       <h2>{t({ ja: "エピソードを編集", en: "Edit Episode" })}</h2>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+        <Link to={`/ai-novel?edit_episode_id=${id}`} className="btn btn-border">
+          {t({ ja: "AI編集", en: "Edit with AI" })}
+        </Link>
+        <Link to={`/ai-novel?episode_id=${id}`} className="btn btn-border">
+          {t({ ja: "AIで続きを生成", en: "Generate continuation with AI" })}
+        </Link>
+      </div>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 8 }}>
