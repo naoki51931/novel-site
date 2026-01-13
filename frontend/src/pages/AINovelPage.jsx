@@ -1,5 +1,5 @@
 // frontend/src/pages/AINovelPage.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
 
@@ -137,7 +137,8 @@ export default function AINovelPage() {
   const [posting, setPosting] = useState(false);
   const [polishing, setPolishing] = useState(false);
   const [polishIntensity, setPolishIntensity] = useState(50);
-  const [lastPolishBaseBody, setLastPolishBaseBody] = useState("");
+  const [lastPolishContext, setLastPolishContext] = useState(null);
+  const [hasActiveSelection, setHasActiveSelection] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
@@ -151,6 +152,7 @@ export default function AINovelPage() {
   const [lastGenerateParams, setLastGenerateParams] = useState(null);
 
   const navigate = useNavigate();
+  const resultBodyRef = useRef(null);
 
   useEffect(() => {
     const fetchRemaining = async () => {
@@ -177,6 +179,30 @@ export default function AINovelPage() {
     };
 
     fetchRemaining();
+  }, []);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection ? window.getSelection() : null;
+      if (!selection || selection.rangeCount === 0) {
+        setHasActiveSelection(false);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      if (range.collapsed) {
+        setHasActiveSelection(false);
+        return;
+      }
+      const pre = resultBodyRef.current;
+      if (!pre || !pre.contains(range.commonAncestorContainer)) {
+        setHasActiveSelection(false);
+        return;
+      }
+      setHasActiveSelection(Boolean(range.toString()));
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
 
   useEffect(() => {
@@ -442,6 +468,27 @@ export default function AINovelPage() {
     if (!result?.body) return "";
     if (!continuationBody) return result.body;
     return `${result.body}\n\n${continuationBody}`;
+  };
+
+  const getSelectionContext = () => {
+    const selection = window.getSelection ? window.getSelection() : null;
+    if (!selection || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) return null;
+    const pre = resultBodyRef.current;
+    if (!pre || !pre.contains(range.commonAncestorContainer)) return null;
+
+    const fullText = getCombinedBody();
+    if (!fullText) return null;
+    const beforeRange = document.createRange();
+    beforeRange.selectNodeContents(pre);
+    beforeRange.setEnd(range.startContainer, range.startOffset);
+    const start = beforeRange.toString().length;
+    const selectedText = range.toString();
+    const end = start + selectedText.length;
+    if (!selectedText) return null;
+
+    return { fullText, start, end, selectedText };
   };
 
   const buildContinuationPrompt = (baseBody, params) => {
@@ -822,8 +869,17 @@ export default function AINovelPage() {
     await handleGenerateContinuation(result.body);
   };
 
-  const handlePolishText = async (overrideBaseBody = null) => {
-    const baseBody = typeof overrideBaseBody === "string" ? overrideBaseBody : getCombinedBody();
+  const handlePolishText = async (overrideContext = null) => {
+    const selectionContext = overrideContext || getSelectionContext();
+    const combinedBody = getCombinedBody();
+    if (!combinedBody) return;
+    const context = selectionContext || {
+      fullText: combinedBody,
+      start: 0,
+      end: combinedBody.length,
+      selectedText: combinedBody,
+    };
+    const baseBody = context.selectedText;
     if (!baseBody) return;
     setPolishing(true);
     setError("");
@@ -843,7 +899,7 @@ export default function AINovelPage() {
     };
 
     try {
-      setLastPolishBaseBody(baseBody);
+      setLastPolishContext(context);
       const prompt = buildPolishPrompt(baseBody, params, polishIntensity);
       const res = await fetch("/api/ai/novels/generate", {
         method: "POST",
@@ -924,9 +980,13 @@ export default function AINovelPage() {
         setUserRemaining(null);
       }
       const nextBody = (data?.body || "").trim();
+      const updatedFullText =
+        context.fullText.slice(0, context.start) +
+        (nextBody || context.selectedText) +
+        context.fullText.slice(context.end);
       setResult((prev) => ({
         ...(prev || {}),
-        body: nextBody || (prev?.body || ""),
+        body: updatedFullText,
       }));
       setContinuationBody("");
     } catch (err) {
@@ -1725,7 +1785,29 @@ export default function AINovelPage() {
             <h2 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>
               {result.generated_title || t({ ja: "生成された小説", en: "Generated Novel" })}
             </h2>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ minWidth: "180px" }}>
+                <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginBottom: "0.2rem" }}>
+                  {t({ ja: "AI添削の強さ", en: "Polish intensity" })}
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={polishIntensity}
+                  onChange={(e) => setPolishIntensity(Number(e.target.value))}
+                  style={{ width: "180px" }}
+                />
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--muted-text)" }}>
+                  <span>{t({ ja: "軽め", en: "Light" })}</span>
+                  <span>{t({ ja: "強め", en: "Heavy" })}</span>
+                </div>
+              </div>
+              {hasActiveSelection && (
+                <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
+                  {t({ ja: "選択部分を添削します", en: "Polishing selection only" })}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={handlePolishText}
@@ -1746,8 +1828,8 @@ export default function AINovelPage() {
               </button>
               <button
                 type="button"
-                onClick={() => handlePolishText(lastPolishBaseBody)}
-                disabled={polishing || loading || continuing || !lastPolishBaseBody}
+                onClick={() => handlePolishText(lastPolishContext)}
+                disabled={polishing || loading || continuing || !lastPolishContext}
                 style={{
                   height: "2.2rem",
                   alignSelf: "center",
@@ -1799,6 +1881,8 @@ export default function AINovelPage() {
           </div>
 
           <pre
+            ref={resultBodyRef}
+            className="ai-result-body"
             style={{
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -1817,30 +1901,6 @@ export default function AINovelPage() {
           </pre>
 
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
-            <div
-              style={{
-                padding: "0.75rem",
-                borderRadius: "6px",
-                border: "1px solid var(--border)",
-                backgroundColor: "var(--ai-result-surface)",
-              }}
-            >
-              <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
-                {t({ ja: "AI添削の強さ", en: "Polish intensity" })}
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={polishIntensity}
-                onChange={(e) => setPolishIntensity(Number(e.target.value))}
-                style={{ width: "100%" }}
-              />
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "var(--muted-text)" }}>
-                <span>{t({ ja: "軽め", en: "Light" })}</span>
-                <span>{t({ ja: "強め", en: "Heavy" })}</span>
-              </div>
-            </div>
             {!isEditMode && (
               <div
                 style={{

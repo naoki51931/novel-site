@@ -95,6 +95,11 @@ a {
 button.btn.btn-border { background: var(--surface); border: 2px solid var(--border-strong); color: var(--text); }
 button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
 
+.ai-result-body::selection {
+  background-color: #c7a7ff;
+  color: #000000;
+}
+
 
 /* ============================
    共通ボタンスタイル
