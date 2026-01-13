@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
+import { applyPolishReplacement, buildPolishPrompt } from "../lib/aiPolish.mjs";
 
 /**
  * 既存プロジェクトで JWT をどこに保存しているかに合わせてここを調整する
@@ -139,6 +140,7 @@ export default function AINovelPage() {
   const [polishIntensity, setPolishIntensity] = useState(50);
   const [lastPolishContext, setLastPolishContext] = useState(null);
   const [hasActiveSelection, setHasActiveSelection] = useState(false);
+  const [polishPreview, setPolishPreview] = useState(null);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
@@ -153,6 +155,8 @@ export default function AINovelPage() {
 
   const navigate = useNavigate();
   const resultBodyRef = useRef(null);
+  const combinedBodyRef = useRef("");
+  const lastSelectionContextRef = useRef(null);
 
   useEffect(() => {
     const fetchRemaining = async () => {
@@ -198,7 +202,12 @@ export default function AINovelPage() {
         setHasActiveSelection(false);
         return;
       }
-      setHasActiveSelection(Boolean(range.toString()));
+      const context = getSelectionContext(selection);
+      const hasSelection = Boolean(context && context.selectedText);
+      setHasActiveSelection(hasSelection);
+      if (hasSelection) {
+        lastSelectionContextRef.current = context;
+      }
     };
 
     document.addEventListener("selectionchange", handleSelectionChange);
@@ -470,15 +479,19 @@ export default function AINovelPage() {
     return `${result.body}\n\n${continuationBody}`;
   };
 
-  const getSelectionContext = () => {
-    const selection = window.getSelection ? window.getSelection() : null;
+  useEffect(() => {
+    combinedBodyRef.current = getCombinedBody();
+  }, [result, continuationBody]);
+
+  const getSelectionContext = (selectionOverride = null) => {
+    const selection = selectionOverride || (window.getSelection ? window.getSelection() : null);
     if (!selection || selection.rangeCount === 0) return null;
     const range = selection.getRangeAt(0);
     if (range.collapsed) return null;
     const pre = resultBodyRef.current;
     if (!pre || !pre.contains(range.commonAncestorContainer)) return null;
 
-    const fullText = getCombinedBody();
+    const fullText = combinedBodyRef.current || "";
     if (!fullText) return null;
     const beforeRange = document.createRange();
     beforeRange.selectNodeContents(pre);
@@ -555,48 +568,6 @@ export default function AINovelPage() {
       `- 雰囲気: ${toneText}`,
       `- 登場人物・設定: ${charactersText}`,
       `- 文字数の目安: ${lengthText}`,
-      "",
-      "出力は JSON の body に修正文のみを書いてください（タイトルは変更しない）。",
-    ].join("\n");
-  };
-
-  const buildPolishPrompt = (baseBody, params, intensity) => {
-    const r18Note = params.isR18
-      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
-      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
-    const toneText = params.tone || "指定なし";
-    const genreText = params.genre || "指定なし";
-    const charactersText = params.characters || "指定なし";
-    const level = Math.min(100, Math.max(0, Number(intensity) || 0));
-    const strengthText =
-      level <= 20
-        ? "極めて軽い添削（誤字・表記ゆれ中心）"
-        : level <= 40
-        ? "軽めの添削（重複や違和感を軽く調整）"
-        : level <= 60
-        ? "標準の添削（読みやすさを中心に整える）"
-        : level <= 80
-        ? "強めのリライト（文の組み替えや表現の刷新も可）"
-        : "非常に強いリライト（構成の再整理まで許可）";
-
-    return [
-      "あなたは日本語の小説編集者です。",
-      "以下の本文について、重複表現や不自然な箇所を修正し、読みやすく整えてください。",
-      "意味やストーリーは保ちつつ、文章の流れを滑らかにします。",
-      "文字数の指定は無視してください。",
-      `添削の強さ: ${strengthText}`,
-      level >= 70
-        ? "必要なら文の並び替えや言い回しの大きな変更も行ってください。"
-        : "大幅な改変や新規の内容追加は避けてください。",
-      r18Note,
-      "",
-      "【本文】",
-      baseBody,
-      "",
-      "【参考情報】",
-      `- ジャンル: ${genreText}`,
-      `- 雰囲気: ${toneText}`,
-      `- 登場人物・設定: ${charactersText}`,
       "",
       "出力は JSON の body に修正文のみを書いてください（タイトルは変更しない）。",
     ].join("\n");
@@ -870,9 +841,19 @@ export default function AINovelPage() {
   };
 
   const handlePolishText = async (overrideContext = null) => {
-    const selectionContext = overrideContext || getSelectionContext();
-    const combinedBody = getCombinedBody();
+    const selectionContext =
+      overrideContext || lastSelectionContextRef.current || getSelectionContext();
+    const combinedBody = combinedBodyRef.current || getCombinedBody();
     if (!combinedBody) return;
+    if (!selectionContext && !result?.body) {
+      setError(
+        t({
+          ja: "本文が取得できませんでした。先にAI生成を行ってください。",
+          en: "No text available. Generate content before polishing.",
+        })
+      );
+      return;
+    }
     const context = selectionContext || {
       fullText: combinedBody,
       start: 0,
@@ -886,6 +867,7 @@ export default function AINovelPage() {
     setQuotaError("");
     setPremiumError("");
     setAutoFillError("");
+    setPolishPreview(null);
 
     const token = getAuthToken();
     const params = lastGenerateParams || {
@@ -900,7 +882,14 @@ export default function AINovelPage() {
 
     try {
       setLastPolishContext(context);
-      const prompt = buildPolishPrompt(baseBody, params, polishIntensity);
+      const prompt = buildPolishPrompt({
+        baseBody,
+        tone: params.tone,
+        genre: params.genre,
+        characters: params.characters,
+        isR18: params.isR18,
+        intensity: polishIntensity,
+      });
       const res = await fetch("/api/ai/novels/generate", {
         method: "POST",
         headers: token
@@ -914,12 +903,34 @@ export default function AINovelPage() {
           genre: params.genre || null,
           characters: params.characters || null,
           tone: params.tone || null,
-          length: params.length || "medium",
+          length: null,
           model: params.model || "gpt-4.1-mini",
           r18: params.isR18,
           prompt,
         }),
       });
+
+      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 400) {
+          throw new Error(
+            data.detail ||
+              t({ ja: "リクエストが不正です。入力内容を確認してください。", en: "Invalid request." })
+          );
+        }
+        if (res.status === 403) {
+          throw new Error(
+            data.detail ||
+              t({ ja: "権限がありません。ログイン状態を確認してください。", en: "Forbidden." })
+          );
+        }
+        if (res.status === 500) {
+          throw new Error(
+            data.detail ||
+              t({ ja: "サーバー内部エラーが発生しました。", en: "Server error." })
+          );
+        }
+      }
 
       if (res.status === 401 && token) {
         setError(
@@ -980,15 +991,10 @@ export default function AINovelPage() {
         setUserRemaining(null);
       }
       const nextBody = (data?.body || "").trim();
-      const updatedFullText =
-        context.fullText.slice(0, context.start) +
-        (nextBody || context.selectedText) +
-        context.fullText.slice(context.end);
-      setResult((prev) => ({
-        ...(prev || {}),
-        body: updatedFullText,
-      }));
-      setContinuationBody("");
+      setPolishPreview({
+        context,
+        proposedText: nextBody || context.selectedText,
+      });
     } catch (err) {
       console.error(err);
       setError(
@@ -997,6 +1003,27 @@ export default function AINovelPage() {
     } finally {
       setPolishing(false);
     }
+  };
+
+  const handleApplyPolishPreview = () => {
+    if (!polishPreview || !polishPreview.context) return;
+    const { context, proposedText } = polishPreview;
+    const updatedFullText = applyPolishReplacement(
+      context.fullText,
+      context.start,
+      context.end,
+      proposedText
+    );
+    setResult((prev) => ({
+      ...(prev || {}),
+      body: updatedFullText,
+    }));
+    setContinuationBody("");
+    setPolishPreview(null);
+  };
+
+  const handleCancelPolishPreview = () => {
+    setPolishPreview(null);
   };
 
   const handlePostAsNewNovel = async () => {
@@ -1901,6 +1928,79 @@ export default function AINovelPage() {
           </pre>
 
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
+            {polishPreview && (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border)",
+                  backgroundColor: "var(--ai-result-surface)",
+                }}
+              >
+                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                  {t({ ja: "AI添削の比較", en: "Polish comparison" })}
+                </div>
+                <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                  {t({ ja: "選択部分の変更内容を確認してください。", en: "Review the changes for the selected text." })}
+                </div>
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  <div>
+                    <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginBottom: "0.25rem" }}>
+                      {t({ ja: "元の文章", en: "Original" })}
+                    </div>
+                    <pre
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        backgroundColor: "var(--ai-result-bg)",
+                        padding: "0.5rem",
+                        borderRadius: "6px",
+                        border: "1px solid var(--border)",
+                        maxHeight: "200px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {polishPreview.context?.selectedText || ""}
+                    </pre>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginBottom: "0.25rem" }}>
+                      {t({ ja: "AI添削後", en: "Polished" })}
+                    </div>
+                    <pre
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        backgroundColor: "var(--ai-result-bg)",
+                        padding: "0.5rem",
+                        borderRadius: "6px",
+                        border: "1px solid var(--border)",
+                        maxHeight: "200px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {polishPreview.proposedText || ""}
+                    </pre>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={handleApplyPolishPreview}
+                  >
+                    {t({ ja: "差し替える", en: "Apply changes" })}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={handleCancelPolishPreview}
+                  >
+                    {t({ ja: "キャンセル", en: "Cancel" })}
+                  </button>
+                </div>
+              </div>
+            )}
             {!isEditMode && (
               <div
                 style={{
