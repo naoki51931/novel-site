@@ -882,6 +882,7 @@ export default function AINovelPage() {
 
     try {
       setLastPolishContext(context);
+      const maxChars = combinedBody.length || 0;
       const prompt = buildPolishPrompt({
         baseBody,
         tone: params.tone,
@@ -889,6 +890,7 @@ export default function AINovelPage() {
         characters: params.characters,
         isR18: params.isR18,
         intensity: polishIntensity,
+        maxChars,
       });
       const res = await fetch("/api/ai/novels/generate", {
         method: "POST",
@@ -903,32 +905,26 @@ export default function AINovelPage() {
           genre: params.genre || null,
           characters: params.characters || null,
           tone: params.tone || null,
-          length: null,
+          length: String(maxChars),
           model: params.model || "gpt-4.1-mini",
           r18: params.isR18,
           prompt,
         }),
       });
 
-      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
-        const data = await res.json().catch(() => ({}));
-        if (res.status === 400) {
-          throw new Error(
-            data.detail ||
-              t({ ja: "リクエストが不正です。入力内容を確認してください。", en: "Invalid request." })
-          );
-        }
-        if (res.status === 403) {
-          throw new Error(
-            data.detail ||
-              t({ ja: "権限がありません。ログイン状態を確認してください。", en: "Forbidden." })
-          );
-        }
-        if (res.status === 500) {
-          throw new Error(
-            data.detail ||
-              t({ ja: "サーバー内部エラーが発生しました。", en: "Server error." })
-          );
+      let errorDetail = null;
+      if (!res.ok) {
+        const isJson = res.headers.get("content-type")?.includes("application/json");
+        if (isJson) {
+          const data = await res.json().catch(() => ({}));
+          if (data && typeof data.detail === "string" && data.detail.trim()) {
+            errorDetail = data.detail.trim();
+          }
+        } else {
+          const text = await res.text().catch(() => "");
+          if (text && text.trim()) {
+            errorDetail = text.trim().slice(0, 300);
+          }
         }
       }
 
@@ -956,9 +952,8 @@ export default function AINovelPage() {
       }
 
       if (res.status === 429) {
-        const data = await res.json().catch(() => ({}));
         setQuotaError(
-          data.detail ||
+          errorDetail ||
             t({
               ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
               en: "You've reached today's AI generation limit. Please try again tomorrow.",
@@ -969,9 +964,8 @@ export default function AINovelPage() {
       }
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         throw new Error(
-          data.detail ||
+          errorDetail ||
             t(
               { ja: "生成に失敗しました (status={{status}})", en: "Generation failed (status={{status}})" },
               { status: res.status }
@@ -1919,6 +1913,7 @@ export default function AINovelPage() {
               border: "1px solid var(--border)",
               maxHeight: "600px",
               overflowY: "auto",
+              lineHeight: 1.6,
             }}
           >
             <span>{result.body}</span>

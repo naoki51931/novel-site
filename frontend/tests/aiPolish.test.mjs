@@ -8,9 +8,10 @@ const prompt = buildPolishPrompt({
   characters: "AとB",
   isR18: false,
   intensity: 80,
+  maxChars: 1234,
 });
 
-assert.ok(prompt.includes("文字数の指定は無視してください。"));
+assert.ok(prompt.includes("最大文字数: 1234字以内"));
 assert.ok(prompt.includes("添削の強さ:"));
 assert.ok(prompt.includes("【本文】"));
 

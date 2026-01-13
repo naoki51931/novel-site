@@ -5,6 +5,7 @@ export function buildPolishPrompt({
   characters,
   isR18,
   intensity,
+  maxChars,
 }) {
   const r18Note = isR18
     ? "成人向けの内容を許可します。性的描写を含めても構いません。"
@@ -24,11 +25,13 @@ export function buildPolishPrompt({
       ? "強めのリライト（文の組み替えや表現の刷新も可）"
       : "非常に強いリライト（構成の再整理まで許可）";
 
+  const maxCharsText = Number(maxChars) > 0 ? `最大文字数: ${maxChars}字以内` : "最大文字数: 指定なし";
+
   return [
     "あなたは日本語の小説編集者です。",
     "以下の本文について、重複表現や不自然な箇所を修正し、読みやすく整えてください。",
     "意味やストーリーは保ちつつ、文章の流れを滑らかにします。",
-    "文字数の指定は無視してください。",
+    maxCharsText,
     `添削の強さ: ${strengthText}`,
     level >= 70
       ? "必要なら文の並び替えや言い回しの大きな変更も行ってください。"
