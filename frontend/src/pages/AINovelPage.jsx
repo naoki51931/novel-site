@@ -536,6 +536,7 @@ export default function AINovelPage() {
       "あなたは日本語の小説編集者です。",
       "以下の本文について、重複表現や不自然な箇所を修正し、読みやすく整えてください。",
       "意味やストーリーは保ちつつ、文章の流れを滑らかにします。",
+      "文字数の指定は無視してください。",
       `添削の強さ: ${strengthText}`,
       level >= 70
         ? "必要なら文の並び替えや言い回しの大きな変更も行ってください。"
@@ -736,7 +737,7 @@ export default function AINovelPage() {
           genre: params.genre || null,
           characters: params.characters || null,
           tone: params.tone || null,
-          length: params.length || "medium",
+          length: null,
           model: params.model || "gpt-4.1-mini",
           r18: params.isR18,
           prompt,
