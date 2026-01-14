@@ -841,8 +841,12 @@ export default function AINovelPage() {
   };
 
   const handlePolishText = async (overrideContext = null) => {
+    const safeOverride =
+      overrideContext && typeof overrideContext === "object" && "selectedText" in overrideContext
+        ? overrideContext
+        : null;
     const selectionContext =
-      overrideContext || lastSelectionContextRef.current || getSelectionContext();
+      safeOverride || lastSelectionContextRef.current || getSelectionContext();
     const combinedBody = combinedBodyRef.current || getCombinedBody();
     if (!combinedBody) return;
     if (!selectionContext && !result?.body) {
@@ -1831,7 +1835,7 @@ export default function AINovelPage() {
               )}
               <button
                 type="button"
-                onClick={handlePolishText}
+                onClick={() => handlePolishText()}
                 disabled={polishing || loading || continuing}
                 style={{
                   height: "2.2rem",
