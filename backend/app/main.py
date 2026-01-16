@@ -558,6 +558,16 @@ def send_notification_email(to_email: str, subject: str, body: str) -> None:
         print(f"[notification] メール送信失敗 to={to_email}, err={e!r}")
 
 
+def send_admin_contact_email(subject: str, body: str, admin_username: str | None) -> None:
+    to_email = SMTP_FROM or SMTP_USER
+    mail_subject = f"[Admin Contact] {subject}".strip()
+    if admin_username:
+        mail_body = f"Admin: {admin_username}\n\n{body}"
+    else:
+        mail_body = body
+    send_notification_email(to_email, mail_subject, mail_body)
+
+
 def create_notification(
     db: Session,
     *,
@@ -906,6 +916,17 @@ def require_admin(request: Request) -> None:
         if legacy == ADMIN_API_KEY:
             return
     raise HTTPException(401, "管理者権限が必要です")
+
+
+def get_admin_username(request: Request) -> str | None:
+    admin_cookie = request.cookies.get("admin_token")
+    if not admin_cookie:
+        return None
+    try:
+        payload = verify_admin_token(admin_cookie)
+    except Exception:
+        return None
+    return payload.get("sub")
 
 
 def _set_admin_cookie(response: Response, token: str | None) -> None:
@@ -1372,6 +1393,22 @@ class AdminLoginRequest(BaseModel):
     username: str
     password: str
     token_type: str = "bearer"
+
+
+class AdminContactRequest(BaseModel):
+    subject: str
+    body: str
+
+
+class AdminContactMessageOut(BaseModel):
+    id: int
+    admin_username: str | None = None
+    subject: str
+    body: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 # =========================================
@@ -1955,6 +1992,50 @@ def admin_me(request: Request):
         raise HTTPException(401, "未ログインです")
     verify_admin_token(admin_cookie)
     return {"is_admin": True}
+
+
+@app.post("/api/admin/contact/messages", response_model=AdminContactMessageOut)
+def admin_create_contact_message(
+    request: Request,
+    payload: AdminContactRequest,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    subject = (payload.subject or "").strip()
+    body = (payload.body or "").strip()
+    if not subject:
+        raise HTTPException(400, "件名を入力してください")
+    if not body:
+        raise HTTPException(400, "本文を入力してください")
+
+    admin_username = get_admin_username(request)
+    message = models.AdminContactMessage(
+        admin_username=admin_username,
+        subject=subject,
+        body=body,
+    )
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    send_admin_contact_email(subject, body, admin_username)
+    return message
+
+
+@app.get("/api/admin/contact/messages", response_model=List[AdminContactMessageOut])
+def admin_list_contact_messages(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    messages = (
+        db.query(models.AdminContactMessage)
+        .order_by(models.AdminContactMessage.created_at.desc(), models.AdminContactMessage.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return messages
 
 
 @app.post("/api/admin/translations/backfill")

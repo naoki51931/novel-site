@@ -595,6 +595,16 @@ class Notification(Base):
     actor = relationship("User", foreign_keys=[actor_user_id])
 
 
+class AdminContactMessage(Base):
+    __tablename__ = "admin_contact_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_username = Column(String(255), nullable=True)
+    subject = Column(String(255), nullable=False)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
 class AIGuestGenerateUsage(Base):
     __tablename__ = "ai_guest_generate_usage"
 
