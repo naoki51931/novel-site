@@ -2,7 +2,7 @@ import {useEffect, useState, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const EDIT_EPISODE_DRAFT_PREFIX = "edit_episode_draft";
 const ILLUST_TAG_PREFIX = "illust:";
 const ILLUST_TAG_RE = /^illust:(\d{8})$/;
@@ -42,6 +42,12 @@ const formatIllustTag = (tag) => {
   return `[[illust:${match[1]}]]`;
 };
 
+const withApiBase = (url) => {
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${API_BASE}${url}`;
+};
+
 export default function EditEpisode() {
   const { id } = useParams(); // episode_id
   const navigate = useNavigate();
@@ -61,10 +67,7 @@ export default function EditEpisode() {
   const [coverFile, setCoverFile] = useState(null);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
 
-  const [illustFile, setIllustFile] = useState(null);
-  const [illustCaption, setIllustCaption] = useState("");
-  const [illustTag, setIllustTag] = useState("");
-  const [illustMetaTags, setIllustMetaTags] = useState("");
+  const [illustItems, setIllustItems] = useState([]);
   const [isUploadingIllust, setIsUploadingIllust] = useState(false);
 
   const [loading, setLoading] = useState(true);
@@ -369,33 +372,51 @@ export default function EditEpisode() {
   // =========================
   // 押絵アップロード系
   // =========================
-  const handleIllustFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setIllustFile(e.target.files[0]);
-      if (!(illustTag || "").trim()) {
-        const usedTags = new Set(
-          illusts
-            .map((it) => (it.illust_tag || "").trim())
-            .filter((tag) => tag.length > 0)
-        );
-        setIllustTag(generateIllustTag(usedTags));
-      }
-    }
+  const handleIllustFilesChange = (e) => {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (!files.length) return;
+    setIllustItems((prev) => {
+      const usedTags = new Set(
+        [
+          ...illusts.map((it) => (it.illust_tag || "").trim()),
+          ...prev.map((it) => (it.illustTag || "").trim()),
+        ].filter((tag) => tag.length > 0)
+      );
+      const next = files.map((file) => {
+        const illustTag = generateIllustTag(usedTags);
+        usedTags.add(illustTag);
+        return { file, caption: "", illustTag, metaTags: "" };
+      });
+      return [...prev, ...next];
+    });
+    e.target.value = "";
+  };
+
+  const updateIllustCaption = (index, caption) => {
+    setIllustItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, caption } : it))
+    );
+  };
+
+  const updateIllustTag = (index, illustTag) => {
+    setIllustItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, illustTag } : it))
+    );
+  };
+
+  const updateIllustMetaTags = (index, metaTags) => {
+    setIllustItems((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, metaTags } : it))
+    );
+  };
+
+  const removeIllustItem = (index) => {
+    setIllustItems((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleIllustUpload = async () => {
-    if (!illustFile) {
+    if (!illustItems.length) {
       alert(t({ ja: "押絵画像ファイルを選択してください", en: "Please select an illustration file." }));
-      return;
-    }
-    const normalizedTag = normalizeIllustTag(illustTag);
-    if (!normalizedTag) {
-      alert(
-        t({
-          ja: "illustタグは [[illust:12345678]] の形式で指定してください",
-          en: "Illust tags must be in the form [[illust:12345678]].",
-        })
-      );
       return;
     }
 
@@ -406,36 +427,43 @@ export default function EditEpisode() {
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", illustFile);
-    formData.append("caption", illustCaption || "");
-    formData.append("illust_tag", normalizedTag);
-    formData.append("meta_tags", illustMetaTags || "");
-
     try {
       setIsUploadingIllust(true);
+      for (const item of illustItems) {
+        const normalizedTag = normalizeIllustTag(item.illustTag);
+        if (!normalizedTag) {
+          throw new Error(
+            t({
+              ja: "illustタグは [[illust:12345678]] の形式で指定してください",
+              en: "Illust tags must be in the form [[illust:12345678]].",
+            })
+          );
+        }
+        const formData = new FormData();
+        formData.append("file", item.file);
+        formData.append("caption", item.caption || "");
+        formData.append("illust_tag", normalizedTag);
+        formData.append("meta_tags", item.metaTags || "");
 
-      const res = await fetch(`${API_BASE}/api/episodes/${id}/illusts`, {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer " + token,
-        },
-        body: formData,
-      });
+        const res = await fetch(`${API_BASE}/api/episodes/${id}/illusts`, {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+          },
+          body: formData,
+        });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(
-          data.detail || t({ ja: "押絵のアップロードに失敗しました", en: "Failed to upload illustration." })
-        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(
+            data.detail || t({ ja: "押絵のアップロードに失敗しました", en: "Failed to upload illustration." })
+          );
+        }
+
+        const newIllust = await res.json();
+        setIllusts((prev) => [...prev, newIllust]);
       }
-
-      const newIllust = await res.json();
-      setIllusts((prev) => [...prev, newIllust]);
-      setIllustFile(null);
-      setIllustCaption("");
-      setIllustTag("");
-      setIllustMetaTags("");
+      setIllustItems([]);
       alert(t({ ja: "押絵を追加しました", en: "Illustration added." }));
     } catch (e) {
       console.error(e);
@@ -610,7 +638,7 @@ export default function EditEpisode() {
         {coverImageUrl ? (
           <div style={{ marginBottom: 12 }}>
             <img
-              src={coverImageUrl}
+              src={withApiBase(coverImageUrl)}
               alt={t({ ja: "表紙画像", en: "Cover image" })}
               style={{ maxWidth: "100%", borderRadius: 8 }}
             />
@@ -686,7 +714,7 @@ export default function EditEpisode() {
                 }}
               >
                 <img
-                  src={illust.image_url}
+                  src={withApiBase(illust.image_url)}
                   alt={illust.caption || t({ ja: "押絵", en: "Illustration" })}
                   style={{ maxWidth: "100%", borderRadius: 4 }}
                 />
@@ -728,31 +756,72 @@ export default function EditEpisode() {
           <input
             type="file"
             accept="image/*"
-            onChange={handleIllustFileChange}
+            multiple
+            onChange={handleIllustFilesChange}
           />
-          <input
-            type="text"
-            placeholder={t({ ja: "キャプション（任意）", en: "Caption (optional)" })}
-            value={illustCaption}
-            onChange={(e) => setIllustCaption(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder={t({ ja: "必須タグ（例: [[illust:12345678]]）", en: "Required tag (e.g., [[illust:12345678]])" })}
-            value={illustTag}
-            onChange={(e) => setIllustTag(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder={t({ ja: "補助タグ（例: type:scene, mood:soft）", en: "Optional tags (e.g., type:scene, mood:soft)" })}
-            value={illustMetaTags}
-            onChange={(e) => setIllustMetaTags(e.target.value)}
-          />
+          {illustItems.length > 0 ? (
+            <div style={{ marginTop: 8, display: "grid", gap: 10 }}>
+              {illustItems.map((it, idx) => (
+                <div
+                  key={`${it.file?.name ?? "illust"}-${idx}`}
+                  style={{
+                    border: "1px solid #eee",
+                    borderRadius: 8,
+                    padding: 10,
+                    display: "grid",
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "#555" }}>
+                    {it.file?.name}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder={t({ ja: "キャプション（任意）", en: "Caption (optional)" })}
+                    value={it.caption || ""}
+                    onChange={(e) => updateIllustCaption(idx, e.target.value)}
+                    style={{ width: "100%", padding: 6 }}
+                  />
+                  <input
+                    type="text"
+                    placeholder={t({
+                      ja: "必須タグ（例: [[illust:12345678]]）",
+                      en: "Required tag (e.g., [[illust:12345678]])",
+                    })}
+                    value={it.illustTag || ""}
+                    onChange={(e) => updateIllustTag(idx, e.target.value)}
+                    style={{ width: "100%", padding: 6 }}
+                  />
+                  <input
+                    type="text"
+                    placeholder={t({
+                      ja: "補助タグ（例: type:scene, mood:soft）",
+                      en: "Optional tags (e.g., type:scene, mood:soft)",
+                    })}
+                    value={it.metaTags || ""}
+                    onChange={(e) => updateIllustMetaTags(idx, e.target.value)}
+                    style={{ width: "100%", padding: 6 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => removeIllustItem(idx)}
+                  >
+                    {t({ ja: "この押絵を外す", en: "Remove illustration" })}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ marginTop: 6, color: "#777", fontSize: 13 }}>
+              {t({ ja: "まだ押絵は選択されていません。", en: "No illustrations selected yet." })}
+            </p>
+          )}
           <button
             type="button"
             className="btn btn-border"
             onClick={handleIllustUpload}
-            disabled={isUploadingIllust || !illustFile}
+            disabled={isUploadingIllust || !illustItems.length}
           >
             {isUploadingIllust
               ? t({ ja: "アップロード中...", en: "Uploading..." })

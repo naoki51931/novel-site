@@ -1,6 +1,6 @@
 import { getStoredLanguage, translate } from "./i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
 const getToken = () => {
   if (typeof window === "undefined") return null;

@@ -38,6 +38,7 @@ from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_, func
 from sqlalchemy.orm import selectinload
@@ -49,9 +50,15 @@ import smtplib
 from email.mime.text import MIMEText  # type: ignore
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+STATIC_DIR = Path(
+    os.getenv(
+        "STATIC_DIR",
+        "/app/static" if Path("/app/static").exists() else str(BASE_DIR / "static"),
+    )
+)
 EPISODE_IMAGE_DIR = os.getenv(
     "EPISODE_IMAGE_DIR",
-    str(BASE_DIR / "backend" / "app" / "static" / "episode_images"),
+    str(STATIC_DIR / "episode_images"),
 )
 from fastapi import UploadFile, File
 from fastapi import Form
@@ -477,6 +484,8 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 app.add_middleware(
     CORSMiddleware,

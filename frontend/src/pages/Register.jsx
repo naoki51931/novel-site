@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
 export default function Register() {
   const navigate = useNavigate();

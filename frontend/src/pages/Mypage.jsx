@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
 async function startStripeCheckout() {
   try {

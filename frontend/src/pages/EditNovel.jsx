@@ -3,7 +3,7 @@ import { useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const NOVEL_DRAFT_KEY_PREFIX = "draft_edit_novel"; // 作品ごとの編集下書き用プレフィックス
 
 export default function EditNovel() {

@@ -4,7 +4,7 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const FREE_READING_SCHEDULE = {
   ja: "無料開放時間: 平日17:00-19:00 / 土日祝14:00-19:00（JST）",
   en: "Free reading hours: Weekdays 17:00-19:00 / Weekends & holidays 14:00-19:00 (JST)",

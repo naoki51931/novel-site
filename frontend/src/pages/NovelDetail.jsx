@@ -4,7 +4,7 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
 export default function NovelDetail() {
   const { id } = useParams(); // novel_id

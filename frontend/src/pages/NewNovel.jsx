@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { trackEvent } from "../lib/analytics";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const DRAFT_KEY = "draft_new_novel";
 
 export default function NewNovel() {

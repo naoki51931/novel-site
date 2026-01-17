@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
