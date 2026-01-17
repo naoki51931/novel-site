@@ -56,6 +56,61 @@ export default function EpisodeDetail() {
     window.open(intentUrl, "_blank", "noopener,noreferrer");
   };
 
+  const handleShareToInstagram = async () => {
+    if (!episode?.id) return;
+
+    const origin = window.location.origin;
+    const shareUrl = `${origin}/share/episodes/${episode.id}`;
+    const displayTitle = formatEpisodeDisplayTitle(
+      episode.number || episode.episode_number,
+      episode.title
+    );
+    const text = displayTitle
+      ? `${displayTitle}`
+      : t({ ja: "エピソードを読みました", en: "I read this episode" });
+    const baseShareData = { title: displayTitle || "Episode", text, url: shareUrl };
+
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        let shareData = baseShareData;
+        if (episode.cover_image_url) {
+          const imageUrl = API_BASE + episode.cover_image_url;
+          const res = await fetch(imageUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            const file = new File([blob], "cover.png", {
+              type: blob.type || "image/png",
+            });
+            if (navigator.canShare?.({ ...baseShareData, files: [file] })) {
+              shareData = { ...baseShareData, files: [file] };
+            }
+          }
+        }
+        await navigator.share(shareData);
+        return;
+      } catch (err) {
+        if (err?.name !== "AbortError") {
+          console.error(err);
+        }
+      }
+    }
+
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        alert(
+          t({
+            ja: "リンクをコピーしました。Instagramで共有してください。",
+            en: "Link copied. Share it on Instagram.",
+          })
+        );
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    window.open("https://www.instagram.com/", "_blank", "noopener,noreferrer");
+  };
+
   const handleSubscribe = async () => {
     const token = localStorage.getItem("token");
     try {
@@ -348,6 +403,13 @@ export default function EpisodeDetail() {
           onClick={handleShareToX}
         >
           {t({ ja: "Xで共有", en: "Share on X" })}
+        </button>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleShareToInstagram}
+        >
+          {t({ ja: "Instagramで共有", en: "Share on Instagram" })}
         </button>
 
         <button
