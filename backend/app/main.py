@@ -568,6 +568,12 @@ def send_admin_contact_email(subject: str, body: str, admin_username: str | None
     send_notification_email(to_email, mail_subject, mail_body)
 
 
+def send_public_contact_email(subject: str, body: str) -> None:
+    to_email = SMTP_FROM or SMTP_USER
+    mail_subject = f"[Contact] {subject}".strip()
+    send_notification_email(to_email, mail_subject, body)
+
+
 def create_notification(
     db: Session,
     *,
@@ -1400,6 +1406,13 @@ class AdminContactRequest(BaseModel):
     body: str
 
 
+class PublicContactRequest(BaseModel):
+    subject: str
+    body: str
+    name: str | None = None
+    email: str | None = None
+
+
 class AdminContactMessageOut(BaseModel):
     id: int
     admin_username: str | None = None
@@ -1960,6 +1973,57 @@ def supports_checkout(
     db.commit()
 
     return {"checkout_url": session.url}
+
+
+@app.post("/api/contact/messages", response_model=AdminContactMessageOut)
+def public_create_contact_message(
+    request: Request,
+    payload: PublicContactRequest,
+    db: Session = Depends(get_db),
+):
+    subject = (payload.subject or "").strip()
+    body = (payload.body or "").strip()
+    name = (payload.name or "").strip() or None
+    email = (payload.email or "").strip() or None
+    if not subject:
+        raise HTTPException(400, "件名を入力してください")
+    if not body:
+        raise HTTPException(400, "本文を入力してください")
+
+    try:
+        user = get_optional_current_user(request, db)
+    except HTTPException:
+        user = None
+
+    sender_label = None
+    if user:
+        sender_label = f"user:{user.username}"
+    elif name:
+        sender_label = f"name:{name}"
+    elif email:
+        sender_label = f"email:{email}"
+
+    header_lines = []
+    if user:
+        header_lines.append(f"User: {user.username}")
+    if name:
+        header_lines.append(f"Name: {name}")
+    if email:
+        header_lines.append(f"Email: {email}")
+    header_text = "\n".join(header_lines)
+    body_with_sender = f"{header_text}\n\n{body}" if header_text else body
+
+    message = models.AdminContactMessage(
+        admin_username=sender_label,
+        subject=subject,
+        body=body_with_sender,
+    )
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    send_public_contact_email(subject, body_with_sender)
+    return message
 
 
 @app.post("/api/admin/auth/login")

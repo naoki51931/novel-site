@@ -30,6 +30,7 @@ import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
 import Notifications from "./pages/Notifications";
 import AuthorLanding from "./pages/AuthorLanding";
+import Contact from "./pages/Contact";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
@@ -66,6 +67,7 @@ export default function App() {
         path.startsWith("/novels/") ||
         path.startsWith("/episodes/") ||
         path.startsWith("/users/") ||
+        path === "/contact" ||
         path === "/login" ||
         path === "/register" ||
         path === "/reset-password" ||
@@ -287,6 +289,7 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/contact" element={<Contact />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
@@ -356,8 +359,14 @@ export default function App() {
           borderTop: "1px solid #eee",
           display: "flex",
           justifyContent: "center",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
         }}
       >
+        <Link className="btn btn-border" to="/contact">
+          {t({ ja: "お問い合わせ", en: "Contact" })}
+        </Link>
         <Link className="btn btn-border" to="/admin">
           {t({ ja: "管理画面", en: "Admin" })}
         </Link>

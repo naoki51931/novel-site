@@ -89,6 +89,7 @@ export default function AdminHome() {
   return (
     <div style={{ maxWidth: 700, margin: "0 auto" }}>
       <section
+        id="admin-contact"
         style={{
           border: "1px solid #ddd",
           borderRadius: 10,
@@ -161,6 +162,9 @@ export default function AdminHome() {
       <p style={{ marginBottom: 12 }}>
         {t({ ja: "運営向けの管理機能です。", en: "Administration tools for operators." })}
       </p>
+      <a href="#admin-contact" style={{ display: "inline-block", marginBottom: 12 }}>
+        {t({ ja: "お問い合わせへ", en: "Go to Contact" })}
+      </a>
       <Link className="btn btn-border" to="/admin/payouts">
         {t({ ja: "精算管理へ", en: "Go to Payouts" })}
       </Link>
