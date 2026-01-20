@@ -301,6 +301,24 @@ export default function Mypage() {
                   color: "var(--text)",
                 }}
               >
+                {novel.cover_image_url && (
+                  <img
+                    src={
+                      novel.cover_image_url.startsWith("http")
+                        ? novel.cover_image_url
+                        : API_BASE + novel.cover_image_url
+                    }
+                    alt={t({ ja: "表紙画像", en: "Cover image" })}
+                    style={{
+                      width: "100%",
+                      maxHeight: 220,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      boxShadow: "0 1px 4px var(--shadow)",
+                      marginBottom: 10,
+                    }}
+                  />
+                )}
                 <h4 style={{ marginBottom: 6 }}>
                   <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
                 </h4>

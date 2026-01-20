@@ -21,6 +21,9 @@ export default function EpisodeDetail() {
   const [episode, setEpisode] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [comments, setComments] = useState([]);
+  const [commentBody, setCommentBody] = useState("");
+  const [myUserId, setMyUserId] = useState(null);
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
@@ -181,7 +184,95 @@ export default function EpisodeDetail() {
     };
 
     fetchEpisode();
+    fetch(`${API_BASE}/api/episodes/${id}/comments`)
+      .then((res) => res.json())
+      .then((data) => setComments(Array.isArray(data) ? data : []));
   }, [id]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/users/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setMyUserId(data.id);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
+
+  const handlePostComment = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert(t({ ja: "コメントするにはログインが必要です。", en: "Login required to comment." }));
+      return;
+    }
+    const body = (commentBody || "").trim();
+    if (!body) {
+      alert(t({ ja: "コメントを入力してください。", en: "Please enter a comment." }));
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/episodes/${id}/comments`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ body }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || t({ ja: "コメント投稿に失敗しました", en: "Failed to post comment." }));
+      }
+      setCommentBody("");
+      const listRes = await fetch(`${API_BASE}/api/episodes/${id}/comments`);
+      const listData = await listRes.json().catch(() => []);
+      setComments(Array.isArray(listData) ? listData : []);
+    } catch (e) {
+      console.error(e);
+      alert(
+        e.message || t({ ja: "コメント投稿中にエラーが発生しました", en: "An error occurred while posting comment." })
+      );
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert(t({ ja: "コメントを削除するにはログインが必要です。", en: "Login required to delete comments." }));
+      return;
+    }
+    if (!window.confirm(t({ ja: "このコメントを削除します。よろしいですか？", en: "Delete this comment?" }))) {
+      return;
+    }
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/episodes/${id}/comments/${commentId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || t({ ja: "コメントの削除に失敗しました", en: "Failed to delete comment." }));
+      }
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+    } catch (e) {
+      console.error(e);
+      alert(
+        e.message || t({ ja: "コメント削除中にエラーが発生しました", en: "An error occurred while deleting comment." })
+      );
+    }
+  };
 
   // ★ いいねトグル
   const handleToggleLike = async () => {
@@ -251,6 +342,11 @@ export default function EpisodeDetail() {
 
   const tags = Array.isArray(episode.tags) ? episode.tags : [];
   const illusts = Array.isArray(episode.illusts) ? episode.illusts : [];
+  const canDeleteComment = (commentUserId) => {
+    if (!myUserId) return false;
+    if (commentUserId && commentUserId === myUserId) return true;
+    return episode?.author_id === myUserId;
+  };
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
@@ -592,6 +688,87 @@ export default function EpisodeDetail() {
           )}
         </div>
       )}
+
+      <div style={{ marginTop: "2rem" }}>
+        <h3>{t({ ja: "コメント", en: "Comments" })}</h3>
+
+        {comments.length === 0 ? (
+          <p style={{ fontSize: "0.9rem", color: "#666" }}>
+            {t({
+              ja: "まだコメントはありません。最初の感想を書いてみましょう。",
+              en: "No comments yet. Share the first impression.",
+            })}
+          </p>
+        ) : (
+          <div>
+            {comments.map((c) => (
+              <div
+                key={c.id}
+                style={{
+                  borderBottom: "1px solid #ddd",
+                  padding: "6px 0",
+                  marginBottom: 4,
+                  fontSize: "0.9rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <strong>
+                    {c.username || t({ ja: "匿名", en: "Anonymous" })}
+                    {myUserId && c.user_id === myUserId ? t({ ja: "（あなた）", en: " (you)" }) : ""}
+                  </strong>
+
+                  {canDeleteComment(c.user_id) && (
+                    <button
+                      type="button"
+                      className="btn btn-border"
+                      style={{
+                        borderColor: "#c00",
+                        color: "#c00",
+                        fontSize: "0.8rem",
+                      }}
+                      onClick={() => handleDeleteComment(c.id)}
+                    >
+                      {t({ ja: "削除", en: "Delete" })}
+                    </button>
+                  )}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>
+                  {c.body}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 8 }}>
+          <textarea
+            value={commentBody}
+            onChange={(e) => setCommentBody(e.target.value)}
+            placeholder={t({ ja: "感想や一言コメントを書いてください", en: "Write your thoughts or a short comment" })}
+            style={{
+              width: "100%",
+              height: "70px",
+              marginTop: "8px",
+              padding: 8,
+              fontSize: "0.9rem",
+            }}
+          />
+          <button
+            className="btn btn-border"
+            style={{ marginTop: 8 }}
+            onClick={handlePostComment}
+          >
+            {t({ ja: "コメント投稿", en: "Post comment" })}
+          </button>
+        </div>
+      </div>
 
       <div style={{ marginTop: 24 }}>
         <Link to={"/novels/" + episode.novel_id} className="btn btn-border">

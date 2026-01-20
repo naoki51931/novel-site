@@ -4203,6 +4203,13 @@ def delete_novel(
     )
     db.execute(
         text(
+            "DELETE FROM episode_comments "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
+        ),
+        {"nid": novel_id},
+    )
+    db.execute(
+        text(
             "DELETE FROM supports "
             "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id = :nid)"
         ),
@@ -4269,6 +4276,70 @@ def post_comment(novel_id: int, payload: dict = Body(...), request: Request = No
             link_url=f"/novels/{novel.id}",
         )
     return {"ok": True, "id": c.id}
+
+# =========================================
+@app.get("/api/episodes/{episode_id}/comments")
+def get_episode_comments(episode_id: int, db: Session = Depends(get_db)):
+    comments = (
+        db.query(models.EpisodeComment)
+        .filter(models.EpisodeComment.episode_id == episode_id)
+        .order_by(models.EpisodeComment.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "user_id": c.user_id,
+            "username": c.user.username if c.user else None,
+            "body": c.body,
+            "created_at": c.created_at,
+        }
+        for c in comments
+    ]
+
+
+@app.post("/api/episodes/{episode_id}/comments")
+def post_episode_comment(
+    episode_id: int,
+    payload: dict = Body(...),
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    body = (payload.get("body") or "").strip()
+    if not body:
+        raise HTTPException(400, "コメントが空です")
+    episode = db.query(models.Episode).get(episode_id)
+    if not episode:
+        raise HTTPException(404, "エピソードが存在しません")
+    comment = models.EpisodeComment(episode_id=episode_id, user_id=user.id, body=body)
+    db.add(comment)
+    novel = db.query(models.Novel).get(episode.novel_id) if episode.novel_id else None
+    if novel and novel.author_id != user.id:
+        title = "エピソードにコメントが届きました"
+        snippet = _truncate_text(body, 120)
+        episode_title = episode.title or f"EP#{episode_id}"
+        notif_body = f"{user.username}が「{episode_title}」にコメントしました: {snippet}"
+        create_notification(
+            db,
+            user_id=novel.author_id,
+            notif_type="episode_comment",
+            title=title,
+            body=notif_body,
+            link_url=f"/episodes/{episode.id}",
+            actor_user_id=user.id,
+        )
+    db.commit()
+    db.refresh(comment)
+    if novel and novel.author_id != user.id:
+        send_notification_email_if_enabled(
+            db,
+            user_id=novel.author_id,
+            title=title,
+            body=notif_body,
+            link_url=f"/episodes/{episode.id}",
+        )
+    return {"ok": True, "id": comment.id}
 
 # 小説詳細（tags 付き）
 # =========================================
@@ -4574,6 +4645,30 @@ def list_public_novels(
     novels = query.order_by(models.Novel.created_at.desc()).all()
 
     novel_ids = [novel.id for novel in novels]
+    cover_map = {}
+    if novel_ids:
+        cover_rows = (
+            db.query(
+                models.Episode.novel_id,
+                models.Episode.cover_image_url,
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.cover_image_url.isnot(None))
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(
+                models.Episode.novel_id,
+                models.Episode.episode_number.is_(None),
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .all()
+        )
+        for novel_id, cover_url, _, __ in cover_rows:
+            if novel_id not in cover_map and cover_url:
+                cover_map[novel_id] = cover_url
     favorite_counts = {}
     if novel_ids:
         favorite_rows = (
@@ -4627,6 +4722,7 @@ def list_public_novels(
                 "age_limit": getattr(novel, "age_limit", "all") or "all",
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
+                "cover_image_url": cover_map.get(novel.id),
             }
         )
     return result
@@ -4790,6 +4886,30 @@ def list_public_novel_rankings(
 
     novels = query.limit(limit).all()
     novel_ids = [novel.id for novel in novels]
+    cover_map = {}
+    if novel_ids:
+        cover_rows = (
+            db.query(
+                models.Episode.novel_id,
+                models.Episode.cover_image_url,
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.cover_image_url.isnot(None))
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(
+                models.Episode.novel_id,
+                models.Episode.episode_number.is_(None),
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .all()
+        )
+        for novel_id, cover_url, _, __ in cover_rows:
+            if novel_id not in cover_map and cover_url:
+                cover_map[novel_id] = cover_url
 
     favorite_counts = {}
     if novel_ids:
@@ -4842,6 +4962,7 @@ def list_public_novel_rankings(
                 "favorite_count": favorite_counts.get(novel.id, 0),
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
+                "cover_image_url": cover_map.get(novel.id),
                 "tags": [
                     {"id": nt.tag.id, "name": nt.tag.name}
                     for nt in (getattr(novel, "novel_tags", []) or [])
@@ -4920,6 +5041,31 @@ def list_public_user_novels(
                 q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
     novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
+    novel_ids = [novel.id for novel in novels]
+    cover_map = {}
+    if novel_ids:
+        cover_rows = (
+            db.query(
+                models.Episode.novel_id,
+                models.Episode.cover_image_url,
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.cover_image_url.isnot(None))
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(
+                models.Episode.novel_id,
+                models.Episode.episode_number.is_(None),
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .all()
+        )
+        for novel_id, cover_url, _, __ in cover_rows:
+            if novel_id not in cover_map and cover_url:
+                cover_map[novel_id] = cover_url
 
     return [
         {
@@ -4937,6 +5083,7 @@ def list_public_user_novels(
             "creative_type": getattr(novel, "creative_type", "original"),
             "is_public": True,
             "status": getattr(novel, "status", "public"),
+            "cover_image_url": cover_map.get(novel.id),
             "tags": [
                 {"id": nt.tag.id, "name": nt.tag.name}
                 for nt in (getattr(novel, "novel_tags", []) or [])
@@ -4998,6 +5145,31 @@ def list_public_user_favorites(
                 q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
     favorites = q.all()
+    novel_ids = [n.id for n in favorites]
+    cover_map = {}
+    if novel_ids:
+        cover_rows = (
+            db.query(
+                models.Episode.novel_id,
+                models.Episode.cover_image_url,
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.cover_image_url.isnot(None))
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(
+                models.Episode.novel_id,
+                models.Episode.episode_number.is_(None),
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .all()
+        )
+        for novel_id, cover_url, _, __ in cover_rows:
+            if novel_id not in cover_map and cover_url:
+                cover_map[novel_id] = cover_url
 
     return [
         {
@@ -5015,6 +5187,7 @@ def list_public_user_favorites(
             "favorite_count": len(getattr(n, "favorite_links", []) or []),
             "is_public": True,
             "status": getattr(n, "status", "public"),
+            "cover_image_url": cover_map.get(n.id),
             "tags": [
                 {"id": nt.tag.id, "name": nt.tag.name}
                 for nt in (getattr(n, "novel_tags", []) or [])
@@ -5464,6 +5637,10 @@ def delete_episode(
         if ill.image_url:
             file_paths.append(ill.image_url)
 
+    db.execute(
+        text("DELETE FROM episode_comments WHERE episode_id = :eid"),
+        {"eid": episode_id},
+    )
     db.delete(ep)
     db.commit()
 
@@ -6593,6 +6770,31 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
         .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
         .all()
     )
+    novel_ids = [n.id for n in favorites]
+    cover_map = {}
+    if novel_ids:
+        cover_rows = (
+            db.query(
+                models.Episode.novel_id,
+                models.Episode.cover_image_url,
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.cover_image_url.isnot(None))
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(
+                models.Episode.novel_id,
+                models.Episode.episode_number.is_(None),
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .all()
+        )
+        for novel_id, cover_url, _, __ in cover_rows:
+            if novel_id not in cover_map and cover_url:
+                cover_map[novel_id] = cover_url
 
     return [
         {
@@ -6610,6 +6812,7 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
             "favorite_count": len(getattr(n, "favorite_links", []) or []),
             "is_public": bool(getattr(n, "is_public", True)),
             "status": getattr(n, "status", "public"),
+            "cover_image_url": cover_map.get(n.id),
             "tags": [
                 {"id": nt.tag.id, "name": nt.tag.name}
                 for nt in (getattr(n, "novel_tags", []) or [])
@@ -6866,6 +7069,52 @@ def delete_comment(
             getattr(request.url, "path", None) if "request" in locals() else None,
             getattr(locals().get("current_user") or locals().get("user"), "id", None),
             locals().get("novel_id", None) or locals().get("id", None),
+            locals().get("episode_id", None),
+        )
+        raise HTTPException(403, "コメントを削除する権限がありません")
+
+    db.delete(comment)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/episodes/{episode_id}/comments/{comment_id}")
+def delete_episode_comment(
+    episode_id: int,
+    comment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    エピソードコメント削除 API
+    - 自分のコメント か 小説作者 だけが削除可能
+    """
+    user = require_current_user(request, db)
+
+    comment = (
+        db.query(models.EpisodeComment)
+        .filter(
+            models.EpisodeComment.id == comment_id,
+            models.EpisodeComment.episode_id == episode_id,
+        )
+        .first()
+    )
+    if not comment:
+        raise HTTPException(404, "コメントが存在しません")
+
+    episode = db.query(models.Episode).get(episode_id)
+    novel = db.query(models.Novel).get(episode.novel_id) if episode else None
+
+    if not (
+        (comment.user_id is not None and comment.user_id == user.id)
+        or (novel and novel.author_id == user.id)
+    ):
+        logger.warning(
+            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
+            "コメントを削除する権限がありません",
+            getattr(request.url, "path", None) if "request" in locals() else None,
+            getattr(locals().get("current_user") or locals().get("user"), "id", None),
+            getattr(novel, "id", None),
             locals().get("episode_id", None),
         )
         raise HTTPException(403, "コメントを削除する権限がありません")

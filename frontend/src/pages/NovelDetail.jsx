@@ -512,6 +512,10 @@ export default function NovelDetail() {
 
   const episodes = Array.isArray(novel.episodes) ? novel.episodes : [];
   const tags = Array.isArray(novel.tags) ? novel.tags : [];
+  const coverImageUrl =
+    novel.cover_image_url ||
+    episodes.find((ep) => ep.cover_image_url)?.cover_image_url ||
+    "";
 
   return (
     <div>
@@ -649,6 +653,21 @@ export default function NovelDetail() {
             : t({ ja: "♡ いいね", en: "♡ Like" })} ({likeCount})
         </button>
       </div>
+
+      {coverImageUrl && (
+        <div style={{ margin: "12px 0" }}>
+          <p style={{ marginBottom: 4 }}>{t({ ja: "表紙:", en: "Cover:" })}</p>
+          <img
+            src={API_BASE + coverImageUrl}
+            alt={t({ ja: "表紙画像", en: "Cover image" })}
+            style={{
+              maxWidth: "260px",
+              borderRadius: 8,
+              boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+            }}
+          />
+        </div>
+      )}
 
       {novel?.author_id && (
         <SupportPanel

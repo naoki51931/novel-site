@@ -39,6 +39,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    episode_comments = relationship(
+        "EpisodeComment",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     episode_likes = relationship("EpisodeLike", back_populates="user")
     novel_likes = relationship("NovelLike", back_populates="user")
     ai_generate_logs = relationship("AIGenerateLog", back_populates="user")
@@ -188,6 +193,11 @@ class Episode(Base):
     )
     likes = relationship(
         "EpisodeLike",
+        back_populates="episode",
+        cascade="all, delete-orphan",
+    )
+    comments = relationship(
+        "EpisodeComment",
         back_populates="episode",
         cascade="all, delete-orphan",
     )
@@ -514,6 +524,19 @@ class NovelComment(Base):
 
     novel = relationship("Novel", back_populates="comments")
     user = relationship("User", back_populates="comments")
+
+
+class EpisodeComment(Base):
+    __tablename__ = "episode_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    episode = relationship("Episode", back_populates="comments")
+    user = relationship("User", back_populates="episode_comments")
 
 class AIGenerateLog(Base):
     __tablename__ = "ai_generate_logs"
