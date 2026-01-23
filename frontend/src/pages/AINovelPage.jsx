@@ -153,6 +153,8 @@ export default function AINovelPage() {
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
   const [lastGenerateParams, setLastGenerateParams] = useState(null);
 
+  const countChars = (value) => (value || "").length;
+
   const navigate = useNavigate();
   const resultBodyRef = useRef(null);
   const combinedBodyRef = useRef("");
@@ -1507,6 +1509,9 @@ export default function AINovelPage() {
             }
             style={{ width: "100%", padding: "0.5rem" }}
           />
+          <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
+            {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(titleHint)}
+          </div>
         </div>
 
         {!isContinueMode && (
@@ -1524,6 +1529,9 @@ export default function AINovelPage() {
               })}
               style={{ width: "100%", padding: "0.5rem" }}
             />
+            <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
+              {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(genre)}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
               <button
                 type="button"
@@ -1647,6 +1655,9 @@ export default function AINovelPage() {
             }
             style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
           />
+          <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
+            {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(characters)}
+          </div>
         </div>
 
         {!isContinueMode && (
@@ -1664,6 +1675,9 @@ export default function AINovelPage() {
               })}
               style={{ width: "100%", padding: "0.5rem" }}
             />
+            <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
+              {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(tone)}
+            </div>
           </div>
         )}
 
@@ -1899,9 +1913,19 @@ export default function AINovelPage() {
           </div>
 
           <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
-            {result.model && <span>{t({ ja: "モデル", en: "Model" })}: {result.model} / </span>}
+            {result.model && <span>{t({ ja: "モデル", en: "Model" })}: {result.model}</span>}
             {typeof result.used_tokens === "number" && (
-              <span>{t({ ja: "使用トークン", en: "Tokens used" })}: {result.used_tokens}</span>
+              <span>
+                {`${result.model ? " / " : ""}${t({ ja: "使用トークン", en: "Tokens used" })}: ${result.used_tokens}`}
+              </span>
+            )}
+            <span>
+              {`${result.model || typeof result.used_tokens === "number" ? " / " : ""}${t({ ja: "文字数", en: "Chars" })}: ${countChars(result.body)}`}
+            </span>
+            {continuationBody && (
+              <span>
+                {` / ${t({ ja: "続き文字数", en: "Continuation chars" })}: ${countChars(continuationBody)} / ${t({ ja: "合計文字数", en: "Total chars" })}: ${countChars(getCombinedBody())}`}
+              </span>
             )}
           </div>
 
@@ -2097,6 +2121,9 @@ export default function AINovelPage() {
                     style={{ width: "100%", padding: "0.5rem" }}
                     disabled={posting}
                   />
+                  <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
+                    {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(postEpisodeTitle)}
+                  </div>
                   <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
                     {continueNovelId ? (
                       <span>

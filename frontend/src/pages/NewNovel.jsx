@@ -20,6 +20,8 @@ export default function NewNovel() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const countChars = (value) => (value || "").length;
+
   // 🔹 AI小説生成ページへ移動
   const handleOpenAINovel = () => {
     navigate("/ai-novel");
@@ -165,6 +167,9 @@ export default function NewNovel() {
               style={{ width: "100%", padding: 4 }}
             />
           </label>
+          <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
+            {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(title)}
+          </div>
         </div>
 
         <div style={{ marginBottom: 8 }}>
@@ -178,6 +183,9 @@ export default function NewNovel() {
               style={{ width: "100%", padding: 4 }}
             />
           </label>
+          <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
+            {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(description)}
+          </div>
         </div>
 
         <div style={{ marginBottom: 8 }}>

@@ -24,10 +24,14 @@ export default function EpisodeDetail() {
   const [comments, setComments] = useState([]);
   const [commentBody, setCommentBody] = useState("");
   const [myUserId, setMyUserId] = useState(null);
+  const [ageConfirmRequired, setAgeConfirmRequired] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
+
+  const countChars = (value) => (value || "").length;
 
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
@@ -165,6 +169,14 @@ export default function EpisodeDetail() {
 
         const data = await res.json();
         setEpisode(data);
+        const needsConfirm = !!data.age_confirmation_required;
+        setAgeConfirmRequired(needsConfirm);
+        if (needsConfirm) {
+          const key = `age_confirmed_novel_${data.novel_id}`;
+          setAgeConfirmed(sessionStorage.getItem(key) === "yes");
+        } else {
+          setAgeConfirmed(false);
+        }
 
         // ★ いいね / 閲覧数
         if (typeof data.like_count === "number") {
@@ -339,6 +351,36 @@ export default function EpisodeDetail() {
       </div>
     );
   }
+  if (ageConfirmRequired && !ageConfirmed) {
+    return (
+      <div style={{ padding: 16 }}>
+        <h2 style={{ marginTop: 0 }}>
+          {t({ ja: "18歳以上ですか？", en: "Are you 18 or older?" })}
+        </h2>
+        <p style={{ color: "#666" }}>
+          {t({
+            ja: "この小説は18歳未満の方は閲覧できません。",
+            en: "This novel is not available to users under 18.",
+          })}
+        </p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="btn btn-border"
+            onClick={() => {
+              const key = `age_confirmed_novel_${episode.novel_id}`;
+              sessionStorage.setItem(key, "yes");
+              setAgeConfirmed(true);
+            }}
+          >
+            {t({ ja: "はい", en: "Yes" })}
+          </button>
+          <button className="btn btn-border" onClick={() => navigate("/")}>
+            {t({ ja: "いいえ", en: "No" })}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const tags = Array.isArray(episode.tags) ? episode.tags : [];
   const illusts = Array.isArray(episode.illusts) ? episode.illusts : [];
@@ -486,6 +528,7 @@ export default function EpisodeDetail() {
         {typeof episode.view_count === "number" && (
           <span>{t({ ja: "閲覧数", en: "Views" })}: {episode.view_count}</span>
         )}
+        <span>{t({ ja: "文字数", en: "Chars" })}: {countChars(episode.body)}</span>
 	<Link
           to={`/ai-novel?episode_id=${episode.id}`}
           className="btn btn-border"

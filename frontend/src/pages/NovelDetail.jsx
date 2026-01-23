@@ -15,6 +15,8 @@ export default function NovelDetail() {
   const [comments, setComments] = useState([]);
   const [commentBody, setCommentBody] = useState("");
   const [myUserId, setMyUserId] = useState(null);
+  const [ageConfirmRequired, setAgeConfirmRequired] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
 
   const authorName = novel?.author_username;
   const [isFavorited, setIsFavorited] = useState(false);
@@ -35,6 +37,8 @@ export default function NovelDetail() {
     if (typeof title !== "string") return false;
     return /^\s*第\s*(?:[0-9０-９]+|[一二三四五六七八九十百千万]+)\s*話/.test(title);
   };
+
+  const countChars = (value) => (value || "").length;
 
   const formatEpisodeDisplayTitle = (episodeNumber, title) => {
     const cleanTitle = typeof title === "string" ? title.trim() : "";
@@ -157,6 +161,14 @@ export default function NovelDetail() {
         console.log("NOVEL DATA:", data);
         setNovel(data);
         setIsFavorited(!!data.is_favorited);
+        const needsConfirm = !!data.age_confirmation_required;
+        setAgeConfirmRequired(needsConfirm);
+        if (needsConfirm) {
+          const key = `age_confirmed_novel_${data.id}`;
+          setAgeConfirmed(sessionStorage.getItem(key) === "yes");
+        } else {
+          setAgeConfirmed(false);
+        }
 
         // ★ いいね / 閲覧数
         if (typeof data.like_count === "number") {
@@ -509,6 +521,36 @@ export default function NovelDetail() {
       </div>
     );
   }
+  if (ageConfirmRequired && !ageConfirmed) {
+    return (
+      <div style={{ padding: 16 }}>
+        <h2 style={{ marginTop: 0 }}>
+          {t({ ja: "18歳以上ですか？", en: "Are you 18 or older?" })}
+        </h2>
+        <p style={{ color: "#666" }}>
+          {t({
+            ja: "この小説は18歳未満の方は閲覧できません。",
+            en: "This novel is not available to users under 18.",
+          })}
+        </p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="btn btn-border"
+            onClick={() => {
+              const key = `age_confirmed_novel_${novel.id}`;
+              sessionStorage.setItem(key, "yes");
+              setAgeConfirmed(true);
+            }}
+          >
+            {t({ ja: "はい", en: "Yes" })}
+          </button>
+          <button className="btn btn-border" onClick={() => navigate("/")}>
+            {t({ ja: "いいえ", en: "No" })}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const episodes = Array.isArray(novel.episodes) ? novel.episodes : [];
   const tags = Array.isArray(novel.tags) ? novel.tags : [];
@@ -631,6 +673,9 @@ export default function NovelDetail() {
         {typeof novel.view_count === "number" && (
           <span>{t({ ja: "閲覧数", en: "Views" })}: {novel.view_count}</span>
         )}
+        {typeof novel.total_char_count === "number" && (
+          <span>{t({ ja: "総文字数", en: "Total chars" })}: {novel.total_char_count}</span>
+        )}
         {/* お気に入りボタン */}
         <button
           type="button"
@@ -699,6 +744,9 @@ export default function NovelDetail() {
           {novel.description}
         </div>
       )}
+      <div style={{ fontSize: "0.85rem", color: "#777", marginBottom: 8 }}>
+        {t({ ja: "概要の文字数", en: "Summary length" })}: {countChars(novel.description)}
+      </div>
 
       <hr />
       
@@ -783,6 +831,9 @@ export default function NovelDetail() {
                 {typeof ep.view_count === "number" && (
                   <span>{t({ ja: "閲覧数", en: "Views" })}: {ep.view_count}</span>
                 )}
+                <span>
+                  {t({ ja: "文字数", en: "Chars" })}: {countChars(ep.body)}
+                </span>
               </div>
             </li>
           ))}

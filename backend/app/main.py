@@ -92,6 +92,26 @@ _janome_tokenizer = Tokenizer() if JANOME_AVAILABLE else None
 # =========================================
 Base.metadata.create_all(bind=engine)
 
+def get_novel_char_counts(db: Session, novel_ids: list[int], public_only: bool = False) -> dict[int, int]:
+    if not novel_ids:
+        return {}
+    q = (
+        db.query(
+            models.Episode.novel_id,
+            func.coalesce(
+                func.sum(
+                    func.coalesce(func.char_length(models.Episode.body), 0)
+                ),
+                0,
+            ),
+        )
+        .filter(models.Episode.novel_id.in_(novel_ids))
+    )
+    if public_only:
+        q = q.filter(models.Episode.status == "public").filter(models.Episode.is_public == True)
+    rows = q.group_by(models.Episode.novel_id).all()
+    return {row[0]: int(row[1] or 0) for row in rows}
+
 def ensure_users_table_columns():
     """
     このリポジトリはマイグレーションツールを使っていないため、
@@ -4005,6 +4025,8 @@ def list_novels(
     novels = (
         q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
     )
+    novel_ids = [novel.id for novel in novels]
+    char_counts = get_novel_char_counts(db, novel_ids)
 
     # フロントで使いやすい形に整形（マイページの指標表示など）
     return [
@@ -4017,6 +4039,7 @@ def list_novels(
             "view_count": getattr(novel, "view_count", 0) or 0,
             "like_count": getattr(novel, "like_count", 0) or 0,
             "favorite_count": len(getattr(novel, "favorite_links", []) or []),
+            "total_char_count": char_counts.get(novel.id, 0),
             "age_limit": getattr(novel, "age_limit", "all"),
             "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
             "creative_type": getattr(novel, "creative_type", "original"),
@@ -4046,11 +4069,34 @@ def update_novel(
     db.refresh(novel)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+    has_non_tag_change = False
+    if payload.language is not None and normalize_language(payload.language) != normalize_language(
+        getattr(novel, "language", None)
+    ):
+        has_non_tag_change = True
+    if payload.title is not None and payload.title != novel.title:
+        has_non_tag_change = True
+    if payload.description is not None and payload.description != novel.description:
+        has_non_tag_change = True
+    if payload.age_limit is not None and payload.age_limit != getattr(novel, "age_limit", None):
+        has_non_tag_change = True
+    if payload.is_ai_generated is not None and payload.is_ai_generated != getattr(
+        novel, "is_ai_generated", None
+    ):
+        has_non_tag_change = True
+    if payload.creative_type is not None and payload.creative_type != getattr(
+        novel, "creative_type", None
+    ):
+        has_non_tag_change = True
+    if payload.is_public is not None and payload.is_public != getattr(novel, "is_public", None):
+        has_non_tag_change = True
+
+    tag_only_update = payload.tag_names is not None and not has_non_tag_change
     # Draft/Public の公開制御: draft は作者以外には 404 扱い
     # ※ status 列がないプロジェクトでも壊れないように hasattr チェックを入れている
     if hasattr(novel, "is_public") and not novel.is_public:
         # ログインしていない、または作者本人でない場合は存在しないことにする
-        if (not user) or (novel.author_id != user.id):
+        if (not user) or (novel.author_id != user.id and not tag_only_update):
             raise HTTPException(404, "小説が存在しません")
 
         db.commit()  # cleanup old broken code
@@ -4062,7 +4108,8 @@ def update_novel(
     db.commit()
     db.refresh(novel)
 
-    if novel.author_id != user.id:
+    is_author = novel.author_id == user.id
+    if not is_author and not tag_only_update:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
             "編集権限がありません",
@@ -4074,29 +4121,29 @@ def update_novel(
         raise HTTPException(403, "編集権限がありません")
 
     needs_translation = False
-    if payload.language is not None:
+    if is_author and payload.language is not None:
         novel.language = normalize_language(payload.language)
         needs_translation = True
 
-    if payload.title is not None:
+    if is_author and payload.title is not None:
         novel.title = payload.title
         needs_translation = True
-    if payload.description is not None:
-        if payload.age_limit is not None:
-            novel.age_limit = payload.age_limit
-        if payload.is_ai_generated is not None:
-            novel.is_ai_generated = payload.is_ai_generated
+    if is_author and payload.description is not None:
         novel.description = payload.description
         needs_translation = True
+    if is_author and payload.age_limit is not None:
+        novel.age_limit = payload.age_limit
+    if is_author and payload.is_ai_generated is not None:
+        novel.is_ai_generated = payload.is_ai_generated
 
-    if payload.is_public is not None:
+    if is_author and payload.is_public is not None:
         novel.is_public = payload.is_public
-    if payload.creative_type is not None:
+    if is_author and payload.creative_type is not None:
         novel.creative_type = payload.creative_type
 
     # ★ タグ差し替え
     updated_tag_names: list[str] | None = None
-    if payload.tag_names is not None:
+    if tag_only_update:
         db.query(models.NovelTag).filter(
             models.NovelTag.novel_id == novel_id
         ).delete()
@@ -4440,6 +4487,8 @@ def get_novel_detail(
         )
 
     tags = [{"id": nt.tag.id, "name": nt.tag.name} for nt in novel.novel_tags]
+    public_only = not (user and novel.author_id == user.id)
+    total_char_count = get_novel_char_counts(db, [novel.id], public_only=public_only).get(novel.id, 0)
 
     return {
         "id": novel.id,
@@ -4460,6 +4509,8 @@ def get_novel_detail(
         "creative_type": getattr(novel, "creative_type", "original"),
         "is_public": bool(getattr(novel, "is_public", True)),
         "status": getattr(novel, "status", "public"),
+        "age_confirmation_required": AGE_RESTRICTION_DISABLED and novel.age_limit == "r18",
+        "total_char_count": total_char_count,
         "tags": tags,
         "episodes": [
             {
@@ -4681,6 +4732,8 @@ def list_public_novels(
             .all()
         )
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
 
     liked_ids = set()
     favorited_ids = set()
@@ -4719,6 +4772,7 @@ def list_public_novels(
                 "view_count": getattr(novel, "view_count", 0) or 0,
                 "like_count": getattr(novel, "like_count", 0) or 0,
                 "favorite_count": favorite_counts.get(novel.id, 0),
+                "total_char_count": char_counts.get(novel.id, 0),
                 "age_limit": getattr(novel, "age_limit", "all") or "all",
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
@@ -4923,6 +4977,7 @@ def list_public_novel_rankings(
             .all()
         )
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
 
     liked_ids = set()
     favorited_ids = set()
@@ -4960,6 +5015,7 @@ def list_public_novel_rankings(
                 "view_count": getattr(novel, "view_count", 0) or 0,
                 "like_count": getattr(novel, "like_count", 0) or 0,
                 "favorite_count": favorite_counts.get(novel.id, 0),
+                "total_char_count": char_counts.get(novel.id, 0),
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
                 "cover_image_url": cover_map.get(novel.id),
@@ -5042,6 +5098,7 @@ def list_public_user_novels(
 
     novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
     novel_ids = [novel.id for novel in novels]
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     cover_map = {}
     if novel_ids:
         cover_rows = (
@@ -5078,6 +5135,7 @@ def list_public_user_novels(
             "view_count": getattr(novel, "view_count", 0) or 0,
             "like_count": getattr(novel, "like_count", 0) or 0,
             "favorite_count": len(getattr(novel, "favorite_links", []) or []),
+            "total_char_count": char_counts.get(novel.id, 0),
             "age_limit": getattr(novel, "age_limit", "all"),
             "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
             "creative_type": getattr(novel, "creative_type", "original"),
@@ -5146,6 +5204,7 @@ def list_public_user_favorites(
 
     favorites = q.all()
     novel_ids = [n.id for n in favorites]
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     cover_map = {}
     if novel_ids:
         cover_rows = (
@@ -5185,6 +5244,7 @@ def list_public_user_favorites(
             "view_count": getattr(n, "view_count", 0) or 0,
             "like_count": getattr(n, "like_count", 0) or 0,
             "favorite_count": len(getattr(n, "favorite_links", []) or []),
+            "total_char_count": char_counts.get(n.id, 0),
             "is_public": True,
             "status": getattr(n, "status", "public"),
             "cover_image_url": cover_map.get(n.id),
@@ -5531,9 +5591,40 @@ def update_episode(
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
 
+    has_non_tag_change = False
+    if payload.get("language") is not None and normalize_language(
+        payload.get("language")
+    ) != normalize_language(getattr(ep, "language", None)):
+        has_non_tag_change = True
+    if payload.get("episode_number") is not None and int(
+        payload.get("episode_number")
+    ) != getattr(ep, "episode_number", None):
+        has_non_tag_change = True
+    if payload.get("title") is not None and payload.get("title") != ep.title:
+        has_non_tag_change = True
+    if payload.get("body") is not None and payload.get("body") != ep.body:
+        has_non_tag_change = True
+    if payload.get("status") is not None:
+        status_value, is_public = normalize_episode_status(payload.get("status"), None)
+        if status_value != getattr(ep, "status", None) or is_public != getattr(
+            ep, "is_public", None
+        ):
+            has_non_tag_change = True
+    elif payload.get("is_public") is not None:
+        status_value, is_public = normalize_episode_status(None, payload.get("is_public"))
+        if status_value != getattr(ep, "status", None) or is_public != getattr(
+            ep, "is_public", None
+        ):
+            has_non_tag_change = True
+
+    tag_only_update = payload.get("tag_names") is not None and not has_non_tag_change
+
     # 自分の小説かチェック
     novel = db.query(models.Novel).get(ep.novel_id)
-    if not novel or novel.author_id != user.id:
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    is_author = novel.author_id == user.id
+    if not is_author and not tag_only_update:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
             "編集権限がありません",
@@ -5545,32 +5636,32 @@ def update_episode(
         raise HTTPException(403, "編集権限がありません")
 
     needs_translation = False
-    if "language" in payload and payload["language"] is not None:
+    if is_author and "language" in payload and payload["language"] is not None:
         ep.language = normalize_language(payload["language"])
         needs_translation = True
 
     # 基本項目を更新
-    if "episode_number" in payload and payload["episode_number"] is not None:
+    if is_author and "episode_number" in payload and payload["episode_number"] is not None:
         ep.episode_number = int(payload["episode_number"])
-    if "title" in payload and payload["title"] is not None:
+    if is_author and "title" in payload and payload["title"] is not None:
         ep.title = payload["title"]
         needs_translation = True
-    if "body" in payload and payload["body"] is not None:
+    if is_author and "body" in payload and payload["body"] is not None:
         ep.body = payload["body"]
         needs_translation = True
 
-    if "status" in payload and payload["status"] is not None:
+    if is_author and "status" in payload and payload["status"] is not None:
         status_value, is_public = normalize_episode_status(payload["status"], None)
         ep.status = status_value
         ep.is_public = is_public
-    elif "is_public" in payload and payload["is_public"] is not None:
+    elif is_author and "is_public" in payload and payload["is_public"] is not None:
         status_value, is_public = normalize_episode_status(None, payload["is_public"])
         ep.status = status_value
         ep.is_public = is_public
 
     # タグ更新（差し替え）
     tag_names = payload.get("tag_names")
-    if tag_names is not None:
+    if tag_only_update and tag_names is not None:
         # 既存タグの関連を削除
         db.query(models.EpisodeTag).filter(
             models.EpisodeTag.episode_id == episode_id
@@ -6016,16 +6107,15 @@ def get_episode_for_edit(
     novel = db.query(models.Novel).get(ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
-    if novel.author_id != user.id:
-        logger.warning(
-            "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
-            "このエピソードを編集する権限がありません",
-            getattr(request.url, "path", None) if "request" in locals() else None,
-            getattr(locals().get("current_user") or locals().get("user"), "id", None),
-            locals().get("novel_id", None) or locals().get("id", None),
-            locals().get("episode_id", None),
-        )
-        raise HTTPException(403, "このエピソードを編集する権限がありません")
+    is_author = novel.author_id == user.id
+    if not is_author:
+        return {
+            "id": ep.id,
+            "novel_id": ep.novel_id,
+            "title": ep.title,
+            "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
+            "can_edit_full": False,
+        }
 
     like_count = db.query(models.EpisodeLike).filter(
         models.EpisodeLike.episode_id == episode_id
@@ -6070,6 +6160,7 @@ def get_episode_for_edit(
             for il in ep.illusts
         ],
         "is_premium_user": is_premium,
+        "can_edit_full": True,
     }
 
 
@@ -6199,6 +6290,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "novel_id": ep.novel_id,
         "author_id": novel.author_id if novel else None,
         "author_username": (novel.author.username if (novel and novel.author) else None),
+        "novel_age_limit": novel.age_limit if novel else None,
         "title": ep.title,
         "cover_image_url": ep.cover_image_url,
         "body": body_converted,
@@ -6226,6 +6318,9 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "is_free_reading_time": is_free_time,
         "next_episode": next_episode,
         "prev_episode": prev_episode,
+        "age_confirmation_required": AGE_RESTRICTION_DISABLED
+        and bool(novel)
+        and novel.age_limit == "r18",
     }
 
 
@@ -6771,6 +6866,7 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
         .all()
     )
     novel_ids = [n.id for n in favorites]
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     cover_map = {}
     if novel_ids:
         cover_rows = (
@@ -6810,6 +6906,7 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
             "view_count": getattr(n, "view_count", 0) or 0,
             "like_count": getattr(n, "like_count", 0) or 0,
             "favorite_count": len(getattr(n, "favorite_links", []) or []),
+            "total_char_count": char_counts.get(n.id, 0),
             "is_public": bool(getattr(n, "is_public", True)),
             "status": getattr(n, "status", "public"),
             "cover_image_url": cover_map.get(n.id),

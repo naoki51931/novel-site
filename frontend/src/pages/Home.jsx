@@ -458,6 +458,7 @@ export default function Home({ query = "" }) {
                       <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
                       <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
                       <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
+                      <span>{t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}</span>
                     </div>
 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -572,6 +573,7 @@ export default function Home({ query = "" }) {
               <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
               <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
               <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
+              <span>{t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}</span>
             </div>
 
             <div style={{ fontSize: 12, color: "var(--novel-card-meta)", marginBottom: 8 }}>

@@ -73,6 +73,9 @@ export default function EditEpisode() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [canEditFull, setCanEditFull] = useState(true);
+
+  const countChars = (value) => (value || "").length;
 
   // draft を読んだかどうかのフラグ
   const hasDraftRef = useRef(false);
@@ -153,36 +156,46 @@ export default function EditEpisode() {
 
         const data = await res.json();
         setNovelId(data.novel_id);
+        const canEdit = data.can_edit_full !== false;
+        setCanEditFull(canEdit);
 
         // draft を読み込んでいない場合だけ API の内容で上書き
         if (!hasDraftRef.current) {
-          setEpisodeNumber(
-            String(
-              data.number != null
-                ? data.number
-                : data.episode_number != null
-                ? data.episode_number
-                : ""
-            )
-          );
-          setTitle(data.title || "");
-          setBody(data.body || "");
+          if (canEdit) {
+            setEpisodeNumber(
+              String(
+                data.number != null
+                  ? data.number
+                  : data.episode_number != null
+                  ? data.episode_number
+                  : ""
+              )
+            );
+            setTitle(data.title || "");
+            setBody(data.body || "");
+          } else {
+            setTitle(data.title || "");
+          }
           if (Array.isArray(data.tags)) {
             setTags(data.tags.map((t) => t.name).join(", "));
           } else {
             setTags("");
           }
-          if (data.status === "draft" || data.is_public === false) {
-            setStatus("draft");
-          } else {
-            setStatus("public");
+          if (canEdit) {
+            if (data.status === "draft" || data.is_public === false) {
+              setStatus("draft");
+            } else {
+              setStatus("public");
+            }
           }
         }
 
 
         // ★ 表紙・押絵も state に取り込む
-        setCoverImageUrl(data.cover_image_url || "");
-        setIllusts(Array.isArray(data.illusts) ? data.illusts : []);
+        if (canEdit) {
+          setCoverImageUrl(data.cover_image_url || "");
+          setIllusts(Array.isArray(data.illusts) ? data.illusts : []);
+        }
       } catch (err) {
         console.error(err);
         setError(
@@ -200,17 +213,19 @@ export default function EditEpisode() {
     e.preventDefault();
     setError("");
 
-    if (!episodeNumber || isNaN(Number(episodeNumber))) {
-      setError(t({ ja: "話数は数字で入力してください。", en: "Episode number must be a number." }));
-      return;
-    }
-    if (!title.trim()) {
-      setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
-      return;
-    }
-    if (!body.trim()) {
-      setError(t({ ja: "本文は必須です。", en: "Body is required." }));
-      return;
+    if (canEditFull) {
+      if (!episodeNumber || isNaN(Number(episodeNumber))) {
+        setError(t({ ja: "話数は数字で入力してください。", en: "Episode number must be a number." }));
+        return;
+      }
+      if (!title.trim()) {
+        setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
+        return;
+      }
+      if (!body.trim()) {
+        setError(t({ ja: "本文は必須です。", en: "Body is required." }));
+        return;
+      }
     }
 
     setSaving(true);
@@ -220,24 +235,32 @@ export default function EditEpisode() {
         throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       }
 
+      const tagNames = tags
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
       const res = await fetch(`${API_BASE}/api/episodes/${id}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: "Bearer " + token,
         },
-        body: JSON.stringify({
-          episode_number: Number(episodeNumber),
-          title,
-          body,
-          status,
-          is_public: status === "public",
-          // ★ 編集時も tag_names を送る
-          tag_names: tags
-            .split(",")
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0),
-        }),
+        body: JSON.stringify(
+          canEditFull
+            ? {
+                episode_number: Number(episodeNumber),
+                title,
+                body,
+                status,
+                is_public: status === "public",
+                // ★ 編集時も tag_names を送る
+                tag_names: tagNames,
+              }
+            : {
+                tag_names: tagNames,
+              }
+        ),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -523,41 +546,61 @@ export default function EditEpisode() {
       </div>
 
       <h2>{t({ ja: "エピソードを編集", en: "Edit Episode" })}</h2>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-        <Link to={`/ai-novel?edit_episode_id=${id}`} className="btn btn-border">
-          {t({ ja: "AI編集", en: "Edit with AI" })}
-        </Link>
-        <Link to={`/ai-novel?episode_id=${id}`} className="btn btn-border">
-          {t({ ja: "AIで続きを生成", en: "Generate continuation with AI" })}
-        </Link>
-      </div>
+      {canEditFull && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+          <Link to={`/ai-novel?edit_episode_id=${id}`} className="btn btn-border">
+            {t({ ja: "AI編集", en: "Edit with AI" })}
+          </Link>
+          <Link to={`/ai-novel?episode_id=${id}`} className="btn btn-border">
+            {t({ ja: "AIで続きを生成", en: "Generate continuation with AI" })}
+          </Link>
+        </div>
+      )}
+      {!canEditFull && (
+        <p style={{ marginBottom: 12, color: "#666" }}>
+          {t({
+            ja: "このエピソードはタグのみ編集できます。",
+            en: "Only tags can be edited for this episode.",
+          })}
+        </p>
+      )}
 
       <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "話数（例: 1, 2, 3）", en: "Episode number (e.g., 1, 2, 3)" })}
-            <br />
-            <input
-              type="number"
-              value={episodeNumber}
-              onChange={(e) => setEpisodeNumber(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            />
-          </label>
-        </div>
+        {canEditFull && (
+          <div style={{ marginBottom: 8 }}>
+            <label>
+              {t({ ja: "話数（例: 1, 2, 3）", en: "Episode number (e.g., 1, 2, 3)" })}
+              <br />
+              <input
+                type="number"
+                value={episodeNumber}
+                onChange={(e) => setEpisodeNumber(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              />
+            </label>
+            <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
+              {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(episodeNumber)}
+            </div>
+          </div>
+        )}
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "タイトル", en: "Title" })}
-            <br />
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            />
-          </label>
-        </div>
+        {canEditFull && (
+          <div style={{ marginBottom: 8 }}>
+            <label>
+              {t({ ja: "タイトル", en: "Title" })}
+              <br />
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              />
+            </label>
+            <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
+              {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(title)}
+            </div>
+          </div>
+        )}
 
         <div style={{ marginBottom: 8 }}>
           <label>
@@ -571,35 +614,45 @@ export default function EditEpisode() {
               style={{ width: "100%", padding: 4 }}
             />
           </label>
+          <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
+            {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(tags)}
+          </div>
         </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "公開ステータス", en: "Visibility" })}
-            <br />
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            >
-              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
-              <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
-            </select>
-          </label>
-        </div>
+        {canEditFull && (
+          <div style={{ marginBottom: 8 }}>
+            <label>
+              {t({ ja: "公開ステータス", en: "Visibility" })}
+              <br />
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              >
+                <option value="public">{t({ ja: "公開", en: "Public" })}</option>
+                <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
+              </select>
+            </label>
+          </div>
+        )}
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "本文", en: "Body" })}
-            <br />
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={10}
-              style={{ width: "100%", padding: 4 }}
-            />
-          </label>
-        </div>
+        {canEditFull && (
+          <div style={{ marginBottom: 8 }}>
+            <label>
+              {t({ ja: "本文", en: "Body" })}
+              <br />
+              <textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={10}
+                style={{ width: "100%", padding: 4 }}
+              />
+            </label>
+            <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
+              {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(body)}
+            </div>
+          </div>
+        )}
 
         {error && (
           <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>
@@ -621,214 +674,219 @@ export default function EditEpisode() {
         </div>
       </form>
 
-      {/* =========================
-          表紙編集セクション
-          ========================= */}
-      <div
-        style={{
-          marginTop: 16,
-          marginBottom: 16,
-          padding: 12,
-          borderRadius: 8,
-          border: "1px solid #ddd",
-        }}
-      >
-        <h3 style={{ marginTop: 0 }}>{t({ ja: "表紙画像", en: "Cover image" })}</h3>
+      {canEditFull && (
+        <>
+          {/* =========================
+              表紙編集セクション
+              ========================= */}
+          <div
+            style={{
+              marginTop: 16,
+              marginBottom: 16,
+              padding: 12,
+              borderRadius: 8,
+              border: "1px solid #ddd",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>{t({ ja: "表紙画像", en: "Cover image" })}</h3>
 
-        {coverImageUrl ? (
-          <div style={{ marginBottom: 12 }}>
-            <img
-              src={withApiBase(coverImageUrl)}
-              alt={t({ ja: "表紙画像", en: "Cover image" })}
-              style={{ maxWidth: "100%", borderRadius: 8 }}
-            />
-            <div style={{ marginTop: 8 }}>
+            {coverImageUrl ? (
+              <div style={{ marginBottom: 12 }}>
+                <img
+                  src={withApiBase(coverImageUrl)}
+                  alt={t({ ja: "表紙画像", en: "Cover image" })}
+                  style={{ maxWidth: "100%", borderRadius: 8 }}
+                />
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={handleCoverDelete}
+                  >
+                    {t({ ja: "表紙を削除", en: "Delete cover" })}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p style={{ color: "#777" }}>
+                {t({ ja: "表紙画像はまだ設定されていません。", en: "No cover image set yet." })}
+              </p>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
+              <input type="file" accept="image/*" onChange={handleCoverFileChange} />
               <button
                 type="button"
                 className="btn btn-border"
-                onClick={handleCoverDelete}
+                onClick={handleCoverUpload}
+                disabled={isUploadingCover || !coverFile}
               >
-                {t({ ja: "表紙を削除", en: "Delete cover" })}
+                {isUploadingCover
+                  ? t({ ja: "アップロード中...", en: "Uploading..." })
+                  : t({ ja: "表紙としてアップロード", en: "Upload as cover" })}
               </button>
             </div>
           </div>
-        ) : (
-          <p style={{ color: "#777" }}>
-            {t({ ja: "表紙画像はまだ設定されていません。", en: "No cover image set yet." })}
-          </p>
-        )}
 
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            alignItems: "center",
-          }}
-        >
-          <input type="file" accept="image/*" onChange={handleCoverFileChange} />
-          <button
-            type="button"
-            className="btn btn-border"
-            onClick={handleCoverUpload}
-            disabled={isUploadingCover || !coverFile}
-          >
-            {isUploadingCover
-              ? t({ ja: "アップロード中...", en: "Uploading..." })
-              : t({ ja: "表紙としてアップロード", en: "Upload as cover" })}
-          </button>
-        </div>
-      </div>
-
-      {/* =========================
-          押絵編集セクション
-          ========================= */}
-      <div
-        style={{
-          marginTop: 16,
-          marginBottom: 16,
-          padding: 12,
-          borderRadius: 8,
-          border: "1px solid #ddd",
-        }}
-      >
-        <h3 style={{ marginTop: 0 }}>{t({ ja: "押絵", en: "Illustrations" })}</h3>
-
-        {illusts.length > 0 ? (
+          {/* =========================
+              押絵編集セクション
+              ========================= */}
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-              gap: 12,
-              marginBottom: 12,
+              marginTop: 16,
+              marginBottom: 16,
+              padding: 12,
+              borderRadius: 8,
+              border: "1px solid #ddd",
             }}
           >
-            {illusts.map((illust) => (
+            <h3 style={{ marginTop: 0 }}>{t({ ja: "押絵", en: "Illustrations" })}</h3>
+
+            {illusts.length > 0 ? (
               <div
-                key={illust.id ?? illust.image_url}
                 style={{
-                  border: "1px solid #eee",
-                  borderRadius: 8,
-                  padding: 8,
-                  textAlign: "center",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                  gap: 12,
+                  marginBottom: 12,
                 }}
               >
-                <img
-                  src={withApiBase(illust.image_url)}
-                  alt={illust.caption || t({ ja: "押絵", en: "Illustration" })}
-                  style={{ maxWidth: "100%", borderRadius: 4 }}
-                />
-                {illust.illust_tag && (
-                  <div style={{ marginTop: 6, fontSize: 12, color: "#444" }}>
-                    {formatIllustTag(illust.illust_tag)}
-                  </div>
-                )}
-                {Array.isArray(illust.meta_tags) && illust.meta_tags.length > 0 && (
-                  <div style={{ marginTop: 4, fontSize: 11, color: "#777" }}>
-                    {illust.meta_tags.join(", ")}
-                  </div>
-                )}
-                {illust.caption && (
-                  <div style={{ marginTop: 4, fontSize: 12 }}>
-                    {illust.caption}
-                  </div>
-                )}
-                {illust.id && (
-                  <button
-                    type="button"
-                    className="btn btn-border"
-                    style={{ marginTop: 6 }}
-                    onClick={() => handleIllustDelete(illust.id)}
+                {illusts.map((illust) => (
+                  <div
+                    key={illust.id ?? illust.image_url}
+                    style={{
+                      border: "1px solid #eee",
+                      borderRadius: 8,
+                      padding: 8,
+                      textAlign: "center",
+                    }}
                   >
-                    {t({ ja: "押絵を削除", en: "Delete illustration" })}
-                  </button>
-                )}
+                    <img
+                      src={withApiBase(illust.image_url)}
+                      alt={illust.caption || t({ ja: "押絵", en: "Illustration" })}
+                      style={{ maxWidth: "100%", borderRadius: 4 }}
+                    />
+                    {illust.illust_tag && (
+                      <div style={{ marginTop: 6, fontSize: 12, color: "#444" }}>
+                        {formatIllustTag(illust.illust_tag)}
+                      </div>
+                    )}
+                    {Array.isArray(illust.meta_tags) &&
+                      illust.meta_tags.length > 0 && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#777" }}>
+                          {illust.meta_tags.join(", ")}
+                        </div>
+                      )}
+                    {illust.caption && (
+                      <div style={{ marginTop: 4, fontSize: 12 }}>
+                        {illust.caption}
+                      </div>
+                    )}
+                    {illust.id && (
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        style={{ marginTop: 6 }}
+                        onClick={() => handleIllustDelete(illust.id)}
+                      >
+                        {t({ ja: "押絵を削除", en: "Delete illustration" })}
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p style={{ color: "#777" }}>
-            {t({ ja: "まだ押絵が登録されていません。", en: "No illustrations yet." })}
-          </p>
-        )}
+            ) : (
+              <p style={{ color: "#777" }}>
+                {t({ ja: "まだ押絵が登録されていません。", en: "No illustrations yet." })}
+              </p>
+            )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={handleIllustFilesChange}
-          />
-          {illustItems.length > 0 ? (
-            <div style={{ marginTop: 8, display: "grid", gap: 10 }}>
-              {illustItems.map((it, idx) => (
-                <div
-                  key={`${it.file?.name ?? "illust"}-${idx}`}
-                  style={{
-                    border: "1px solid #eee",
-                    borderRadius: 8,
-                    padding: 10,
-                    display: "grid",
-                    gap: 6,
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: "#555" }}>
-                    {it.file?.name}
-                  </div>
-                  <input
-                    type="text"
-                    placeholder={t({ ja: "キャプション（任意）", en: "Caption (optional)" })}
-                    value={it.caption || ""}
-                    onChange={(e) => updateIllustCaption(idx, e.target.value)}
-                    style={{ width: "100%", padding: 6 }}
-                  />
-                  <input
-                    type="text"
-                    placeholder={t({
-                      ja: "必須タグ（例: [[illust:12345678]]）",
-                      en: "Required tag (e.g., [[illust:12345678]])",
-                    })}
-                    value={it.illustTag || ""}
-                    onChange={(e) => updateIllustTag(idx, e.target.value)}
-                    style={{ width: "100%", padding: 6 }}
-                  />
-                  <input
-                    type="text"
-                    placeholder={t({
-                      ja: "補助タグ（例: type:scene, mood:soft）",
-                      en: "Optional tags (e.g., type:scene, mood:soft)",
-                    })}
-                    value={it.metaTags || ""}
-                    onChange={(e) => updateIllustMetaTags(idx, e.target.value)}
-                    style={{ width: "100%", padding: 6 }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-border"
-                    onClick={() => removeIllustItem(idx)}
-                  >
-                    {t({ ja: "この押絵を外す", en: "Remove illustration" })}
-                  </button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleIllustFilesChange}
+              />
+              {illustItems.length > 0 ? (
+                <div style={{ marginTop: 8, display: "grid", gap: 10 }}>
+                  {illustItems.map((it, idx) => (
+                    <div
+                      key={`${it.file?.name ?? "illust"}-${idx}`}
+                      style={{
+                        border: "1px solid #eee",
+                        borderRadius: 8,
+                        padding: 10,
+                        display: "grid",
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: "#555" }}>
+                        {it.file?.name}
+                      </div>
+                      <input
+                        type="text"
+                        placeholder={t({ ja: "キャプション（任意）", en: "Caption (optional)" })}
+                        value={it.caption || ""}
+                        onChange={(e) => updateIllustCaption(idx, e.target.value)}
+                        style={{ width: "100%", padding: 6 }}
+                      />
+                      <input
+                        type="text"
+                        placeholder={t({
+                          ja: "必須タグ（例: [[illust:12345678]]）",
+                          en: "Required tag (e.g., [[illust:12345678]])",
+                        })}
+                        value={it.illustTag || ""}
+                        onChange={(e) => updateIllustTag(idx, e.target.value)}
+                        style={{ width: "100%", padding: 6 }}
+                      />
+                      <input
+                        type="text"
+                        placeholder={t({
+                          ja: "補助タグ（例: type:scene, mood:soft）",
+                          en: "Optional tags (e.g., type:scene, mood:soft)",
+                        })}
+                        value={it.metaTags || ""}
+                        onChange={(e) => updateIllustMetaTags(idx, e.target.value)}
+                        style={{ width: "100%", padding: 6 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        onClick={() => removeIllustItem(idx)}
+                      >
+                        {t({ ja: "この押絵を外す", en: "Remove illustration" })}
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <p style={{ marginTop: 6, color: "#777", fontSize: 13 }}>
+                  {t({ ja: "まだ押絵は選択されていません。", en: "No illustrations selected yet." })}
+                </p>
+              )}
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={handleIllustUpload}
+                disabled={isUploadingIllust || !illustItems.length}
+              >
+                {isUploadingIllust
+                  ? t({ ja: "アップロード中...", en: "Uploading..." })
+                  : t({ ja: "押絵を追加", en: "Add illustration" })}
+              </button>
             </div>
-          ) : (
-            <p style={{ marginTop: 6, color: "#777", fontSize: 13 }}>
-              {t({ ja: "まだ押絵は選択されていません。", en: "No illustrations selected yet." })}
-            </p>
-          )}
-          <button
-            type="button"
-            className="btn btn-border"
-            onClick={handleIllustUpload}
-            disabled={isUploadingIllust || !illustItems.length}
-          >
-            {isUploadingIllust
-              ? t({ ja: "アップロード中...", en: "Uploading..." })
-              : t({ ja: "押絵を追加", en: "Add illustration" })}
-          </button>
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
