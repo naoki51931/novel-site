@@ -156,11 +156,11 @@ export default function AdminPayouts() {
 
       <section
         style={{
-          border: "1px solid #ddd",
+          border: "1px solid var(--border)",
           borderRadius: 10,
           padding: 16,
           marginBottom: 16,
-          background: "#fff",
+          background: "var(--surface)",
         }}
       >
         <h3 style={{ marginTop: 0 }}>精算生成</h3>
@@ -210,19 +210,19 @@ export default function AdminPayouts() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
                         {t({ ja: "作者", en: "Author" })}
                       </th>
-                      <th style={{ textAlign: "right", borderBottom: "1px solid #eee" }}>
+                      <th style={{ textAlign: "right", borderBottom: "1px solid var(--border)" }}>
                         {t({ ja: "合計", en: "Total" })}
                       </th>
-                      <th style={{ textAlign: "right", borderBottom: "1px solid #eee" }}>
+                      <th style={{ textAlign: "right", borderBottom: "1px solid var(--border)" }}>
                         {t({ ja: "支援", en: "Support" })}
                       </th>
-                      <th style={{ textAlign: "right", borderBottom: "1px solid #eee" }}>
+                      <th style={{ textAlign: "right", borderBottom: "1px solid var(--border)" }}>
                         {t({ ja: "請求", en: "Invoice" })}
                       </th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
                         {t({ ja: "状態", en: "Status" })}
                       </th>
                     </tr>
@@ -266,12 +266,12 @@ export default function AdminPayouts() {
 
       <section
         style={{
-          border: "1px solid #ddd",
+          border: "1px solid var(--border)",
           borderRadius: 10,
           padding: 16,
-        background: "#fff",
-      }}
-    >
+          background: "var(--surface)",
+        }}
+      >
         <h3 style={{ marginTop: 0 }}>{t({ ja: "支払確定 / 失敗", en: "Mark paid / failed" })}</h3>
         <div style={{ display: "grid", gap: 8 }}>
           <label>
@@ -302,7 +302,7 @@ export default function AdminPayouts() {
             </select>
           </label>
           {profileLoading && (
-            <div style={{ fontSize: 13, color: "#666" }}>
+            <div style={{ fontSize: 13, color: "var(--muted-text)" }}>
               {t({ ja: "振込先情報を取得中...", en: "Loading payout destination..." })}
             </div>
           )}
@@ -310,10 +310,10 @@ export default function AdminPayouts() {
           {selectedProfile && (
             <div
               style={{
-                border: "1px solid #e0e0e0",
+                border: "1px solid var(--border)",
                 padding: 10,
                 borderRadius: 8,
-                background: "#f9fbfc",
+                background: "var(--surface-2)",
                 fontSize: 13,
               }}
             >
@@ -371,7 +371,7 @@ export default function AdminPayouts() {
           </button>
         </div>
         {!payoutsList.length && (
-          <div style={{ marginTop: 10, color: "#666", fontSize: 13 }}>
+          <div style={{ marginTop: 10, color: "var(--muted-text)", fontSize: 13 }}>
             {t({ ja: "振込待ちの精算がありません。", en: "No pending payouts." })}
           </div>
         )}

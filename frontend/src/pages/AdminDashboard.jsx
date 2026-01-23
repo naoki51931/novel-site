@@ -112,7 +112,7 @@ export default function AdminDashboard() {
       <h2 style={{ marginBottom: 8 }}>
         {t({ ja: "支援・振込ダッシュボード", en: "Support & Payout Dashboard" })}
       </h2>
-      <p style={{ marginTop: 0, marginBottom: 16, color: "#555" }}>
+      <p style={{ marginTop: 0, marginBottom: 16, color: "var(--muted-text)" }}>
         {t({
           ja: "支援発生と振込タイミングを直近の流れで確認できます。",
           en: "Review recent support activity and payout timing.",
@@ -126,18 +126,18 @@ export default function AdminDashboard() {
         <>
           <section
             style={{
-              border: "1px solid #ddd",
+              border: "1px solid var(--border)",
               borderRadius: 10,
               padding: 16,
               marginBottom: 16,
-              background: "#fff",
+              background: "var(--surface)",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <h3 style={{ marginTop: 0 }}>
                 {t({ ja: "支援タイミング（ユーザー別）", en: "Support timing (by user)" })}
               </h3>
-              <label style={{ fontSize: 13, color: "#666" }}>
+              <label style={{ fontSize: 13, color: "var(--muted-text)" }}>
                 {t({ ja: "表示対象", en: "View by" })}
                 <select
                   value={supportBy}
@@ -149,7 +149,7 @@ export default function AdminDashboard() {
                 </select>
               </label>
             </div>
-            <div style={{ fontSize: 12, color: "#777", marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: "var(--muted-text)", marginBottom: 12 }}>
               {supportWindow}
             </div>
 
@@ -167,7 +167,7 @@ export default function AdminDashboard() {
                   >
                     <div>
                       <div style={{ fontWeight: 600 }}>{user.username}</div>
-                      <div style={{ fontSize: 12, color: "#666" }}>
+                      <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                         {t(
                           { ja: "合計 {{amount}}円 / {{count}}件", en: "Total ¥{{amount}} / {{count}} items" },
                           { amount: yen(user.total_amount_yen, locale), count: user.total_count }
@@ -179,7 +179,7 @@ export default function AdminDashboard() {
                 ))}
               </div>
             ) : (
-              <div style={{ color: "#666", fontSize: 14 }}>
+              <div style={{ color: "var(--muted-text)", fontSize: 14 }}>
                 {t({ ja: "該当期間の支援データがありません。", en: "No support data for this period." })}
               </div>
             )}
@@ -187,14 +187,14 @@ export default function AdminDashboard() {
 
           <section
             style={{
-              border: "1px solid #ddd",
+              border: "1px solid var(--border)",
               borderRadius: 10,
               padding: 16,
-            background: "#fff",
-          }}
-        >
+              background: "var(--surface)",
+            }}
+          >
             <h3 style={{ marginTop: 0 }}>{t({ ja: "振込タイミング", en: "Payout timing" })}</h3>
-            <div style={{ fontSize: 12, color: "#777", marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: "var(--muted-text)", marginBottom: 12 }}>
               {payoutWindow} /{" "}
               {t({ ja: "振込最低額", en: "Minimum payout" })}{" "}
               {t(
@@ -205,7 +205,7 @@ export default function AdminDashboard() {
 
             {payouts && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>
+                <div style={{ fontSize: 13, color: "var(--muted-text)", marginBottom: 6 }}>
                   {t({ ja: "振込完了（合計金額）", en: "Completed payouts (total)" })}
                 </div>
                 <SparkBars data={payouts.paid_amounts} color="#3b5b7a" />
@@ -233,7 +233,7 @@ export default function AdminDashboard() {
                         <div>
                           {item.username} /{" "}
                           {t({ ja: "{{amount}}円", en: "¥{{amount}}" }, { amount: yen(item.amount_yen, locale) })}
-                          <div style={{ color: "#666", fontSize: 12 }}>
+                          <div style={{ color: "var(--muted-text)", fontSize: 12 }}>
                             {item.period_start} – {item.period_end}
                           </div>
                           <button
@@ -253,14 +253,14 @@ export default function AdminDashboard() {
                             {t({ ja: "口座情報を見る", en: "View bank details" })}
                           </button>
                         </div>
-                        <div style={{ textTransform: "uppercase", color: "#666" }}>
+                        <div style={{ textTransform: "uppercase", color: "var(--muted-text)" }}>
                           {item.status}
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div style={{ color: "#666", fontSize: 13 }}>
+                  <div style={{ color: "var(--muted-text)", fontSize: 13 }}>
                     {t({ ja: "振込待ちのデータがありません。", en: "No pending payouts." })}
                   </div>
                 )}
@@ -278,13 +278,13 @@ export default function AdminDashboard() {
                   <div
                     style={{
                       marginTop: 12,
-                      border: "1px solid #e0e0e0",
+                      border: "1px solid var(--border)",
                       padding: 12,
                       borderRadius: 8,
-                      background: "#f9fbfc",
+                      background: "var(--surface-2)",
                       fontSize: 13,
                     }}
-                    >
+                  >
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>
                       {t(
                         { ja: "{{name}} の振込先", en: "Payout destination for {{name}}" },
@@ -343,18 +343,18 @@ export default function AdminDashboard() {
                         <div>
                           {item.username} /{" "}
                           {t({ ja: "{{amount}}円", en: "¥{{amount}}" }, { amount: yen(item.amount_yen, locale) })}
-                          <div style={{ color: "#666", fontSize: 12 }}>
+                          <div style={{ color: "var(--muted-text)", fontSize: 12 }}>
                             {item.period_start} – {item.period_end}
                           </div>
                         </div>
-                        <div style={{ color: "#666" }}>
+                        <div style={{ color: "var(--muted-text)" }}>
                           {item.paid_at ? item.paid_at.slice(0, 10) : "-"}
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div style={{ color: "#666", fontSize: 13 }}>
+                  <div style={{ color: "var(--muted-text)", fontSize: 13 }}>
                     {t({ ja: "振込履歴がありません。", en: "No payout history." })}
                   </div>
                 )}

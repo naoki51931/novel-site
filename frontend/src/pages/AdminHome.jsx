@@ -6,11 +6,7 @@ import { useI18n } from "../lib/i18n";
 export default function AdminHome() {
   const navigate = useNavigate();
   const { t } = useI18n();
-  const [contactSubject, setContactSubject] = useState("");
-  const [contactBody, setContactBody] = useState("");
-  const [contactSending, setContactSending] = useState(false);
   const [contactError, setContactError] = useState("");
-  const [contactSuccess, setContactSuccess] = useState("");
   const [contactMessages, setContactMessages] = useState([]);
   const [contactLoading, setContactLoading] = useState(true);
 
@@ -38,46 +34,6 @@ export default function AdminHome() {
     checkAuth();
   }, [navigate, t]);
 
-  const refreshMessages = async () => {
-    try {
-      const messages = await apiFetch("/api/admin/contact/messages?limit=50", {
-        credentials: "include",
-      });
-      setContactMessages(messages || []);
-    } catch (e) {
-      setContactError(
-        e.message || t({ ja: "送信ログの取得に失敗しました。", en: "Failed to load messages." })
-      );
-    }
-  };
-
-  const handleContactSubmit = async (event) => {
-    event.preventDefault();
-    setContactError("");
-    setContactSuccess("");
-    try {
-      setContactSending(true);
-      await apiFetch("/api/admin/contact/messages", {
-        method: "POST",
-        credentials: "include",
-        body: {
-          subject: contactSubject,
-          body: contactBody,
-        },
-      });
-      setContactSuccess(t({ ja: "送信しました。", en: "Sent successfully." }));
-      setContactSubject("");
-      setContactBody("");
-      await refreshMessages();
-    } catch (e) {
-      setContactError(
-        e.message || t({ ja: "送信に失敗しました。", en: "Failed to send." })
-      );
-    } finally {
-      setContactSending(false);
-    }
-  };
-
   const handleLogout = async () => {
     await apiFetch("/api/admin/auth/logout", {
       method: "POST",
@@ -91,39 +47,15 @@ export default function AdminHome() {
       <section
         id="admin-contact"
         style={{
-          border: "1px solid #ddd",
+          border: "1px solid var(--border)",
           borderRadius: 10,
           padding: 16,
           marginBottom: 20,
-          background: "#fff",
+          background: "var(--surface)",
         }}
       >
         <h3 style={{ marginTop: 0 }}>{t({ ja: "お問い合わせ", en: "Contact" })}</h3>
-        <form onSubmit={handleContactSubmit} style={{ display: "grid", gap: 10 }}>
-          <input
-            type="text"
-            value={contactSubject}
-            onChange={(event) => setContactSubject(event.target.value)}
-            placeholder={t({ ja: "件名", en: "Subject" })}
-            style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #ccc" }}
-          />
-          <textarea
-            value={contactBody}
-            onChange={(event) => setContactBody(event.target.value)}
-            placeholder={t({ ja: "本文", en: "Message" })}
-            rows={5}
-            style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #ccc" }}
-          />
-          {contactError && <div style={{ color: "red" }}>{contactError}</div>}
-          {contactSuccess && <div style={{ color: "green" }}>{contactSuccess}</div>}
-          <button
-            type="submit"
-            className="btn btn-border"
-            disabled={contactSending || !contactSubject.trim() || !contactBody.trim()}
-          >
-            {contactSending ? t({ ja: "送信中...", en: "Sending..." }) : t({ ja: "送信", en: "Send" })}
-          </button>
-        </form>
+        {contactError && <div style={{ color: "red" }}>{contactError}</div>}
         <div style={{ marginTop: 16 }}>
           <h4 style={{ marginBottom: 8 }}>{t({ ja: "送信ログ", en: "Send log" })}</h4>
           {contactLoading ? (
@@ -134,15 +66,15 @@ export default function AdminHome() {
                 <div
                   key={message.id}
                   style={{
-                    border: "1px solid #eee",
+                    border: "1px solid var(--border)",
                     borderRadius: 8,
                     padding: 10,
-                    background: "#fafafa",
+                    background: "var(--surface-2)",
                   }}
                 >
                   <div style={{ fontWeight: 600 }}>{message.subject}</div>
                   <div style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>{message.body}</div>
-                  <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
+                  <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 6 }}>
                     {message.admin_username
                       ? `${message.admin_username} / `
                       : ""}
@@ -152,7 +84,7 @@ export default function AdminHome() {
               ))}
             </div>
           ) : (
-            <div style={{ color: "#666" }}>
+            <div style={{ color: "var(--muted-text)" }}>
               {t({ ja: "送信ログはまだありません。", en: "No messages yet." })}
             </div>
           )}

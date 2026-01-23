@@ -162,8 +162,8 @@ export default function SupportPanel({
         margin: "16px 0",
         padding: "16px",
         borderRadius: 12,
-        border: "1px solid #ddd",
-        background: "#fffdf7",
+        border: "1px solid var(--border)",
+        background: "var(--surface-2)",
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
       }}
     >
@@ -233,7 +233,7 @@ export default function SupportPanel({
             <p style={{ color: "red", marginTop: 0, marginBottom: 8 }}>{plansError}</p>
           )}
           {plans.length === 0 ? (
-            <p style={{ marginTop: 0, color: "#666" }}>
+            <p style={{ marginTop: 0, color: "var(--muted-text)" }}>
               {t({ ja: "月額プランがありません。", en: "No monthly plans available." })}
             </p>
           ) : (
@@ -247,8 +247,8 @@ export default function SupportPanel({
                     alignItems: "center",
                     padding: "6px 8px",
                     borderRadius: 6,
-                    border: "1px solid #ddd",
-                    background: "#fff",
+                    border: "1px solid var(--border)",
+                    background: "var(--surface)",
                   }}
                 >
                   <input
@@ -284,7 +284,7 @@ export default function SupportPanel({
         </div>
       </div>
 
-      <div style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
+      <div style={{ marginTop: 12, fontSize: 12, color: "var(--muted-text)" }}>
         <p style={{ margin: 0 }}>
           {t({ ja: "決済は Stripe に移動します。", en: "Payment is handled on Stripe." })}
         </p>
