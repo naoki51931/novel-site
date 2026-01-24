@@ -6974,12 +6974,13 @@ def list_my_novel_analytics(
         start_day = today.replace(day=1)
 
     next_month = (start_day.replace(day=28) + timedelta(days=4)).replace(day=1)
-    novel_ids = [
-        row[0]
-        for row in db.query(models.Novel.id)
+    novels = (
+        db.query(models.Novel.id, models.Novel.title)
         .filter(models.Novel.author_id == user.id)
+        .order_by(models.Novel.created_at.desc())
         .all()
-    ]
+    )
+    novel_ids = [row[0] for row in novels]
 
     day_map = {}
     if novel_ids:
@@ -7025,9 +7026,127 @@ def list_my_novel_analytics(
         )
         cursor += timedelta(days=1)
 
+    novel_metric_map = {}
+    if novel_ids:
+        metric_rows = (
+            db.query(
+                models.NovelDailyMetric.novel_id,
+                func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0),
+                func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0),
+                func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0),
+            )
+            .filter(models.NovelDailyMetric.novel_id.in_(novel_ids))
+            .filter(models.NovelDailyMetric.date >= start_day)
+            .filter(models.NovelDailyMetric.date < next_month)
+            .group_by(models.NovelDailyMetric.novel_id)
+            .all()
+        )
+        novel_metric_map = {
+            row[0]: {
+                "views": int(row[1] or 0),
+                "likes": int(row[2] or 0),
+                "favorites": int(row[3] or 0),
+            }
+            for row in metric_rows
+        }
+
+    per_novel = [
+        {
+            "id": novel_id,
+            "title": title,
+            "views": (novel_metric_map.get(novel_id) or {}).get("views", 0),
+            "likes": (novel_metric_map.get(novel_id) or {}).get("likes", 0),
+            "favorites": (novel_metric_map.get(novel_id) or {}).get("favorites", 0),
+        }
+        for novel_id, title in novels
+    ]
+    per_novel.sort(
+        key=lambda row: (-row["views"], -row["likes"], -row["favorites"], row["title"])
+    )
+
     return {
         "month": start_day.strftime("%Y-%m"),
         "novel_count": len(novel_ids),
+        "totals": {
+            "views": total_views,
+            "likes": total_likes,
+            "favorites": total_favorites,
+        },
+        "days": days,
+        "novels": per_novel,
+    }
+
+
+@app.get("/api/me/analytics/novels/{novel_id}")
+def read_my_novel_analytics(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    month: Optional[str] = Query(None),
+):
+    user = require_current_user(request, db)
+    novel = (
+        db.query(models.Novel.id, models.Novel.title)
+        .filter(models.Novel.id == novel_id, models.Novel.author_id == user.id)
+        .first()
+    )
+    if not novel:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "対象の小説が見つかりません")
+
+    if month:
+        try:
+            start_day = datetime.strptime(month, "%Y-%m").date()
+        except ValueError:
+            raise HTTPException(400, "month は YYYY-MM 形式で指定してください")
+    else:
+        today = date.today()
+        start_day = today.replace(day=1)
+
+    next_month = (start_day.replace(day=28) + timedelta(days=4)).replace(day=1)
+    rows = (
+        db.query(
+            models.NovelDailyMetric.date,
+            func.coalesce(models.NovelDailyMetric.view_count, 0),
+            func.coalesce(models.NovelDailyMetric.like_count, 0),
+            func.coalesce(models.NovelDailyMetric.favorite_count, 0),
+        )
+        .filter(models.NovelDailyMetric.novel_id == novel_id)
+        .filter(models.NovelDailyMetric.date >= start_day)
+        .filter(models.NovelDailyMetric.date < next_month)
+        .all()
+    )
+    day_map = {
+        row[0]: {
+            "views": int(row[1] or 0),
+            "likes": int(row[2] or 0),
+            "favorites": int(row[3] or 0),
+        }
+        for row in rows
+    }
+
+    days = []
+    total_views = 0
+    total_likes = 0
+    total_favorites = 0
+    cursor = start_day
+    while cursor < next_month:
+        counts = day_map.get(cursor, {"views": 0, "likes": 0, "favorites": 0})
+        total_views += counts["views"]
+        total_likes += counts["likes"]
+        total_favorites += counts["favorites"]
+        days.append(
+            {
+                "date": str(cursor),
+                "views": counts["views"],
+                "likes": counts["likes"],
+                "favorites": counts["favorites"],
+            }
+        )
+        cursor += timedelta(days=1)
+
+    return {
+        "month": start_day.strftime("%Y-%m"),
+        "novel": {"id": novel.id, "title": novel.title},
         "totals": {
             "views": total_views,
             "likes": total_likes,

@@ -65,6 +65,10 @@ export default function Mypage() {
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState("");
+  const [selectedNovelId, setSelectedNovelId] = useState("");
+  const [selectedNovelAnalytics, setSelectedNovelAnalytics] = useState(null);
+  const [novelAnalyticsLoading, setNovelAnalyticsLoading] = useState(false);
+  const [novelAnalyticsError, setNovelAnalyticsError] = useState("");
   const [username, setUsername] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
@@ -199,6 +203,50 @@ export default function Mypage() {
 
     fetchAnalytics();
   }, [analyticsMonth, token, t]);
+
+  useEffect(() => {
+    if (!token || !selectedNovelId) {
+      setSelectedNovelAnalytics(null);
+      setNovelAnalyticsError("");
+      setNovelAnalyticsLoading(false);
+      return;
+    }
+
+    const fetchNovelAnalytics = async () => {
+      try {
+        setNovelAnalyticsLoading(true);
+        setNovelAnalyticsError("");
+        const res = await fetch(
+          `${API_BASE}/api/me/analytics/novels/${selectedNovelId}?month=${analyticsMonth}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data.detail || t({ ja: "小説別アクセス解析の取得に失敗しました", en: "Failed to load novel analytics." })
+          );
+        }
+        setSelectedNovelAnalytics(data);
+      } catch (err) {
+        console.error(err);
+        setNovelAnalyticsError(
+          err.message ||
+            t({
+              ja: "小説別アクセス解析の取得中にエラーが発生しました",
+              en: "An error occurred while loading novel analytics.",
+            })
+        );
+      } finally {
+        setNovelAnalyticsLoading(false);
+      }
+    };
+
+    fetchNovelAnalytics();
+  }, [analyticsMonth, selectedNovelId, token, t]);
 
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
@@ -441,6 +489,184 @@ export default function Mypage() {
                 <p style={{ marginTop: 8 }}>
                   {t({ ja: "データがありません。", en: "No data." })}
                 </p>
+              )}
+            </div>
+
+            <div style={{ marginTop: 20 }}>
+              <h4 style={{ marginBottom: 8 }}>
+                {t({ ja: "小説別の集計", en: "By novel" })}
+              </h4>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 12 }}>
+                <label style={{ fontSize: 14 }}>
+                  {t({ ja: "小説を選択", en: "Select novel" })}
+                </label>
+                <select
+                  value={selectedNovelId}
+                  onChange={(e) => setSelectedNovelId(e.target.value)}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border)",
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    minWidth: 220,
+                  }}
+                >
+                  <option value="">{t({ ja: "選択してください", en: "Choose a novel" })}</option>
+                  {(analyticsData.novels || []).map((novel) => (
+                    <option key={novel.id} value={novel.id}>
+                      {novel.title || t({ ja: "無題", en: "Untitled" })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {Array.isArray(analyticsData.novels) && analyticsData.novels.length > 0 ? (
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr repeat(3, minmax(0, 120px))",
+                      fontSize: 12,
+                      color: "var(--muted-text)",
+                      paddingBottom: 4,
+                      borderBottom: "1px solid var(--border)",
+                    }}
+                  >
+                    <span>{t({ ja: "タイトル", en: "Title" })}</span>
+                    <span>{t({ ja: "閲覧", en: "Views" })}</span>
+                    <span>{t({ ja: "いいね", en: "Likes" })}</span>
+                    <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}</span>
+                  </div>
+                  {analyticsData.novels.map((novel) => (
+                    <div
+                      key={novel.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr repeat(3, minmax(0, 120px))",
+                        fontSize: 13,
+                        padding: "4px 0",
+                        borderBottom: "1px solid rgba(0,0,0,0.04)",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <Link to={`/novels/${novel.id}`} style={{ fontWeight: 600 }}>
+                        {novel.title || t({ ja: "無題", en: "Untitled" })}
+                      </Link>
+                      <span>{novel.views ?? 0}</span>
+                      <span>{novel.likes ?? 0}</span>
+                      <span>{novel.favorites ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ marginTop: 8 }}>
+                  {t({ ja: "小説別のデータがありません。", en: "No per-novel data." })}
+                </p>
+              )}
+            </div>
+
+            <div style={{ marginTop: 20 }}>
+              <h4 style={{ marginBottom: 8 }}>
+                {t({ ja: "小説別の日ごとの履歴", en: "Novel daily history" })}
+              </h4>
+              {!selectedNovelId && (
+                <p style={{ marginTop: 8 }}>
+                  {t({ ja: "小説を選択すると日ごとの集計が表示されます。", en: "Select a novel to see daily stats." })}
+                </p>
+              )}
+              {novelAnalyticsLoading && <p style={{ marginTop: 8 }}>{t({ ja: "読み込み中...", en: "Loading..." })}</p>}
+              {novelAnalyticsError && <p style={{ marginTop: 8, color: "red" }}>{novelAnalyticsError}</p>}
+              {!novelAnalyticsLoading && !novelAnalyticsError && selectedNovelAnalytics && (
+                <div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        background: "var(--surface)",
+                      }}
+                    >
+                      <strong style={{ fontSize: 13 }}>
+                        {t({ ja: "合計閲覧", en: "Total views" })}
+                      </strong>
+                      <div style={{ fontSize: 18, marginTop: 4 }}>
+                        {selectedNovelAnalytics.totals?.views ?? 0}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        background: "var(--surface)",
+                      }}
+                    >
+                      <strong style={{ fontSize: 13 }}>
+                        {t({ ja: "合計いいね", en: "Total likes" })}
+                      </strong>
+                      <div style={{ fontSize: 18, marginTop: 4 }}>
+                        {selectedNovelAnalytics.totals?.likes ?? 0}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        background: "var(--surface)",
+                      }}
+                    >
+                      <strong style={{ fontSize: 13 }}>
+                        {t({ ja: "合計ブックマーク", en: "Total bookmarks" })}
+                      </strong>
+                      <div style={{ fontSize: 18, marginTop: 4 }}>
+                        {selectedNovelAnalytics.totals?.favorites ?? 0}
+                      </div>
+                    </div>
+                  </div>
+                  {Array.isArray(selectedNovelAnalytics.days) && selectedNovelAnalytics.days.length > 0 ? (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "120px repeat(3, minmax(0, 1fr))",
+                          fontSize: 12,
+                          color: "var(--muted-text)",
+                          paddingBottom: 4,
+                          borderBottom: "1px solid var(--border)",
+                        }}
+                      >
+                        <span>{t({ ja: "日付", en: "Date" })}</span>
+                        <span>{t({ ja: "閲覧", en: "Views" })}</span>
+                        <span>{t({ ja: "いいね", en: "Likes" })}</span>
+                        <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}</span>
+                      </div>
+                      {selectedNovelAnalytics.days.map((row) => (
+                        <div
+                          key={row.date}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "120px repeat(3, minmax(0, 1fr))",
+                            fontSize: 13,
+                            padding: "4px 0",
+                            borderBottom: "1px solid rgba(0,0,0,0.04)",
+                          }}
+                        >
+                          <span>{row.date}</span>
+                          <span>{row.views ?? 0}</span>
+                          <span>{row.likes ?? 0}</span>
+                          <span>{row.favorites ?? 0}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ marginTop: 8 }}>
+                      {t({ ja: "データがありません。", en: "No data." })}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>
