@@ -57,6 +57,14 @@ export default function Mypage() {
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [analyticsMonth, setAnalyticsMonth] = useState(() => {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    return `${now.getFullYear()}-${month}`;
+  });
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
   const [username, setUsername] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
@@ -110,7 +118,7 @@ export default function Mypage() {
   }, [navigate, token]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !analyticsMonth) return;
 
     const fetchFavoritesAndProfile = async () => {
       try {
@@ -155,6 +163,42 @@ export default function Mypage() {
 
     fetchFavoritesAndProfile();
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const fetchAnalytics = async () => {
+      try {
+        setAnalyticsLoading(true);
+        setAnalyticsError("");
+        const res = await fetch(
+          `${API_BASE}/api/me/analytics/novels?month=${analyticsMonth}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data.detail || t({ ja: "アクセス解析の取得に失敗しました", en: "Failed to load analytics." })
+          );
+        }
+        setAnalyticsData(data);
+      } catch (err) {
+        console.error(err);
+        setAnalyticsError(
+          err.message ||
+            t({ ja: "アクセス解析の取得中にエラーが発生しました", en: "An error occurred while loading analytics." })
+        );
+      } finally {
+        setAnalyticsLoading(false);
+      }
+    };
+
+    fetchAnalytics();
+  }, [analyticsMonth, token, t]);
 
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
@@ -275,6 +319,132 @@ export default function Mypage() {
             {t({ ja: "公開ページを見る", en: "View public page" })}
           </Link>
         </div>
+      </section>
+
+      {/* アクセス解析 */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          {t({ ja: "アクセス解析", en: "Analytics" })}
+        </h3>
+
+        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+          <label style={{ fontSize: 14 }}>
+            {t({ ja: "月を選択", en: "Select month" })}
+          </label>
+          <input
+            type="month"
+            value={analyticsMonth}
+            onChange={(e) => setAnalyticsMonth(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: "var(--surface)",
+              color: "var(--text)",
+            }}
+          />
+        </div>
+
+        {analyticsLoading && <p style={{ marginTop: 10 }}>{t({ ja: "読み込み中...", en: "Loading..." })}</p>}
+        {analyticsError && <p style={{ marginTop: 10, color: "red" }}>{analyticsError}</p>}
+
+        {!analyticsLoading && !analyticsError && analyticsData && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              <div
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface)",
+                }}
+              >
+                <strong style={{ fontSize: 13 }}>
+                  {t({ ja: "合計閲覧", en: "Total views" })}
+                </strong>
+                <div style={{ fontSize: 18, marginTop: 4 }}>
+                  {analyticsData.totals?.views ?? 0}
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface)",
+                }}
+              >
+                <strong style={{ fontSize: 13 }}>
+                  {t({ ja: "合計いいね", en: "Total likes" })}
+                </strong>
+                <div style={{ fontSize: 18, marginTop: 4 }}>
+                  {analyticsData.totals?.likes ?? 0}
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface)",
+                }}
+              >
+                <strong style={{ fontSize: 13 }}>
+                  {t({ ja: "合計ブックマーク", en: "Total bookmarks" })}
+                </strong>
+                <div style={{ fontSize: 18, marginTop: 4 }}>
+                  {analyticsData.totals?.favorites ?? 0}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <h4 style={{ marginBottom: 8 }}>
+                {t({ ja: "日ごとの履歴", en: "Daily history" })}
+              </h4>
+              {Array.isArray(analyticsData.days) && analyticsData.days.length > 0 ? (
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "120px repeat(3, minmax(0, 1fr))",
+                      fontSize: 12,
+                      color: "var(--muted-text)",
+                      paddingBottom: 4,
+                      borderBottom: "1px solid var(--border)",
+                    }}
+                  >
+                    <span>{t({ ja: "日付", en: "Date" })}</span>
+                    <span>{t({ ja: "閲覧", en: "Views" })}</span>
+                    <span>{t({ ja: "いいね", en: "Likes" })}</span>
+                    <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}</span>
+                  </div>
+                  {analyticsData.days.map((row) => (
+                    <div
+                      key={row.date}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "120px repeat(3, minmax(0, 1fr))",
+                        fontSize: 13,
+                        padding: "4px 0",
+                        borderBottom: "1px solid rgba(0,0,0,0.04)",
+                      }}
+                    >
+                      <span>{row.date}</span>
+                      <span>{row.views ?? 0}</span>
+                      <span>{row.likes ?? 0}</span>
+                      <span>{row.favorites ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ marginTop: 8 }}>
+                  {t({ ja: "データがありません。", en: "No data." })}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* お気に入り小説 */}

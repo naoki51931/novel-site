@@ -112,6 +112,38 @@ def get_novel_char_counts(db: Session, novel_ids: list[int], public_only: bool =
     rows = q.group_by(models.Episode.novel_id).all()
     return {row[0]: int(row[1] or 0) for row in rows}
 
+def apply_novel_daily_metric(
+    db: Session,
+    novel_id: int,
+    view_delta: int = 0,
+    like_delta: int = 0,
+    favorite_delta: int = 0,
+    target_date: Optional[date] = None,
+) -> None:
+    if view_delta == 0 and like_delta == 0 and favorite_delta == 0:
+        return
+    metric_date = target_date or date.today()
+    db.execute(
+        text(
+            """
+            INSERT INTO novel_daily_metrics (novel_id, `date`, view_count, like_count, favorite_count)
+            VALUES (:novel_id, :metric_date, :view_delta, :like_delta, :favorite_delta)
+            ON DUPLICATE KEY UPDATE
+                view_count = GREATEST(0, view_count + :view_delta),
+                like_count = GREATEST(0, like_count + :like_delta),
+                favorite_count = GREATEST(0, favorite_count + :favorite_delta),
+                updated_at = NOW()
+            """
+        ),
+        {
+            "novel_id": novel_id,
+            "metric_date": metric_date,
+            "view_delta": view_delta,
+            "like_delta": like_delta,
+            "favorite_delta": favorite_delta,
+        },
+    )
+
 def ensure_users_table_columns():
     """
     このリポジトリはマイグレーションツールを使っていないため、
@@ -4422,6 +4454,7 @@ def get_novel_detail(
 
     # 閲覧数カウント
     novel.view_count = (novel.view_count or 0) + 1
+    apply_novel_daily_metric(db, novel.id, view_delta=1)
     db.commit()
     db.refresh(novel)
 
@@ -6651,6 +6684,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
 
     novel.like_count = (novel.like_count or 0) + 1
     db.add(novel)
+    apply_novel_daily_metric(db, novel.id, like_delta=1)
 
     if novel.author_id != user.id:
         title = "小説にいいねが付きました"
@@ -6921,6 +6955,88 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
     ]
 
 # ============================
+# マイページ用アクセス解析
+# ============================
+@app.get("/api/me/analytics/novels")
+def list_my_novel_analytics(
+    request: Request,
+    db: Session = Depends(get_db),
+    month: Optional[str] = Query(None),
+):
+    user = require_current_user(request, db)
+    if month:
+        try:
+            start_day = datetime.strptime(month, "%Y-%m").date()
+        except ValueError:
+            raise HTTPException(400, "month は YYYY-MM 形式で指定してください")
+    else:
+        today = date.today()
+        start_day = today.replace(day=1)
+
+    next_month = (start_day.replace(day=28) + timedelta(days=4)).replace(day=1)
+    novel_ids = [
+        row[0]
+        for row in db.query(models.Novel.id)
+        .filter(models.Novel.author_id == user.id)
+        .all()
+    ]
+
+    day_map = {}
+    if novel_ids:
+        rows = (
+            db.query(
+                models.NovelDailyMetric.date,
+                func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0),
+                func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0),
+                func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0),
+            )
+            .filter(models.NovelDailyMetric.novel_id.in_(novel_ids))
+            .filter(models.NovelDailyMetric.date >= start_day)
+            .filter(models.NovelDailyMetric.date < next_month)
+            .group_by(models.NovelDailyMetric.date)
+            .all()
+        )
+        day_map = {
+            row[0]: {
+                "views": int(row[1] or 0),
+                "likes": int(row[2] or 0),
+                "favorites": int(row[3] or 0),
+            }
+            for row in rows
+        }
+
+    days = []
+    total_views = 0
+    total_likes = 0
+    total_favorites = 0
+    cursor = start_day
+    while cursor < next_month:
+        counts = day_map.get(cursor, {"views": 0, "likes": 0, "favorites": 0})
+        total_views += counts["views"]
+        total_likes += counts["likes"]
+        total_favorites += counts["favorites"]
+        days.append(
+            {
+                "date": str(cursor),
+                "views": counts["views"],
+                "likes": counts["likes"],
+                "favorites": counts["favorites"],
+            }
+        )
+        cursor += timedelta(days=1)
+
+    return {
+        "month": start_day.strftime("%Y-%m"),
+        "novel_count": len(novel_ids),
+        "totals": {
+            "views": total_views,
+            "likes": total_likes,
+            "favorites": total_favorites,
+        },
+        "days": days,
+    }
+
+# ============================
 # ユーザープロフィール取得
 # ============================
 @app.get("/api/users/me")
@@ -7115,19 +7231,23 @@ def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db
     if exists:
         return {"ok": True, "favorited": True}
     fav = models.NovelFavorite(user_id=user.id, novel_id=novel_id)
-    db.add(fav); db.commit()
+    db.add(fav)
+    apply_novel_daily_metric(db, novel.id, favorite_delta=1)
+    db.commit()
     return {"ok": True, "favorited": True}
 
 
 @app.delete("/api/novels/{novel_id}/favorite")
 def unfavorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
+    novel = db.query(models.Novel).get(novel_id)
     fav = db.query(models.NovelFavorite).filter(
         models.NovelFavorite.novel_id == novel_id,
         models.NovelFavorite.user_id == user.id).first()
     if not fav:
         return {"ok": True, "favorited": False}
-    db.delete(fav); db.commit()
+    db.delete(fav)
+    db.commit()
     return {"ok": True, "favorited": False}
 
 @app.delete("/api/novels/{novel_id}/comments/{comment_id}")

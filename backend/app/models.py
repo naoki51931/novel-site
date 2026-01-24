@@ -162,6 +162,28 @@ class Novel(Base):
 
 
 # =========================
+# Novel daily analytics
+# =========================
+class NovelDailyMetric(Base):
+    __tablename__ = "novel_daily_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    view_count = Column(Integer, nullable=False, server_default="0")
+    like_count = Column(Integer, nullable=False, server_default="0")
+    favorite_count = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    novel = relationship("Novel")
+
+    __table_args__ = (
+        UniqueConstraint("novel_id", "date", name="uq_novel_daily_metrics_novel_date"),
+    )
+
+
+# =========================
 # Episode / Illust
 # =========================
 class Episode(Base):
