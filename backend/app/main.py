@@ -4509,6 +4509,7 @@ def get_novel_detail(
         "creative_type": getattr(novel, "creative_type", "original"),
         "is_public": bool(getattr(novel, "is_public", True)),
         "status": getattr(novel, "status", "public"),
+        "can_edit_full": bool(user and novel.author_id == user.id),
         "age_confirmation_required": AGE_RESTRICTION_DISABLED and novel.age_limit == "r18",
         "total_char_count": total_char_count,
         "tags": tags,

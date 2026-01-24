@@ -17,6 +17,7 @@ export default function EditNovel() {
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [creativeType, setCreativeType] = useState("original"); // オリジナル / 二次創作
   const [status, setStatus] = useState("public");            // "public" / "draft"
+  const [canEditFull, setCanEditFull] = useState(true);
 
   // ★ タグ（カンマ区切り入力）
   const [tagsInput, setTagsInput] = useState("");
@@ -57,6 +58,8 @@ const [loading, setLoading] = useState(true);
         }
 
         const data = await res.json();
+        const canEdit = data?.can_edit_full !== false;
+        setCanEditFull(canEdit);
         setTitle(data.title || "");
         setDescription(data.description || "");
         setAgeLimit(data.age_limit || "all");
@@ -140,9 +143,11 @@ if (draft.title) setTitle(draft.title);
     e.preventDefault();
     setError("");
 
-    if (!title.trim()) {
-      setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
-      return;
+    if (canEditFull) {
+      if (!title.trim()) {
+        setError(t({ ja: "タイトルは必須です。", en: "Title is required." }));
+        return;
+      }
     }
 
     setSaving(true);
@@ -162,18 +167,24 @@ if (draft.title) setTitle(draft.title);
           "Content-Type": "application/json",
           Authorization: "Bearer " + token,
         },
-        body: JSON.stringify({
-          title,
-          description,
-          age_limit: ageLimit,
-          is_ai_generated: isAIGenerated,
-          creative_type: creativeType,
-          status,
-          is_public: status === "public",
+        body: JSON.stringify(
+          canEditFull
+            ? {
+                title,
+                description,
+                age_limit: ageLimit,
+                is_ai_generated: isAIGenerated,
+                creative_type: creativeType,
+                status,
+                is_public: status === "public",
 
-          // ★ ここが本命
-          tag_names: tagNames,
-        }),
+                // ★ ここが本命
+                tag_names: tagNames,
+              }
+            : {
+                tag_names: tagNames,
+              }
+        ),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -214,31 +225,11 @@ if (draft.title) setTitle(draft.title);
       <h2>{t({ ja: "小説を編集", en: "Edit Novel" })}</h2>
 
       <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "タイトル", en: "Title" })}
-            <br />
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            />
-          </label>
-        </div>
-
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "説明（あらすじ）", en: "Description (summary)" })}
-            <br />
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={6}
-              style={{ width: "100%", padding: 4 }}
-            />
-          </label>
-        </div>
+        {!canEditFull && (
+          <p style={{ marginTop: 0, marginBottom: 8, color: "#666" }}>
+            {t({ ja: "この作品はタグのみ編集できます。", en: "Only tags can be edited for this novel." })}
+          </p>
+        )}
 
         {/* ★ タグ編集 */}
         <div style={{ marginBottom: 8 }}>
@@ -258,79 +249,109 @@ if (draft.title) setTitle(draft.title);
           </div>
         </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "作品種別", en: "Work type" })}
-            <br />
-            <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+        {canEditFull && (
+          <>
+            <div style={{ marginBottom: 8 }}>
               <label>
+                {t({ ja: "タイトル", en: "Title" })}
+                <br />
                 <input
-                  type="radio"
-                  name="creative_type"
-                  value="original"
-                  checked={creativeType === "original"}
-                  onChange={(e) => setCreativeType(e.target.value)}
-                  style={{ marginRight: 4 }}
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
                 />
-                {t({ ja: "オリジナル", en: "Original" })}
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="creative_type"
-                  value="fanfic"
-                  checked={creativeType === "fanfic"}
-                  onChange={(e) => setCreativeType(e.target.value)}
-                  style={{ marginRight: 4 }}
-                />
-                {t({ ja: "二次創作", en: "Fanfiction" })}
               </label>
             </div>
-          </label>
-        </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "年齢区分", en: "Age rating" })}
-            <br />
-            <select
-              value={ageLimit}
-              onChange={(e) => setAgeLimit(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            >
-              <option value="all">{t({ ja: "全年齢", en: "All ages" })}</option>
-              <option value="r15">R15</option>
-              <option value="r18">R18</option>
-            </select>
-          </label>
-        </div>
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "説明（あらすじ）", en: "Description (summary)" })}
+                <br />
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={6}
+                  style={{ width: "100%", padding: 4 }}
+                />
+              </label>
+            </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            {t({ ja: "公開ステータス", en: "Visibility" })}
-            <br />
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            >
-              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
-              <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
-            </select>
-          </label>
-        </div>
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "作品種別", en: "Work type" })}
+                <br />
+                <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+                  <label>
+                    <input
+                      type="radio"
+                      name="creative_type"
+                      value="original"
+                      checked={creativeType === "original"}
+                      onChange={(e) => setCreativeType(e.target.value)}
+                      style={{ marginRight: 4 }}
+                    />
+                    {t({ ja: "オリジナル", en: "Original" })}
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="creative_type"
+                      value="fanfic"
+                      checked={creativeType === "fanfic"}
+                      onChange={(e) => setCreativeType(e.target.value)}
+                      style={{ marginRight: 4 }}
+                    />
+                    {t({ ja: "二次創作", en: "Fanfiction" })}
+                  </label>
+                </div>
+              </label>
+            </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            <input
-              type="checkbox"
-              checked={isAIGenerated}
-              onChange={(e) => setIsAIGenerated(e.target.checked)}
-              style={{ marginRight: 4 }}
-            />
-            {t({ ja: "AI創作", en: "AI-generated" })}
-          </label>
-        </div>
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "年齢区分", en: "Age rating" })}
+                <br />
+                <select
+                  value={ageLimit}
+                  onChange={(e) => setAgeLimit(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                >
+                  <option value="all">{t({ ja: "全年齢", en: "All ages" })}</option>
+                  <option value="r15">R15</option>
+                  <option value="r18">R18</option>
+                </select>
+              </label>
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "公開ステータス", en: "Visibility" })}
+                <br />
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                >
+                  <option value="public">{t({ ja: "公開", en: "Public" })}</option>
+                  <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
+                </select>
+              </label>
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={isAIGenerated}
+                  onChange={(e) => setIsAIGenerated(e.target.checked)}
+                  style={{ marginRight: 4 }}
+                />
+                {t({ ja: "AI創作", en: "AI-generated" })}
+              </label>
+            </div>
+          </>
+        )}
 
         {error && <p style={{ color: "red", marginTop: 4, marginBottom: 8 }}>{error}</p>}
 
