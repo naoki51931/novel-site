@@ -816,6 +816,14 @@ export default function NovelDetail() {
                 </button>
               </div>
 
+              {Array.isArray(ep.tags) && ep.tags.length > 0 && (
+                <div className="tag-chip-row">
+                  {ep.tags.map((tag) => (
+                    <TagChipLink key={tag.id ?? tag.name} name={tag.name} />
+                  ))}
+                </div>
+              )}
+
               <div
                 style={{
                   fontSize: "0.85rem",

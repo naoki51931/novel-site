@@ -4507,6 +4507,9 @@ def get_novel_detail(
 
     episode_q = (
         db.query(models.Episode)
+        .options(
+            selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag)
+        )
         .filter(models.Episode.novel_id == novel_id)
     )
     if user and novel.author_id == user.id:
@@ -4554,6 +4557,7 @@ def get_novel_detail(
                 "number": get_episode_number(ep),
                 "body": ep.body if can_read_full else truncate_for_free(ep.body or ""),
                 "created_at": ep.created_at,
+                "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
             }
             for ep in episodes
         ],
