@@ -3,9 +3,8 @@ import { useI18n } from "../lib/i18n";
 
 export const buildTagSearchUrl = (tagName) => {
   const name = (tagName ?? "").toString().trim();
-  const params = new URLSearchParams();
-  params.set("tag", name);
-  return `/?${params.toString()}`;
+  if (!name) return "/tags";
+  return `/tags/${encodeURIComponent(name)}`;
 };
 
 export default function TagChipLink({ name }) {
@@ -18,11 +17,11 @@ export default function TagChipLink({ name }) {
       to={buildTagSearchUrl(label)}
       className="tag-chip"
       aria-label={t(
-        { ja: "タグ「{{tag}}」で検索", en: "Search tag \"{{tag}}\"" },
+        { ja: "タグ「{{tag}}」の作品一覧へ", en: "View novels tagged \"{{tag}}\"" },
         { tag: label }
       )}
       title={t(
-        { ja: "タグ「{{tag}}」で検索", en: "Search tag \"{{tag}}\"" },
+        { ja: "タグ「{{tag}}」の作品一覧へ", en: "View novels tagged \"{{tag}}\"" },
         { tag: label }
       )}
     >

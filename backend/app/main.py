@@ -73,6 +73,8 @@ from .ai_novel import (
     call_openai_novel_api,
     call_openrouter_novel_api,
     call_deepseek_novel_api,
+    call_openai_summary_candidates,
+    call_openai_tag_candidates,
     provider_from_model,
     provider_from_request,
 )
@@ -1551,6 +1553,50 @@ class AdminContactMessageOut(BaseModel):
         from_attributes = True
 
 
+class AdminUserOut(BaseModel):
+    id: int
+    username: str
+    email: str | None = None
+    is_premium: bool
+    email_notifications_enabled: bool
+    novel_count: int
+
+
+class AdminUserListOut(BaseModel):
+    total_users: int
+    users: List[AdminUserOut]
+
+
+class AdminUserNovelOut(BaseModel):
+    id: int
+    title: str
+    is_public: bool
+    created_at: datetime
+    episode_count: int
+
+
+class AdminUserDeleteOut(BaseModel):
+    ok: bool
+    user_id: int
+    username: str
+
+
+class NovelSummaryCandidatesOut(BaseModel):
+    candidates: List[str]
+    model: str | None = None
+    used_tokens: int | None = None
+
+
+class TagCandidatesRequest(BaseModel):
+    text: str
+
+
+class TagCandidatesOut(BaseModel):
+    candidates: List[str]
+    model: str | None = None
+    used_tokens: int | None = None
+
+
 # =========================================
 # 認証 API（通常ログイン）
 # =========================================
@@ -2229,6 +2275,224 @@ def admin_list_contact_messages(
     return messages
 
 
+@app.get("/api/admin/users", response_model=AdminUserListOut)
+def admin_list_users(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    total_users = db.query(func.count(models.User.id)).scalar() or 0
+    novel_counts = (
+        db.query(
+            models.Novel.author_id.label("author_id"),
+            func.count(models.Novel.id).label("novel_count"),
+        )
+        .group_by(models.Novel.author_id)
+        .subquery()
+    )
+    rows = (
+        db.query(
+            models.User,
+            func.coalesce(novel_counts.c.novel_count, 0).label("novel_count"),
+        )
+        .outerjoin(novel_counts, models.User.id == novel_counts.c.author_id)
+        .order_by(models.User.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    users = [
+        AdminUserOut(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+            is_premium=bool(user.is_premium),
+            email_notifications_enabled=bool(user.email_notifications_enabled),
+            novel_count=int(novel_count or 0),
+        )
+        for user, novel_count in rows
+    ]
+    return AdminUserListOut(total_users=total_users, users=users)
+
+
+@app.get("/api/admin/users/{user_id}/novels", response_model=List[AdminUserNovelOut])
+def admin_list_user_novels(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    episode_counts = (
+        db.query(
+            models.Episode.novel_id.label("novel_id"),
+            func.count(models.Episode.id).label("episode_count"),
+        )
+        .group_by(models.Episode.novel_id)
+        .subquery()
+    )
+    rows = (
+        db.query(
+            models.Novel,
+            func.coalesce(episode_counts.c.episode_count, 0).label("episode_count"),
+        )
+        .outerjoin(episode_counts, models.Novel.id == episode_counts.c.novel_id)
+        .filter(models.Novel.author_id == user_id)
+        .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+        .all()
+    )
+    return [
+        AdminUserNovelOut(
+            id=novel.id,
+            title=novel.title,
+            is_public=bool(novel.is_public),
+            created_at=novel.created_at,
+            episode_count=int(episode_count or 0),
+        )
+        for novel, episode_count in rows
+    ]
+
+
+@app.delete("/api/admin/users/{user_id}", response_model=AdminUserDeleteOut)
+def admin_delete_user(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    db.execute(
+        text("DELETE FROM notifications WHERE user_id = :uid OR actor_user_id = :uid"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM direct_messages "
+            "WHERE sender_id = :uid "
+            "OR recipient_user_id = :uid "
+            "OR thread_id IN (SELECT id FROM direct_message_threads WHERE user1_id = :uid OR user2_id = :uid)"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM direct_message_threads WHERE user1_id = :uid OR user2_id = :uid"),
+        {"uid": user_id},
+    )
+    db.execute(text("DELETE FROM episode_likes WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM novel_likes WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM novel_favorites WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM episode_comments WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM novel_comments WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_generate_logs WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(
+        text("DELETE FROM supports WHERE supporter_user_id = :uid OR author_user_id = :uid"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM membership_invoices "
+            "WHERE membership_id IN (SELECT id FROM memberships WHERE supporter_user_id = :uid OR author_user_id = :uid)"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM memberships WHERE supporter_user_id = :uid OR author_user_id = :uid"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM payout_items WHERE payout_id IN (SELECT id FROM payouts WHERE author_user_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(text("DELETE FROM payouts WHERE author_user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM support_plans WHERE author_user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM authors_payout_profiles WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM author_balances WHERE author_user_id = :uid"), {"uid": user_id})
+    db.execute(
+        text(
+            "DELETE FROM episode_illusts "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid))"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM episode_tags "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid))"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM episode_likes "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid))"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM episode_translations "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid))"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM episode_comments "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid))"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM supports "
+            "WHERE episode_id IN (SELECT id FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid))"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM episodes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM novel_comments WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM novel_favorites WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM novel_tags WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM novel_likes WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM novel_translations WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM novel_daily_metrics WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(
+        text("DELETE FROM supports WHERE novel_id IN (SELECT id FROM novels WHERE author_id = :uid)"),
+        {"uid": user_id},
+    )
+    db.execute(text("DELETE FROM novels WHERE author_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM oauth_accounts WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM password_reset_tokens WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+    db.commit()
+    return AdminUserDeleteOut(ok=True, user_id=user_id, username=user.username)
+
+
 @app.post("/api/admin/translations/backfill")
 def admin_backfill_translations(
     request: Request,
@@ -2299,6 +2563,21 @@ def admin_backfill_translations(
         "novels_translated": novels_done,
         "episodes_translated": episodes_done,
     }
+
+
+@app.post("/api/ai/tag_candidates", response_model=TagCandidatesOut)
+async def generate_tag_candidates(
+    payload: TagCandidatesRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_current_user(request, db)
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "本文が空です。")
+    source_text = text[:1000]
+    candidates, tokens, model = await call_openai_tag_candidates(source_text)
+    return TagCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
 
 
 @app.get("/api/support_plans", response_model=List[SupportPlanOut])
@@ -4665,6 +4944,7 @@ def get_novel_translation(
 def list_public_novels(
     request: Request,
     q: str | None = None,
+    exclude: str | None = None,
     tag: str | None = None,
     db: Session = Depends(get_db),
 ):
@@ -4707,6 +4987,41 @@ def list_public_novels(
                 query = query.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
     # --- 検索 ---
+    def episode_match_exists(like: str):
+        return (
+            db.query(models.Episode.id)
+            .filter(models.Episode.novel_id == models.Novel.id)
+            .filter(
+                or_(
+                    models.Episode.title.ilike(like),
+                    models.Episode.body.ilike(like),
+                )
+            )
+            .exists()
+        )
+
+    def novel_tag_match_exists(like: str):
+        return (
+            db.query(models.NovelTag.novel_id)
+            .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+            .filter(models.NovelTag.novel_id == models.Novel.id)
+            .filter(models.Tag.name.ilike(like))
+            .exists()
+        )
+
+    def episode_tag_match_exists(like: str):
+        return (
+            db.query(models.Episode.id)
+            .join(
+                models.EpisodeTag,
+                models.EpisodeTag.episode_id == models.Episode.id,
+            )
+            .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+            .filter(models.Episode.novel_id == models.Novel.id)
+            .filter(models.Tag.name.ilike(like))
+            .exists()
+        )
+
     if q:
         raw = q.strip()
         if raw:
@@ -4719,45 +5034,32 @@ def list_public_novels(
                     query = query.filter(models.User.username.ilike(f"%{username_term}%"))
                 terms = terms[1:]
 
-            def episode_match_exists(like: str):
-                return (
-                    db.query(models.Episode.id)
-                    .filter(models.Episode.novel_id == models.Novel.id)
-                    .filter(
-                        or_(
-                            models.Episode.title.ilike(like),
-                            models.Episode.body.ilike(like),
-                        )
-                    )
-                    .exists()
-                )
-
-            def novel_tag_match_exists(like: str):
-                return (
-                    db.query(models.NovelTag.novel_id)
-                    .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
-                    .filter(models.NovelTag.novel_id == models.Novel.id)
-                    .filter(models.Tag.name.ilike(like))
-                    .exists()
-                )
-
-            def episode_tag_match_exists(like: str):
-                return (
-                    db.query(models.Episode.id)
-                    .join(
-                        models.EpisodeTag,
-                        models.EpisodeTag.episode_id == models.Episode.id,
-                    )
-                    .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
-                    .filter(models.Episode.novel_id == models.Novel.id)
-                    .filter(models.Tag.name.ilike(like))
-                    .exists()
-                )
-
             for term in terms:
                 like = f"%{term}%"
                 query = query.filter(
                     or_(
+                        models.Novel.title.ilike(like),
+                        models.Novel.description.ilike(like),
+                        models.User.username.ilike(like),
+                        episode_match_exists(like),
+                        novel_tag_match_exists(like),
+                        episode_tag_match_exists(like),
+                    )
+                )
+
+    if exclude:
+        raw = exclude.strip()
+        if raw:
+            terms = [t for t in re.split(r"[\s,]+", raw) if t]
+            for term in terms:
+                if term.startswith("@"):
+                    username_term = term[1:].strip()
+                    if username_term:
+                        query = query.filter(~models.User.username.ilike(f"%{username_term}%"))
+                    continue
+                like = f"%{term}%"
+                query = query.filter(
+                    ~or_(
                         models.Novel.title.ilike(like),
                         models.Novel.description.ilike(like),
                         models.User.username.ilike(like),
@@ -4892,6 +5194,7 @@ def list_public_novel_rankings(
     sort: str = Query("likes"),
     limit: int = Query(10, ge=1, le=50),
     q: str | None = None,
+    exclude: str | None = None,
     tag: str | None = None,
     db: Session = Depends(get_db),
 ):
@@ -4922,6 +5225,41 @@ def list_public_novel_rankings(
         .filter(models.Novel.is_public == True)
     )
 
+    def episode_match_exists(like: str):
+        return (
+            db.query(models.Episode.id)
+            .filter(models.Episode.novel_id == models.Novel.id)
+            .filter(
+                or_(
+                    models.Episode.title.ilike(like),
+                    models.Episode.body.ilike(like),
+                )
+            )
+            .exists()
+        )
+
+    def novel_tag_match_exists(like: str):
+        return (
+            db.query(models.NovelTag.novel_id)
+            .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+            .filter(models.NovelTag.novel_id == models.Novel.id)
+            .filter(models.Tag.name.ilike(like))
+            .exists()
+        )
+
+    def episode_tag_match_exists(like: str):
+        return (
+            db.query(models.Episode.id)
+            .join(
+                models.EpisodeTag,
+                models.EpisodeTag.episode_id == models.Episode.id,
+            )
+            .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
+            .filter(models.Episode.novel_id == models.Novel.id)
+            .filter(models.Tag.name.ilike(like))
+            .exists()
+        )
+
     if not AGE_RESTRICTION_DISABLED:
         if user_age is None:
             query = query.filter(models.Novel.age_limit == "all")
@@ -4942,45 +5280,32 @@ def list_public_novel_rankings(
                     query = query.filter(models.User.username.ilike(f"%{username_term}%"))
                 terms = terms[1:]
 
-            def episode_match_exists(like: str):
-                return (
-                    db.query(models.Episode.id)
-                    .filter(models.Episode.novel_id == models.Novel.id)
-                    .filter(
-                        or_(
-                            models.Episode.title.ilike(like),
-                            models.Episode.body.ilike(like),
-                        )
-                    )
-                    .exists()
-                )
-
-            def novel_tag_match_exists(like: str):
-                return (
-                    db.query(models.NovelTag.novel_id)
-                    .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
-                    .filter(models.NovelTag.novel_id == models.Novel.id)
-                    .filter(models.Tag.name.ilike(like))
-                    .exists()
-                )
-
-            def episode_tag_match_exists(like: str):
-                return (
-                    db.query(models.Episode.id)
-                    .join(
-                        models.EpisodeTag,
-                        models.EpisodeTag.episode_id == models.Episode.id,
-                    )
-                    .join(models.Tag, models.Tag.id == models.EpisodeTag.tag_id)
-                    .filter(models.Episode.novel_id == models.Novel.id)
-                    .filter(models.Tag.name.ilike(like))
-                    .exists()
-                )
-
             for term in terms:
                 like = f"%{term}%"
                 query = query.filter(
                     or_(
+                        models.Novel.title.ilike(like),
+                        models.Novel.description.ilike(like),
+                        models.User.username.ilike(like),
+                        episode_match_exists(like),
+                        novel_tag_match_exists(like),
+                        episode_tag_match_exists(like),
+                    )
+                )
+
+    if exclude:
+        raw = exclude.strip()
+        if raw:
+            terms = [t for t in re.split(r"[\s,]+", raw) if t]
+            for term in terms:
+                if term.startswith("@"):
+                    username_term = term[1:].strip()
+                    if username_term:
+                        query = query.filter(~models.User.username.ilike(f"%{username_term}%"))
+                    continue
+                like = f"%{term}%"
+                query = query.filter(
+                    ~or_(
                         models.Novel.title.ilike(like),
                         models.Novel.description.ilike(like),
                         models.User.username.ilike(like),
@@ -5910,6 +6235,76 @@ def list_episodes(
         for ep in episodes
     ]
 
+
+@app.post("/api/novels/{novel_id}/summary_candidates", response_model=NovelSummaryCandidatesOut)
+async def generate_novel_summary_candidates(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if novel.author_id != user.id:
+        raise HTTPException(403, "説明文の生成権限がありません")
+
+    first_episode = (
+        db.query(models.Episode)
+        .filter(models.Episode.novel_id == novel_id)
+        .order_by(
+            models.Episode.episode_number.is_(None),
+            models.Episode.episode_number,
+            models.Episode.id,
+        )
+        .first()
+    )
+    if not first_episode or not (first_episode.body or "").strip():
+        raise HTTPException(404, "本文が存在しません")
+
+    source_text = (first_episode.body or "").strip()[:1000]
+    candidates, tokens, model = await call_openai_summary_candidates(source_text)
+    return NovelSummaryCandidatesOut(
+        candidates=candidates,
+        model=model,
+        used_tokens=tokens,
+    )
+
+
+@app.post("/api/novels/{novel_id}/tag_candidates", response_model=TagCandidatesOut)
+async def generate_novel_tag_candidates(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    novel = db.query(models.Novel).get(novel_id)
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if novel.author_id != user.id:
+        raise HTTPException(403, "タグ生成権限がありません")
+
+    first_episode = (
+        db.query(models.Episode)
+        .filter(models.Episode.novel_id == novel_id)
+        .order_by(
+            models.Episode.episode_number.is_(None),
+            models.Episode.episode_number,
+            models.Episode.id,
+        )
+        .first()
+    )
+    if not first_episode or not (first_episode.body or "").strip():
+        raise HTTPException(404, "本文が存在しません")
+
+    source_text = (first_episode.body or "").strip()[:1000]
+    candidates, tokens, model = await call_openai_tag_candidates(source_text)
+    return TagCandidatesOut(
+        candidates=candidates,
+        model=model,
+        used_tokens=tokens,
+    )
+
 # =========================================
 # =========================================
 # Episode 画像削除（表紙・押絵）
@@ -6669,6 +7064,35 @@ def sitemap_xml(db: Session = Depends(get_db)):
     )
     for episode_id, created_at in episodes:
         urls.append((f"{base}/episodes/{episode_id}", created_at))
+
+    tag_names = set()
+    novel_tag_rows = (
+        db.query(models.Tag.name)
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
+        .filter(models.Novel.is_public == True)
+        .distinct()
+        .all()
+    )
+    episode_tag_rows = (
+        db.query(models.Tag.name)
+        .join(models.EpisodeTag, models.EpisodeTag.tag_id == models.Tag.id)
+        .join(models.Episode, models.Episode.id == models.EpisodeTag.episode_id)
+        .join(models.Novel, models.Novel.id == models.Episode.novel_id)
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True)
+        .filter(models.Novel.is_public == True)
+        .distinct()
+        .all()
+    )
+    for (name,) in novel_tag_rows:
+        if name:
+            tag_names.add(name)
+    for (name,) in episode_tag_rows:
+        if name:
+            tag_names.add(name)
+    for name in sorted(tag_names):
+        urls.append((f"{base}/tags/{quote(name)}", None))
 
     items = []
     for loc, lastmod in urls:

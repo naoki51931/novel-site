@@ -1,12 +1,18 @@
 // frontend/src/components/SearchBar.jsx
 import { useI18n } from "../lib/i18n";
 
-export default function SearchBar({ query, onChangeQuery, onSearch }) {
+export default function SearchBar({
+  query,
+  excludeQuery,
+  onChangeQuery,
+  onChangeExcludeQuery,
+  onSearch,
+}) {
   const { t } = useI18n();
   const handleSubmit = (e) => {
     e.preventDefault();
     if (onSearch) {
-      onSearch(query); // ← 親に「検索して」と依頼する
+      onSearch({ query, excludeQuery }); // ← 親に「検索して」と依頼する
     }
   };
 
@@ -20,6 +26,16 @@ export default function SearchBar({ query, onChangeQuery, onSearch }) {
         })}
         value={query}
         onChange={(e) => onChangeQuery(e.target.value)}
+        className="search-input"
+      />
+      <input
+        type="text"
+        placeholder={t({
+          ja: "除外: タイトル/本文/概要/タグ(空白・カンマ)/@ユーザー",
+          en: "Exclude: title/body/summary/tags (space/comma)/@user",
+        })}
+        value={excludeQuery}
+        onChange={(e) => onChangeExcludeQuery(e.target.value)}
         className="search-input"
       />
 

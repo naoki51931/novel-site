@@ -586,6 +586,152 @@ async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = N
     )
 
 
+async def call_openai_summary_candidates(text: str, model: str | None = None) -> tuple[list[str], int | None, str]:
+    if client is None:
+        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
+    source_text = (text or "").strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail="本文が空です。")
+
+    effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
+    prompt = dedent(
+        f"""
+        以下の本文から、小説の説明文（あらすじ）を3候補作成してください。
+        それぞれ 60〜180 文字程度、内容が重複しないようにしてください。
+        出力は必ず JSON のみ。形式: {{"candidates": ["候補1", "候補2", "候補3"]}}
+
+        本文:
+        {source_text}
+        """
+    ).strip()
+
+    try:
+        resp = client.responses.create(
+            model=effective_model,
+            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+            input=prompt,
+            max_output_tokens=512,
+        )
+    except Exception as e:
+        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
+        raise HTTPException(status_code=502, detail=f"AI 要約 API 呼び出しに失敗しました: {e!r}")
+
+    raw = ""
+    try:
+        raw = resp.output[0].content[0].text
+    except Exception:
+        raw = getattr(resp, "output_text", "") or ""
+
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    try:
+        data = _parse_json_payload(raw)
+    except Exception as e:
+        print("[ERROR] AI JSON parse failed:", repr(e))
+        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+
+    candidates = data.get("candidates") if isinstance(data, dict) else None
+    if not isinstance(candidates, list):
+        raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
+
+    normalized = []
+    seen = set()
+    for item in candidates:
+        if not isinstance(item, str):
+            continue
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+
+    if not normalized:
+        raise HTTPException(status_code=500, detail="AI から候補が取得できませんでした。")
+
+    tokens: int | None = None
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", None)
+
+    return normalized, tokens, effective_model
+
+
+async def call_openai_tag_candidates(text: str, model: str | None = None) -> tuple[list[str], int | None, str]:
+    if client is None:
+        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
+    source_text = (text or "").strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail="本文が空です。")
+
+    effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
+    prompt = dedent(
+        f"""
+        以下の本文から、内容を表すタグ候補を8〜12個作成してください。
+        一般的な単語で、短く（10文字以内）し、ハッシュ記号は不要です。
+        出力は必ず JSON のみ。形式: {{"candidates": ["タグ1", "タグ2"]}}
+
+        本文:
+        {source_text}
+        """
+    ).strip()
+
+    try:
+        resp = client.responses.create(
+            model=effective_model,
+            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+            input=prompt,
+            max_output_tokens=256,
+        )
+    except Exception as e:
+        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
+        raise HTTPException(status_code=502, detail=f"AI タグ生成 API 呼び出しに失敗しました: {e!r}")
+
+    raw = ""
+    try:
+        raw = resp.output[0].content[0].text
+    except Exception:
+        raw = getattr(resp, "output_text", "") or ""
+
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    try:
+        data = _parse_json_payload(raw)
+    except Exception as e:
+        print("[ERROR] AI JSON parse failed:", repr(e))
+        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+
+    candidates = data.get("candidates") if isinstance(data, dict) else None
+    if not isinstance(candidates, list):
+        raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
+
+    normalized = []
+    seen = set()
+    for item in candidates:
+        if not isinstance(item, str):
+            continue
+        cleaned = item.strip().lstrip("#")
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+
+    if not normalized:
+        raise HTTPException(status_code=500, detail="AI から候補が取得できませんでした。")
+
+    tokens: int | None = None
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", None)
+
+    return normalized, tokens, effective_model
+
+
 async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
     if openrouter_client is None:
         raise HTTPException(status_code=500, detail="OpenRouter の API キーが設定されていません。")

@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
+import { isGoogleCrawler } from "../lib/seo";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
@@ -45,6 +46,37 @@ export default function NovelDetail() {
     if (!clean) return "";
     if (clean.length <= limit) return clean;
     return `${clean.slice(0, limit)}...`;
+  };
+
+  const getNovelTags = (novelData, episodeList = []) => {
+    const rawTags = Array.isArray(novelData?.tags) ? novelData.tags : [];
+    if (rawTags.length) {
+      return rawTags.map((tag) =>
+        typeof tag === "string" ? { name: tag } : tag
+      );
+    }
+    const rawNames = Array.isArray(novelData?.tag_names) ? novelData.tag_names : [];
+    if (rawNames.length) {
+      return rawNames.map((name) => ({ name }));
+    }
+    const episodeTags = [];
+    for (const episode of episodeList) {
+      const tags = Array.isArray(episode?.tags) ? episode.tags : [];
+      for (const tag of tags) {
+        if (typeof tag === "string") {
+          episodeTags.push({ name: tag });
+        } else if (tag?.name) {
+          episodeTags.push({ name: tag.name });
+        }
+      }
+    }
+    const seen = new Set();
+    return episodeTags.filter((tag) => {
+      const key = (tag?.name || "").toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   };
 
   const formatEpisodeDisplayTitle = (episodeNumber, title) => {
@@ -171,8 +203,12 @@ export default function NovelDetail() {
         const needsConfirm = !!data.age_confirmation_required;
         setAgeConfirmRequired(needsConfirm);
         if (needsConfirm) {
-          const key = `age_confirmed_novel_${data.id}`;
-          setAgeConfirmed(sessionStorage.getItem(key) === "yes");
+          if (isGoogleCrawler()) {
+            setAgeConfirmed(true);
+          } else {
+            const key = `age_confirmed_novel_${data.id}`;
+            setAgeConfirmed(sessionStorage.getItem(key) === "yes");
+          }
         } else {
           setAgeConfirmed(false);
         }
@@ -529,7 +565,8 @@ export default function NovelDetail() {
     );
   }
   if (ageConfirmRequired && !ageConfirmed) {
-    const tags = Array.isArray(novel.tags) ? novel.tags : [];
+    const fallbackEpisodes = Array.isArray(novel.episodes) ? novel.episodes : [];
+    const tags = getNovelTags(novel, fallbackEpisodes);
     const summary = summarizeText(novel.description, 200);
     return (
       <div style={{ padding: 16 }}>
@@ -590,7 +627,7 @@ export default function NovelDetail() {
   }
 
   const episodes = Array.isArray(novel.episodes) ? novel.episodes : [];
-  const tags = Array.isArray(novel.tags) ? novel.tags : [];
+  const tags = getNovelTags(novel, episodes);
   const coverImageUrl =
     novel.cover_image_url ||
     episodes.find((ep) => ep.cover_image_url)?.cover_image_url ||

@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
+import { isGoogleCrawler } from "../lib/seo";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const FREE_READING_SCHEDULE = {
@@ -178,8 +179,12 @@ export default function EpisodeDetail() {
         const needsConfirm = !!data.age_confirmation_required;
         setAgeConfirmRequired(needsConfirm);
         if (needsConfirm) {
-          const key = `age_confirmed_novel_${data.novel_id}`;
-          setAgeConfirmed(sessionStorage.getItem(key) === "yes");
+          if (isGoogleCrawler()) {
+            setAgeConfirmed(true);
+          } else {
+            const key = `age_confirmed_novel_${data.novel_id}`;
+            setAgeConfirmed(sessionStorage.getItem(key) === "yes");
+          }
         } else {
           setAgeConfirmed(false);
         }

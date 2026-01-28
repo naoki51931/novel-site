@@ -103,6 +103,9 @@ export default function AdminHome() {
       <Link className="btn btn-border" to="/admin/dashboard" style={{ marginLeft: 8 }}>
         {t({ ja: "支援/振込ダッシュボードへ", en: "Go to Support & Payout Dashboard" })}
       </Link>
+      <Link className="btn btn-border" to="/admin/users" style={{ marginLeft: 8 }}>
+        {t({ ja: "ユーザー管理へ", en: "Go to Users" })}
+      </Link>
       <button
         type="button"
         className="btn btn-border"

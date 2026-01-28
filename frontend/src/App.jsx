@@ -25,20 +25,28 @@ import AdminHome from "./pages/AdminHome";
 import AdminPayouts from "./pages/AdminPayouts";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
+import AdminUsers from "./pages/AdminUsers";
 import SupportReturn from "./pages/SupportReturn";
 import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
 import Notifications from "./pages/Notifications";
 import AuthorLanding from "./pages/AuthorLanding";
 import Contact from "./pages/Contact";
+import TagPage from "./pages/TagPage";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
 import { useI18n } from "./lib/i18n";
 
-
 export default function App() {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("search_query") || "";
+  });
+  const [excludeQuery, setExcludeQuery] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("search_exclude_query") || "";
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const navigate = useNavigate();
@@ -49,7 +57,12 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    setQuery(params.get("q") ?? "");
+    if (params.has("q")) {
+      setQuery(params.get("q") ?? "");
+    }
+    if (params.has("exclude")) {
+      setExcludeQuery(params.get("exclude") ?? "");
+    }
   }, [location.search]);
 
   useEffect(() => {
@@ -58,12 +71,23 @@ export default function App() {
   }, [location.pathname, location.search, location.hash]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("search_query", query ?? "");
+  }, [query]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("search_exclude_query", excludeQuery ?? "");
+  }, [excludeQuery]);
+
+  useEffect(() => {
     const isLoginRoute = () => {
       const path = location.pathname;
       return (
         path === "/" ||
         path === "/authors" ||
         path.startsWith("/ai-novel") ||
+        path.startsWith("/tags/") ||
         path.startsWith("/novels/") ||
         path.startsWith("/episodes/") ||
         path.startsWith("/users/") ||
@@ -266,16 +290,20 @@ export default function App() {
       {/* 検索バーはヘッダーの下に固定 */}
       <SearchBar
         query={query}
+        excludeQuery={excludeQuery}
         onChangeQuery={setQuery}
-        onSearch={() => {
+        onChangeExcludeQuery={setExcludeQuery}
+        onSearch={({ query: inputQuery, excludeQuery: inputExclude } = {}) => {
           setMenuOpen(false);
-          const q = (query ?? "").trim();
-          if (!q) {
+          const q = (inputQuery ?? "").trim();
+          const exclude = (inputExclude ?? "").trim();
+          if (!q && !exclude) {
             navigate("/");
             return;
           }
           const params = new URLSearchParams();
-          params.set("q", q);
+          if (q) params.set("q", q);
+          if (exclude) params.set("exclude", exclude);
           navigate(`/?${params.toString()}`);
         }}
       />
@@ -283,7 +311,8 @@ export default function App() {
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
           <Route path="/mypage/settings" element={<AccountSettings />} />
-          <Route path="/" element={<Home query={query} />} />
+          <Route path="/" element={<Home query={query} excludeQuery={excludeQuery} />} />
+          <Route path="/tags/:slug" element={<TagPage />} />
           <Route path="/authors" element={<AuthorLanding />} />
           <Route path="/login" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -299,6 +328,7 @@ export default function App() {
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin/payouts" element={<AdminPayouts />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />

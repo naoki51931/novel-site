@@ -6,7 +6,12 @@ import { useI18n } from "../lib/i18n";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
-export default function Home({ query = "" }) {
+export default function Home({
+  query = "",
+  excludeQuery = "",
+  tag = "",
+  showRanking = true,
+}) {
   const location = useLocation();
   const navigate = useNavigate();
   const { t, lang } = useI18n();
@@ -29,13 +34,17 @@ export default function Home({ query = "" }) {
 
         const params = new URLSearchParams(location.search);
         const urlQuery = (params.get("q") ?? "").trim();
+        const urlExclude = (params.get("exclude") ?? "").trim();
         const urlTag = (params.get("tag") ?? "").trim();
+        const effectiveTag = urlTag || (tag ?? "").trim();
         const effectiveQuery = urlQuery || (query ?? "").trim();
+        const effectiveExclude = urlExclude || (excludeQuery ?? "").trim();
 
         let url = `${API_BASE}/api/public/novels`;
         const apiParams = new URLSearchParams();
         if (effectiveQuery) apiParams.set("q", effectiveQuery);
-        if (urlTag) apiParams.set("tag", urlTag);
+        if (effectiveExclude) apiParams.set("exclude", effectiveExclude);
+        if (effectiveTag) apiParams.set("tag", effectiveTag);
         const qs = apiParams.toString();
         if (qs) url += `?${qs}`;
 
@@ -71,9 +80,15 @@ export default function Home({ query = "" }) {
     };
 
     fetchNovels();
-  }, [query, location.search]); // ← 検索語 or URL が変わるたびに再取得
+  }, [query, excludeQuery, tag, location.search]); // ← 検索語 or URL が変わるたびに再取得
 
   useEffect(() => {
+    if (!showRanking) {
+      setRanking([]);
+      setRankingLoading(false);
+      setRankingError("");
+      return;
+    }
     const fetchRanking = async () => {
       if (!isPremium || !rankingEnabled) {
         setRanking([]);
@@ -87,8 +102,11 @@ export default function Home({ query = "" }) {
 
         const params = new URLSearchParams(location.search);
         const urlQuery = (params.get("q") ?? "").trim();
+        const urlExclude = (params.get("exclude") ?? "").trim();
         const urlTag = (params.get("tag") ?? "").trim();
+        const effectiveTag = urlTag || (tag ?? "").trim();
         const effectiveQuery = urlQuery || (query ?? "").trim();
+        const effectiveExclude = urlExclude || (excludeQuery ?? "").trim();
 
         const token =
           localStorage.getItem("token") ||
@@ -98,7 +116,8 @@ export default function Home({ query = "" }) {
         const apiParams = new URLSearchParams();
         apiParams.set("sort", rankingSort);
         if (effectiveQuery) apiParams.set("q", effectiveQuery);
-        if (urlTag) apiParams.set("tag", urlTag);
+        if (effectiveExclude) apiParams.set("exclude", effectiveExclude);
+        if (effectiveTag) apiParams.set("tag", effectiveTag);
         const qs = apiParams.toString();
         let url = `${API_BASE}/api/public/novels/ranking`;
         if (qs) url += `?${qs}`;
@@ -125,7 +144,16 @@ export default function Home({ query = "" }) {
     };
 
     fetchRanking();
-  }, [rankingSort, isPremium, rankingEnabled, location.search, query]);
+  }, [
+    rankingSort,
+    isPremium,
+    rankingEnabled,
+    location.search,
+    query,
+    excludeQuery,
+    tag,
+    showRanking,
+  ]);
 
   useEffect(() => {
     const fetchPremium = async () => {
@@ -277,217 +305,219 @@ export default function Home({ query = "" }) {
         <p style={{ color: "red", marginTop: 8, marginBottom: 8 }}>{error}</p>
       )}
 
-      <section style={{ marginBottom: 24 }}>
-        <h3
-          style={{
-            borderBottom: "1px solid var(--border)",
-            paddingBottom: 6,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            flexWrap: "wrap",
-          }}
-        >
-          {t({ ja: "ランキング", en: "Ranking" })}
-          <span
+      {showRanking && (
+        <section style={{ marginBottom: 24 }}>
+          <h3
             style={{
-              display: "inline-block",
-              padding: "2px 8px",
-              borderRadius: 999,
-              backgroundColor: "#1f2937",
-              color: "#fff",
-              fontSize: 12,
-              letterSpacing: "0.04em",
-            }}
-          >
-            PREMIUM
-          </span>
-          <label
-            style={{
-              marginLeft: "auto",
-              display: "inline-flex",
+              borderBottom: "1px solid var(--border)",
+              paddingBottom: 6,
+              display: "flex",
               alignItems: "center",
-              gap: 6,
-              fontSize: 12,
-              color: "var(--muted-text)",
-              cursor: "pointer",
+              gap: 8,
+              flexWrap: "wrap",
             }}
           >
-            <input
-              type="checkbox"
-              checked={rankingEnabled}
-              onChange={(e) => setRankingEnabled(e.target.checked)}
-            />
-            {t({ ja: "ランキング表示", en: "Show ranking" })}
-          </label>
-        </h3>
-        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-          {[
-            { key: "likes", label: t({ ja: "いいね", en: "Likes" }) },
-            { key: "favorites", label: t({ ja: "ブックマーク", en: "Bookmarks" }) },
-            { key: "views", label: t({ ja: "閲覧", en: "Views" }) },
-          ].map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              className="btn btn-border"
-              onClick={() => setRankingSort(option.key)}
-              disabled={!rankingEnabled}
-              style={
-                rankingSort === option.key
-                  ? { borderColor: "#333", color: "#333" }
-                  : undefined
-              }
+            {t({ ja: "ランキング", en: "Ranking" })}
+            <span
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                borderRadius: 999,
+                backgroundColor: "#1f2937",
+                color: "#fff",
+                fontSize: 12,
+                letterSpacing: "0.04em",
+              }}
             >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        {!premiumChecked ? (
-          <p style={{ marginTop: 10 }}>
-            {t({ ja: "プレミアム状態を確認中...", en: "Checking premium status..." })}
-          </p>
-        ) : !isPremium ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              border: "1px dashed var(--border)",
-              borderRadius: 8,
-              color: "var(--muted-text)",
-            }}
-          >
-            {t({ ja: "ランキングはプレミアム会員限定の機能です。", en: "Ranking is a premium-only feature." })}
+              PREMIUM
+            </span>
+            <label
+              style={{
+                marginLeft: "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                color: "var(--muted-text)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={rankingEnabled}
+                onChange={(e) => setRankingEnabled(e.target.checked)}
+              />
+              {t({ ja: "ランキング表示", en: "Show ranking" })}
+            </label>
+          </h3>
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            {[
+              { key: "likes", label: t({ ja: "いいね", en: "Likes" }) },
+              { key: "favorites", label: t({ ja: "ブックマーク", en: "Bookmarks" }) },
+              { key: "views", label: t({ ja: "閲覧", en: "Views" }) },
+            ].map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className="btn btn-border"
+                onClick={() => setRankingSort(option.key)}
+                disabled={!rankingEnabled}
+                style={
+                  rankingSort === option.key
+                    ? { borderColor: "#333", color: "#333" }
+                    : undefined
+                }
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
-        ) : !rankingEnabled ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              border: "1px dashed var(--border)",
-              borderRadius: 8,
-              color: "var(--muted-text)",
-            }}
-          >
-            {t({ ja: "トグルをオンにするとランキングが表示されます。", en: "Turn on the toggle to show rankings." })}
-          </div>
-        ) : (
-          <>
-            {rankingError && (
-              <p style={{ color: "red", marginTop: 8 }}>{rankingError}</p>
-            )}
 
-            {rankingLoading ? (
-              <p style={{ marginTop: 10 }}>
-                {t({ ja: "ランキングを読み込み中...", en: "Loading ranking..." })}
-              </p>
-            ) : ranking.length === 0 ? (
-              <p style={{ marginTop: 10 }}>
-                {t({ ja: "ランキングデータがありません。", en: "No ranking data available." })}
-              </p>
-            ) : (
-              <ol style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
-                {ranking.map((novel) => (
-                  <li
-                    key={novel.id}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                      border: "1px solid var(--novel-card-border)",
-                      borderRadius: 8,
-                      padding: 12,
-                      marginBottom: 12,
-                      backgroundColor: "var(--novel-card-bg)",
-                      color: "var(--text)",
-                    }}
-                  >
-                    {novel.cover_image_url && (
-                      <img
-                        src={
-                          novel.cover_image_url.startsWith("http")
-                            ? novel.cover_image_url
-                            : API_BASE + novel.cover_image_url
-                        }
-                        alt={t({ ja: "表紙画像", en: "Cover image" })}
+          {!premiumChecked ? (
+            <p style={{ marginTop: 10 }}>
+              {t({ ja: "プレミアム状態を確認中...", en: "Checking premium status..." })}
+            </p>
+          ) : !isPremium ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                border: "1px dashed var(--border)",
+                borderRadius: 8,
+                color: "var(--muted-text)",
+              }}
+            >
+              {t({ ja: "ランキングはプレミアム会員限定の機能です。", en: "Ranking is a premium-only feature." })}
+            </div>
+          ) : !rankingEnabled ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                border: "1px dashed var(--border)",
+                borderRadius: 8,
+                color: "var(--muted-text)",
+              }}
+            >
+              {t({ ja: "トグルをオンにするとランキングが表示されます。", en: "Turn on the toggle to show rankings." })}
+            </div>
+          ) : (
+            <>
+              {rankingError && (
+                <p style={{ color: "red", marginTop: 8 }}>{rankingError}</p>
+              )}
+
+              {rankingLoading ? (
+                <p style={{ marginTop: 10 }}>
+                  {t({ ja: "ランキングを読み込み中...", en: "Loading ranking..." })}
+                </p>
+              ) : ranking.length === 0 ? (
+                <p style={{ marginTop: 10 }}>
+                  {t({ ja: "ランキングデータがありません。", en: "No ranking data available." })}
+                </p>
+              ) : (
+                <ol style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
+                  {ranking.map((novel) => (
+                    <li
+                      key={novel.id}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        border: "1px solid var(--novel-card-border)",
+                        borderRadius: 8,
+                        padding: 12,
+                        marginBottom: 12,
+                        backgroundColor: "var(--novel-card-bg)",
+                        color: "var(--text)",
+                      }}
+                    >
+                      {novel.cover_image_url && (
+                        <img
+                          src={
+                            novel.cover_image_url.startsWith("http")
+                              ? novel.cover_image_url
+                              : API_BASE + novel.cover_image_url
+                          }
+                          alt={t({ ja: "表紙画像", en: "Cover image" })}
+                          style={{
+                            width: "100%",
+                            maxHeight: 220,
+                            objectFit: "cover",
+                            borderRadius: 6,
+                            boxShadow: "0 1px 4px var(--shadow)",
+                          }}
+                        />
+                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span
+                          style={{
+                            fontWeight: "bold",
+                            minWidth: 48,
+                            color: "var(--novel-card-meta)",
+                          }}
+                        >
+                          #{novel.rank}
+                        </span>
+                        <Link to={`/novels/${novel.id}`} style={{ fontWeight: "bold" }}>
+                          {novel.title}
+                        </Link>
+                        {novel.author_username && (
+                          <span style={{ marginLeft: "auto", fontSize: 12 }}>
+                            {t({ ja: "作者", en: "Author" })}:{" "}
+                            <Link
+                              className="user-link"
+                              to={`/users/${encodeURIComponent(novel.author_username)}`}
+                            >
+                              {novel.author_username}
+                            </Link>
+                          </span>
+                        )}
+                      </div>
+
+                      <div
                         style={{
-                          width: "100%",
-                          maxHeight: 220,
-                          objectFit: "cover",
-                          borderRadius: 6,
-                          boxShadow: "0 1px 4px var(--shadow)",
-                        }}
-                      />
-                    )}
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span
-                        style={{
-                          fontWeight: "bold",
-                          minWidth: 48,
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 10,
+                          fontSize: 12,
                           color: "var(--novel-card-meta)",
                         }}
                       >
-                        #{novel.rank}
-                      </span>
-                      <Link to={`/novels/${novel.id}`} style={{ fontWeight: "bold" }}>
-                        {novel.title}
-                      </Link>
-                      {novel.author_username && (
-                        <span style={{ marginLeft: "auto", fontSize: 12 }}>
-                          {t({ ja: "作者", en: "Author" })}:{" "}
-                          <Link
-                            className="user-link"
-                            to={`/users/${encodeURIComponent(novel.author_username)}`}
-                          >
-                            {novel.author_username}
-                          </Link>
-                        </span>
-                      )}
-                    </div>
+                        <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                        <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                        <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
+                        <span>{t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}</span>
+                      </div>
 
-                    <div
-                      style={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        gap: 10,
-                        fontSize: 12,
-                        color: "var(--novel-card-meta)",
-                      }}
-                    >
-                      <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
-                      <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
-                      <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
-                      <span>{t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}</span>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        className="btn btn-border"
-                        onClick={() => toggleLike(novel)}
-                      >
-                        {novel.is_liked
-                          ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
-                          : t({ ja: "♡ いいね", en: "♡ Like" })}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-border"
-                        onClick={() => toggleFavorite(novel)}
-                      >
-                        {novel.is_favorited
-                          ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
-                          : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btn-border"
+                          onClick={() => toggleLike(novel)}
+                        >
+                          {novel.is_liked
+                            ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+                            : t({ ja: "♡ いいね", en: "♡ Like" })}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-border"
+                          onClick={() => toggleFavorite(novel)}
+                        >
+                          {novel.is_favorited
+                            ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
+                            : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
               </ol>
             )}
           </>
         )}
-      </section>
+        </section>
+      )}
 
       {novels.length === 0 && (
         <p>{t({ ja: "小説が見つかりません。", en: "No novels found." })}</p>

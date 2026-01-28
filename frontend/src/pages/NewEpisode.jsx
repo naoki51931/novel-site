@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const EP_DRAFT_KEY_PREFIX = "draft_new_episode"; // 作品ごとの下書き用プレフィックス
@@ -56,6 +57,9 @@ export default function NewEpisode() {
   const [isUploadingIllust, setIsUploadingIllust] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [tagCandidates, setTagCandidates] = useState([]);
+  const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
+  const [tagSuggestError, setTagSuggestError] = useState("");
 
   // この作品用のローカルストレージキー
   const draftKey = `${EP_DRAFT_KEY_PREFIX}_${id ?? "unknown"}`;
@@ -214,6 +218,76 @@ export default function NewEpisode() {
     } finally {
       setIsUploadingIllust(false);
     }
+  };
+
+  const handleSuggestTags = async () => {
+    setTagSuggestError("");
+    if (!body.trim()) {
+      setTagSuggestError(
+        t({ ja: "本文がないため候補を生成できません。", en: "No body text available to generate tags." })
+      );
+      return;
+    }
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
+      }
+      const res = await fetch(`${API_BASE}/api/ai/tag_candidates`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: body.slice(0, 1000) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || t({ ja: "タグ候補の生成に失敗しました。", en: "Failed to generate tags." }));
+      }
+      const existing = parseTagsInput(tags);
+      const existingSet = new Set(existing.map((tag) => tag.toLowerCase()));
+      const candidates = (data?.candidates || []).filter(
+        (tag) => tag && !existingSet.has(tag.toLowerCase())
+      );
+      if (!candidates.length) {
+        setTagSuggestError(
+          t({ ja: "追加できるタグ候補がありません。", en: "No tag candidates to add." })
+        );
+        setTagCandidates([]);
+        setSelectedTagCandidates(new Set());
+        return;
+      }
+      setTagCandidates(candidates);
+      setSelectedTagCandidates(new Set(candidates));
+    } catch (err) {
+      console.error(err);
+      setTagSuggestError(
+        err.message || t({ ja: "タグ候補の生成に失敗しました。", en: "Failed to generate tags." })
+      );
+    }
+  };
+
+  const handleToggleCandidate = (candidate) => {
+    setSelectedTagCandidates((prev) => {
+      const next = new Set(prev);
+      if (next.has(candidate)) {
+        next.delete(candidate);
+      } else {
+        next.add(candidate);
+      }
+      return next;
+    });
+  };
+
+  const handleAddSuggestedTags = () => {
+    if (!selectedTagCandidates.size) return;
+    const selected = tagCandidates.filter((tag) => selectedTagCandidates.has(tag));
+    const nextInput = mergeTagsInput(tags, selected);
+    setTags(nextInput);
+    const remaining = tagCandidates.filter((tag) => !selectedTagCandidates.has(tag));
+    setTagCandidates(remaining);
+    setSelectedTagCandidates(new Set());
   };
 
   
@@ -495,6 +569,59 @@ export default function NewEpisode() {
               style={{ width: "100%", padding: 4 }}
             />
           </label>
+          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleSuggestTags}
+            >
+              {t({ ja: "本文からタグ候補を抽出", en: "Suggest tags from text" })}
+            </button>
+            <span style={{ fontSize: "0.85rem", color: "#666" }}>
+              {t({ ja: "候補を選んで追加できます", en: "Pick candidates to add" })}
+            </span>
+          </div>
+          {tagSuggestError && (
+            <div style={{ marginTop: 6, color: "red" }}>{tagSuggestError}</div>
+          )}
+          {tagCandidates.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {tagCandidates.map((candidate) => (
+                  <label
+                    key={candidate}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 999,
+                      padding: "4px 10px",
+                      background: "var(--surface-2)",
+                      fontSize: "0.85rem",
+                      display: "inline-flex",
+                      gap: 6,
+                      alignItems: "center",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedTagCandidates.has(candidate)}
+                      onChange={() => handleToggleCandidate(candidate)}
+                    />
+                    {candidate}
+                  </label>
+                ))}
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={handleAddSuggestedTags}
+                  disabled={!selectedTagCandidates.size}
+                >
+                  {t({ ja: "選択したタグを追加", en: "Add selected tags" })}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 8 }}>
