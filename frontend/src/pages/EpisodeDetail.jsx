@@ -32,6 +32,12 @@ export default function EpisodeDetail() {
   const [isLiked, setIsLiked] = useState(false);
 
   const countChars = (value) => (value || "").length;
+  const summarizeText = (text, limit = 200) => {
+    const clean = (text || "").trim();
+    if (!clean) return "";
+    if (clean.length <= limit) return clean;
+    return `${clean.slice(0, limit)}...`;
+  };
 
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
@@ -352,6 +358,13 @@ export default function EpisodeDetail() {
     );
   }
   if (ageConfirmRequired && !ageConfirmed) {
+    const summary = summarizeText(episode.novel_description, 200);
+    const tags = Array.isArray(episode.novel_tags)
+      ? episode.novel_tags
+      : Array.isArray(episode.tags)
+        ? episode.tags
+        : [];
+    const headlineTitle = episode.novel_title || episode.title;
     return (
       <div style={{ padding: 16 }}>
         <h2 style={{ marginTop: 0 }}>
@@ -363,6 +376,34 @@ export default function EpisodeDetail() {
             en: "This novel is not available to users under 18.",
           })}
         </p>
+        <div style={{ marginTop: 16 }}>
+          {headlineTitle && <h3 style={{ margin: "0 0 6px" }}>{headlineTitle}</h3>}
+          {episode.author_username && (
+            <div style={{ marginBottom: 6, color: "#666" }}>
+              {t({ ja: "作者", en: "Author" })}:{" "}
+              <Link
+                className="user-link"
+                to={`/users/${encodeURIComponent(episode.author_username)}`}
+              >
+                {episode.author_username}
+              </Link>
+            </div>
+          )}
+          {tags.length > 0 && (
+            <div className="tag-chip-row" style={{ marginBottom: 8 }}>
+              {tags.map((tag) => (
+                <TagChipLink key={tag.id ?? tag.name} name={tag.name} />
+              ))}
+            </div>
+          )}
+          {summary && <p style={{ margin: "0 0 6px" }}>{summary}</p>}
+          <p style={{ margin: 0, color: "#666" }}>
+            {t({
+              ja: "年齢制限により本文は非表示です。",
+              en: "The full text is hidden due to age restrictions.",
+            })}
+          </p>
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
             className="btn btn-border"

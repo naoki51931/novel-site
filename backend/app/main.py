@@ -682,6 +682,72 @@ def send_notification_email_if_enabled(
     send_notification_email(user.email, title, email_body)
 
 
+def send_notification_email_if_enabled_with_user(
+    user: models.User,
+    *,
+    title: str,
+    body: str | None = None,
+    link_url: str | None = None,
+) -> None:
+    if not user or not getattr(user, "email_notifications_enabled", True):
+        return
+    if not user.email:
+        return
+    full_link = None
+    if link_url:
+        if link_url.startswith("/"):
+            full_link = FRONTEND_ORIGIN.rstrip("/") + link_url
+        else:
+            full_link = link_url
+    email_body = body or title
+    if full_link:
+        email_body = f"{email_body}\n\n{full_link}"
+    send_notification_email(user.email, title, email_body)
+
+
+def notify_favorited_users_episode_published(
+    db: Session,
+    *,
+    novel: models.Novel,
+    episode: models.Episode,
+) -> None:
+    if not getattr(novel, "is_public", True):
+        return
+    favorites = (
+        db.query(models.User)
+        .join(models.NovelFavorite, models.NovelFavorite.user_id == models.User.id)
+        .filter(
+            models.NovelFavorite.novel_id == novel.id,
+            models.User.id != novel.author_id,
+        )
+        .all()
+    )
+    if not favorites:
+        return
+    episode_title = episode.title or f"EP#{episode.id}"
+    title = "お気に入りの小説が更新されました"
+    notif_body = f"「{novel.title}」に新しいエピソード「{episode_title}」が追加されました"
+    link_url = f"/episodes/{episode.id}"
+    for user in favorites:
+        create_notification(
+            db,
+            user_id=user.id,
+            notif_type="favorite_update",
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=novel.author_id,
+        )
+    db.commit()
+    for user in favorites:
+        send_notification_email_if_enabled_with_user(
+            user,
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+        )
+
+
 def _truncate_text(value: str, limit: int = 120) -> str:
     text = (value or "").strip()
     if len(text) <= limit:
@@ -5612,6 +5678,8 @@ def create_episode(
     )
     db.commit()
     db.refresh(ep)
+    if is_public:
+        notify_favorited_users_episode_published(db, novel=novel, episode=ep)
     return ep
 
 @app.put("/api/episodes/{episode_id}")
@@ -5628,6 +5696,7 @@ def update_episode(
     ep = db.query(models.Episode).get(episode_id)
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
+    was_public = not is_episode_draft(ep)
 
     has_non_tag_change = False
     if payload.get("language") is not None and normalize_language(
@@ -5729,6 +5798,8 @@ def update_episode(
         )
     db.commit()
     db.refresh(ep)
+    if not was_public and not is_episode_draft(ep):
+        notify_favorited_users_episode_published(db, novel=novel, episode=ep)
     return ep
 
 @app.delete("/api/episodes/{episode_id}")
@@ -6223,6 +6294,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
     novel = (
         db.query(models.Novel)
         .options(selectinload(models.Novel.author))
+        .options(selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag))
         .get(ep.novel_id)
     )
 
@@ -6328,6 +6400,11 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "novel_id": ep.novel_id,
         "author_id": novel.author_id if novel else None,
         "author_username": (novel.author.username if (novel and novel.author) else None),
+        "novel_title": getattr(novel, "title", None),
+        "novel_description": getattr(novel, "description", None),
+        "novel_tags": [
+            {"id": t.id, "name": t.name} for t in (novel.tags if novel else [])
+        ],
         "novel_age_limit": novel.age_limit if novel else None,
         "title": ep.title,
         "cover_image_url": ep.cover_image_url,
@@ -6565,6 +6642,49 @@ def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml(db: Session = Depends(get_db)):
+    base = FRONTEND_ORIGIN.rstrip("/")
+    urls: list[tuple[str, Optional[datetime]]] = [(f"{base}/", None)]
+
+    novels = (
+        db.query(models.Novel.id, models.Novel.created_at)
+        .filter(models.Novel.is_public == True)
+        .order_by(models.Novel.id.asc())
+        .all()
+    )
+    for novel_id, created_at in novels:
+        urls.append((f"{base}/novels/{novel_id}", created_at))
+
+    episodes = (
+        db.query(models.Episode.id, models.Episode.created_at)
+        .join(models.Novel, models.Episode.novel_id == models.Novel.id)
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True)
+        .filter(models.Novel.is_public == True)
+        .order_by(models.Episode.id.asc())
+        .all()
+    )
+    for episode_id, created_at in episodes:
+        urls.append((f"{base}/episodes/{episode_id}", created_at))
+
+    items = []
+    for loc, lastmod in urls:
+        safe_loc = html.escape(loc, quote=True)
+        lastmod_tag = ""
+        if isinstance(lastmod, datetime):
+            lastmod_tag = f"<lastmod>{lastmod.date().isoformat()}</lastmod>"
+        items.append(f"<url><loc>{safe_loc}</loc>{lastmod_tag}</url>")
+
+    xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
+        + "".join(items)
+        + "</urlset>"
+    )
+    return Response(content=xml, media_type="application/xml")
 
 
 class LoginVerify(BaseModel):

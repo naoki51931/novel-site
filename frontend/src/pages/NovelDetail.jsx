@@ -40,6 +40,13 @@ export default function NovelDetail() {
 
   const countChars = (value) => (value || "").length;
 
+  const summarizeText = (text, limit = 200) => {
+    const clean = (text || "").trim();
+    if (!clean) return "";
+    if (clean.length <= limit) return clean;
+    return `${clean.slice(0, limit)}...`;
+  };
+
   const formatEpisodeDisplayTitle = (episodeNumber, title) => {
     const cleanTitle = typeof title === "string" ? title.trim() : "";
     if (cleanTitle && titleStartsWithEpisodePrefix(cleanTitle)) return cleanTitle;
@@ -522,6 +529,8 @@ export default function NovelDetail() {
     );
   }
   if (ageConfirmRequired && !ageConfirmed) {
+    const tags = Array.isArray(novel.tags) ? novel.tags : [];
+    const summary = summarizeText(novel.description, 200);
     return (
       <div style={{ padding: 16 }}>
         <h2 style={{ marginTop: 0 }}>
@@ -533,7 +542,35 @@ export default function NovelDetail() {
             en: "This novel is not available to users under 18.",
           })}
         </p>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ marginTop: 16 }}>
+          <h3 style={{ margin: "0 0 6px" }}>{novel.title}</h3>
+          {authorName && (
+            <div style={{ marginBottom: 6, color: "#666" }}>
+              {t({ ja: "作者", en: "Author" })}:{" "}
+              <Link
+                className="user-link"
+                to={`/users/${encodeURIComponent(authorName)}`}
+              >
+                {authorName}
+              </Link>
+            </div>
+          )}
+          {tags.length > 0 && (
+            <div className="tag-chip-row" style={{ marginBottom: 8 }}>
+              {tags.map((tag) => (
+                <TagChipLink key={tag.id ?? tag.name} name={tag.name} />
+              ))}
+            </div>
+          )}
+          {summary && <p style={{ margin: "0 0 6px" }}>{summary}</p>}
+          <p style={{ margin: 0, color: "#666" }}>
+            {t({
+              ja: "年齢制限により本文は非表示です。",
+              en: "The full text is hidden due to age restrictions.",
+            })}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <button
             className="btn btn-border"
             onClick={() => {
