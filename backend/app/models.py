@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date, UniqueConstraint
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -26,6 +27,8 @@ class User(Base):
     # 2FA 用
     two_factor_code = Column(String(6), nullable=True)
     two_factor_expires_at = Column(DateTime, nullable=True)
+    ai_novel_draft_json = Column(LONGTEXT, nullable=True)
+    ai_novel_draft_updated_at = Column(DateTime, nullable=True)
 
     # リレーション
     novels = relationship("Novel", back_populates="author")

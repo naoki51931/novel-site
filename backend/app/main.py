@@ -174,6 +174,10 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN stripe_customer_id VARCHAR(255) NULL")
             if "stripe_subscription_id" not in existing:
                 alters.append("ADD COLUMN stripe_subscription_id VARCHAR(255) NULL")
+            if "ai_novel_draft_json" not in existing:
+                alters.append("ADD COLUMN ai_novel_draft_json LONGTEXT NULL")
+            if "ai_novel_draft_updated_at" not in existing:
+                alters.append("ADD COLUMN ai_novel_draft_updated_at DATETIME NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE users {clause}"))
@@ -3877,6 +3881,15 @@ class AINovelJobStatusResponse(BaseModel):
     error: str | None = None
 
 
+class AINovelDraftSaveRequest(BaseModel):
+    draft: dict
+
+
+class AINovelDraftResponse(BaseModel):
+    draft: dict | None = None
+    updated_at: str | None = None
+
+
 def _serialize_ai_response(resp: AINovelResponse) -> dict:
     return resp.dict()
 
@@ -4259,6 +4272,42 @@ def get_ai_novel_remaining(
     return {
         "guest_remaining": guest_remaining,
         "user_remaining": user_remaining,
+    }
+
+@app.get("/api/ai/novels/draft", response_model=AINovelDraftResponse)
+def get_ai_novel_draft(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    raw = getattr(user, "ai_novel_draft_json", None)
+    if not raw:
+        return {"draft": None, "updated_at": None}
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        payload = None
+    updated_at = getattr(user, "ai_novel_draft_updated_at", None)
+    return {
+        "draft": payload,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+    }
+
+@app.post("/api/ai/novels/draft", response_model=AINovelDraftResponse)
+def save_ai_novel_draft(
+    payload: AINovelDraftSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    raw = json.dumps(payload.draft or {}, ensure_ascii=True)
+    user.ai_novel_draft_json = raw
+    user.ai_novel_draft_updated_at = datetime.utcnow()
+    db.add(user)
+    db.commit()
+    return {
+        "draft": payload.draft,
+        "updated_at": user.ai_novel_draft_updated_at.isoformat(),
     }
 
 @app.get("/api/ai/novels/auto-fill")

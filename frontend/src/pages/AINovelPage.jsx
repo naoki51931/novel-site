@@ -187,6 +187,8 @@ export default function AINovelPage() {
   const combinedBodyRef = useRef("");
   const lastSelectionContextRef = useRef(null);
   const jobPollTimerRef = useRef(null);
+  const localDraftRef = useRef(null);
+  const draftSaveTimerRef = useRef(null);
   const [pendingJob, setPendingJob] = useState(null);
 
   useEffect(() => {
@@ -223,6 +225,39 @@ export default function AINovelPage() {
     }
   };
 
+  const extractDraftTimestamp = (draft) => {
+    if (!draft) return 0;
+    const raw = draft.saved_at || draft.savedAt || null;
+    if (!raw) return 0;
+    const ts = Date.parse(raw);
+    return Number.isFinite(ts) ? ts : 0;
+  };
+
+  const applyDraft = (draft) => {
+    if (!draft || typeof draft !== "object") return;
+    if (typeof draft.titleHint === "string") setTitleHint(draft.titleHint);
+    if (typeof draft.genre === "string") setGenre(draft.genre);
+    if (typeof draft.characters === "string") setCharacters(draft.characters);
+    if (typeof draft.tone === "string") setTone(draft.tone);
+    if (typeof draft.length === "string") setLength(draft.length);
+    if (typeof draft.model === "string") setModel(draft.model);
+    if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
+    if (typeof draft.isContinueMode === "boolean") setIsContinueMode(draft.isContinueMode);
+    if (typeof draft.episodeId === "number" || draft.episodeId === null) setEpisodeId(draft.episodeId);
+    if (typeof draft.continueNovelId === "number" || draft.continueNovelId === null)
+      setContinueNovelId(draft.continueNovelId);
+    if (typeof draft.continueEpisodeNumber === "number" || draft.continueEpisodeNumber === null)
+      setContinueEpisodeNumber(draft.continueEpisodeNumber);
+    if (typeof draft.isEditMode === "boolean") setIsEditMode(draft.isEditMode);
+    if (typeof draft.editSourceBody === "string") setEditSourceBody(draft.editSourceBody);
+    if (draft.result && typeof draft.result === "object") setResult(draft.result);
+    if (typeof draft.continuationBody === "string") setContinuationBody(draft.continuationBody);
+    if (typeof draft.postEpisodeTitle === "string") setPostEpisodeTitle(draft.postEpisodeTitle);
+    if (draft.lastGenerateParams && typeof draft.lastGenerateParams === "object") {
+      setLastGenerateParams(draft.lastGenerateParams);
+    }
+  };
+
   const handleJobResult = (job, payload) => {
     if (payload && typeof payload === "object") {
       if (typeof payload.guest_remaining === "number") {
@@ -251,6 +286,21 @@ export default function AINovelPage() {
 
   const pollAiJob = async (job) => {
     if (!job || !job.job_id) return;
+    const startedAt = Number(job.started_at || 0);
+    if (startedAt && Date.now() - startedAt > 10 * 60 * 1000) {
+      setError(
+        t({
+          ja: "生成待機が10分を超えたため通信を終了しました。もう一度お試しください。",
+          en: "Waiting exceeded 10 minutes. Please try again.",
+        })
+      );
+      stopJobPolling();
+      setLoading(false);
+      setContinuing(false);
+      clearPendingAiJob();
+      setPendingJob(null);
+      return;
+    }
     const token = getAuthToken();
     try {
       const res = await fetch(`/api/ai/jobs/${job.job_id}`, {
@@ -312,14 +362,15 @@ export default function AINovelPage() {
   const startJobPolling = (job) => {
     stopJobPolling();
     if (!job) return;
-    setPendingJob(job);
-    savePendingAiJob(job);
+    const withStartedAt = job.started_at ? job : { ...job, started_at: Date.now() };
+    setPendingJob(withStartedAt);
+    savePendingAiJob(withStartedAt);
     if (job.kind === "continuation") {
       setContinuing(true);
     } else {
       setLoading(true);
     }
-    jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 500);
+    jobPollTimerRef.current = setTimeout(() => pollAiJob(withStartedAt), 500);
   };
 
   const resumePendingJobIfAny = (kind) => {
@@ -376,21 +427,35 @@ export default function AINovelPage() {
       const raw = localStorage.getItem(AI_NOVEL_DRAFT_KEY);
       if (!raw) return;
       const draft = JSON.parse(raw);
-      if (typeof draft.titleHint === "string") setTitleHint(draft.titleHint);
-      if (typeof draft.genre === "string") setGenre(draft.genre);
-      if (typeof draft.characters === "string") setCharacters(draft.characters);
-      if (typeof draft.tone === "string") setTone(draft.tone);
-      if (typeof draft.length === "string") setLength(draft.length);
-      if (typeof draft.model === "string") setModel(draft.model);
-      if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
-      if (draft.result && typeof draft.result === "object") setResult(draft.result);
-      if (typeof draft.continuationBody === "string") setContinuationBody(draft.continuationBody);
-      if (draft.lastGenerateParams && typeof draft.lastGenerateParams === "object") {
-        setLastGenerateParams(draft.lastGenerateParams);
-      }
+      localDraftRef.current = draft;
+      applyDraft(draft);
     } catch (e) {
       console.error("failed to load ai novel draft", e);
     }
+  }, []);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/ai/novels/draft", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const serverDraft = data?.draft || null;
+        if (!serverDraft) return;
+        const localTs = extractDraftTimestamp(localDraftRef.current);
+        const serverTs = extractDraftTimestamp(serverDraft);
+        if (serverTs >= localTs) {
+          localDraftRef.current = serverDraft;
+          applyDraft(serverDraft);
+        }
+      } catch (e) {
+        console.error("failed to load ai novel server draft", e);
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -403,13 +468,21 @@ export default function AINovelPage() {
         length,
         model,
         isR18,
+        isContinueMode,
+        episodeId,
+        continueNovelId,
+        continueEpisodeNumber,
+        isEditMode,
+        editSourceBody,
         result,
         continuationBody,
+        postEpisodeTitle,
         lastGenerateParams,
         saved_at: new Date().toISOString(),
       };
       try {
         localStorage.setItem(AI_NOVEL_DRAFT_KEY, JSON.stringify(payload));
+        localDraftRef.current = payload;
       } catch (e) {
         console.error("failed to save ai novel draft", e);
       }
@@ -424,8 +497,78 @@ export default function AINovelPage() {
     length,
     model,
     isR18,
+    isContinueMode,
+    episodeId,
+    continueNovelId,
+    continueEpisodeNumber,
+    isEditMode,
+    editSourceBody,
     result,
     continuationBody,
+    postEpisodeTitle,
+    lastGenerateParams,
+  ]);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+    }
+    const payload = {
+      titleHint,
+      genre,
+      characters,
+      tone,
+      length,
+      model,
+      isR18,
+      isContinueMode,
+      episodeId,
+      continueNovelId,
+      continueEpisodeNumber,
+      isEditMode,
+      editSourceBody,
+      result,
+      continuationBody,
+      postEpisodeTitle,
+      lastGenerateParams,
+      saved_at: new Date().toISOString(),
+    };
+    draftSaveTimerRef.current = setTimeout(() => {
+      fetch("/api/ai/novels/draft", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ draft: payload }),
+      }).catch((e) => {
+        console.error("failed to save ai novel server draft", e);
+      });
+    }, 1500);
+    return () => {
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+      }
+    };
+  }, [
+    titleHint,
+    genre,
+    characters,
+    tone,
+    length,
+    model,
+    isR18,
+    isContinueMode,
+    episodeId,
+    continueNovelId,
+    continueEpisodeNumber,
+    isEditMode,
+    editSourceBody,
+    result,
+    continuationBody,
+    postEpisodeTitle,
     lastGenerateParams,
   ]);
 
