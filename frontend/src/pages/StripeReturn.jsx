@@ -1,20 +1,28 @@
 import { Link } from "react-router-dom";
+import { useEffect } from "react";
 import { useI18n } from "../lib/i18n";
 
-/**
- * Stripe 決済結果表示ページ
- *
- * App.jsx で
- *   <Route path="/stripe/success" element={<StripeReturn mode="success" />} />
- *   <Route path="/stripe/cancel"  element={<StripeReturn mode="cancel"  />} />
- * のように使う前提。
- */
 export default function StripeReturn({ mode }) {
   const { t } = useI18n();
   const isSuccess = mode === "success";
+
+  useEffect(() => {
+    if (!isSuccess) return;
+
+    if (typeof window !== "undefined" && window.gtag) {
+      window.gtag("event", "conversion", {
+        send_to: "AW-781963249/Y5UkCJugivEbEPGf7_QC",
+        value: 1000.0,
+        currency: "JPY",
+        transaction_id: "",
+      });
+    }
+  }, [isSuccess]);
+
   const title = isSuccess
     ? t({ ja: "課金が完了しました", en: "Payment completed" })
     : t({ ja: "決済がキャンセルされました", en: "Payment canceled" });
+
   const message = isSuccess
     ? t({
         ja: "ご利用ありがとうございます。プレミアム会員への反映に数秒〜数十秒かかる場合があります。マイページでステータスをご確認ください。",
@@ -61,3 +69,4 @@ export default function StripeReturn({ mode }) {
     </div>
   );
 }
+

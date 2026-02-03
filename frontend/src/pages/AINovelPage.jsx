@@ -18,6 +18,7 @@ function getAuthToken() {
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
+const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
 
 function savePendingAiPost(data) {
   try {
@@ -45,6 +46,32 @@ function consumePendingAiPostError() {
     return msg;
   } catch {
     return null;
+  }
+}
+
+function savePendingAiJob(data) {
+  try {
+    localStorage.setItem(PENDING_AI_JOB_KEY, JSON.stringify(data));
+  } catch {
+    // ignore
+  }
+}
+
+function loadPendingAiJob() {
+  try {
+    const raw = localStorage.getItem(PENDING_AI_JOB_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingAiJob() {
+  try {
+    localStorage.removeItem(PENDING_AI_JOB_KEY);
+  } catch {
+    // ignore
   }
 }
 
@@ -159,6 +186,8 @@ export default function AINovelPage() {
   const resultBodyRef = useRef(null);
   const combinedBodyRef = useRef("");
   const lastSelectionContextRef = useRef(null);
+  const jobPollTimerRef = useRef(null);
+  const [pendingJob, setPendingJob] = useState(null);
 
   useEffect(() => {
     const fetchRemaining = async () => {
@@ -185,6 +214,132 @@ export default function AINovelPage() {
     };
 
     fetchRemaining();
+  }, []);
+
+  const stopJobPolling = () => {
+    if (jobPollTimerRef.current) {
+      clearTimeout(jobPollTimerRef.current);
+      jobPollTimerRef.current = null;
+    }
+  };
+
+  const handleJobResult = (job, payload) => {
+    if (payload && typeof payload === "object") {
+      if (typeof payload.guest_remaining === "number") {
+        setGuestRemaining(payload.guest_remaining);
+      } else {
+        setGuestRemaining(null);
+      }
+      if (typeof payload.user_remaining === "number") {
+        setUserRemaining(payload.user_remaining);
+      } else {
+        setUserRemaining(null);
+      }
+    }
+    if (job?.kind === "continuation") {
+      const data = normalizeAINovelResponse(payload || {});
+      const nextBody = (data?.body || "").trim();
+      if (nextBody) {
+        setContinuationBody((prev) => (prev ? `${prev}\n\n${nextBody}` : nextBody));
+      }
+      setContinuing(false);
+      return;
+    }
+    setResult(normalizeAINovelResponse(payload || {}));
+    setLoading(false);
+  };
+
+  const pollAiJob = async (job) => {
+    if (!job || !job.job_id) return;
+    const token = getAuthToken();
+    try {
+      const res = await fetch(`/api/ai/jobs/${job.job_id}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (res.status === 401 && token) {
+        setError(
+          t({
+            ja: "ログインの有効期限が切れています。再ログインしてください。",
+            en: "Your session has expired. Please log in again.",
+          })
+        );
+        setTimeout(() => navigate("/login"), 800);
+        stopJobPolling();
+        setLoading(false);
+        setContinuing(false);
+        clearPendingAiJob();
+        setPendingJob(null);
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          t(
+            { ja: "生成状況の取得に失敗しました (status={{status}})", en: "Failed to load status (status={{status}})" },
+            { status: res.status }
+          )
+        );
+      }
+
+      const data = await res.json();
+      if (data.status === "succeeded") {
+        handleJobResult(job, data.response);
+        stopJobPolling();
+        clearPendingAiJob();
+        setPendingJob(null);
+        return;
+      }
+      if (data.status === "failed") {
+        setError(
+          data.error ||
+            t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
+        );
+        stopJobPolling();
+        setLoading(false);
+        setContinuing(false);
+        clearPendingAiJob();
+        setPendingJob(null);
+        return;
+      }
+      jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 2000);
+    } catch (err) {
+      console.error(err);
+      jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 3000);
+    }
+  };
+
+  const startJobPolling = (job) => {
+    stopJobPolling();
+    if (!job) return;
+    setPendingJob(job);
+    savePendingAiJob(job);
+    if (job.kind === "continuation") {
+      setContinuing(true);
+    } else {
+      setLoading(true);
+    }
+    jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 500);
+  };
+
+  const resumePendingJobIfAny = (kind) => {
+    const job = pendingJob || loadPendingAiJob();
+    if (!job || job.kind !== kind || !job.job_id) return false;
+    startJobPolling(job);
+    return true;
+  };
+
+  useEffect(() => {
+    const pending = loadPendingAiJob();
+    if (pending && pending.job_id) {
+      if (pending.kind === "continuation") {
+        setContinuing(true);
+      } else {
+        setLoading(true);
+      }
+      startJobPolling(pending);
+    }
+    return () => stopJobPolling();
   }, []);
 
   useEffect(() => {
@@ -577,6 +732,9 @@ export default function AINovelPage() {
 
   const handleGenerate = async (e) => {
     e.preventDefault();
+    stopJobPolling();
+    clearPendingAiJob();
+    setPendingJob(null);
     setLoading(true);
     setError("");
     setQuotaError("");
@@ -613,25 +771,25 @@ export default function AINovelPage() {
       return;
     }
 
-    try {
-      const params = {
-        titleHint,
-        genre,
-        characters,
-        tone,
-        length,
-        model,
-        isR18,
-      };
-      // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
-      const endpoint = episodeId
-        ? `/api/ai/episodes/${episodeId}/continue`
-        : "/api/ai/novels/generate";
-      const prompt =
-        isEditMode && baseBodyForEdit
-          ? buildEditPrompt(baseBodyForEdit, params)
-          : null;
+    const params = {
+      titleHint,
+      genre,
+      characters,
+      tone,
+      length,
+      model,
+      isR18,
+    };
+    // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
+    const endpoint = episodeId
+      ? `/api/ai/episodes/${episodeId}/continue_job`
+      : "/api/ai/novels/generate_job";
+    const prompt =
+      isEditMode && baseBodyForEdit
+        ? buildEditPrompt(baseBodyForEdit, params)
+        : null;
 
+    try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: token
@@ -700,30 +858,25 @@ export default function AINovelPage() {
       }
 
       const data = await res.json();
-      if (typeof data?.guest_remaining === "number") {
-        setGuestRemaining(data.guest_remaining);
-      } else {
-        setGuestRemaining(null);
-      }
-      if (typeof data?.user_remaining === "number") {
-        setUserRemaining(data.user_remaining);
-      } else {
-        setUserRemaining(null);
-      }
       setLastGenerateParams(params);
-      setResult(normalizeAINovelResponse(data));
+      startJobPolling({ job_id: data.job_id, kind: "generate" });
     } catch (err) {
       console.error(err);
       setError(
         err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
       );
-    } finally {
       setLoading(false);
     }
   };
 
   const handleGenerateContinuation = async (baseBodyOverride = null) => {
     if (!result?.body) return;
+    if (resumePendingJobIfAny("continuation")) {
+      return;
+    }
+    stopJobPolling();
+    clearPendingAiJob();
+    setPendingJob(null);
     setContinuing(true);
     setError("");
     setQuotaError("");
@@ -741,10 +894,10 @@ export default function AINovelPage() {
       isR18,
     };
 
+    const baseBody = typeof baseBodyOverride === "string" ? baseBodyOverride : getCombinedBody();
+    const prompt = buildContinuationPrompt(baseBody, params);
     try {
-      const baseBody = typeof baseBodyOverride === "string" ? baseBodyOverride : getCombinedBody();
-      const prompt = buildContinuationPrompt(baseBody, params);
-      const res = await fetch("/api/ai/novels/generate", {
+      const res = await fetch("/api/ai/novels/generate_job", {
         method: "POST",
         headers: token
           ? {
@@ -811,33 +964,22 @@ export default function AINovelPage() {
         );
       }
 
-      const data = normalizeAINovelResponse(await res.json());
-      if (typeof data?.guest_remaining === "number") {
-        setGuestRemaining(data.guest_remaining);
-      } else {
-        setGuestRemaining(null);
-      }
-      if (typeof data?.user_remaining === "number") {
-        setUserRemaining(data.user_remaining);
-      } else {
-        setUserRemaining(null);
-      }
-      const nextBody = (data?.body || "").trim();
-      if (nextBody) {
-        setContinuationBody((prev) => (prev ? `${prev}\n\n${nextBody}` : nextBody));
-      }
+      const data = await res.json();
+      startJobPolling({ job_id: data.job_id, kind: "continuation" });
     } catch (err) {
       console.error(err);
       setError(
         err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
       );
-    } finally {
       setContinuing(false);
     }
   };
 
   const handleRedoContinuation = async () => {
     if (!result?.body) return;
+    if (resumePendingJobIfAny("continuation")) {
+      return;
+    }
     setContinuationBody("");
     await handleGenerateContinuation(result.body);
   };

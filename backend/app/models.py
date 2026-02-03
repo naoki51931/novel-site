@@ -574,6 +574,22 @@ class AIGenerateLog(Base):
     user = relationship("User", back_populates="ai_generate_logs")
 
 
+class AINovelJob(Base):
+    __tablename__ = "ai_novel_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    guest_id = Column(String(64), nullable=True, index=True)
+    job_type = Column(String(32), nullable=False, index=True)
+    status = Column(String(16), nullable=False, server_default="pending", index=True)
+    request_json = Column(Text, nullable=False)
+    response_json = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
 # =========================
 # Direct Messages
 # =========================

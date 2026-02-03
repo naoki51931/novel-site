@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, or_, func
 from sqlalchemy.orm import selectinload
 
-from .database import Base, engine, get_db
+from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas
 
 import smtplib
@@ -3866,6 +3866,187 @@ def _format_ai_log_model(provider: str | None, model: str | None) -> str | None:
     return model or provider
 
 
+class AINovelJobCreateResponse(BaseModel):
+    job_id: int
+    status: str
+
+
+class AINovelJobStatusResponse(BaseModel):
+    status: str
+    response: dict | None = None
+    error: str | None = None
+
+
+def _serialize_ai_response(resp: AINovelResponse) -> dict:
+    return resp.dict()
+
+
+def _count_ai_jobs_today(db: Session, user_id: int) -> int:
+    today = datetime.utcnow().date()
+    start_of_day = datetime.combine(today, datetime.min.time())
+    return (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.user_id == user_id)
+        .filter(models.AINovelJob.created_at >= start_of_day)
+        .count()
+    )
+
+
+def _count_ai_usage_today(db: Session, user_id: int) -> int:
+    today = datetime.utcnow().date()
+    start_of_day = datetime.combine(today, datetime.min.time())
+    logs_count = (
+        db.query(models.AIGenerateLog)
+        .filter(models.AIGenerateLog.user_id == user_id)
+        .filter(models.AIGenerateLog.created_at >= start_of_day)
+        .count()
+    )
+    jobs_count = _count_ai_jobs_today(db, user_id)
+    return max(logs_count, jobs_count)
+
+
+async def _run_ai_job(job_id: int) -> None:
+    db = SessionLocal()
+    now = datetime.utcnow()
+    job = db.query(models.AINovelJob).get(job_id)
+    if not job or job.status not in {"pending", "running"}:
+        db.close()
+        return
+    try:
+        job.status = "running"
+        job.started_at = now
+        db.add(job)
+        db.commit()
+
+        payload = json.loads(job.request_json or "{}")
+        response_payload = None
+        error_message = None
+
+        if job.job_type == "novel_generate":
+            req = AINovelRequest(**payload)
+            provider = provider_from_request(req)
+            if getattr(req, "provider", None) is None and provider == "openai":
+                provider = provider_from_model(getattr(req, "model", None))
+            if provider == "deepseek":
+                resp = await call_deepseek_novel_api(req)
+            elif provider == "openrouter":
+                resp = await call_openrouter_novel_api(req)
+            else:
+                resp = await call_openai_novel_api(req)
+
+            if job.user_id:
+                user_remaining = max(0, AI_USER_DAILY_MAX - _count_ai_jobs_today(db, job.user_id))
+                resp.user_remaining = user_remaining
+
+                parts = [req.title_hint, req.genre, req.characters, req.tone]
+                prompt_summary = " / ".join([p for p in parts if p])[:200] if any(parts) else None
+                model_used = (
+                    getattr(resp, "model", None)
+                    or getattr(req, "model", None)
+                    or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+                )
+                model_log = _format_ai_log_model(provider, model_used)
+                tokens_used = getattr(resp, "used_tokens", None)
+                log = models.AIGenerateLog(
+                    user_id=job.user_id,
+                    prompt_summary=prompt_summary,
+                    tokens_used=tokens_used,
+                    model=model_log,
+                )
+                db.add(log)
+                db.commit()
+            else:
+                usage = get_guest_ai_usage(db, job.guest_id or "")
+                resp.guest_remaining = max(
+                    0, AI_GUEST_FREE_MAX - int(getattr(usage, "generate_count", 0) or 0)
+                )
+
+            response_payload = _serialize_ai_response(resp)
+        elif job.job_type == "episode_continue":
+            req = AINovelRequest(**(payload.get("req") or {}))
+            episode_id = int(payload.get("episode_id") or 0)
+            if not job.user_id:
+                raise HTTPException(status_code=401, detail="認証が必要です。")
+
+            ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
+            if not ep:
+                raise HTTPException(404, "エピソードが見つかりません")
+
+            characters_hint = (req.characters or "").strip()
+            characters_block = (
+                f"\n【登場人物・設定（今回の指定）】\n{characters_hint}\n"
+                "※上記の登場人物・設定を優先し、前話と矛盾が出ない範囲で自然に反映してください。\n"
+                if characters_hint
+                else ""
+            )
+            r18_note = (
+                "※成人向けの内容を許可します。性的描写を含めても構いません。\n"
+                if getattr(req, "r18", False)
+                else "※一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。\n"
+            )
+
+            prompt = f"""あなたは小説家です。
+以下のエピソードの続きとなる文章を、小説として自然につながるように書いてください。
+
+{r18_note}
+【前の話の本文】
+{ep.body}
+
+{characters_block}
+【続きの指示】
+{req.prompt or req.title_hint or "自然な続きお願いします"}
+
+"""
+
+            provider = provider_from_request(req)
+            if getattr(req, "provider", None) is None and provider == "openai":
+                provider = provider_from_model(getattr(req, "model", None))
+            if provider == "deepseek":
+                ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
+            elif provider == "openrouter":
+                ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+            else:
+                ai_resp = await call_openai_novel_api(prompt, model=req.model)
+
+            log = models.AIGenerateLog(
+                user_id=job.user_id,
+                prompt_summary=f"EP#{episode_id} の続き",
+                tokens_used=ai_resp.used_tokens,
+                model=_format_ai_log_model(
+                    provider,
+                    getattr(ai_resp, "model", None) or getattr(req, "model", None),
+                ),
+            )
+            db.add(log)
+            db.commit()
+
+            response_payload = _serialize_ai_response(ai_resp)
+        else:
+            raise HTTPException(status_code=400, detail="無効なジョブ種別です。")
+
+        job.status = "succeeded"
+        job.response_json = json.dumps(response_payload, ensure_ascii=True)
+        job.finished_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+    except HTTPException as e:
+        error_message = str(getattr(e, "detail", "") or e)
+        job.status = "failed"
+        job.error_message = error_message
+        job.finished_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+    except Exception as e:
+        error_message = str(e)
+        job.status = "failed"
+        job.error_message = error_message
+        job.finished_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+    finally:
+        db.close()
+
+
 @app.post("/api/ai/novels/generate", response_model=AINovelResponse)
 async def generate_ai_novel(
     req: AINovelRequest,
@@ -3907,14 +4088,7 @@ async def generate_ai_novel(
     assert user is not None
 
     # ★ 1日あたりの利用回数制限
-    today = datetime.utcnow().date()
-    start_of_day = datetime.combine(today, datetime.min.time())
-    count_today = (
-        db.query(models.AIGenerateLog)
-        .filter(models.AIGenerateLog.user_id == user.id)
-        .filter(models.AIGenerateLog.created_at >= start_of_day)
-        .count()
-    )
+    count_today = _count_ai_usage_today(db, user.id)
     if count_today >= AI_USER_DAILY_MAX:
         raise HTTPException(
             status_code=429,
@@ -3954,6 +4128,114 @@ async def generate_ai_novel(
     resp.user_remaining = max(0, user_remaining - 1)
     return resp
 
+@app.post("/api/ai/novels/generate_job", response_model=AINovelJobCreateResponse)
+async def create_ai_novel_job(
+    req: AINovelRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    user = get_optional_current_user(request, db)
+    is_premium = bool(user) and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False)))
+
+    if not is_premium:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        usage = require_guest_ai_quota(db, guest_id)
+        usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
+        usage.last_used_at = datetime.utcnow()
+        db.add(usage)
+        db.commit()
+
+        job = models.AINovelJob(
+            guest_id=guest_id,
+            job_type="novel_generate",
+            status="pending",
+            request_json=json.dumps(req.dict(), ensure_ascii=True),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        asyncio.create_task(_run_ai_job(job.id))
+        return AINovelJobCreateResponse(job_id=job.id, status=job.status)
+
+    assert user is not None
+    count_today = _count_ai_usage_today(db, user.id)
+    if count_today >= AI_USER_DAILY_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail="本日のAI小説生成回数の上限に達しました。",
+        )
+
+    job = models.AINovelJob(
+        user_id=user.id,
+        job_type="novel_generate",
+        status="pending",
+        request_json=json.dumps(req.dict(), ensure_ascii=True),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    asyncio.create_task(_run_ai_job(job.id))
+    return AINovelJobCreateResponse(job_id=job.id, status=job.status)
+
+@app.post("/api/ai/episodes/{episode_id}/continue_job", response_model=AINovelJobCreateResponse)
+async def create_ai_episode_continue_job(
+    episode_id: int,
+    req: AINovelRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_premium_user(request, db)
+    job = models.AINovelJob(
+        user_id=user.id,
+        job_type="episode_continue",
+        status="pending",
+        request_json=json.dumps(
+            {"episode_id": episode_id, "req": req.dict()},
+            ensure_ascii=True,
+        ),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    asyncio.create_task(_run_ai_job(job.id))
+    return AINovelJobCreateResponse(job_id=job.id, status=job.status)
+
+@app.get("/api/ai/jobs/{job_id}", response_model=AINovelJobStatusResponse)
+def get_ai_job_status(
+    job_id: int,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    job = db.query(models.AINovelJob).get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="ジョブが見つかりません。")
+
+    user = None
+    try:
+        user = get_optional_current_user(request, db)
+    except HTTPException:
+        user = None
+
+    if job.user_id:
+        if not user or user.id != job.user_id:
+            raise HTTPException(status_code=404, detail="ジョブが見つかりません。")
+    else:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        if not job.guest_id or guest_id != job.guest_id:
+            raise HTTPException(status_code=404, detail="ジョブが見つかりません。")
+
+    result = {"status": job.status}
+    if job.status == "succeeded" and job.response_json:
+        try:
+            result["response"] = json.loads(job.response_json)
+        except Exception:
+            result["response"] = None
+    if job.status == "failed":
+        result["error"] = job.error_message or "failed"
+    return result
+
 @app.get("/api/ai/novels/remaining")
 def get_ai_novel_remaining(
     request: Request,
@@ -3971,14 +4253,7 @@ def get_ai_novel_remaining(
 
     user_remaining = None
     if user and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))):
-        today = datetime.utcnow().date()
-        start_of_day = datetime.combine(today, datetime.min.time())
-        count_today = (
-            db.query(models.AIGenerateLog)
-            .filter(models.AIGenerateLog.user_id == user.id)
-            .filter(models.AIGenerateLog.created_at >= start_of_day)
-            .count()
-        )
+        count_today = _count_ai_usage_today(db, user.id)
         user_remaining = max(0, AI_USER_DAILY_MAX - count_today)
 
     return {
