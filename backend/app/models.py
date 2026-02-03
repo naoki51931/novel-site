@@ -593,6 +593,17 @@ class AINovelJob(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+class AINovelDraft(Base):
+    __tablename__ = "ai_novel_drafts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    draft_json = Column(LONGTEXT, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
+
+
 # =========================
 # Direct Messages
 # =========================

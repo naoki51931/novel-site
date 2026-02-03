@@ -179,6 +179,11 @@ export default function AINovelPage() {
   const [continuationBody, setContinuationBody] = useState("");
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
   const [lastGenerateParams, setLastGenerateParams] = useState(null);
+  const [draftSlots, setDraftSlots] = useState([]);
+  const [draftSlotsLoading, setDraftSlotsLoading] = useState(false);
+  const [draftSlotsError, setDraftSlotsError] = useState("");
+  const [selectedDraftId, setSelectedDraftId] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
 
   const countChars = (value) => (value || "").length;
 
@@ -190,6 +195,7 @@ export default function AINovelPage() {
   const localDraftRef = useRef(null);
   const draftSaveTimerRef = useRef(null);
   const [pendingJob, setPendingJob] = useState(null);
+  const hasAuthToken = Boolean(getAuthToken());
 
   useEffect(() => {
     const fetchRemaining = async () => {
@@ -258,7 +264,54 @@ export default function AINovelPage() {
     }
   };
 
+  const buildDraftPayload = () => ({
+    titleHint,
+    genre,
+    characters,
+    tone,
+    length,
+    model,
+    isR18,
+    isContinueMode,
+    episodeId,
+    continueNovelId,
+    continueEpisodeNumber,
+    isEditMode,
+    editSourceBody,
+    result,
+    continuationBody,
+    postEpisodeTitle,
+    lastGenerateParams,
+    saved_at: new Date().toISOString(),
+  });
+
+  const buildDefaultDraftTitle = () => {
+    const base = (draftTitle || "").trim() || (result?.generated_title || "").trim() || (titleHint || "").trim();
+    if (base) return base;
+    const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+    return t({ ja: `AI生成 ${stamp}`, en: `AI Draft ${stamp}` });
+  };
+
+  const handleSelectDraftSlot = (value) => {
+    setSelectedDraftId(value);
+    const match = draftSlots.find((item) => String(item.id) === String(value));
+    if (match && typeof match.title === "string") {
+      setDraftTitle(match.title);
+    }
+  };
+
   const handleJobResult = (job, payload) => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      const titleText =
+        job?.kind === "continuation"
+          ? t({ ja: "続き生成が完了しました", en: "Continuation is ready" })
+          : t({ ja: "AI小説生成が完了しました", en: "AI novel is ready" });
+      try {
+        new Notification(titleText);
+      } catch {
+        // ignore
+      }
+    }
     if (payload && typeof payload === "object") {
       if (typeof payload.guest_remaining === "number") {
         setGuestRemaining(payload.guest_remaining);
@@ -341,6 +394,17 @@ export default function AINovelPage() {
         return;
       }
       if (data.status === "failed") {
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          const titleText =
+            job?.kind === "continuation"
+              ? t({ ja: "続き生成が失敗しました", en: "Continuation failed" })
+              : t({ ja: "AI小説生成が失敗しました", en: "AI novel failed" });
+          try {
+            new Notification(titleText);
+          } catch {
+            // ignore
+          }
+        }
         setError(
           data.error ||
             t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
@@ -380,6 +444,146 @@ export default function AINovelPage() {
     return true;
   };
 
+  const fetchDraftSlots = async (selectId = null) => {
+    const token = getAuthToken();
+    if (!token) return;
+    setDraftSlotsLoading(true);
+    setDraftSlotsError("");
+    try {
+      const res = await fetch("/api/ai/novels/drafts", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        throw new Error(
+          t(
+            { ja: "保存データの取得に失敗しました (status={{status}})", en: "Failed to load saves (status={{status}})" },
+            { status: res.status }
+          )
+        );
+      }
+      const data = await res.json().catch(() => []);
+      const list = Array.isArray(data) ? data : [];
+      setDraftSlots(list);
+      if (selectId) {
+        setSelectedDraftId(String(selectId));
+      }
+    } catch (e) {
+      console.error(e);
+      setDraftSlotsError(
+        e.message || t({ ja: "保存データの取得中にエラーが発生しました。", en: "Failed to load saves." })
+      );
+    } finally {
+      setDraftSlotsLoading(false);
+    }
+  };
+
+  const handleLoadDraftSlot = async () => {
+    const token = getAuthToken();
+    if (!token || !selectedDraftId) return;
+    setDraftSlotsLoading(true);
+    setDraftSlotsError("");
+    try {
+      const res = await fetch(`/api/ai/novels/drafts/${selectedDraftId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        throw new Error(
+          t(
+            { ja: "保存データの読み込みに失敗しました (status={{status}})", en: "Failed to load save (status={{status}})" },
+            { status: res.status }
+          )
+        );
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data?.draft) {
+        applyDraft(data.draft);
+      }
+      if (typeof data?.title === "string") {
+        setDraftTitle(data.title);
+      }
+    } catch (e) {
+      console.error(e);
+      setDraftSlotsError(
+        e.message || t({ ja: "保存データの読み込み中にエラーが発生しました。", en: "Failed to load save." })
+      );
+    } finally {
+      setDraftSlotsLoading(false);
+    }
+  };
+
+  const handleSaveDraftSlot = async () => {
+    const token = getAuthToken();
+    if (!token) {
+      setDraftSlotsError(t({ ja: "ログインしてください。", en: "Please log in." }));
+      return;
+    }
+    setDraftSlotsLoading(true);
+    setDraftSlotsError("");
+    try {
+      const title = buildDefaultDraftTitle();
+      const payload = buildDraftPayload();
+      const res = await fetch("/api/ai/novels/drafts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title, draft: payload }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "failed");
+      }
+      const data = await res.json().catch(() => ({}));
+      if (typeof data?.title === "string") {
+        setDraftTitle(data.title);
+      }
+      await fetchDraftSlots(data?.id ? String(data.id) : null);
+    } catch (e) {
+      console.error(e);
+      setDraftSlotsError(
+        e.message || t({ ja: "保存中にエラーが発生しました。", en: "Failed to save." })
+      );
+    } finally {
+      setDraftSlotsLoading(false);
+    }
+  };
+
+  const handleOverwriteDraftSlot = async () => {
+    const token = getAuthToken();
+    if (!token || !selectedDraftId) return;
+    setDraftSlotsLoading(true);
+    setDraftSlotsError("");
+    try {
+      const payload = buildDraftPayload();
+      const title = buildDefaultDraftTitle();
+      const res = await fetch(`/api/ai/novels/drafts/${selectedDraftId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title, draft: payload }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "failed");
+      }
+      const data = await res.json().catch(() => ({}));
+      if (typeof data?.title === "string") {
+        setDraftTitle(data.title);
+      }
+      await fetchDraftSlots();
+    } catch (e) {
+      console.error(e);
+      setDraftSlotsError(
+        e.message || t({ ja: "上書き保存中にエラーが発生しました。", en: "Failed to overwrite." })
+      );
+    } finally {
+      setDraftSlotsLoading(false);
+    }
+  };
+
   useEffect(() => {
     const pending = loadPendingAiJob();
     if (pending && pending.job_id) {
@@ -392,6 +596,11 @@ export default function AINovelPage() {
     }
     return () => stopJobPolling();
   }, []);
+
+  useEffect(() => {
+    if (!hasAuthToken) return;
+    fetchDraftSlots();
+  }, [hasAuthToken]);
 
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -460,26 +669,7 @@ export default function AINovelPage() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      const payload = {
-        titleHint,
-        genre,
-        characters,
-        tone,
-        length,
-        model,
-        isR18,
-        isContinueMode,
-        episodeId,
-        continueNovelId,
-        continueEpisodeNumber,
-        isEditMode,
-        editSourceBody,
-        result,
-        continuationBody,
-        postEpisodeTitle,
-        lastGenerateParams,
-        saved_at: new Date().toISOString(),
-      };
+      const payload = buildDraftPayload();
       try {
         localStorage.setItem(AI_NOVEL_DRAFT_KEY, JSON.stringify(payload));
         localDraftRef.current = payload;
@@ -515,26 +705,7 @@ export default function AINovelPage() {
     if (draftSaveTimerRef.current) {
       clearTimeout(draftSaveTimerRef.current);
     }
-    const payload = {
-      titleHint,
-      genre,
-      characters,
-      tone,
-      length,
-      model,
-      isR18,
-      isContinueMode,
-      episodeId,
-      continueNovelId,
-      continueEpisodeNumber,
-      isEditMode,
-      editSourceBody,
-      result,
-      continuationBody,
-      postEpisodeTitle,
-      lastGenerateParams,
-      saved_at: new Date().toISOString(),
-    };
+    const payload = buildDraftPayload();
     draftSaveTimerRef.current = setTimeout(() => {
       fetch("/api/ai/novels/draft", {
         method: "POST",
@@ -875,6 +1046,9 @@ export default function AINovelPage() {
 
   const handleGenerate = async (e) => {
     e.preventDefault();
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
     stopJobPolling();
     clearPendingAiJob();
     setPendingJob(null);
@@ -1014,6 +1188,9 @@ export default function AINovelPage() {
 
   const handleGenerateContinuation = async (baseBodyOverride = null) => {
     if (!result?.body) return;
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
     if (resumePendingJobIfAny("continuation")) {
       return;
     }
@@ -1120,6 +1297,9 @@ export default function AINovelPage() {
 
   const handleRedoContinuation = async () => {
     if (!result?.body) return;
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
     if (resumePendingJobIfAny("continuation")) {
       return;
     }
@@ -1766,6 +1946,87 @@ export default function AINovelPage() {
           borderRadius: "8px",
         }}
       >
+        <div
+          style={{
+            padding: "0.75rem",
+            border: "1px solid var(--border)",
+            borderRadius: "6px",
+            backgroundColor: "var(--ai-result-surface)",
+          }}
+        >
+          <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+            {t({ ja: "保存データ", en: "Saved drafts" })}
+          </div>
+          {hasAuthToken ? (
+            <>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <select
+                  value={selectedDraftId}
+                  onChange={(e) => handleSelectDraftSlot(e.target.value)}
+                  style={{ padding: "0.45rem", minWidth: "220px" }}
+                >
+                  <option value="">{t({ ja: "保存データを選択", en: "Select a saved draft" })}</option>
+                  {draftSlots.map((item) => (
+                    <option key={item.id} value={String(item.id)}>
+                      {item.title}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleLoadDraftSlot}
+                  disabled={!selectedDraftId || draftSlotsLoading}
+                  className="btn btn-border"
+                >
+                  {t({ ja: "反映", en: "Apply" })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fetchDraftSlots()}
+                  disabled={draftSlotsLoading}
+                  className="btn btn-border"
+                >
+                  {draftSlotsLoading ? t({ ja: "更新中...", en: "Refreshing..." }) : t({ ja: "更新", en: "Refresh" })}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.6rem" }}>
+                <input
+                  type="text"
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  placeholder={t({ ja: "保存タイトル", en: "Save title" })}
+                  style={{ padding: "0.5rem", minWidth: "240px", flex: "1 1 240px" }}
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveDraftSlot}
+                  disabled={draftSlotsLoading}
+                  className="btn btn-border"
+                >
+                  {t({ ja: "新規保存", en: "Save new" })}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOverwriteDraftSlot}
+                  disabled={!selectedDraftId || draftSlotsLoading}
+                  className="btn btn-border"
+                >
+                  {t({ ja: "上書き保存", en: "Overwrite" })}
+                </button>
+              </div>
+              {draftSlotsError && (
+                <div style={{ marginTop: "0.5rem", color: "#842029", fontSize: "0.9rem" }}>
+                  {draftSlotsError}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: "0.9rem", color: "var(--muted-text)" }}>
+              {t({ ja: "ログインすると保存データを使えます。", en: "Log in to use saved drafts." })}
+            </div>
+          )}
+        </div>
+
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
             {isEditMode

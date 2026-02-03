@@ -3890,6 +3890,35 @@ class AINovelDraftResponse(BaseModel):
     updated_at: str | None = None
 
 
+class AINovelDraftSlotListItem(BaseModel):
+    id: int
+    title: str
+    updated_at: str | None = None
+    created_at: str | None = None
+
+
+class AINovelDraftSlotDetailResponse(BaseModel):
+    id: int
+    title: str
+    draft: dict
+    updated_at: str | None = None
+    created_at: str | None = None
+
+
+class AINovelDraftSlotCreateRequest(BaseModel):
+    title: str
+    draft: dict
+
+
+class AINovelDraftSlotUpdateRequest(BaseModel):
+    title: str | None = None
+    draft: dict
+
+
+class AIJobKillResponse(BaseModel):
+    killed: int
+
+
 def _serialize_ai_response(resp: AINovelResponse) -> dict:
     return resp.dict()
 
@@ -3925,6 +3954,9 @@ async def _run_ai_job(job_id: int) -> None:
     if not job or job.status not in {"pending", "running"}:
         db.close()
         return
+    if job.status == "failed":
+        db.close()
+        return
     try:
         job.status = "running"
         job.started_at = now
@@ -3934,6 +3966,14 @@ async def _run_ai_job(job_id: int) -> None:
         payload = json.loads(job.request_json or "{}")
         response_payload = None
         error_message = None
+        job_status = (
+            db.query(models.AINovelJob.status)
+            .filter(models.AINovelJob.id == job_id)
+            .scalar()
+        )
+        if job_status == "failed":
+            db.close()
+            return
 
         if job.job_type == "novel_generate":
             req = AINovelRequest(**payload)
@@ -3947,6 +3987,14 @@ async def _run_ai_job(job_id: int) -> None:
             else:
                 resp = await call_openai_novel_api(req)
 
+            job_status = (
+                db.query(models.AINovelJob.status)
+                .filter(models.AINovelJob.id == job_id)
+                .scalar()
+            )
+            if job_status == "failed":
+                db.close()
+                return
             if job.user_id:
                 user_remaining = max(0, AI_USER_DAILY_MAX - _count_ai_jobs_today(db, job.user_id))
                 resp.user_remaining = user_remaining
@@ -4021,17 +4069,23 @@ async def _run_ai_job(job_id: int) -> None:
             else:
                 ai_resp = await call_openai_novel_api(prompt, model=req.model)
 
-            log = models.AIGenerateLog(
-                user_id=job.user_id,
-                prompt_summary=f"EP#{episode_id} の続き",
-                tokens_used=ai_resp.used_tokens,
-                model=_format_ai_log_model(
-                    provider,
-                    getattr(ai_resp, "model", None) or getattr(req, "model", None),
-                ),
+            job_status = (
+                db.query(models.AINovelJob.status)
+                .filter(models.AINovelJob.id == job_id)
+                .scalar()
             )
-            db.add(log)
-            db.commit()
+            if job_status != "failed":
+                log = models.AIGenerateLog(
+                    user_id=job.user_id,
+                    prompt_summary=f"EP#{episode_id} の続き",
+                    tokens_used=ai_resp.used_tokens,
+                    model=_format_ai_log_model(
+                        provider,
+                        getattr(ai_resp, "model", None) or getattr(req, "model", None),
+                    ),
+                )
+                db.add(log)
+                db.commit()
 
             response_payload = _serialize_ai_response(ai_resp)
         else:
@@ -4249,6 +4303,51 @@ def get_ai_job_status(
         result["error"] = job.error_message or "failed"
     return result
 
+@app.post("/api/ai/jobs/kill_me", response_model=AIJobKillResponse)
+def kill_my_ai_jobs(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    now = datetime.utcnow()
+    killed = (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.user_id == user.id)
+        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .update(
+            {
+                "status": "failed",
+                "error_message": "killed by user",
+                "finished_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return {"killed": int(killed or 0)}
+
+@app.post("/api/ai/jobs/kill_all", response_model=AIJobKillResponse)
+def kill_all_ai_jobs(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    now = datetime.utcnow()
+    killed = (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .update(
+            {
+                "status": "failed",
+                "error_message": "killed by admin",
+                "finished_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return {"killed": int(killed or 0)}
+
 @app.get("/api/ai/novels/remaining")
 def get_ai_novel_remaining(
     request: Request,
@@ -4308,6 +4407,114 @@ def save_ai_novel_draft(
     return {
         "draft": payload.draft,
         "updated_at": user.ai_novel_draft_updated_at.isoformat(),
+    }
+
+@app.get("/api/ai/novels/drafts", response_model=list[AINovelDraftSlotListItem])
+def list_ai_novel_drafts(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    drafts = (
+        db.query(models.AINovelDraft)
+        .filter(models.AINovelDraft.user_id == user.id)
+        .order_by(models.AINovelDraft.updated_at.desc(), models.AINovelDraft.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": d.id,
+            "title": d.title,
+            "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        }
+        for d in drafts
+    ]
+
+@app.post("/api/ai/novels/drafts", response_model=AINovelDraftSlotDetailResponse)
+def create_ai_novel_draft(
+    payload: AINovelDraftSlotCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="タイトルを入力してください。")
+    raw = json.dumps(payload.draft or {}, ensure_ascii=True)
+    draft = models.AINovelDraft(
+        user_id=user.id,
+        title=title[:255],
+        draft_json=raw,
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    return {
+        "id": draft.id,
+        "title": draft.title,
+        "draft": payload.draft,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+    }
+
+@app.get("/api/ai/novels/drafts/{draft_id}", response_model=AINovelDraftSlotDetailResponse)
+def get_ai_novel_draft_slot(
+    draft_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    draft = (
+        db.query(models.AINovelDraft)
+        .filter(models.AINovelDraft.user_id == user.id)
+        .filter(models.AINovelDraft.id == draft_id)
+        .first()
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="保存データが見つかりません。")
+    try:
+        payload = json.loads(draft.draft_json or "{}")
+    except Exception:
+        payload = {}
+    return {
+        "id": draft.id,
+        "title": draft.title,
+        "draft": payload,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+    }
+
+@app.put("/api/ai/novels/drafts/{draft_id}", response_model=AINovelDraftSlotDetailResponse)
+def update_ai_novel_draft(
+    draft_id: int,
+    payload: AINovelDraftSlotUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    draft = (
+        db.query(models.AINovelDraft)
+        .filter(models.AINovelDraft.user_id == user.id)
+        .filter(models.AINovelDraft.id == draft_id)
+        .first()
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="保存データが見つかりません。")
+    title = (payload.title or draft.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="タイトルを入力してください。")
+    draft.title = title[:255]
+    draft.draft_json = json.dumps(payload.draft or {}, ensure_ascii=True)
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    return {
+        "id": draft.id,
+        "title": draft.title,
+        "draft": payload.draft,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
     }
 
 @app.get("/api/ai/novels/auto-fill")
