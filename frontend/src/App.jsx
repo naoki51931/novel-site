@@ -26,6 +26,7 @@ import AdminPayouts from "./pages/AdminPayouts";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
 import AdminUsers from "./pages/AdminUsers";
+import AdminAiJobs from "./pages/AdminAiJobs";
 import SupportReturn from "./pages/SupportReturn";
 import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
@@ -329,6 +330,7 @@ export default function App() {
           <Route path="/admin/payouts" element={<AdminPayouts />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/admin/users" element={<AdminUsers />} />
+          <Route path="/admin/ai-jobs" element={<AdminAiJobs />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />

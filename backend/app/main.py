@@ -14,7 +14,7 @@ import html
 import io
 from datetime import date, datetime, timedelta
 from functools import lru_cache
-from typing import Optional, List
+from typing import Optional, List, Callable, Awaitable
 
 import jwt
 import stripe
@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_, func
 from sqlalchemy.orm import selectinload
+from sqlalchemy import and_
 
 from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas
@@ -253,14 +254,14 @@ def ensure_episodes_table_columns():
             rows = conn.execute(
                 text(
                     """
-                    SELECT COLUMN_NAME
+                    SELECT COLUMN_NAME, DATA_TYPE
                     FROM INFORMATION_SCHEMA.COLUMNS
                     WHERE TABLE_SCHEMA = DATABASE()
                       AND TABLE_NAME = 'episodes'
                     """
                 )
             ).fetchall()
-            existing = {r[0] for r in rows}
+            existing = {r[0]: (r[1] or "").lower() for r in rows}
 
             alters: list[str] = []
             if "status" not in existing:
@@ -269,6 +270,8 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 1")
             if "language" not in existing:
                 alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
+            if "body" in existing and existing["body"] != "longtext":
+                alters.append("MODIFY COLUMN body LONGTEXT NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE episodes {clause}"))
@@ -306,6 +309,37 @@ def ensure_novels_table_columns():
 
 
 ensure_novels_table_columns()
+
+def ensure_ai_novel_jobs_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME, DATA_TYPE
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'ai_novel_jobs'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0]: (r[1] or "").lower() for r in rows}
+
+            alters: list[str] = []
+            if "retry_attempts" not in existing:
+                alters.append("ADD COLUMN retry_attempts INT NOT NULL DEFAULT 0")
+            if "request_json" in existing and existing["request_json"] != "longtext":
+                alters.append("MODIFY COLUMN request_json LONGTEXT NOT NULL")
+            if "response_json" in existing and existing["response_json"] != "longtext":
+                alters.append("MODIFY COLUMN response_json LONGTEXT NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE ai_novel_jobs {clause}"))
+    except Exception as e:
+        print("[db] ensure_ai_novel_jobs_table_columns failed:", repr(e))
+
+
+ensure_ai_novel_jobs_table_columns()
 
 def ensure_tag_indexes():
     try:
@@ -1317,6 +1351,7 @@ def require_premium_user(request: Request, db: Session) -> models.User:
 AI_GUEST_COOKIE_NAME = "ai_guest_id"
 AI_GUEST_FREE_MAX = 10
 AI_USER_DAILY_MAX = 80
+AI_JOB_TIMEOUT_MINUTES = 10
 
 
 def get_optional_current_user(request: Request, db: Session) -> models.User | None:
@@ -3879,6 +3914,8 @@ class AINovelJobStatusResponse(BaseModel):
     status: str
     response: dict | None = None
     error: str | None = None
+    retry_attempts: int | None = None
+    retry_max: int | None = None
 
 
 class AINovelDraftSaveRequest(BaseModel):
@@ -3919,8 +3956,44 @@ class AIJobKillResponse(BaseModel):
     killed: int
 
 
+class AINovelDraftDeleteResponse(BaseModel):
+    deleted: bool
+
+
+class AIJobListItem(BaseModel):
+    id: int
+    user_id: int | None = None
+    status: str
+    job_type: str
+    created_at: str | None = None
+    started_at: str | None = None
+
+
+class AIJobKillSelectedRequest(BaseModel):
+    job_ids: list[int]
+
+
 def _serialize_ai_response(resp: AINovelResponse) -> dict:
     return resp.dict()
+
+
+def _extract_retry_max_from_request_json(raw: str | None) -> int | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    if isinstance(payload, dict) and "req" in payload and isinstance(payload.get("req"), dict):
+        payload = payload.get("req") or {}
+    retry_max = payload.get("retry_max")
+    if retry_max is None:
+        return None
+    try:
+        value = int(retry_max)
+    except Exception:
+        return None
+    return max(0, value)
 
 
 def _count_ai_jobs_today(db: Session, user_id: int) -> int:
@@ -3947,11 +4020,131 @@ def _count_ai_usage_today(db: Session, user_id: int) -> int:
     return max(logs_count, jobs_count)
 
 
+def _is_ai_job_expired(job: models.AINovelJob, now: datetime | None = None) -> bool:
+    if not job:
+        return False
+    now = now or datetime.utcnow()
+    start_at = job.started_at or job.created_at
+    if not start_at:
+        return False
+    return start_at <= (now - timedelta(minutes=AI_JOB_TIMEOUT_MINUTES))
+
+
+def _kill_expired_ai_jobs(db: Session, user_id: int | None = None) -> int:
+    now = datetime.utcnow()
+    cutoff = now - timedelta(minutes=AI_JOB_TIMEOUT_MINUTES)
+    query = db.query(models.AINovelJob).filter(models.AINovelJob.status.in_(["pending", "running"]))
+    if user_id is not None:
+        query = query.filter(models.AINovelJob.user_id == user_id)
+    expired = query.filter(
+        or_(
+            models.AINovelJob.started_at <= cutoff,
+            and_(models.AINovelJob.started_at.is_(None), models.AINovelJob.created_at <= cutoff),
+        )
+    )
+    killed = expired.update(
+        {
+            "status": "failed",
+            "error_message": "timeout",
+            "finished_at": now,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+    return int(killed or 0)
+
+
+def _should_retry_ai_error(err: Exception) -> bool:
+    if not isinstance(err, HTTPException):
+        return False
+    detail = str(getattr(err, "detail", "") or "")
+    return (
+        "AI からの応答が空でした" in detail
+        or "AI 応答の JSON 解析に失敗しました" in detail
+        or "AI 応答の形式が不正です" in detail
+    )
+
+
+async def _call_ai_with_retry(
+    req: AINovelRequest,
+    provider: str,
+    max_retries: int,
+    on_retry: Callable[[int], Awaitable[None]] | None = None,
+) -> AINovelResponse:
+    attempts = 0
+    last_error = None
+    while True:
+        try:
+            if provider == "deepseek":
+                return await call_deepseek_novel_api(req, strict_json=True)
+            if provider == "openrouter":
+                return await call_openrouter_novel_api(req, strict_json=True)
+            return await call_openai_novel_api(req, strict_json=True)
+        except HTTPException as e:
+            last_error = e
+            if _should_retry_ai_error(e) and attempts < max_retries:
+                attempts += 1
+                if on_retry:
+                    try:
+                        await on_retry(attempts)
+                    except Exception:
+                        pass
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            raise
+    if last_error:
+        raise last_error
+
+
+async def _call_ai_with_retry_prompt(
+    prompt: str,
+    model: str | None,
+    provider: str,
+    max_retries: int,
+    on_retry: Callable[[int], Awaitable[None]] | None = None,
+) -> AINovelResponse:
+    attempts = 0
+    last_error = None
+    while True:
+        try:
+            if provider == "deepseek":
+                return await call_deepseek_novel_api(prompt, model=model, strict_json=True)
+            if provider == "openrouter":
+                return await call_openrouter_novel_api(prompt, model=model, strict_json=True)
+            return await call_openai_novel_api(prompt, model=model, strict_json=True)
+        except HTTPException as e:
+            last_error = e
+            if _should_retry_ai_error(e) and attempts < max_retries:
+                attempts += 1
+                if on_retry:
+                    try:
+                        await on_retry(attempts)
+                    except Exception:
+                        pass
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            raise
+    if last_error:
+        raise last_error
+
+
 async def _run_ai_job(job_id: int) -> None:
     db = SessionLocal()
     now = datetime.utcnow()
     job = db.query(models.AINovelJob).get(job_id)
     if not job or job.status not in {"pending", "running"}:
+        db.close()
+        return
+    if _is_ai_job_expired(job, now):
+        job.status = "failed"
+        job.error_message = "timeout"
+        job.finished_at = now
+        db.add(job)
+        db.commit()
         db.close()
         return
     if job.status == "failed":
@@ -3960,6 +4153,7 @@ async def _run_ai_job(job_id: int) -> None:
     try:
         job.status = "running"
         job.started_at = now
+        job.retry_attempts = 0
         db.add(job)
         db.commit()
 
@@ -3975,17 +4169,29 @@ async def _run_ai_job(job_id: int) -> None:
             db.close()
             return
 
+        async def record_retry_attempts(attempts: int) -> None:
+            job.retry_attempts = int(attempts or 0)
+            db.add(job)
+            db.commit()
+
         if job.job_type == "novel_generate":
             req = AINovelRequest(**payload)
             provider = provider_from_request(req)
             if getattr(req, "provider", None) is None and provider == "openai":
                 provider = provider_from_model(getattr(req, "model", None))
-            if provider == "deepseek":
-                resp = await call_deepseek_novel_api(req)
-            elif provider == "openrouter":
-                resp = await call_openrouter_novel_api(req)
+            retry_enabled = bool(getattr(req, "retry_mode", False))
+            retry_max = int(getattr(req, "retry_max", 0) or 0)
+            if retry_max < 0:
+                retry_max = 0
+            if retry_enabled and retry_max > 0:
+                resp = await _call_ai_with_retry(req, provider, retry_max, on_retry=record_retry_attempts)
             else:
-                resp = await call_openai_novel_api(req)
+                if provider == "deepseek":
+                    resp = await call_deepseek_novel_api(req)
+                elif provider == "openrouter":
+                    resp = await call_openrouter_novel_api(req)
+                else:
+                    resp = await call_openai_novel_api(req)
 
             job_status = (
                 db.query(models.AINovelJob.status)
@@ -4062,12 +4268,25 @@ async def _run_ai_job(job_id: int) -> None:
             provider = provider_from_request(req)
             if getattr(req, "provider", None) is None and provider == "openai":
                 provider = provider_from_model(getattr(req, "model", None))
-            if provider == "deepseek":
-                ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
-            elif provider == "openrouter":
-                ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+            retry_enabled = bool(getattr(req, "retry_mode", False))
+            retry_max = int(getattr(req, "retry_max", 0) or 0)
+            if retry_max < 0:
+                retry_max = 0
+            if retry_enabled and retry_max > 0:
+                ai_resp = await _call_ai_with_retry_prompt(
+                    prompt,
+                    req.model,
+                    provider,
+                    retry_max,
+                    on_retry=record_retry_attempts,
+                )
             else:
-                ai_resp = await call_openai_novel_api(prompt, model=req.model)
+                if provider == "deepseek":
+                    ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
+                elif provider == "openrouter":
+                    ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+                else:
+                    ai_resp = await call_openai_novel_api(prompt, model=req.model)
 
             job_status = (
                 db.query(models.AINovelJob.status)
@@ -4091,6 +4310,14 @@ async def _run_ai_job(job_id: int) -> None:
         else:
             raise HTTPException(status_code=400, detail="無効なジョブ種別です。")
 
+        job_status = (
+            db.query(models.AINovelJob.status)
+            .filter(models.AINovelJob.id == job_id)
+            .scalar()
+        )
+        if job_status == "failed":
+            db.close()
+            return
         job.status = "succeeded"
         job.response_json = json.dumps(response_payload, ensure_ascii=True)
         job.finished_at = datetime.utcnow()
@@ -4268,6 +4495,31 @@ async def create_ai_episode_continue_job(
     asyncio.create_task(_run_ai_job(job.id))
     return AINovelJobCreateResponse(job_id=job.id, status=job.status)
 
+@app.get("/api/ai/jobs/me", response_model=list[AIJobListItem])
+def list_my_ai_jobs(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    _kill_expired_ai_jobs(db, user_id=user.id)
+    jobs = (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.user_id == user.id)
+        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .order_by(models.AINovelJob.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": job.id,
+            "status": job.status,
+            "job_type": job.job_type,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+        }
+        for job in jobs
+    ]
+
 @app.get("/api/ai/jobs/{job_id}", response_model=AINovelJobStatusResponse)
 def get_ai_job_status(
     job_id: int,
@@ -4275,6 +4527,7 @@ def get_ai_job_status(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    _kill_expired_ai_jobs(db)
     job = db.query(models.AINovelJob).get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="ジョブが見つかりません。")
@@ -4293,7 +4546,11 @@ def get_ai_job_status(
         if not job.guest_id or guest_id != job.guest_id:
             raise HTTPException(status_code=404, detail="ジョブが見つかりません。")
 
-    result = {"status": job.status}
+    result = {
+        "status": job.status,
+        "retry_attempts": int(getattr(job, "retry_attempts", 0) or 0),
+        "retry_max": _extract_retry_max_from_request_json(job.request_json),
+    }
     if job.status == "succeeded" and job.response_json:
         try:
             result["response"] = json.loads(job.response_json)
@@ -4318,6 +4575,96 @@ def kill_my_ai_jobs(
             {
                 "status": "failed",
                 "error_message": "killed by user",
+                "finished_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return {"killed": int(killed or 0)}
+
+@app.post("/api/ai/jobs/kill_selected_me", response_model=AIJobKillResponse)
+def kill_selected_my_ai_jobs(
+    payload: AIJobKillSelectedRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    job_ids = []
+    for j in payload.job_ids or []:
+        try:
+            job_ids.append(int(j))
+        except Exception:
+            continue
+    if not job_ids:
+        return {"killed": 0}
+    now = datetime.utcnow()
+    killed = (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.user_id == user.id)
+        .filter(models.AINovelJob.id.in_(job_ids))
+        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .update(
+            {
+                "status": "failed",
+                "error_message": "killed by user",
+                "finished_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return {"killed": int(killed or 0)}
+
+@app.get("/api/ai/jobs", response_model=list[AIJobListItem])
+def list_all_ai_jobs(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    _kill_expired_ai_jobs(db)
+    jobs = (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .order_by(models.AINovelJob.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": job.id,
+            "user_id": job.user_id,
+            "status": job.status,
+            "job_type": job.job_type,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+        }
+        for job in jobs
+    ]
+
+@app.post("/api/ai/jobs/kill_selected", response_model=AIJobKillResponse)
+def kill_selected_ai_jobs(
+    payload: AIJobKillSelectedRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    job_ids = []
+    for j in payload.job_ids or []:
+        try:
+            job_ids.append(int(j))
+        except Exception:
+            continue
+    if not job_ids:
+        return {"killed": 0}
+    now = datetime.utcnow()
+    killed = (
+        db.query(models.AINovelJob)
+        .filter(models.AINovelJob.id.in_(job_ids))
+        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .update(
+            {
+                "status": "failed",
+                "error_message": "killed by admin",
                 "finished_at": now,
             },
             synchronize_session=False,
@@ -4516,6 +4863,25 @@ def update_ai_novel_draft(
         "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
     }
+
+@app.delete("/api/ai/novels/drafts/{draft_id}", response_model=AINovelDraftDeleteResponse)
+def delete_ai_novel_draft(
+    draft_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    draft = (
+        db.query(models.AINovelDraft)
+        .filter(models.AINovelDraft.user_id == user.id)
+        .filter(models.AINovelDraft.id == draft_id)
+        .first()
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="保存データが見つかりません。")
+    db.delete(draft)
+    db.commit()
+    return {"deleted": True}
 
 @app.get("/api/ai/novels/auto-fill")
 async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | None = None):

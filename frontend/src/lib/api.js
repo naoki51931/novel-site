@@ -29,8 +29,10 @@ export async function apiFetch(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    const detail = data?.detail;
     const message =
-      data?.detail ||
+      (typeof detail === "string" && detail.trim()) ||
+      (detail ? JSON.stringify(detail) : "") ||
       data?.message ||
       translate({ ja: "API エラーが発生しました", en: "API error occurred." }, getStoredLanguage());
     const err = new Error(message);

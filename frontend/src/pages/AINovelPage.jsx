@@ -148,6 +148,10 @@ export default function AINovelPage() {
   const [length, setLength] = useState("medium");
   const [model, setModel] = useState("gpt-4.1-mini");
   const [isR18, setIsR18] = useState(false);
+  const [retryMode, setRetryMode] = useState(false);
+  const [retryMax, setRetryMax] = useState(2);
+  const [retryAttempts, setRetryAttempts] = useState(0);
+  const [activeRetryMax, setActiveRetryMax] = useState(null);
 
   // ★ ここが「続き生成モード」用の state
   const [isContinueMode, setIsContinueMode] = useState(false);
@@ -184,8 +188,15 @@ export default function AINovelPage() {
   const [draftSlotsError, setDraftSlotsError] = useState("");
   const [selectedDraftId, setSelectedDraftId] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
+  const [hasContinuationAttempted, setHasContinuationAttempted] = useState(false);
 
   const countChars = (value) => (value || "").length;
+  const showRetryStatus =
+    (loading || continuing) &&
+    ((typeof activeRetryMax === "number" && activeRetryMax > 0) ||
+      (activeRetryMax === null && retryMode && retryMax > 0));
+  const displayRetryMax =
+    typeof activeRetryMax === "number" ? activeRetryMax : retryMode ? retryMax : null;
 
   const navigate = useNavigate();
   const resultBodyRef = useRef(null);
@@ -248,6 +259,8 @@ export default function AINovelPage() {
     if (typeof draft.length === "string") setLength(draft.length);
     if (typeof draft.model === "string") setModel(draft.model);
     if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
+    if (typeof draft.retryMode === "boolean") setRetryMode(draft.retryMode);
+    if (typeof draft.retryMax === "number") setRetryMax(draft.retryMax);
     if (typeof draft.isContinueMode === "boolean") setIsContinueMode(draft.isContinueMode);
     if (typeof draft.episodeId === "number" || draft.episodeId === null) setEpisodeId(draft.episodeId);
     if (typeof draft.continueNovelId === "number" || draft.continueNovelId === null)
@@ -272,6 +285,8 @@ export default function AINovelPage() {
     length,
     model,
     isR18,
+    retryMode,
+    retryMax,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -331,10 +346,14 @@ export default function AINovelPage() {
         setContinuationBody((prev) => (prev ? `${prev}\n\n${nextBody}` : nextBody));
       }
       setContinuing(false);
+      setRetryAttempts(0);
+      setActiveRetryMax(null);
       return;
     }
     setResult(normalizeAINovelResponse(payload || {}));
     setLoading(false);
+    setRetryAttempts(0);
+    setActiveRetryMax(null);
   };
 
   const pollAiJob = async (job) => {
@@ -350,6 +369,8 @@ export default function AINovelPage() {
       stopJobPolling();
       setLoading(false);
       setContinuing(false);
+      setRetryAttempts(0);
+      setActiveRetryMax(null);
       clearPendingAiJob();
       setPendingJob(null);
       return;
@@ -371,6 +392,8 @@ export default function AINovelPage() {
         stopJobPolling();
         setLoading(false);
         setContinuing(false);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
         clearPendingAiJob();
         setPendingJob(null);
         return;
@@ -386,6 +409,12 @@ export default function AINovelPage() {
       }
 
       const data = await res.json();
+      if (typeof data?.retry_attempts === "number") {
+        setRetryAttempts(data.retry_attempts);
+      }
+      if (typeof data?.retry_max === "number") {
+        setActiveRetryMax(data.retry_max);
+      }
       if (data.status === "succeeded") {
         handleJobResult(job, data.response);
         stopJobPolling();
@@ -412,6 +441,8 @@ export default function AINovelPage() {
         stopJobPolling();
         setLoading(false);
         setContinuing(false);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
         clearPendingAiJob();
         setPendingJob(null);
         return;
@@ -578,6 +609,44 @@ export default function AINovelPage() {
       console.error(e);
       setDraftSlotsError(
         e.message || t({ ja: "上書き保存中にエラーが発生しました。", en: "Failed to overwrite." })
+      );
+    } finally {
+      setDraftSlotsLoading(false);
+    }
+  };
+
+  const handleDeleteDraftSlot = async () => {
+    const token = getAuthToken();
+    if (!token || !selectedDraftId) return;
+    const target = draftSlots.find((item) => String(item.id) === String(selectedDraftId));
+    const name = (target?.title || "").trim();
+    const ok = window.confirm(
+      t(
+        {
+          ja: "保存データ「{{title}}」を削除します。よろしいですか？",
+          en: "Delete saved draft “{{title}}”?",
+        },
+        { title: name || "Untitled" }
+      )
+    );
+    if (!ok) return;
+    setDraftSlotsLoading(true);
+    setDraftSlotsError("");
+    try {
+      const res = await fetch(`/api/ai/novels/drafts/${selectedDraftId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "failed");
+      }
+      setSelectedDraftId("");
+      await fetchDraftSlots();
+    } catch (e) {
+      console.error(e);
+      setDraftSlotsError(
+        e.message || t({ ja: "削除中にエラーが発生しました。", en: "Failed to delete." })
       );
     } finally {
       setDraftSlotsLoading(false);
@@ -892,6 +961,12 @@ export default function AINovelPage() {
     if (!editEid) return;
 
     setIsEditMode(true);
+    setIsContinueMode(false);
+    setEpisodeId(null);
+    setContinueNovelId(null);
+    setContinueEpisodeNumber(null);
+    setContinueInfoError("");
+    setCanPostToContinueNovel(null);
     setError("");
 
     (async () => {
@@ -923,6 +998,19 @@ export default function AINovelPage() {
         const data = await res.json().catch(() => ({}));
         const title = data?.title || t({ ja: "タイトル未設定", en: "Untitled" });
         const body = data?.body || "";
+        if (typeof data?.novel_id === "number") setContinueNovelId(data.novel_id);
+        if (typeof data?.episode_number === "number") setContinueEpisodeNumber(data.episode_number);
+        if (data?.can_edit_full === false) {
+          setCanPostToContinueNovel(false);
+          setContinueInfoError(
+            t({
+              ja: "このエピソードの作者ではないため、次話として投稿できません。",
+              en: "You are not the author of this episode, so you can't post the next episode.",
+            })
+          );
+        } else {
+          setCanPostToContinueNovel(true);
+        }
         setEditSourceBody(body);
         setResult({ generated_title: title, body });
       } catch (e) {
@@ -1062,6 +1150,8 @@ export default function AINovelPage() {
       : "";
     setResult(null);
     setContinuationBody("");
+    setHasContinuationAttempted(false);
+    setRedoContinuationArmed(false);
 
     const token = getAuthToken();
     if (episodeId && !token) {
@@ -1096,6 +1186,8 @@ export default function AINovelPage() {
       length,
       model,
       isR18,
+      retryMode,
+      retryMax,
     };
     // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
     const endpoint = episodeId
@@ -1124,6 +1216,8 @@ export default function AINovelPage() {
           model: model || "gpt-4.1-mini",
           r18: isR18,
           prompt,
+          retry_mode: retryMode,
+          retry_max: retryMax,
         }),
       });
 
@@ -1176,6 +1270,8 @@ export default function AINovelPage() {
 
       const data = await res.json();
       setLastGenerateParams(params);
+      setRetryAttempts(0);
+      setActiveRetryMax(params.retryMode ? params.retryMax : 0);
       startJobPolling({ job_id: data.job_id, kind: "generate" });
     } catch (err) {
       console.error(err);
@@ -1198,6 +1294,8 @@ export default function AINovelPage() {
     clearPendingAiJob();
     setPendingJob(null);
     setContinuing(true);
+    setHasContinuationAttempted(true);
+    setRedoContinuationArmed(false);
     setError("");
     setQuotaError("");
     setPremiumError("");
@@ -1212,6 +1310,8 @@ export default function AINovelPage() {
       length,
       model,
       isR18,
+      retryMode,
+      retryMax,
     };
 
     const baseBody = typeof baseBodyOverride === "string" ? baseBodyOverride : getCombinedBody();
@@ -1234,6 +1334,8 @@ export default function AINovelPage() {
           model: params.model || "gpt-4.1-mini",
           r18: params.isR18,
           prompt,
+          retry_mode: params.retryMode,
+          retry_max: params.retryMax,
         }),
       });
 
@@ -1285,6 +1387,8 @@ export default function AINovelPage() {
       }
 
       const data = await res.json();
+      setRetryAttempts(0);
+      setActiveRetryMax(params.retryMode ? params.retryMax : 0);
       startJobPolling({ job_id: data.job_id, kind: "continuation" });
     } catch (err) {
       console.error(err);
@@ -2013,6 +2117,14 @@ export default function AINovelPage() {
                 >
                   {t({ ja: "上書き保存", en: "Overwrite" })}
                 </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteDraftSlot}
+                  disabled={!selectedDraftId || draftSlotsLoading}
+                  className="btn btn-border"
+                >
+                  {t({ ja: "削除", en: "Delete" })}
+                </button>
               </div>
               {draftSlotsError && (
                 <div style={{ marginTop: "0.5rem", color: "#842029", fontSize: "0.9rem" }}>
@@ -2281,6 +2393,55 @@ export default function AINovelPage() {
           </select>
         </div>
 
+        <div>
+          <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
+            {t({ ja: "再試行モード", en: "Retry mode" })}
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <input
+              type="checkbox"
+              checked={retryMode}
+              onChange={(e) => setRetryMode(e.target.checked)}
+            />
+            {t({
+              ja: "AIの返答が空/JSON不正のときに再試行する",
+              en: "Retry when AI response is empty or invalid JSON",
+            })}
+          </label>
+          <div style={{ marginTop: "0.5rem" }}>
+            <label style={{ fontSize: "0.9rem", color: "var(--muted-text)" }}>
+              {t({ ja: "最大再試行回数", en: "Max retries" })}
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={99}
+              value={retryMax}
+              onChange={(e) => {
+                const next = Number.parseInt(e.target.value, 10);
+                if (!Number.isFinite(next)) return;
+                const clamped = Math.max(0, Math.min(99, next));
+                setRetryMax(clamped);
+              }}
+              style={{ width: "120px", marginLeft: "0.5rem", padding: "0.4rem" }}
+              disabled={!retryMode}
+            />
+          </div>
+          {showRetryStatus && (
+            <div
+              style={{
+                marginTop: "0.4rem",
+                color: "#c00000",
+                fontWeight: "bold",
+                fontSize: "0.9rem",
+              }}
+            >
+              {t({ ja: "再試行回数", en: "Retry attempts" })}: {retryAttempts}
+              {typeof displayRetryMax === "number" ? ` / ${displayRetryMax}` : ""}
+            </div>
+          )}
+        </div>
+
         <button
           type="submit"
           disabled={loading}
@@ -2299,7 +2460,7 @@ export default function AINovelPage() {
             : isEditMode
             ? t({ ja: "AIで編集する", en: "Edit with AI" })
             : isContinueMode
-            ? t({ ja: "このエピソードの続きを生成する", en: "Generate continuation for this episode" })
+            ? t({ ja: "AIで次話を作成", en: "Create next episode with AI" })
             : t({ ja: "AI小説を生成する", en: "Generate AI novel" })}
         </button>
         <button
@@ -2570,7 +2731,7 @@ export default function AINovelPage() {
                 </div>
               </div>
             )}
-            {!isEditMode && (
+            {(!isContinueMode || isEditMode) && (
               <div
                 style={{
                   padding: "0.75rem",
@@ -2602,10 +2763,10 @@ export default function AINovelPage() {
                   }}
                 >
                   {continuing
-                    ? t({ ja: "続き生成中...", en: "Generating continuation..." })
+                    ? t({ ja: "続き作成中...", en: "Creating continuation..." })
                     : t({ ja: "続きを作成する", en: "Generate continuation" })}
                 </button>
-                {continuationBody && (
+                {result?.body && (
                   <button
                     type="button"
                     onClick={handleRedoContinuation}
@@ -2620,7 +2781,7 @@ export default function AINovelPage() {
                       marginLeft: "0.5rem",
                     }}
                   >
-                    {t({ ja: "続き生成をやり直す", en: "Redo continuation" })}
+                    {t({ ja: "続き作成をやり直す", en: "Redo continuation" })}
                   </button>
                 )}
               </div>
@@ -2637,7 +2798,7 @@ export default function AINovelPage() {
                 {t({ ja: "投稿する", en: "Post" })}
               </div>
 
-              {isContinueMode && (
+              {(isContinueMode || isEditMode) && (
                 <div style={{ marginBottom: "0.5rem" }}>
                   <div
                     style={{
@@ -2647,8 +2808,8 @@ export default function AINovelPage() {
                     }}
                   >
                     {t({
-                      ja: "既存小説に「続き」を新しいエピソードとして投稿します。",
-                      en: "Post this continuation as a new episode to the existing novel.",
+                      ja: "既存小説に最新話として投稿します。",
+                      en: "Post this as the latest episode to the existing novel.",
                     })}
                   </div>
                   {continueInfoError && (
@@ -2689,7 +2850,7 @@ export default function AINovelPage() {
               )}
 
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                {isContinueMode && (
+                {(isContinueMode || isEditMode) && (
                   <button
                     type="button"
                     onClick={handlePostAsNextEpisode}
@@ -2705,7 +2866,7 @@ export default function AINovelPage() {
                 >
                     {posting
                       ? t({ ja: "投稿中...", en: "Posting..." })
-                      : t({ ja: "この続きを新しいエピソードとして投稿", en: "Post this continuation as a new episode" })}
+                      : t({ ja: "最新話として投稿", en: "Post as latest episode" })}
                   </button>
                 )}
                 <button

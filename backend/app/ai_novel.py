@@ -2,6 +2,7 @@
 
 import os
 import json
+import asyncio
 from textwrap import dedent
 from typing import Tuple
 
@@ -109,6 +110,8 @@ class AINovelRequest(BaseModel):
     model: str | None = None
     provider: str | None = None
     r18: bool = False
+    retry_mode: bool = False
+    retry_max: int | None = None
 
 
 class AINovelResponse(BaseModel):
@@ -404,6 +407,17 @@ def _parse_json_payload(raw: str) -> dict:
 
     raise ValueError("failed to parse json")
 
+def _log_ai_raw_response(raw: str, label: str) -> None:
+    if os.getenv("AI_LOG_RAW_RESPONSE", "").strip() not in {"1", "true", "yes"}:
+        return
+    try:
+        max_len = int(os.getenv("AI_LOG_RAW_RESPONSE_MAX", "4000"))
+    except Exception:
+        max_len = 4000
+    text = raw or ""
+    clipped = text if len(text) <= max_len else text[:max_len] + " ...[truncated]"
+    print(f"[DEBUG] {label} raw response (len={len(text)}):\n{clipped}")
+
 
 async def call_ai_json(
     prompt: str,
@@ -427,7 +441,8 @@ async def call_ai_json(
         if not effective_model:
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
         try:
-            resp = deepseek_client.chat.completions.create(
+            resp = await asyncio.to_thread(
+                deepseek_client.chat.completions.create,
                 model=effective_model,
                 messages=[
                     {"role": "system", "content": system_instructions},
@@ -451,7 +466,8 @@ async def call_ai_json(
         if not effective_model:
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
         try:
-            resp = openrouter_client.chat.completions.create(
+            resp = await asyncio.to_thread(
+                openrouter_client.chat.completions.create,
                 model=effective_model,
                 messages=[
                     {"role": "system", "content": system_instructions},
@@ -473,7 +489,8 @@ async def call_ai_json(
             raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
         effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
         try:
-            resp = client.responses.create(
+            resp = await asyncio.to_thread(
+                client.responses.create,
                 model=effective_model,
                 instructions=system_instructions,
                 input=prompt,
@@ -495,6 +512,7 @@ async def call_ai_json(
     try:
         data = _parse_json_payload(raw)
     except Exception as e:
+        _log_ai_raw_response(raw, "call_ai_json")
         print("[ERROR] AI JSON parse failed:", repr(e))
         raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
 
@@ -507,7 +525,11 @@ async def call_ai_json(
 
 # ===== 実際に OpenAI API を叩く関数 =====
 
-async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
+async def call_openai_novel_api(
+    req: AINovelRequest | str,
+    model: str | None = None,
+    strict_json: bool = False,
+) -> AINovelResponse:
     """
     OpenAI Responses API を用いて小説を生成する。
 
@@ -541,7 +563,8 @@ async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = N
 
     # ---- OpenAI 呼び出し ----
     try:
-        resp = client.responses.create(
+        resp = await asyncio.to_thread(
+            client.responses.create,
             model=effective_model,
             instructions=(
                 "あなたは日本語ライトノベル作家です。"
@@ -567,6 +590,14 @@ async def call_openai_novel_api(req: AINovelRequest | str, model: str | None = N
 
     if not raw:
         raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    if strict_json:
+        try:
+            _parse_json_payload(raw)
+        except Exception as e:
+            _log_ai_raw_response(raw, "openai_novel")
+            print("[ERROR] AI JSON parse failed:", repr(e))
+            raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
 
     # ---- JSON パースして title/body を取り出す ----
     title, body = _parse_title_and_body(raw)
@@ -606,7 +637,8 @@ async def call_openai_summary_candidates(text: str, model: str | None = None) ->
     ).strip()
 
     try:
-        resp = client.responses.create(
+        resp = await asyncio.to_thread(
+            client.responses.create,
             model=effective_model,
             instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
             input=prompt,
@@ -628,6 +660,7 @@ async def call_openai_summary_candidates(text: str, model: str | None = None) ->
     try:
         data = _parse_json_payload(raw)
     except Exception as e:
+        _log_ai_raw_response(raw, "summary_candidates")
         print("[ERROR] AI JSON parse failed:", repr(e))
         raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
 
@@ -679,7 +712,8 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
     ).strip()
 
     try:
-        resp = client.responses.create(
+        resp = await asyncio.to_thread(
+            client.responses.create,
             model=effective_model,
             instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
             input=prompt,
@@ -701,6 +735,7 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
     try:
         data = _parse_json_payload(raw)
     except Exception as e:
+        _log_ai_raw_response(raw, "tag_candidates")
         print("[ERROR] AI JSON parse failed:", repr(e))
         raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
 
@@ -732,7 +767,11 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
     return normalized, tokens, effective_model
 
 
-async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
+async def call_openrouter_novel_api(
+    req: AINovelRequest | str,
+    model: str | None = None,
+    strict_json: bool = False,
+) -> AINovelResponse:
     if openrouter_client is None:
         raise HTTPException(status_code=500, detail="OpenRouter の API キーが設定されていません。")
 
@@ -747,7 +786,8 @@ async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None
         raise HTTPException(status_code=400, detail="モデルが指定されていません。")
 
     try:
-        resp = openrouter_client.chat.completions.create(
+        resp = await asyncio.to_thread(
+            openrouter_client.chat.completions.create,
             model=effective_model,
             messages=[
                 {
@@ -776,6 +816,14 @@ async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None
     if not raw:
         raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
 
+    if strict_json:
+        try:
+            _parse_json_payload(raw)
+        except Exception as e:
+            _log_ai_raw_response(raw, "openrouter_novel")
+            print("[ERROR] AI JSON parse failed:", repr(e))
+            raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+
     title, body = _parse_title_and_body(raw)
 
     tokens: int | None = None
@@ -792,7 +840,11 @@ async def call_openrouter_novel_api(req: AINovelRequest | str, model: str | None
     )
 
 
-async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None = None) -> AINovelResponse:
+async def call_deepseek_novel_api(
+    req: AINovelRequest | str,
+    model: str | None = None,
+    strict_json: bool = False,
+) -> AINovelResponse:
     if deepseek_client is None:
         raise HTTPException(status_code=500, detail="DeepSeek の API キーが設定されていません。")
 
@@ -810,7 +862,8 @@ async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None =
         raise HTTPException(status_code=400, detail="モデルが指定されていません。")
 
     try:
-        resp = deepseek_client.chat.completions.create(
+        resp = await asyncio.to_thread(
+            deepseek_client.chat.completions.create,
             model=effective_model,
             messages=[
                 {
@@ -838,6 +891,14 @@ async def call_deepseek_novel_api(req: AINovelRequest | str, model: str | None =
 
     if not raw:
         raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    if strict_json:
+        try:
+            _parse_json_payload(raw)
+        except Exception as e:
+            _log_ai_raw_response(raw, "deepseek_novel")
+            print("[ERROR] AI JSON parse failed:", repr(e))
+            raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
 
     title, body = _parse_title_and_body(raw)
 

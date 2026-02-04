@@ -69,6 +69,10 @@ export default function Mypage() {
   const [selectedNovelAnalytics, setSelectedNovelAnalytics] = useState(null);
   const [novelAnalyticsLoading, setNovelAnalyticsLoading] = useState(false);
   const [novelAnalyticsError, setNovelAnalyticsError] = useState("");
+  const [aiJobs, setAiJobs] = useState([]);
+  const [aiJobsLoading, setAiJobsLoading] = useState(false);
+  const [aiJobsError, setAiJobsError] = useState("");
+  const [aiJobsSelected, setAiJobsSelected] = useState(() => new Set());
   const [username, setUsername] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
@@ -76,6 +80,11 @@ export default function Mypage() {
   const navigate = useNavigate();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const formatErrorDetail = (detail, fallback) => {
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (detail) return JSON.stringify(detail);
+    return fallback;
+  };
 
   useEffect(() => {
     if (!token) {
@@ -120,6 +129,38 @@ export default function Mypage() {
 
     fetchMine();
   }, [navigate, token]);
+
+  const loadAiJobs = async () => {
+    if (!token) return;
+    try {
+      setAiJobsLoading(true);
+      setAiJobsError("");
+      const res = await fetch(`${API_BASE}/api/ai/jobs/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => []);
+      if (!res.ok) {
+        throw new Error(
+          formatErrorDetail(
+            data.detail,
+            t({ ja: "AIジョブの取得に失敗しました", en: "Failed to load AI jobs." })
+          )
+        );
+      }
+      setAiJobs(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      setAiJobsError(
+        err.message || t({ ja: "AIジョブの取得中にエラーが発生しました", en: "Failed to load AI jobs." })
+      );
+    } finally {
+      setAiJobsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAiJobs();
+  }, [token]);
 
   useEffect(() => {
     if (!token || !analyticsMonth) return;
@@ -248,6 +289,89 @@ export default function Mypage() {
     fetchNovelAnalytics();
   }, [analyticsMonth, selectedNovelId, token, t]);
 
+  const toggleAiJobSelected = (jobId) => {
+    setAiJobsSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  };
+
+  const handleKillSelectedAiJobs = async () => {
+    if (!token || aiJobsSelected.size === 0) return;
+    const ok = window.confirm(
+      t({ ja: "選択したAIジョブを停止します。よろしいですか？", en: "Stop selected AI jobs?" })
+    );
+    if (!ok) return;
+    try {
+      setAiJobsLoading(true);
+      setAiJobsError("");
+      const res = await fetch(`${API_BASE}/api/ai/jobs/kill_selected_me`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ job_ids: Array.from(aiJobsSelected) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          formatErrorDetail(
+            data.detail,
+            t({ ja: "AIジョブの停止に失敗しました", en: "Failed to stop AI jobs." })
+          )
+        );
+      }
+      setAiJobsSelected(new Set());
+      await loadAiJobs();
+    } catch (err) {
+      console.error(err);
+      setAiJobsError(
+        err.message || t({ ja: "AIジョブの停止中にエラーが発生しました", en: "Failed to stop AI jobs." })
+      );
+    } finally {
+      setAiJobsLoading(false);
+    }
+  };
+
+  const handleKillAllAiJobs = async () => {
+    if (!token) return;
+    const ok = window.confirm(
+      t({ ja: "すべてのAIジョブを停止します。よろしいですか？", en: "Stop all AI jobs?" })
+    );
+    if (!ok) return;
+    try {
+      setAiJobsLoading(true);
+      setAiJobsError("");
+      const res = await fetch(`${API_BASE}/api/ai/jobs/kill_me`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          formatErrorDetail(
+            data.detail,
+            t({ ja: "AIジョブの停止に失敗しました", en: "Failed to stop AI jobs." })
+          )
+        );
+      }
+      setAiJobsSelected(new Set());
+      await loadAiJobs();
+    } catch (err) {
+      console.error(err);
+      setAiJobsError(
+        err.message || t({ ja: "AIジョブの停止中にエラーが発生しました", en: "Failed to stop AI jobs." })
+      );
+    } finally {
+      setAiJobsLoading(false);
+    }
+  };
+
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
@@ -309,6 +433,82 @@ export default function Mypage() {
         {isPremium && (
           <p style={{ marginTop: 8, color: "#0a0", fontWeight: "bold" }}>
             {t({ ja: "現在プレミアム会員中です。", en: "You are currently Premium." })}
+          </p>
+        )}
+      </section>
+
+      {/* AIジョブ管理 */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          {t({ ja: "AIジョブ管理", en: "AI Jobs" })}
+        </h3>
+        <p style={{ marginTop: 8, lineHeight: 1.6, color: "var(--muted-text)" }}>
+          {t({
+            ja: "待機中/実行中のAI小説生成ジョブを停止できます。",
+            en: "Stop pending or running AI jobs.",
+          })}
+        </p>
+        {aiJobsError && <p style={{ marginTop: 10, color: "red" }}>{aiJobsError}</p>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          <button type="button" className="btn btn-border" onClick={loadAiJobs} disabled={aiJobsLoading}>
+            {aiJobsLoading ? t({ ja: "更新中...", en: "Refreshing..." }) : t({ ja: "更新", en: "Refresh" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={handleKillSelectedAiJobs}
+            disabled={aiJobsLoading || aiJobsSelected.size === 0}
+          >
+            {t({ ja: "選択を停止", en: "Stop selected" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={handleKillAllAiJobs}
+            disabled={aiJobsLoading}
+          >
+            {t({ ja: "すべて停止", en: "Stop all" })}
+          </button>
+        </div>
+        {aiJobsLoading ? (
+          <p style={{ marginTop: 10 }}>{t({ ja: "読み込み中...", en: "Loading..." })}</p>
+        ) : aiJobs.length ? (
+          <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+            {aiJobs.map((job) => (
+              <label
+                key={job.id}
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "flex-start",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  padding: 10,
+                  background: "var(--surface)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={aiJobsSelected.has(job.id)}
+                  onChange={() => toggleAiJobSelected(job.id)}
+                />
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    #{job.id} / {job.job_type}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
+                    {t({ ja: "状態", en: "Status" })}: {job.status}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
+                    {t({ ja: "作成", en: "Created" })}: {job.created_at || "-"}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
+            {t({ ja: "実行中のジョブはありません。", en: "No running jobs." })}
           </p>
         )}
       </section>
