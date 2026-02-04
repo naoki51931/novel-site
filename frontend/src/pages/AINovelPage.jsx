@@ -189,6 +189,7 @@ export default function AINovelPage() {
   const [selectedDraftId, setSelectedDraftId] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const [hasContinuationAttempted, setHasContinuationAttempted] = useState(false);
+  const [redoContinuationArmed, setRedoContinuationArmed] = useState(false);
 
   const fetchWithTimeout = async (url, options, timeoutMs) => {
     const controller = new AbortController();

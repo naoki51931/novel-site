@@ -168,6 +168,9 @@ export default function Mypage() {
 
   const aiJobsFiltered = aiJobs.filter((job) => {
     if (aiJobsFilter === "all") return true;
+    if (aiJobsFilter === "running") {
+      return job.status === "pending" || job.status === "running";
+    }
     return job.status === aiJobsFilter;
   });
   const aiJobsPageSize = 5;
@@ -500,10 +503,10 @@ export default function Mypage() {
             type="button"
             className="btn btn-border"
             onClick={() => {
-              setAiJobsFilter("pending");
+              setAiJobsFilter("running");
               setAiJobsPage(1);
             }}
-            disabled={aiJobsFilter === "pending"}
+            disabled={aiJobsFilter === "running"}
           >
             {t({ ja: "実行中", en: "Running" })}
           </button>
