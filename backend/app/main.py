@@ -326,8 +326,16 @@ def ensure_ai_novel_jobs_table_columns():
             existing = {r[0]: (r[1] or "").lower() for r in rows}
 
             alters: list[str] = []
+            if "guest_id" not in existing:
+                alters.append("ADD COLUMN guest_id VARCHAR(64) NULL")
             if "retry_attempts" not in existing:
                 alters.append("ADD COLUMN retry_attempts INT NOT NULL DEFAULT 0")
+            if "error_message" not in existing:
+                alters.append("ADD COLUMN error_message TEXT NULL")
+            if "started_at" not in existing:
+                alters.append("ADD COLUMN started_at DATETIME NULL")
+            if "finished_at" not in existing:
+                alters.append("ADD COLUMN finished_at DATETIME NULL")
             if "request_json" in existing and existing["request_json"] != "longtext":
                 alters.append("MODIFY COLUMN request_json LONGTEXT NOT NULL")
             if "response_json" in existing and existing["response_json"] != "longtext":
@@ -371,8 +379,26 @@ def ensure_tag_indexes():
 
 ensure_tag_indexes()
 
-GOOGLE_CSE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "").strip()
-GOOGLE_CSE_CX = os.getenv("GOOGLE_CSE_CX", "").strip()
+def _get_env_any(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+GOOGLE_CSE_API_KEY = _get_env_any(
+    "GOOGLE_CSE_API_KEY",
+    "GOOGLE_CUSTOM_SEARCH_API_KEY",
+    "GOOGLE_CSE_KEY",
+    "GOOGLE_API_KEY",
+)
+GOOGLE_CSE_CX = _get_env_any(
+    "GOOGLE_CSE_CX",
+    "GOOGLE_CUSTOM_SEARCH_CX",
+    "GOOGLE_CUSTOM_SEARCH_ENGINE_ID",
+    "GOOGLE_CSE_ENGINE_ID",
+    "GOOGLE_CSE_ID",
+)
 
 PREFERRED_CSE_HOSTS = (
     "wikipedia.org",
@@ -4498,14 +4524,15 @@ async def create_ai_episode_continue_job(
 @app.get("/api/ai/jobs/me", response_model=list[AIJobListItem])
 def list_my_ai_jobs(
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
     _kill_expired_ai_jobs(db, user_id=user.id)
+    guest_id = get_or_set_ai_guest_id(request, response)
     jobs = (
         db.query(models.AINovelJob)
-        .filter(models.AINovelJob.user_id == user.id)
-        .filter(models.AINovelJob.status.in_(["pending", "running"]))
+        .filter(or_(models.AINovelJob.user_id == user.id, models.AINovelJob.guest_id == guest_id))
         .order_by(models.AINovelJob.created_at.desc())
         .all()
     )
@@ -4910,6 +4937,7 @@ async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | 
     terms = merged_terms[:5]
 
     aggregated_items: list[dict] = []
+    pick_count = 15
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for term in terms:
@@ -4942,7 +4970,7 @@ async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | 
         raise HTTPException(status_code=502, detail=f"検索 API の呼び出しに失敗しました: {e!r}")
 
     preferred = [i for i in aggregated_items if _is_preferred_cse_host(i.get("link"))]
-    picked = preferred[:5] if preferred else aggregated_items[:5]
+    picked = preferred[:pick_count] if preferred else aggregated_items[:pick_count]
     genre_append, characters_append = _build_auto_fill_snippets(picked)
 
     return {

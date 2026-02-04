@@ -190,6 +190,18 @@ export default function AINovelPage() {
   const [draftTitle, setDraftTitle] = useState("");
   const [hasContinuationAttempted, setHasContinuationAttempted] = useState(false);
 
+  const fetchWithTimeout = async (url, options, timeoutMs) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  const isAbortError = (err) => err && (err.name === "AbortError" || err.code === "ABORT_ERR");
+
   const countChars = (value) => (value || "").length;
   const showRetryStatus =
     (loading || continuing) &&
@@ -252,6 +264,10 @@ export default function AINovelPage() {
 
   const applyDraft = (draft) => {
     if (!draft || typeof draft !== "object") return;
+    const draftEpisodeId =
+      typeof draft.episodeId === "number" || typeof draft.episodeId === "string"
+        ? draft.episodeId
+        : null;
     if (typeof draft.titleHint === "string") setTitleHint(draft.titleHint);
     if (typeof draft.genre === "string") setGenre(draft.genre);
     if (typeof draft.characters === "string") setCharacters(draft.characters);
@@ -261,8 +277,10 @@ export default function AINovelPage() {
     if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
     if (typeof draft.retryMode === "boolean") setRetryMode(draft.retryMode);
     if (typeof draft.retryMax === "number") setRetryMax(draft.retryMax);
-    if (typeof draft.isContinueMode === "boolean") setIsContinueMode(draft.isContinueMode);
-    if (typeof draft.episodeId === "number" || draft.episodeId === null) setEpisodeId(draft.episodeId);
+    if (typeof draft.isContinueMode === "boolean") {
+      setIsContinueMode(Boolean(draft.isContinueMode && draftEpisodeId !== null));
+    }
+    setEpisodeId(draftEpisodeId);
     if (typeof draft.continueNovelId === "number" || draft.continueNovelId === null)
       setContinueNovelId(draft.continueNovelId);
     if (typeof draft.continueEpisodeNumber === "number" || draft.continueEpisodeNumber === null)
@@ -377,9 +395,11 @@ export default function AINovelPage() {
     }
     const token = getAuthToken();
     try {
-      const res = await fetch(`/api/ai/jobs/${job.job_id}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await fetchWithTimeout(
+        `/api/ai/jobs/${job.job_id}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        8000
+      );
 
       if (res.status === 401 && token) {
         setError(
@@ -400,12 +420,31 @@ export default function AINovelPage() {
       }
 
       if (!res.ok) {
-        throw new Error(
+        const data = await res.json().catch(() => ({}));
+        const message =
+          data?.detail ||
           t(
             { ja: "生成状況の取得に失敗しました (status={{status}})", en: "Failed to load status (status={{status}})" },
             { status: res.status }
-          )
-        );
+          );
+        if (res.status === 404) {
+          setError(
+            t({
+              ja: "生成ジョブが見つかりませんでした。もう一度生成をやり直してください。",
+              en: "The job was not found. Please start generation again.",
+            })
+          );
+        } else {
+          setError(message);
+        }
+        stopJobPolling();
+        setLoading(false);
+        setContinuing(false);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
+        clearPendingAiJob();
+        setPendingJob(null);
+        return;
       }
 
       const data = await res.json();
@@ -450,6 +489,22 @@ export default function AINovelPage() {
       jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 2000);
     } catch (err) {
       console.error(err);
+      if (isAbortError(err)) {
+        setError(
+          t({
+            ja: "生成状況の取得がタイムアウトしました。通信環境を確認してもう一度お試しください。",
+            en: "Status check timed out. Please check your connection and try again.",
+          })
+        );
+        stopJobPolling();
+        setLoading(false);
+        setContinuing(false);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
+        clearPendingAiJob();
+        setPendingJob(null);
+        return;
+      }
       jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 3000);
     }
   };
@@ -1199,27 +1254,31 @@ export default function AINovelPage() {
         : null;
 
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: token
-          ? {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            }
-          : { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title_hint: titleHint || null,
-          genre: genre || null,
-          characters: characters || null,
-          tone: tone || null,
-          length: length || "medium",
-          model: model || "gpt-4.1-mini",
-          r18: isR18,
-          prompt,
-          retry_mode: retryMode,
-          retry_max: retryMax,
-        }),
-      });
+      const res = await fetchWithTimeout(
+        endpoint,
+        {
+          method: "POST",
+          headers: token
+            ? {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              }
+            : { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title_hint: titleHint || null,
+            genre: genre || null,
+            characters: characters || null,
+            tone: tone || null,
+            length: length || "medium",
+            model: model || "gpt-4.1-mini",
+            r18: isR18,
+            prompt,
+            retry_mode: retryMode,
+            retry_max: retryMax,
+          }),
+        },
+        20000
+      );
 
       if (res.status === 401 && token) {
         setError(
@@ -1275,9 +1334,18 @@ export default function AINovelPage() {
       startJobPolling({ job_id: data.job_id, kind: "generate" });
     } catch (err) {
       console.error(err);
-      setError(
-        err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
-      );
+      if (isAbortError(err)) {
+        setError(
+          t({
+            ja: "生成リクエストがタイムアウトしました。通信環境を確認してもう一度お試しください。",
+            en: "The request timed out. Please check your connection and try again.",
+          })
+        );
+      } else {
+        setError(
+          err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
+        );
+      }
       setLoading(false);
     }
   };
@@ -1317,27 +1385,31 @@ export default function AINovelPage() {
     const baseBody = typeof baseBodyOverride === "string" ? baseBodyOverride : getCombinedBody();
     const prompt = buildContinuationPrompt(baseBody, params);
     try {
-      const res = await fetch("/api/ai/novels/generate_job", {
-        method: "POST",
-        headers: token
-          ? {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            }
-          : { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title_hint: params.titleHint || null,
-          genre: params.genre || null,
-          characters: params.characters || null,
-          tone: params.tone || null,
-          length: null,
-          model: params.model || "gpt-4.1-mini",
-          r18: params.isR18,
-          prompt,
-          retry_mode: params.retryMode,
-          retry_max: params.retryMax,
-        }),
-      });
+      const res = await fetchWithTimeout(
+        "/api/ai/novels/generate_job",
+        {
+          method: "POST",
+          headers: token
+            ? {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              }
+            : { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title_hint: params.titleHint || null,
+            genre: params.genre || null,
+            characters: params.characters || null,
+            tone: params.tone || null,
+            length: null,
+            model: params.model || "gpt-4.1-mini",
+            r18: params.isR18,
+            prompt,
+            retry_mode: params.retryMode,
+            retry_max: params.retryMax,
+          }),
+        },
+        20000
+      );
 
       if (res.status === 401 && token) {
         setError(
@@ -1392,9 +1464,18 @@ export default function AINovelPage() {
       startJobPolling({ job_id: data.job_id, kind: "continuation" });
     } catch (err) {
       console.error(err);
-      setError(
-        err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
-      );
+      if (isAbortError(err)) {
+        setError(
+          t({
+            ja: "生成リクエストがタイムアウトしました。通信環境を確認してもう一度お試しください。",
+            en: "The request timed out. Please check your connection and try again.",
+          })
+        );
+      } else {
+        setError(
+          err.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
+        );
+      }
       setContinuing(false);
     }
   };
@@ -1905,7 +1986,7 @@ export default function AINovelPage() {
       if (q) params.set("query", q);
       else if (t) params.set("query", t);
       if (c) params.set("characters", c);
-      const res = await fetch(`/api/ai/novels/auto-fill?${params.toString()}`);
+      const res = await fetchWithTimeout(`/api/ai/novels/auto-fill?${params.toString()}`, {}, 20000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
@@ -1918,7 +1999,7 @@ export default function AINovelPage() {
       }
       const appendGenre = (data.genre_append || "").trim();
       const appendCharacters = (data.characters_append || "").trim();
-      if (appendGenre) {
+      if (appendGenre && !isContinueMode) {
         setGenre((prev) => {
           const base = (prev || "").trim();
           return base ? `${base} / ${appendGenre}` : appendGenre;
@@ -1948,9 +2029,18 @@ export default function AINovelPage() {
       });
     } catch (e) {
       console.error(e);
-      setAutoFillError(
-        e.message || t({ ja: "自動補完中にエラーが発生しました。", en: "An error occurred during auto-fill." })
-      );
+      if (isAbortError(e)) {
+        setAutoFillError(
+          t({
+            ja: "自動補完のリクエストがタイムアウトしました。通信環境を確認してもう一度お試しください。",
+            en: "The auto-fill request timed out. Please check your connection and try again.",
+          })
+        );
+      } else {
+        setAutoFillError(
+          e.message || t({ ja: "自動補完中にエラーが発生しました。", en: "An error occurred during auto-fill." })
+        );
+      }
     } finally {
       setAutoFillLoading(false);
     }
@@ -2172,8 +2262,9 @@ export default function AINovelPage() {
           </div>
         </div>
 
-        {!isContinueMode && (
-          <div>
+        <div>
+          {!isContinueMode && (
+            <>
             <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
               {t({ ja: "ジャンル（任意）", en: "Genre (optional)" })}
             </label>
@@ -2190,6 +2281,8 @@ export default function AINovelPage() {
             <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
               {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(genre)}
             </div>
+            </>
+          )}
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
               <button
                 type="button"
@@ -2199,10 +2292,14 @@ export default function AINovelPage() {
               >
                 {autoFillLoading
                   ? t({ ja: "調査中...", en: "Searching..." })
+                  : isContinueMode
+                  ? t({ ja: "設定を自動補完", en: "Auto-fill settings" })
                   : t({ ja: "ジャンル/設定を自動補完", en: "Auto-fill genre/settings" })}
               </button>
               <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
-                {t({ ja: "入力したジャンルを検索して反映", en: "Search and apply the genre you entered" })}
+                {isContinueMode
+                  ? t({ ja: "入力した内容を検索して登場人物・設定に追記", en: "Search and append to characters/settings" })
+                  : t({ ja: "入力したジャンルを検索して反映", en: "Search and apply the genre you entered" })}
               </span>
             </div>
             <div style={{ marginTop: "0.4rem", fontSize: "0.8rem", color: "var(--muted-text)" }}>
@@ -2245,7 +2342,7 @@ export default function AINovelPage() {
                     )}
                   </div>
                 )}
-                {autoFillPreview.genreAppend && (
+                {autoFillPreview.genreAppend && !isContinueMode && (
                   <div style={{ marginBottom: "0.5rem" }}>
                     <strong>{t({ ja: "ジャンルに追加:", en: "Added to genre:" })}</strong>{" "}
                     {autoFillPreview.genreAppend}
@@ -2288,7 +2385,6 @@ export default function AINovelPage() {
               </div>
             )}
           </div>
-        )}
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>

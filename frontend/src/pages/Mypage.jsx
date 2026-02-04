@@ -73,6 +73,8 @@ export default function Mypage() {
   const [aiJobsLoading, setAiJobsLoading] = useState(false);
   const [aiJobsError, setAiJobsError] = useState("");
   const [aiJobsSelected, setAiJobsSelected] = useState(() => new Set());
+  const [aiJobsPage, setAiJobsPage] = useState(1);
+  const [aiJobsFilter, setAiJobsFilter] = useState("all");
   const [username, setUsername] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
@@ -147,7 +149,9 @@ export default function Mypage() {
           )
         );
       }
-      setAiJobs(Array.isArray(data) ? data : []);
+      const nextJobs = Array.isArray(data) ? data : [];
+      setAiJobs(nextJobs);
+      setAiJobsPage(1);
     } catch (err) {
       console.error(err);
       setAiJobsError(
@@ -161,6 +165,16 @@ export default function Mypage() {
   useEffect(() => {
     loadAiJobs();
   }, [token]);
+
+  const aiJobsFiltered = aiJobs.filter((job) => {
+    if (aiJobsFilter === "all") return true;
+    return job.status === aiJobsFilter;
+  });
+  const aiJobsPageSize = 5;
+  const aiJobsTotalPages = Math.max(1, Math.ceil(aiJobsFiltered.length / aiJobsPageSize));
+  const aiJobsPageSafe = Math.min(Math.max(aiJobsPage, 1), aiJobsTotalPages);
+  const aiJobsStartIndex = (aiJobsPageSafe - 1) * aiJobsPageSize;
+  const aiJobsSlice = aiJobsFiltered.slice(aiJobsStartIndex, aiJobsStartIndex + aiJobsPageSize);
 
   useEffect(() => {
     if (!token || !analyticsMonth) return;
@@ -470,11 +484,57 @@ export default function Mypage() {
             {t({ ja: "すべて停止", en: "Stop all" })}
           </button>
         </div>
+        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", marginTop: 10 }}>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => {
+              setAiJobsFilter("all");
+              setAiJobsPage(1);
+            }}
+            disabled={aiJobsFilter === "all"}
+          >
+            {t({ ja: "全件", en: "All" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => {
+              setAiJobsFilter("pending");
+              setAiJobsPage(1);
+            }}
+            disabled={aiJobsFilter === "pending"}
+          >
+            {t({ ja: "実行中", en: "Running" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => {
+              setAiJobsFilter("succeeded");
+              setAiJobsPage(1);
+            }}
+            disabled={aiJobsFilter === "succeeded"}
+          >
+            {t({ ja: "完了", en: "Completed" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => {
+              setAiJobsFilter("failed");
+              setAiJobsPage(1);
+            }}
+            disabled={aiJobsFilter === "failed"}
+          >
+            {t({ ja: "失敗", en: "Failed" })}
+          </button>
+        </div>
         {aiJobsLoading ? (
           <p style={{ marginTop: 10 }}>{t({ ja: "読み込み中...", en: "Loading..." })}</p>
-        ) : aiJobs.length ? (
+        ) : aiJobsFiltered.length ? (
           <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-            {aiJobs.map((job) => (
+            {aiJobsSlice.map((job) => (
               <label
                 key={job.id}
                 style={{
@@ -505,10 +565,36 @@ export default function Mypage() {
                 </div>
               </label>
             ))}
+            {aiJobsTotalPages > 1 && (
+              <div style={{ display: "flex", gap: "0.4rem", marginTop: 4, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => setAiJobsPage((prev) => Math.max(1, prev - 1))}
+                  disabled={aiJobsPageSafe <= 1}
+                >
+                  {t({ ja: "前へ", en: "Prev" })}
+                </button>
+                <div style={{ alignSelf: "center", fontSize: 12, color: "var(--muted-text)" }}>
+                  {t(
+                    { ja: "{{page}} / {{total}} ページ", en: "Page {{page}} / {{total}}" },
+                    { page: aiJobsPageSafe, total: aiJobsTotalPages }
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => setAiJobsPage((prev) => Math.min(aiJobsTotalPages, prev + 1))}
+                  disabled={aiJobsPageSafe >= aiJobsTotalPages}
+                >
+                  {t({ ja: "次へ", en: "Next" })}
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
-            {t({ ja: "実行中のジョブはありません。", en: "No running jobs." })}
+            {t({ ja: "ジョブがありません。", en: "No jobs found." })}
           </p>
         )}
       </section>
