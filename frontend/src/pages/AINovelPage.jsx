@@ -139,6 +139,180 @@ function getJwtUserId(token) {
   }
 }
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i += 1) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+function uint8ArrayToBase64Url(bytes) {
+  if (!bytes || !bytes.length) return "";
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function pushDebug(token, stage, detail = "") {
+  try {
+    const headers = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    await fetch("/api/push/debug", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ stage, detail: String(detail || "") }),
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function ensureWebPushSubscription(token, onStatus = null) {
+  const report = (stage, detail = "", ok = null) => {
+    if (typeof onStatus === "function") onStatus({ stage, detail, ok, at: Date.now() });
+  };
+  if (typeof window === "undefined") return;
+  if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") {
+    console.warn("web push requires https");
+    await pushDebug(token, "skip_insecure_context", window.location.href || "");
+    report("skip_insecure_context", window.location.href || "", false);
+    return;
+  }
+  if (!("Notification" in window)) return;
+  if (!("serviceWorker" in navigator)) return;
+  if (!("PushManager" in window)) return;
+
+  let permission = Notification.permission;
+  if (permission === "default") {
+    try {
+      permission = await Notification.requestPermission();
+    } catch {
+      report("permission_request_failed", "", false);
+      return;
+    }
+  }
+  if (permission !== "granted") {
+    report("permission_not_granted", permission, false);
+    return;
+  }
+  await pushDebug(token, "permission_granted", permission);
+  report("permission_granted", permission, null);
+
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    await pushDebug(token, "sw_ready", reg?.scope || "");
+    report("sw_ready", reg?.scope || "", null);
+    const keyRes = await fetch("/api/push/public_key");
+    if (!keyRes.ok) {
+      console.warn("push public key request failed", keyRes.status);
+      await pushDebug(token, "public_key_failed", String(keyRes.status));
+      report("public_key_failed", String(keyRes.status), false);
+      return;
+    }
+    const keyData = await keyRes.json().catch(() => ({}));
+    if (!keyData?.enabled || !keyData?.public_key) {
+      console.warn("push is disabled on backend");
+      await pushDebug(token, "public_key_disabled", JSON.stringify(keyData || {}));
+      report("public_key_disabled", JSON.stringify(keyData || {}), false);
+      return;
+    }
+    await pushDebug(token, "public_key_ok", "enabled=true");
+    report("public_key_ok", "enabled=true", null);
+
+    let subscription = await reg.pushManager.getSubscription();
+    if (!subscription) {
+      let lastErr = null;
+      for (let i = 0; i < 3; i += 1) {
+        try {
+          const keyBytes = urlBase64ToUint8Array(keyData.public_key);
+          const appServerKey =
+            i === 0
+              ? keyBytes
+              : i === 1
+                ? keyBytes.buffer
+                : new Uint8Array(keyBytes).buffer;
+          subscription = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: appServerKey,
+          });
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (e?.name !== "AbortError" && e?.name !== "TypeError") break;
+          await pushDebug(token, "subscribe_abort_retry", `attempt=${i + 1}`);
+          report("subscribe_abort_retry", `attempt=${i + 1}`, null);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          subscription = await reg.pushManager.getSubscription();
+          if (subscription) break;
+        }
+      }
+      if (!subscription && lastErr) throw lastErr;
+    }
+    if (!subscription) {
+      report("subscription_not_created", "", false);
+      return;
+    }
+    const raw = subscription.toJSON ? subscription.toJSON() : {};
+    const endpoint = raw?.endpoint || subscription.endpoint || "";
+    const p256dhFromRaw = raw?.keys?.p256dh || "";
+    const authFromRaw = raw?.keys?.auth || "";
+    const p256dhKey = subscription.getKey ? subscription.getKey("p256dh") : null;
+    const authKey = subscription.getKey ? subscription.getKey("auth") : null;
+    const p256dh =
+      p256dhFromRaw || (p256dhKey ? uint8ArrayToBase64Url(new Uint8Array(p256dhKey)) : "");
+    const auth =
+      authFromRaw || (authKey ? uint8ArrayToBase64Url(new Uint8Array(authKey)) : "");
+    if (!endpoint || !p256dh || !auth) {
+      console.warn("push subscription payload is incomplete");
+      await pushDebug(token, "subscription_payload_incomplete", JSON.stringify({ endpoint: Boolean(endpoint), p256dh: Boolean(p256dh), auth: Boolean(auth) }));
+      report("subscription_payload_incomplete", JSON.stringify({ endpoint: Boolean(endpoint), p256dh: Boolean(p256dh), auth: Boolean(auth) }), false);
+      return;
+    }
+    await pushDebug(token, "subscription_payload_ok", endpoint.slice(0, 80));
+    report("subscription_payload_ok", endpoint.slice(0, 80), null);
+    const payload = { endpoint, keys: { p256dh, auth } };
+
+    const headers = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const subRes = await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!subRes.ok) {
+      console.warn("push subscribe failed", subRes.status);
+      await pushDebug(token, "subscribe_failed", String(subRes.status));
+      report("subscribe_failed", String(subRes.status), false);
+      return;
+    }
+    await pushDebug(token, "subscribe_ok", "ok");
+    report("subscribe_ok", "ok", true);
+  } catch (e) {
+    console.error("failed to subscribe web push", e);
+    await pushDebug(
+      token,
+      "subscribe_exception",
+      `${e?.name || "Error"}:${e?.message || String(e)}`
+    );
+    report("subscribe_exception", `${e?.name || "Error"}:${e?.message || String(e)}`, false);
+  }
+}
+
 export default function AINovelPage() {
   const { t, lang } = useI18n();
   const [titleHint, setTitleHint] = useState("");
@@ -190,6 +364,13 @@ export default function AINovelPage() {
   const [draftTitle, setDraftTitle] = useState("");
   const [hasContinuationAttempted, setHasContinuationAttempted] = useState(false);
   const [redoContinuationArmed, setRedoContinuationArmed] = useState(false);
+  const [isPushDebugUser, setIsPushDebugUser] = useState(false);
+  const [pushDebugInfo, setPushDebugInfo] = useState({
+    stage: "idle",
+    detail: "",
+    ok: null,
+    at: 0,
+  });
 
   const fetchWithTimeout = async (url, options, timeoutMs) => {
     const controller = new AbortController();
@@ -378,20 +559,14 @@ export default function AINovelPage() {
   const pollAiJob = async (job) => {
     if (!job || !job.job_id) return;
     const startedAt = Number(job.started_at || 0);
-    if (startedAt && Date.now() - startedAt > 10 * 60 * 1000) {
+    if (startedAt && Date.now() - startedAt > 60 * 60 * 1000) {
       setError(
         t({
-          ja: "生成待機が10分を超えたため通信を終了しました。もう一度お試しください。",
-          en: "Waiting exceeded 10 minutes. Please try again.",
+          ja: "生成待機が長時間続いています。通信を再試行中です。画面を閉じても完了時に通知されます。",
+          en: "Generation is taking longer than usual. Retrying in background. You will be notified when it completes.",
         })
       );
-      stopJobPolling();
-      setLoading(false);
-      setContinuing(false);
-      setRetryAttempts(0);
-      setActiveRetryMax(null);
-      clearPendingAiJob();
-      setPendingJob(null);
+      jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 5000);
       return;
     }
     const token = getAuthToken();
@@ -399,7 +574,7 @@ export default function AINovelPage() {
       const res = await fetchWithTimeout(
         `/api/ai/jobs/${job.job_id}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-        8000
+        15000
       );
 
       if (res.status === 401 && token) {
@@ -422,6 +597,16 @@ export default function AINovelPage() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        if (res.status >= 500) {
+          setError(
+            t({
+              ja: "サーバー応答が不安定なため再試行しています。画面を閉じても完了時に通知されます。",
+              en: "Server response is unstable. Retrying. You will be notified when it completes.",
+            })
+          );
+          jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 4000);
+          return;
+        }
         const message =
           data?.detail ||
           t(
@@ -493,17 +678,11 @@ export default function AINovelPage() {
       if (isAbortError(err)) {
         setError(
           t({
-            ja: "生成状況の取得がタイムアウトしました。通信環境を確認してもう一度お試しください。",
-            en: "Status check timed out. Please check your connection and try again.",
+            ja: "生成状況の取得がタイムアウトしました。自動で再試行します。画面を閉じても完了時に通知されます。",
+            en: "Status check timed out. Retrying automatically. You will be notified when it completes.",
           })
         );
-        stopJobPolling();
-        setLoading(false);
-        setContinuing(false);
-        setRetryAttempts(0);
-        setActiveRetryMax(null);
-        clearPendingAiJob();
-        setPendingJob(null);
+        jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 4000);
         return;
       }
       jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 3000);
@@ -725,6 +904,29 @@ export default function AINovelPage() {
   useEffect(() => {
     if (!hasAuthToken) return;
     fetchDraftSlots();
+  }, [hasAuthToken]);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      setIsPushDebugUser(false);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch("/api/users/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          setIsPushDebugUser(false);
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        setIsPushDebugUser((data?.username || "") === "demo02");
+      } catch {
+        setIsPushDebugUser(false);
+      }
+    })();
   }, [hasAuthToken]);
 
   useEffect(() => {
@@ -1190,9 +1392,7 @@ export default function AINovelPage() {
 
   const handleGenerate = async (e) => {
     e.preventDefault();
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
+    await ensureWebPushSubscription(getAuthToken(), setPushDebugInfo);
     stopJobPolling();
     clearPendingAiJob();
     setPendingJob(null);
@@ -1353,9 +1553,7 @@ export default function AINovelPage() {
 
   const handleGenerateContinuation = async (baseBodyOverride = null) => {
     if (!result?.body) return;
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
+    await ensureWebPushSubscription(getAuthToken(), setPushDebugInfo);
     if (resumePendingJobIfAny("continuation")) {
       return;
     }
@@ -1483,9 +1681,7 @@ export default function AINovelPage() {
 
   const handleRedoContinuation = async () => {
     if (!result?.body) return;
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
+    await ensureWebPushSubscription(getAuthToken(), setPushDebugInfo);
     if (resumePendingJobIfAny("continuation")) {
       return;
     }
@@ -2127,6 +2323,32 @@ export default function AINovelPage() {
             { ja: "ユーザーの AI生成 残り回数: {{count}}", en: "User AI generations left: {{count}}" },
             { count: userRemaining }
           )}
+        </div>
+      )}
+      {isPushDebugUser && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.6rem 0.75rem",
+            border: "1px dashed var(--border)",
+            borderRadius: "6px",
+            backgroundColor: "var(--ai-result-surface)",
+            fontSize: "0.85rem",
+          }}
+        >
+          <div style={{ fontWeight: "bold", marginBottom: "0.2rem" }}>
+            {t({ ja: "Push登録デバッグ", en: "Push registration debug" })}
+          </div>
+          <div>
+            {t({ ja: "状態", en: "Status" })}: {String(pushDebugInfo.stage || "idle")}
+          </div>
+          <div>
+            {t({ ja: "詳細", en: "Detail" })}: {pushDebugInfo.detail ? String(pushDebugInfo.detail) : "-"}
+          </div>
+          <div>
+            OK:{" "}
+            {pushDebugInfo.ok === null ? "-" : pushDebugInfo.ok ? "true" : "false"}
+          </div>
         </div>
       )}
 

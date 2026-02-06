@@ -49,6 +49,13 @@ from . import models, schemas
 
 import smtplib
 from email.mime.text import MIMEText  # type: ignore
+try:
+    from pywebpush import webpush, WebPushException  # type: ignore
+    WEBPUSH_AVAILABLE = True
+except Exception:
+    webpush = None
+    WebPushException = Exception  # type: ignore
+    WEBPUSH_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(
@@ -663,6 +670,12 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "no-reply@example.com")
+WEBPUSH_VAPID_PUBLIC_KEY = os.getenv("WEBPUSH_VAPID_PUBLIC_KEY", "").strip()
+WEBPUSH_VAPID_PRIVATE_KEY = os.getenv("WEBPUSH_VAPID_PRIVATE_KEY", "").strip()
+WEBPUSH_VAPID_SUBJECT = os.getenv(
+    "WEBPUSH_VAPID_SUBJECT",
+    f"mailto:{SMTP_FROM}" if SMTP_FROM and "@" in SMTP_FROM else "mailto:admin@example.com",
+).strip()
 
 # =========================================
 # 通知ユーティリティ
@@ -769,6 +782,87 @@ def send_notification_email_if_enabled_with_user(
     if full_link:
         email_body = f"{email_body}\n\n{full_link}"
     send_notification_email(user.email, title, email_body)
+
+
+def is_webpush_configured() -> bool:
+    return (
+        WEBPUSH_AVAILABLE
+        and bool(WEBPUSH_VAPID_PUBLIC_KEY)
+        and bool(WEBPUSH_VAPID_PRIVATE_KEY)
+        and bool(WEBPUSH_VAPID_SUBJECT)
+    )
+
+
+def _notification_target_url(link_url: str | None) -> str:
+    if not link_url:
+        return FRONTEND_ORIGIN.rstrip("/") + "/notifications"
+    if link_url.startswith("/"):
+        return FRONTEND_ORIGIN.rstrip("/") + link_url
+    return link_url
+
+
+def send_web_push_to_user(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    body: str | None = None,
+    link_url: str | None = None,
+    tag: str | None = None,
+) -> None:
+    if not is_webpush_configured() or not user_id:
+        return
+    subs = (
+        db.query(models.PushSubscription)
+        .filter(models.PushSubscription.user_id == user_id)
+        .all()
+    )
+    if not subs:
+        return
+
+    payload = json.dumps(
+        {
+            "title": title,
+            "body": body or title,
+            "url": _notification_target_url(link_url),
+            "tag": tag or "site-notification",
+        },
+        ensure_ascii=False,
+    )
+    stale_ids: list[int] = []
+    vapid_claims = {"sub": WEBPUSH_VAPID_SUBJECT}
+
+    for sub in subs:
+        subscription_info = {
+            "endpoint": sub.endpoint,
+            "keys": {"p256dh": sub.p256dh, "auth": sub.auth},
+        }
+        try:
+            webpush(
+                subscription_info=subscription_info,
+                data=payload,
+                vapid_private_key=WEBPUSH_VAPID_PRIVATE_KEY,
+                vapid_claims=vapid_claims,
+                ttl=300,
+            )
+        except WebPushException as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code in (404, 410):
+                stale_ids.append(sub.id)
+            else:
+                print(
+                    f"[webpush] failed user_id={user_id} subscription_id={sub.id} status={status_code} err={e!r}"
+                )
+        except Exception as e:
+            print(f"[webpush] failed user_id={user_id} subscription_id={sub.id} err={e!r}")
+
+    if stale_ids:
+        (
+            db.query(models.PushSubscription)
+            .filter(models.PushSubscription.id.in_(stale_ids))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
 
 
 def notify_favorited_users_episode_published(
@@ -4158,6 +4252,76 @@ async def _call_ai_with_retry_prompt(
         raise last_error
 
 
+def _notify_ai_job_user(
+    db: Session,
+    *,
+    user_id: int | None,
+    job_type: str,
+    succeeded: bool,
+    error_message: str | None = None,
+) -> None:
+    if not user_id:
+        return
+
+    is_continuation = job_type == "episode_continue"
+    if succeeded:
+        title = "AI生成が完了しました"
+        notif_body = (
+            "続き生成が完了しました。結果を確認できます。"
+            if is_continuation
+            else "AI小説生成が完了しました。結果を確認できます。"
+        )
+        notif_type = "ai_generation_done"
+    else:
+        title = "AI生成が失敗しました"
+        reason = (error_message or "").strip()
+        if len(reason) > 160:
+            reason = reason[:159] + "..."
+        base = "続き生成に失敗しました。" if is_continuation else "AI小説生成に失敗しました。"
+        notif_body = f"{base} {reason}".strip() if reason else base
+        notif_type = "ai_generation_failed"
+
+    link_url = "/ai-novel" if is_continuation else "/ai-logs"
+    try:
+        create_notification(
+            db,
+            user_id=user_id,
+            notif_type=notif_type,
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=None,
+        )
+        db.commit()
+    except Exception as e:
+        print(f"[ai-job] failed to create notification user_id={user_id}, err={e!r}")
+        db.rollback()
+        return
+
+    if succeeded:
+        try:
+            send_notification_email_if_enabled(
+                db,
+                user_id=user_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+            )
+        except Exception as e:
+            print(f"[ai-job] failed to send email notification user_id={user_id}, err={e!r}")
+    try:
+        send_web_push_to_user(
+            db,
+            user_id=user_id,
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            tag="ai-generation",
+        )
+    except Exception as e:
+        print(f"[ai-job] failed to send web push user_id={user_id}, err={e!r}")
+
+
 async def _run_ai_job(job_id: int) -> None:
     db = SessionLocal()
     now = datetime.utcnow()
@@ -4349,6 +4513,13 @@ async def _run_ai_job(job_id: int) -> None:
         job.finished_at = datetime.utcnow()
         db.add(job)
         db.commit()
+        _notify_ai_job_user(
+            db,
+            user_id=job.user_id,
+            job_type=job.job_type,
+            succeeded=True,
+            error_message=None,
+        )
     except HTTPException as e:
         error_message = str(getattr(e, "detail", "") or e)
         job.status = "failed"
@@ -4356,6 +4527,13 @@ async def _run_ai_job(job_id: int) -> None:
         job.finished_at = datetime.utcnow()
         db.add(job)
         db.commit()
+        _notify_ai_job_user(
+            db,
+            user_id=job.user_id,
+            job_type=job.job_type,
+            succeeded=False,
+            error_message=error_message,
+        )
     except Exception as e:
         error_message = str(e)
         job.status = "failed"
@@ -4363,6 +4541,13 @@ async def _run_ai_job(job_id: int) -> None:
         job.finished_at = datetime.utcnow()
         db.add(job)
         db.commit()
+        _notify_ai_job_user(
+            db,
+            user_id=job.user_id,
+            job_type=job.job_type,
+            succeeded=False,
+            error_message=error_message,
+        )
     finally:
         db.close()
 
@@ -8701,6 +8886,110 @@ def update_profile(
 # ============================
 # 通知 API
 # ============================
+class PushSubscriptionKeysPayload(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscriptionPayload(BaseModel):
+    endpoint: str
+    keys: PushSubscriptionKeysPayload
+
+
+class PushUnsubscribePayload(BaseModel):
+    endpoint: str
+
+
+class PushDebugPayload(BaseModel):
+    stage: str
+    detail: str | None = None
+
+
+@app.get("/api/push/public_key")
+def get_push_public_key():
+    return {
+        "enabled": is_webpush_configured(),
+        "public_key": WEBPUSH_VAPID_PUBLIC_KEY if is_webpush_configured() else "",
+    }
+
+
+@app.post("/api/push/subscribe")
+def subscribe_push_notifications(
+    payload: PushSubscriptionPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    if not is_webpush_configured():
+        raise HTTPException(503, "Web Push is not configured")
+
+    endpoint = (payload.endpoint or "").strip()
+    p256dh = (payload.keys.p256dh or "").strip()
+    auth = (payload.keys.auth or "").strip()
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(400, "無効な購読データです")
+
+    user_agent = (request.headers.get("user-agent") or "").strip()[:255] or None
+    existing = (
+        db.query(models.PushSubscription)
+        .filter(models.PushSubscription.endpoint == endpoint)
+        .first()
+    )
+    if existing:
+        existing.user_id = user.id
+        existing.p256dh = p256dh
+        existing.auth = auth
+        existing.user_agent = user_agent
+        db.add(existing)
+    else:
+        db.add(
+            models.PushSubscription(
+                user_id=user.id,
+                endpoint=endpoint,
+                p256dh=p256dh,
+                auth=auth,
+                user_agent=user_agent,
+            )
+        )
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+def unsubscribe_push_notifications(
+    payload: PushUnsubscribePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    endpoint = (payload.endpoint or "").strip()
+    if not endpoint:
+        raise HTTPException(400, "endpoint が必要です")
+    deleted = (
+        db.query(models.PushSubscription)
+        .filter(
+            models.PushSubscription.user_id == user.id,
+            models.PushSubscription.endpoint == endpoint,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"ok": True, "deleted": int(deleted or 0)}
+
+
+@app.post("/api/push/debug")
+def push_debug_log(
+    payload: PushDebugPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    stage = (payload.stage or "").strip()[:64]
+    detail = (payload.detail or "").strip()[:400]
+    print(f"[push-debug] user_id={user.id} stage={stage} detail={detail}")
+    return {"ok": True}
+
+
 @app.get("/api/notifications", response_model=List[schemas.NotificationRead])
 def list_notifications(
     request: Request,

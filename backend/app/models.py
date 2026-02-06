@@ -95,6 +95,25 @@ class OAuthAccount(Base):
 
 
 
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    endpoint = Column(String(512), nullable=False)
+    p256dh = Column(String(512), nullable=False)
+    auth = Column(String(512), nullable=False)
+    user_agent = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("endpoint", name="uq_push_subscription_endpoint"),
+    )
+
+
 # =========================
 # Novel
 # =========================

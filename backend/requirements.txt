@@ -12,3 +12,4 @@ pillow
 httpx
 email-validator
 janome
+pywebpush==2.0.3
