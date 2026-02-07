@@ -9,6 +9,18 @@ export default function AdminHome() {
   const [contactError, setContactError] = useState("");
   const [contactMessages, setContactMessages] = useState([]);
   const [contactLoading, setContactLoading] = useState(true);
+  const [indexingError, setIndexingError] = useState("");
+  const [indexingLoading, setIndexingLoading] = useState(false);
+  const [indexingSubmitting, setIndexingSubmitting] = useState(false);
+  const [indexingUrlItems, setIndexingUrlItems] = useState([]);
+  const [indexingTotal, setIndexingTotal] = useState(0);
+  const [indexingSummary, setIndexingSummary] = useState({
+    indexed: 0,
+    unindexed: 0,
+    unknown: 0,
+  });
+  const [indexingInspectionError, setIndexingInspectionError] = useState("");
+  const [indexingResult, setIndexingResult] = useState(null);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -40,6 +52,72 @@ export default function AdminHome() {
       credentials: "include",
     });
     navigate("/admin/login", { replace: true });
+  };
+
+  const handleLoadIndexingUrls = async () => {
+    try {
+      setIndexingLoading(true);
+      setIndexingError("");
+      setIndexingInspectionError("");
+      const data = await apiFetch("/api/admin/indexing/urls?limit=2000", {
+        credentials: "include",
+      });
+      const items = Array.isArray(data?.items)
+        ? data.items
+        : (Array.isArray(data?.urls) ? data.urls : []).map((url) => ({
+            url,
+            indexed: null,
+            inspection_verdict: null,
+            inspection_error: null,
+          }));
+      setIndexingUrlItems(items);
+      setIndexingTotal(Number(data?.total) || 0);
+      setIndexingSummary({
+        indexed: Number(data?.indexed_count) || 0,
+        unindexed: Number(data?.unindexed_count) || 0,
+        unknown: Number(data?.unknown_count) || 0,
+      });
+      if (data?.inspection_error) {
+        setIndexingInspectionError(String(data.inspection_error));
+      }
+    } catch (e) {
+      setIndexingError(
+        e.message || t({ ja: "URL一覧の取得に失敗しました。", en: "Failed to load URL list." })
+      );
+    } finally {
+      setIndexingLoading(false);
+    }
+  };
+
+  const handleSubmitAllIndexing = async () => {
+    try {
+      setIndexingSubmitting(true);
+      setIndexingError("");
+      const prioritizedUrls = indexingUrlItems.length
+        ? [...indexingUrlItems]
+            .sort((a, b) => {
+              const rank = (v) => (v === false ? 0 : v === null || typeof v === "undefined" ? 1 : 2);
+              return rank(a?.indexed) - rank(b?.indexed);
+            })
+            .map((item) => item?.url)
+            .filter(Boolean)
+        : [];
+      const data = await apiFetch("/api/admin/indexing/submit", {
+        method: "POST",
+        body: prioritizedUrls.length ? { all_pages: false, urls: prioritizedUrls } : { all_pages: true },
+        credentials: "include",
+      });
+      setIndexingResult(data || null);
+      if (!indexingTotal && Number(data?.submitted) > 0) {
+        setIndexingTotal(Number(data.submitted));
+      }
+    } catch (e) {
+      setIndexingError(
+        e.message || t({ ja: "インデックス送信に失敗しました。", en: "Failed to submit indexing requests." })
+      );
+    } finally {
+      setIndexingSubmitting(false);
+    }
   };
 
   return (
@@ -89,6 +167,115 @@ export default function AdminHome() {
             </div>
           )}
         </div>
+      </section>
+      <section
+        style={{
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 16,
+          marginBottom: 20,
+          background: "var(--surface)",
+        }}
+      >
+        <h3 style={{ marginTop: 0 }}>
+          {t({ ja: "Google インデックス登録送信", en: "Google Indexing Submission" })}
+        </h3>
+        <p style={{ color: "var(--muted-text)", marginTop: 0 }}>
+          {t({
+            ja: "公開ページURLを取得し、Search Console でインデックス状態を確認後、未登録ページを優先して Google Indexing API に送信します。",
+            en: "Load public URLs, check index status via Search Console, then submit unindexed pages first to Google Indexing API.",
+          })}
+        </p>
+        {indexingError && <div style={{ color: "red", marginBottom: 8 }}>{indexingError}</div>}
+        {indexingInspectionError && (
+          <div style={{ color: "#a16207", marginBottom: 8 }}>{indexingInspectionError}</div>
+        )}
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleLoadIndexingUrls}
+          disabled={indexingLoading}
+        >
+          {indexingLoading
+            ? t({ ja: "URL一覧を取得中...", en: "Loading URLs..." })
+            : t({ ja: "公開URL一覧を取得", en: "Load public URLs" })}
+        </button>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleSubmitAllIndexing}
+          disabled={indexingSubmitting}
+          style={{ marginLeft: 8 }}
+        >
+          {indexingSubmitting
+            ? t({ ja: "送信中...", en: "Submitting..." })
+            : t({
+                ja: "未登録ページ優先でインデックス登録送信",
+                en: "Submit to indexing (prioritize unindexed)",
+              })}
+        </button>
+        <div style={{ marginTop: 10, fontSize: 13, color: "var(--muted-text)" }}>
+          {t(
+            { ja: "対象URL数: {{count}}", en: "Target URLs: {{count}}" },
+            { count: indexingTotal || indexingUrlItems.length || 0 }
+          )}
+        </div>
+        {indexingUrlItems.length > 0 && (
+          <div style={{ marginTop: 6, fontSize: 13, color: "var(--muted-text)" }}>
+            {t(
+              {
+                ja: "登録済み {{indexed}} / 未登録 {{unindexed}} / 不明 {{unknown}}",
+                en: "Indexed {{indexed}} / Unindexed {{unindexed}} / Unknown {{unknown}}",
+              },
+              {
+                indexed: indexingSummary.indexed || 0,
+                unindexed: indexingSummary.unindexed || 0,
+                unknown: indexingSummary.unknown || 0,
+              }
+            )}
+          </div>
+        )}
+        {indexingUrlItems.length > 0 && (
+          <div style={{ marginTop: 8, maxHeight: 140, overflowY: "auto", fontSize: 12 }}>
+            {indexingUrlItems.slice(0, 50).map((item) => (
+              <div key={item.url}>
+                {item.url}{" "}
+                <span style={{ color: item.indexed === false ? "#b91c1c" : item.indexed ? "#166534" : "#6b7280" }}>
+                  {item.indexed === false
+                    ? t({ ja: "(未登録)", en: "(Unindexed)" })
+                    : item.indexed === true
+                      ? t({ ja: "(登録済み)", en: "(Indexed)" })
+                      : t({ ja: "(不明)", en: "(Unknown)" })}
+                </span>
+              </div>
+            ))}
+            {indexingUrlItems.length > 50 && (
+              <div style={{ color: "var(--muted-text)" }}>
+                {t(
+                  { ja: "…他 {{count}} 件", en: "...and {{count}} more" },
+                  { count: indexingUrlItems.length - 50 }
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {indexingResult && (
+          <div style={{ marginTop: 10, fontSize: 13 }}>
+            <div>
+              {t(
+                {
+                  ja: "送信 {{submitted}} 件 / 成功 {{success}} 件 / 失敗 {{failed}} 件",
+                  en: "Submitted {{submitted}} / Success {{success}} / Failed {{failed}}",
+                },
+                {
+                  submitted: indexingResult.submitted || 0,
+                  success: indexingResult.success || 0,
+                  failed: indexingResult.failed || 0,
+                }
+              )}
+            </div>
+          </div>
+        )}
       </section>
       <h2 style={{ marginBottom: 16 }}>{t({ ja: "管理画面", en: "Admin" })}</h2>
       <p style={{ marginBottom: 12 }}>

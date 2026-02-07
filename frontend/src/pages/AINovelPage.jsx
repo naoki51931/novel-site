@@ -1,6 +1,6 @@
 // frontend/src/pages/AINovelPage.jsx
 import React, { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
 import { applyPolishReplacement, buildPolishPrompt } from "../lib/aiPolish.mjs";
 
@@ -364,6 +364,9 @@ export default function AINovelPage() {
   const [draftTitle, setDraftTitle] = useState("");
   const [hasContinuationAttempted, setHasContinuationAttempted] = useState(false);
   const [redoContinuationArmed, setRedoContinuationArmed] = useState(false);
+  const [textEditMode, setTextEditMode] = useState(false);
+  const [textEditValue, setTextEditValue] = useState("");
+  const [textEditOriginal, setTextEditOriginal] = useState("");
   const [isPushDebugUser, setIsPushDebugUser] = useState(false);
   const [pushDebugInfo, setPushDebugInfo] = useState({
     stage: "idle",
@@ -397,6 +400,7 @@ export default function AINovelPage() {
   const combinedBodyRef = useRef("");
   const lastSelectionContextRef = useRef(null);
   const jobPollTimerRef = useRef(null);
+  const activeJobSessionRef = useRef(0);
   const localDraftRef = useRef(null);
   const draftSaveTimerRef = useRef(null);
   const [pendingJob, setPendingJob] = useState(null);
@@ -556,8 +560,9 @@ export default function AINovelPage() {
     setActiveRetryMax(null);
   };
 
-  const pollAiJob = async (job) => {
+  const pollAiJob = async (job, sessionId = activeJobSessionRef.current) => {
     if (!job || !job.job_id) return;
+    if (sessionId !== activeJobSessionRef.current) return;
     const startedAt = Number(job.started_at || 0);
     if (startedAt && Date.now() - startedAt > 60 * 60 * 1000) {
       setError(
@@ -566,7 +571,7 @@ export default function AINovelPage() {
           en: "Generation is taking longer than usual. Retrying in background. You will be notified when it completes.",
         })
       );
-      jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 5000);
+      jobPollTimerRef.current = setTimeout(() => pollAiJob(job, sessionId), 5000);
       return;
     }
     const token = getAuthToken();
@@ -604,7 +609,7 @@ export default function AINovelPage() {
               en: "Server response is unstable. Retrying. You will be notified when it completes.",
             })
           );
-          jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 4000);
+          jobPollTimerRef.current = setTimeout(() => pollAiJob(job, sessionId), 4000);
           return;
         }
         const message =
@@ -672,7 +677,7 @@ export default function AINovelPage() {
         setPendingJob(null);
         return;
       }
-      jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 2000);
+      jobPollTimerRef.current = setTimeout(() => pollAiJob(job, sessionId), 2000);
     } catch (err) {
       console.error(err);
       if (isAbortError(err)) {
@@ -682,10 +687,10 @@ export default function AINovelPage() {
             en: "Status check timed out. Retrying automatically. You will be notified when it completes.",
           })
         );
-        jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 4000);
+        jobPollTimerRef.current = setTimeout(() => pollAiJob(job, sessionId), 4000);
         return;
       }
-      jobPollTimerRef.current = setTimeout(() => pollAiJob(job), 3000);
+      jobPollTimerRef.current = setTimeout(() => pollAiJob(job, sessionId), 3000);
     }
   };
 
@@ -700,7 +705,8 @@ export default function AINovelPage() {
     } else {
       setLoading(true);
     }
-    jobPollTimerRef.current = setTimeout(() => pollAiJob(withStartedAt), 500);
+    const sessionId = activeJobSessionRef.current;
+    jobPollTimerRef.current = setTimeout(() => pollAiJob(withStartedAt, sessionId), 500);
   };
 
   const resumePendingJobIfAny = (kind) => {
@@ -888,9 +894,62 @@ export default function AINovelPage() {
     }
   };
 
+  const startTextEditMode = () => {
+    const current = getCombinedBody();
+    setTextEditOriginal(current);
+    setTextEditValue(current);
+    setTextEditMode(true);
+  };
+
+  const cancelTextEditMode = () => {
+    setTextEditValue(textEditOriginal);
+    setTextEditMode(false);
+  };
+
+  const applyTextEditMode = () => {
+    const nextBody = textEditValue || "";
+    setResult((prev) => ({
+      ...(prev || {}),
+      body: nextBody,
+    }));
+    // 手動編集後は 1 本化して扱う
+    setContinuationBody("");
+    setTextEditMode(false);
+  };
+
+  const handleResetAll = () => {
+    setTitleHint("");
+    setGenre("");
+    setCharacters("");
+    setTone("");
+    setLength("medium");
+    setModel("gpt-4.1-mini");
+    setIsR18(false);
+    setRetryMode(false);
+    setRetryMax(2);
+    setRetryAttempts(0);
+    setActiveRetryMax(null);
+    setResult(null);
+    setContinuationBody("");
+    setPostEpisodeTitle("");
+    setLastGenerateParams(null);
+    setAutoFillPreview(null);
+    setAutoFillError("");
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+    setPolishPreview(null);
+    setLastPolishContext(null);
+    setHasContinuationAttempted(false);
+    setRedoContinuationArmed(false);
+    setTextEditMode(false);
+    setTextEditValue("");
+    setTextEditOriginal("");
+  };
+
   useEffect(() => {
     const pending = loadPendingAiJob();
-    if (pending && pending.job_id) {
+      if (pending && pending.job_id) {
       if (pending.kind === "continuation") {
         setContinuing(true);
       } else {
@@ -900,6 +959,14 @@ export default function AINovelPage() {
     }
     return () => stopJobPolling();
   }, []);
+
+  useEffect(() => {
+    if (!result) {
+      setTextEditMode(false);
+      setTextEditValue("");
+      setTextEditOriginal("");
+    }
+  }, [result]);
 
   useEffect(() => {
     if (!hasAuthToken) return;
@@ -1326,6 +1393,8 @@ export default function AINovelPage() {
       short: "800〜1200文字程度",
       medium: "2000〜3000文字程度",
       long: "4000〜6000文字程度",
+      xlong: "6000〜8000文字程度",
+      xxlong: "8000〜10000文字程度",
     };
     const lengthText = lengthMap[params.length || "medium"] || lengthMap.medium;
     const r18Note = params.isR18
@@ -1360,6 +1429,8 @@ export default function AINovelPage() {
       short: "800〜1200文字程度",
       medium: "2000〜3000文字程度",
       long: "4000〜6000文字程度",
+      xlong: "6000〜8000文字程度",
+      xxlong: "8000〜10000文字程度",
     };
     const lengthText = lengthMap[params.length || "medium"] || lengthMap.medium;
     const r18Note = params.isR18
@@ -1393,6 +1464,8 @@ export default function AINovelPage() {
   const handleGenerate = async (e) => {
     e.preventDefault();
     await ensureWebPushSubscription(getAuthToken(), setPushDebugInfo);
+    // 新規生成開始時は過去ジョブの応答を無効化し、過去パラメータ参照をクリアする
+    activeJobSessionRef.current += 1;
     stopJobPolling();
     clearPendingAiJob();
     setPendingJob(null);
@@ -1405,6 +1478,7 @@ export default function AINovelPage() {
       ? (result?.body || editSourceBody || "").trim()
       : "";
     setResult(null);
+    setLastGenerateParams(null);
     setContinuationBody("");
     setHasContinuationAttempted(false);
     setRedoContinuationArmed(false);
@@ -1557,6 +1631,7 @@ export default function AINovelPage() {
     if (resumePendingJobIfAny("continuation")) {
       return;
     }
+    activeJobSessionRef.current += 1;
     stopJobPolling();
     clearPendingAiJob();
     setPendingJob(null);
@@ -2302,10 +2377,23 @@ export default function AINovelPage() {
             fontSize: "0.9rem",
           }}
         >
-          {t(
-            { ja: "ゲストの AI生成 残り回数: {{count}}", en: "Guest AI generations left: {{count}}" },
-            { count: guestRemaining }
-          )}
+          <div>
+            {t(
+              { ja: "ゲストの AI生成 残り回数: {{count}}", en: "Guest AI generations left: {{count}}" },
+              { count: guestRemaining }
+            )}
+          </div>
+          <div style={{ marginTop: "0.25rem", color: "var(--muted-text)" }}>
+            {t({
+              ja: "プレミアム会員になると、AI小説生成は1日80回まで利用できます。",
+              en: "Premium members can generate AI novels up to 80 times per day.",
+            })}
+          </div>
+          <div style={{ marginTop: "0.5rem" }}>
+            <Link to="/mypage" className="btn btn-border">
+              {t({ ja: "プレミアム会員になる", en: "Become Premium" })}
+            </Link>
+          </div>
         </div>
       )}
       {typeof userRemaining === "number" && (
@@ -2450,6 +2538,15 @@ export default function AINovelPage() {
               {t({ ja: "ログインすると保存データを使えます。", en: "Log in to use saved drafts." })}
             </div>
           )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+          <button
+            type="button"
+            onClick={handleResetAll}
+            className="btn btn-border"
+          >
+            {t({ ja: "入力内容をリセット", en: "Reset inputs" })}
+          </button>
         </div>
 
         <div>
@@ -2670,6 +2767,8 @@ export default function AINovelPage() {
             <option value="short">{t({ ja: "短め（800〜1200文字程度）", en: "Short (800–1200 chars)" })}</option>
             <option value="medium">{t({ ja: "ふつう（2000〜3000文字程度）", en: "Medium (2000–3000 chars)" })}</option>
             <option value="long">{t({ ja: "長め（4000〜6000文字程度）", en: "Long (4000–6000 chars)" })}</option>
+            <option value="xlong">{t({ ja: "すごく長め（6000〜8000文字程度）", en: "Very long (6000–8000 chars)" })}</option>
+            <option value="xxlong">{t({ ja: "超長め（8000〜10000文字程度）", en: "Ultra long (8000–10000 chars)" })}</option>
           </select>
         </div>
 
@@ -2935,6 +3034,53 @@ export default function AINovelPage() {
               >
                 {t({ ja: "文章をコピー", en: "Copy text" })}
               </button>
+              {!textEditMode ? (
+                <button
+                  type="button"
+                  onClick={startTextEditMode}
+                  style={{
+                    height: "2.2rem",
+                    alignSelf: "center",
+                    padding: "0.3rem 0.8rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--border)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {t({ ja: "編集モード", en: "Edit mode" })}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={applyTextEditMode}
+                    style={{
+                      height: "2.2rem",
+                      alignSelf: "center",
+                      padding: "0.3rem 0.8rem",
+                      borderRadius: "4px",
+                      border: "1px solid var(--border)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t({ ja: "編集を反映", en: "Apply edits" })}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelTextEditMode}
+                    style={{
+                      height: "2.2rem",
+                      alignSelf: "center",
+                      padding: "0.3rem 0.8rem",
+                      borderRadius: "4px",
+                      border: "1px solid var(--border)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t({ ja: "編集を終了", en: "Exit edit mode" })}
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -2955,26 +3101,45 @@ export default function AINovelPage() {
             )}
           </div>
 
-          <pre
-            ref={resultBodyRef}
-            className="ai-result-body"
-            style={{
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              backgroundColor: "var(--ai-result-surface)",
-              padding: "0.75rem",
-              borderRadius: "6px",
-              border: "1px solid var(--border)",
-              maxHeight: "600px",
-              overflowY: "auto",
-              lineHeight: 1.6,
-            }}
-          >
-            <span>{result.body}</span>
-            {continuationBody && (
-              <span style={{ color: "#1b7f2a" }}>{`\n\n${continuationBody}`}</span>
-            )}
-          </pre>
+          {textEditMode ? (
+            <textarea
+              value={textEditValue}
+              onChange={(e) => setTextEditValue(e.target.value)}
+              rows={18}
+              style={{
+                width: "100%",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                backgroundColor: "var(--ai-result-surface)",
+                padding: "0.75rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                lineHeight: 1.6,
+                resize: "vertical",
+              }}
+            />
+          ) : (
+            <pre
+              ref={resultBodyRef}
+              className="ai-result-body"
+              style={{
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                backgroundColor: "var(--ai-result-surface)",
+                padding: "0.75rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                maxHeight: "600px",
+                overflowY: "auto",
+                lineHeight: 1.6,
+              }}
+            >
+              <span>{result.body}</span>
+              {continuationBody && (
+                <span style={{ color: "#1b7f2a" }}>{`\n\n${continuationBody}`}</span>
+              )}
+            </pre>
+          )}
 
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
             {polishPreview && (

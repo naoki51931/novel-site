@@ -78,6 +78,8 @@ export default function EditEpisode() {
   const [tagCandidates, setTagCandidates] = useState([]);
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
   const [tagSuggestError, setTagSuggestError] = useState("");
+  const [isExtractingTitle, setIsExtractingTitle] = useState(false);
+  const [titleSuggestError, setTitleSuggestError] = useState("");
 
   const countChars = (value) => (value || "").length;
 
@@ -362,6 +364,49 @@ export default function EditEpisode() {
       setTagSuggestError(
         err.message || t({ ja: "タグ候補の生成に失敗しました。", en: "Failed to generate tags." })
       );
+    }
+  };
+
+  const handleSuggestTitleFromBody = async () => {
+    setTitleSuggestError("");
+    if (!body.trim()) {
+      setTitleSuggestError(
+        t({ ja: "本文がないためタイトルを生成できません。", en: "No body text available to generate a title." })
+      );
+      return;
+    }
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
+      }
+      setIsExtractingTitle(true);
+      const res = await fetch(`${API_BASE}/api/ai/title_candidate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: body.slice(0, 2000) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || t({ ja: "タイトル生成に失敗しました。", en: "Failed to generate title." }));
+      }
+      const nextTitle = typeof data?.title === "string" ? data.title.trim() : "";
+      if (!nextTitle) {
+        throw new Error(
+          t({ ja: "タイトル候補を取得できませんでした。", en: "Failed to get a title candidate." })
+        );
+      }
+      setTitle(nextTitle);
+    } catch (err) {
+      console.error(err);
+      setTitleSuggestError(
+        err.message || t({ ja: "タイトル生成に失敗しました。", en: "Failed to generate title." })
+      );
+    } finally {
+      setIsExtractingTitle(false);
     }
   };
 
@@ -673,6 +718,21 @@ export default function EditEpisode() {
             <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
               {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(title)}
             </div>
+            <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={handleSuggestTitleFromBody}
+                disabled={isExtractingTitle}
+              >
+                {isExtractingTitle
+                  ? t({ ja: "タイトルを生成中...", en: "Generating title..." })
+                  : t({ ja: "本文からタイトルを抽出", en: "Generate title from body" })}
+              </button>
+            </div>
+            {titleSuggestError && (
+              <div style={{ marginTop: 6, color: "red" }}>{titleSuggestError}</div>
+            )}
           </div>
         )}
 

@@ -105,7 +105,7 @@ class AINovelRequest(BaseModel):
     genre: str | None = None
     characters: str | None = None
     tone: str | None = None
-    length: str | None = "medium"  # "short" | "medium" | "long"
+    length: str | None = "medium"  # "short" | "medium" | "long" | "xlong" | "xxlong"
     prompt: str | None = None
     model: str | None = None
     provider: str | None = None
@@ -134,6 +134,8 @@ def build_ai_prompt(req: AINovelRequest) -> str:
         "short": "およそ 800〜1200 文字の短編",
         "medium": "およそ 2000〜3000 文字の中編",
         "long": "およそ 4000〜6000 文字のやや長めの中編",
+        "xlong": "およそ 6000〜8000 文字の長編",
+        "xxlong": "およそ 8000〜10000 文字の長編",
     }
     length_text = length_map.get(req.length or "medium", length_map["medium"])
 
@@ -765,6 +767,71 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
         tokens = getattr(usage, "total_tokens", None)
 
     return normalized, tokens, effective_model
+
+
+async def call_openai_title_candidate(text: str, model: str | None = None) -> tuple[str, int | None, str]:
+    if client is None:
+        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
+    source_text = (text or "").strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail="本文が空です。")
+
+    effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
+    prompt = dedent(
+        f"""
+        以下の本文に合う小説タイトルを1つ作成してください。
+        条件:
+        - 日本語
+        - 40文字以内
+        - 記号の多用は避ける
+        出力は必ず JSON のみ。形式: {{"title": "タイトル"}}
+
+        本文:
+        {source_text}
+        """
+    ).strip()
+
+    try:
+        resp = await asyncio.to_thread(
+            client.responses.create,
+            model=effective_model,
+            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+            input=prompt,
+            max_output_tokens=128,
+        )
+    except Exception as e:
+        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
+        raise HTTPException(status_code=502, detail=f"AI タイトル生成 API 呼び出しに失敗しました: {e!r}")
+
+    raw = ""
+    try:
+        raw = resp.output[0].content[0].text
+    except Exception:
+        raw = getattr(resp, "output_text", "") or ""
+
+    if not raw:
+        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
+
+    try:
+        data = _parse_json_payload(raw)
+    except Exception as e:
+        _log_ai_raw_response(raw, "title_candidate")
+        print("[ERROR] AI JSON parse failed:", repr(e))
+        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+
+    title = data.get("title") if isinstance(data, dict) else None
+    if not isinstance(title, str):
+        raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
+    normalized = title.strip().strip('"').strip("'")
+    if not normalized:
+        raise HTTPException(status_code=500, detail="AI からタイトルが取得できませんでした。")
+
+    tokens: int | None = None
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        tokens = getattr(usage, "total_tokens", None)
+
+    return normalized[:40], tokens, effective_model
 
 
 async def call_openrouter_novel_api(

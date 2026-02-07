@@ -25,7 +25,7 @@ Codex で作業するときの要点と入口をまとめます。
 
 - DB: `DB_USER`, `DB_PASS`, `DB_HOST`, `DB_NAME`
 - Auth/JWT: `JWT_SECRET_KEY`
-- OAuth: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `X_OAUTH_CLIENT_ID`, `X_OAUTH_CLIENT_SECRET`
+- OAuth: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `X_OAUTH_CONSUMER_KEY`, `X_OAUTH_CONSUMER_SECRET`（環境によって `X_OAUTH_CLIENT_ID/SECRET` 名を使う設定が残っている場合あり）
 - OAuth URL: `FRONTEND_ORIGIN`, `BACKEND_ORIGIN`, `OAUTH_STATE_EXPIRE_MINUTES`
 - Stripe: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`
 - Mail: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
@@ -43,4 +43,23 @@ Codex で作業するときの要点と入口をまとめます。
 
 ## テスト
 
-- 自動テストは未整備。必要なら API の手動確認手順を記載する。
+- 自動テストは最小限（`frontend/tests/aiPolish.test.mjs`）。必要なら API の手動確認手順を記載する。
+
+## 現状の機能（実装ベース）
+
+- 認証: ユーザー登録 / ログイン、パスワードリセット、OAuth（Google/X）、2段階ログインコード（`/api/auth/login/start`,`/api/auth/login/verify`）
+- 小説: 作成・編集・削除、公開/下書き、タグ、年齢区分（`all/r15/r18`）、創作区分（`original/fanfic`）
+- エピソード: 作成・編集・削除、公開/下書き、カバー画像・挿絵アップロード、タグ
+- コミュニティ: 小説/エピソードのコメント、いいね、ブックマーク（favorite）
+- ユーザー機能: マイページ編集、通知センター、DM、作者ページ・ユーザーページ
+- 支援/課金: Stripe Checkout（単発支援・月額）、作者の支援プラン、残高/振込プロフィール、管理者の支払生成・状態更新
+- AI 機能: 小説生成、続き生成、タイトル/タグ/要約候補、生成ジョブ管理、AIログ
+- 翻訳/SEO: 小説・エピソード翻訳 API、共有ページ（`/share/episodes/...`）、sitemap、Google Indexing 送信 API（管理者）
+
+## 追加の注意点
+
+- API の主実装は `backend/app/main.py` に集中している。`backend/app/routers/*.py` は一部旧実装が残るため、修正対象を取り違えない。
+- DB マイグレーションツール未導入。起動時 `ensure_*` は「不足カラムの補完」が中心で、型変更・不要カラム整理・複雑なDDLは手動対応が必要。
+- 公開状態は互換のため `status` と `is_public` を併用している箇所がある。公開制御を変える場合は一覧/詳細/権限チェックを必ず横断確認する。
+- フロント変更は `frontend/src` を編集し、`npm run build` 後に nginx 配信物（`frontend/dist`）へ反映される前提。
+- 画像は `static/episode_images` に保存し、nginx から `/static` 配下で配信する。保存パス変更時は backend・nginx・compose を同時に確認する。

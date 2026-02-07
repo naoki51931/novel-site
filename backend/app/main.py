@@ -83,6 +83,7 @@ from .ai_novel import (
     call_deepseek_novel_api,
     call_openai_summary_candidates,
     call_openai_tag_candidates,
+    call_openai_title_candidate,
     provider_from_model,
     provider_from_request,
 )
@@ -405,6 +406,31 @@ GOOGLE_CSE_CX = _get_env_any(
     "GOOGLE_CUSTOM_SEARCH_ENGINE_ID",
     "GOOGLE_CSE_ENGINE_ID",
     "GOOGLE_CSE_ID",
+)
+GOOGLE_INDEXING_SERVICE_ACCOUNT_EMAIL = _get_env_any(
+    "GOOGLE_INDEXING_SERVICE_ACCOUNT_EMAIL",
+    "GOOGLE_SERVICE_ACCOUNT_EMAIL",
+)
+GOOGLE_INDEXING_PRIVATE_KEY = _get_env_any(
+    "GOOGLE_INDEXING_PRIVATE_KEY",
+    "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY",
+)
+GOOGLE_INDEXING_PRIVATE_KEY_ID = _get_env_any(
+    "GOOGLE_INDEXING_PRIVATE_KEY_ID",
+    "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_ID",
+)
+GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON = _get_env_any(
+    "GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON",
+    "GOOGLE_SERVICE_ACCOUNT_JSON",
+)
+GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON = _get_env_any(
+    "GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON",
+    "GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON",
+    "GOOGLE_SERVICE_ACCOUNT_JSON",
+)
+GOOGLE_SEARCH_CONSOLE_SITE_URL = _get_env_any(
+    "GOOGLE_SEARCH_CONSOLE_SITE_URL",
+    "GOOGLE_SEARCH_CONSOLE_PROPERTY_URI",
 )
 
 PREFERRED_CSE_HOSTS = (
@@ -1756,6 +1782,52 @@ class TagCandidatesOut(BaseModel):
     used_tokens: int | None = None
 
 
+class TitleCandidateRequest(BaseModel):
+    text: str
+
+
+class TitleCandidateOut(BaseModel):
+    title: str
+    model: str | None = None
+    used_tokens: int | None = None
+
+
+class AdminIndexingUrlItem(BaseModel):
+    url: str
+    indexed: bool | None = None
+    inspection_verdict: str | None = None
+    inspection_error: str | None = None
+
+
+class AdminIndexingUrlsOut(BaseModel):
+    total: int
+    urls: List[str]
+    indexed_count: int = 0
+    unindexed_count: int = 0
+    unknown_count: int = 0
+    inspection_error: str | None = None
+    items: List[AdminIndexingUrlItem] = []
+
+
+class AdminIndexingSubmitRequest(BaseModel):
+    all_pages: bool = True
+    urls: List[str] = []
+
+
+class AdminIndexingSubmitItem(BaseModel):
+    url: str
+    ok: bool
+    status_code: int | None = None
+    error: str | None = None
+
+
+class AdminIndexingSubmitOut(BaseModel):
+    submitted: int
+    success: int
+    failed: int
+    items: List[AdminIndexingSubmitItem]
+
+
 # =========================================
 # 認証 API（通常ログイン）
 # =========================================
@@ -2737,6 +2809,21 @@ async def generate_tag_candidates(
     source_text = text[:1000]
     candidates, tokens, model = await call_openai_tag_candidates(source_text)
     return TagCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
+
+
+@app.post("/api/ai/title_candidate", response_model=TitleCandidateOut)
+async def generate_title_candidate(
+    payload: TitleCandidateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_current_user(request, db)
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "本文が空です。")
+    source_text = text[:2000]
+    title, tokens, model = await call_openai_title_candidate(source_text)
+    return TitleCandidateOut(title=title, model=model, used_tokens=tokens)
 
 
 @app.get("/api/support_plans", response_model=List[SupportPlanOut])
@@ -8149,8 +8236,7 @@ def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/sitemap.xml")
-def sitemap_xml(db: Session = Depends(get_db)):
+def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
     base = FRONTEND_ORIGIN.rstrip("/")
     urls: list[tuple[str, Optional[datetime]]] = [(f"{base}/", None)]
 
@@ -8203,6 +8289,364 @@ def sitemap_xml(db: Session = Depends(get_db)):
             tag_names.add(name)
     for name in sorted(tag_names):
         urls.append((f"{base}/tags/{quote(name)}", None))
+    return urls
+
+
+def _is_frontend_origin_url(url: str) -> bool:
+    target = (url or "").strip()
+    if not target:
+        return False
+    try:
+        parsed_target = urlparse(target)
+        parsed_base = urlparse(FRONTEND_ORIGIN.rstrip("/"))
+    except Exception:
+        return False
+    return (
+        parsed_target.scheme == parsed_base.scheme
+        and parsed_target.netloc == parsed_base.netloc
+        and (parsed_target.path or "").startswith("/")
+    )
+
+
+def _load_google_indexing_credentials() -> tuple[str, str, str | None, str]:
+    token_uri = "https://oauth2.googleapis.com/token"
+    if GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON:
+        try:
+            payload = json.loads(GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON)
+        except Exception:
+            raise HTTPException(500, "GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON の JSON が不正です。")
+        email = str(payload.get("client_email") or "").strip()
+        private_key = str(payload.get("private_key") or "").strip()
+        private_key_id = str(payload.get("private_key_id") or "").strip() or None
+        token_uri = str(payload.get("token_uri") or token_uri).strip() or token_uri
+        if email and private_key:
+            return email, private_key.replace("\\n", "\n"), private_key_id, token_uri
+
+    email = GOOGLE_INDEXING_SERVICE_ACCOUNT_EMAIL
+    private_key = GOOGLE_INDEXING_PRIVATE_KEY
+    private_key_id = GOOGLE_INDEXING_PRIVATE_KEY_ID or None
+    if email and private_key:
+        return email, private_key.replace("\\n", "\n"), private_key_id, token_uri
+
+    raise HTTPException(
+        500,
+        "Google Indexing API の認証情報が未設定です。"
+        " GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON または"
+        " GOOGLE_INDEXING_SERVICE_ACCOUNT_EMAIL / GOOGLE_INDEXING_PRIVATE_KEY を設定してください。",
+    )
+
+
+def _build_google_indexing_access_token() -> str:
+    email, private_key, private_key_id, token_uri = _load_google_indexing_credentials()
+    now = int(time.time())
+    payload = {
+        "iss": email,
+        "scope": "https://www.googleapis.com/auth/indexing",
+        "aud": token_uri,
+        "iat": now,
+        "exp": now + 3600,
+    }
+    headers = {"kid": private_key_id} if private_key_id else None
+    try:
+        assertion = jwt.encode(payload, private_key, algorithm="RS256", headers=headers)
+    except Exception as e:
+        raise HTTPException(500, f"Google Indexing API のJWT生成に失敗しました: {e!r}")
+    if isinstance(assertion, bytes):
+        assertion = assertion.decode("utf-8", errors="ignore")
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                token_uri,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        data = resp.json().copy() if resp.content else {}
+    except Exception as e:
+        raise HTTPException(502, f"Google OAuth トークン取得に失敗しました: {e!r}")
+
+    if resp.status_code >= 400:
+        detail = data.get("error_description") or data.get("error") or str(data) or resp.text[:300]
+        raise HTTPException(502, f"Google OAuth トークン取得エラー: {detail}")
+
+    access_token = str(data.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(502, "Google OAuth トークン取得に失敗しました。")
+    return access_token
+
+
+def _load_google_search_console_credentials() -> tuple[str, str, str | None, str]:
+    token_uri = "https://oauth2.googleapis.com/token"
+    if GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON:
+        try:
+            payload = json.loads(GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON)
+        except Exception:
+            raise HTTPException(500, "GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON の JSON が不正です。")
+        email = str(payload.get("client_email") or "").strip()
+        private_key = str(payload.get("private_key") or "").strip()
+        private_key_id = str(payload.get("private_key_id") or "").strip() or None
+        token_uri = str(payload.get("token_uri") or token_uri).strip() or token_uri
+        if email and private_key:
+            return email, private_key.replace("\\n", "\n"), private_key_id, token_uri
+    raise HTTPException(
+        500,
+        "Search Console API の認証情報が未設定です。"
+        " GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON を設定してください。",
+    )
+
+
+def _build_google_search_console_access_token() -> str:
+    email, private_key, private_key_id, token_uri = _load_google_search_console_credentials()
+    now = int(time.time())
+    payload = {
+        "iss": email,
+        "scope": "https://www.googleapis.com/auth/webmasters.readonly",
+        "aud": token_uri,
+        "iat": now,
+        "exp": now + 3600,
+    }
+    headers = {"kid": private_key_id} if private_key_id else None
+    try:
+        assertion = jwt.encode(payload, private_key, algorithm="RS256", headers=headers)
+    except Exception as e:
+        raise HTTPException(500, f"Search Console API のJWT生成に失敗しました: {e!r}")
+    if isinstance(assertion, bytes):
+        assertion = assertion.decode("utf-8", errors="ignore")
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                token_uri,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        data = resp.json().copy() if resp.content else {}
+    except Exception as e:
+        raise HTTPException(502, f"Search Console API トークン取得に失敗しました: {e!r}")
+
+    if resp.status_code >= 400:
+        detail = data.get("error_description") or data.get("error") or str(data) or resp.text[:300]
+        raise HTTPException(502, f"Search Console API トークン取得エラー: {detail}")
+
+    access_token = str(data.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(502, "Search Console API トークン取得に失敗しました。")
+    return access_token
+
+
+def _inspect_google_indexed_status(
+    url: str,
+    access_token: str,
+    site_url: str,
+) -> tuple[bool | None, str | None, str | None]:
+    endpoint = "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
+    payload = {
+        "inspectionUrl": url,
+        "siteUrl": site_url,
+        "languageCode": "ja-JP",
+    }
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        data = resp.json() if resp.content else {}
+    except Exception as e:
+        return None, None, f"request failed: {e!r}"
+
+    if resp.status_code >= 400:
+        err = data.get("error") if isinstance(data, dict) else None
+        message = ""
+        if isinstance(err, dict):
+            message = str(err.get("message") or "").strip()
+            details = err.get("details")
+            if details:
+                message = f"{message} {details}".strip()
+        if not message:
+            message = str(data)[:400] if data else (resp.text or "")[:400]
+        return None, None, message
+
+    result = data.get("inspectionResult") if isinstance(data, dict) else {}
+    index_status = result.get("indexStatusResult") if isinstance(result, dict) else {}
+    verdict = str(index_status.get("verdict") or "").strip() or None
+    coverage = str(index_status.get("coverageState") or "").strip().lower()
+    indexing_state = str(index_status.get("indexingState") or "").strip().lower()
+
+    if verdict == "PASS":
+        return True, verdict, None
+    if verdict == "FAIL":
+        return False, verdict, None
+    if "not indexed" in coverage:
+        return False, verdict, None
+    if "submitted and indexed" in coverage:
+        return True, verdict, None
+    if "indexed" in coverage:
+        return True, verdict, None
+    if "blocked" in indexing_state:
+        return False, verdict, None
+    return None, verdict, None
+
+
+def _publish_google_indexing_url(url: str, access_token: str) -> tuple[bool, int | None, str | None]:
+    endpoint = "https://indexing.googleapis.com/v3/urlNotifications:publish"
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "url": url,
+                    "type": "URL_UPDATED",
+                },
+            )
+        payload = resp.json() if resp.content else {}
+    except Exception as e:
+        return False, None, f"request failed: {e!r}"
+
+    if resp.status_code >= 400:
+        err = payload.get("error") if isinstance(payload, dict) else None
+        message = ""
+        if isinstance(err, dict):
+            message = str(err.get("message") or "").strip()
+            details = err.get("details")
+            if details:
+                message = f"{message} {details}".strip()
+        if not message:
+            message = str(payload)[:400] if payload else (resp.text or "")[:400]
+        return False, resp.status_code, message
+    return True, resp.status_code, None
+
+
+@app.get("/api/admin/indexing/urls", response_model=AdminIndexingUrlsOut)
+def admin_indexing_urls(
+    request: Request,
+    limit: int = Query(1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    all_urls = [url for url, _ in build_public_page_urls(db)]
+    urls = all_urls[:limit]
+    items = [AdminIndexingUrlItem(url=url) for url in urls]
+    inspection_error: str | None = None
+    indexed_count = 0
+    unindexed_count = 0
+    unknown_count = len(items)
+
+    if urls:
+        try:
+            access_token = _build_google_search_console_access_token()
+            site_url = GOOGLE_SEARCH_CONSOLE_SITE_URL.strip() or FRONTEND_ORIGIN.rstrip("/")
+            checked_items: list[AdminIndexingUrlItem] = []
+            indexed_count = 0
+            unindexed_count = 0
+            unknown_count = 0
+            for url in urls:
+                indexed, verdict, item_error = _inspect_google_indexed_status(url, access_token, site_url)
+                if indexed is True:
+                    indexed_count += 1
+                elif indexed is False:
+                    unindexed_count += 1
+                else:
+                    unknown_count += 1
+                checked_items.append(
+                    AdminIndexingUrlItem(
+                        url=url,
+                        indexed=indexed,
+                        inspection_verdict=verdict,
+                        inspection_error=item_error,
+                    )
+                )
+            items = checked_items
+        except HTTPException as e:
+            inspection_error = str(e.detail)
+        except Exception as e:
+            inspection_error = f"インデックス状態の確認に失敗しました: {e!r}"
+
+    return AdminIndexingUrlsOut(
+        total=len(all_urls),
+        urls=urls,
+        indexed_count=indexed_count,
+        unindexed_count=unindexed_count,
+        unknown_count=unknown_count,
+        inspection_error=inspection_error,
+        items=items,
+    )
+
+
+@app.post("/api/admin/indexing/submit", response_model=AdminIndexingSubmitOut)
+def admin_indexing_submit(
+    payload: AdminIndexingSubmitRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    if payload.all_pages or not payload.urls:
+        target_urls = [url for url, _ in build_public_page_urls(db)]
+    else:
+        # 順序維持で重複除去
+        seen = set()
+        target_urls = []
+        for raw in payload.urls:
+            cleaned = (raw or "").strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            target_urls.append(cleaned)
+
+    invalid_urls = [url for url in target_urls if not _is_frontend_origin_url(url)]
+    if invalid_urls:
+        raise HTTPException(
+            400,
+            f"FRONTEND_ORIGIN 配下ではないURLは送信できません。例: {invalid_urls[0]}",
+        )
+
+    if not target_urls:
+        return AdminIndexingSubmitOut(submitted=0, success=0, failed=0, items=[])
+
+    access_token = _build_google_indexing_access_token()
+    items: list[AdminIndexingSubmitItem] = []
+    success = 0
+    failed = 0
+    for url in target_urls:
+        ok, status_code, error = _publish_google_indexing_url(url, access_token)
+        if ok:
+            success += 1
+        else:
+            failed += 1
+        items.append(
+            AdminIndexingSubmitItem(
+                url=url,
+                ok=ok,
+                status_code=status_code,
+                error=error,
+            )
+        )
+
+    return AdminIndexingSubmitOut(
+        submitted=len(target_urls),
+        success=success,
+        failed=failed,
+        items=items,
+    )
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml(db: Session = Depends(get_db)):
+    urls = build_public_page_urls(db)
 
     items = []
     for loc, lastmod in urls:
