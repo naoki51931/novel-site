@@ -624,6 +624,48 @@ class AINovelDraft(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
 
 
+class AIChatCharacter(Base):
+    __tablename__ = "ai_chat_characters"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_ai_chat_characters_user_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    personality = Column(Text, nullable=True)
+    is_public = Column(Boolean, nullable=False, server_default="0", index=True)
+    published_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
+
+    user = relationship("User")
+    messages = relationship(
+        "AIChatMessage",
+        back_populates="character",
+        cascade="all, delete-orphan",
+    )
+
+
+class AIChatMessage(Base):
+    __tablename__ = "ai_chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    character_id = Column(Integer, ForeignKey("ai_chat_characters.id"), nullable=False, index=True)
+    role = Column(String(16), nullable=False)  # user / assistant
+    mode = Column(String(16), nullable=False, server_default="say")  # say / do
+    is_auto_dialogue = Column(Boolean, nullable=False, server_default="0", index=True)
+    character_name_snapshot = Column(String(80), nullable=True)
+    personality_snapshot = Column(Text, nullable=True)
+    language_style_snapshot = Column(String(24), nullable=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    user = relationship("User")
+    character = relationship("AIChatCharacter", back_populates="messages")
+
+
 # =========================
 # Direct Messages
 # =========================

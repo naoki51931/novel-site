@@ -14,7 +14,7 @@ import html
 import io
 from datetime import date, datetime, timedelta
 from functools import lru_cache
-from typing import Optional, List, Callable, Awaitable
+from typing import Optional, List, Callable, Awaitable, Literal
 
 import jwt
 import stripe
@@ -36,7 +36,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -356,6 +356,59 @@ def ensure_ai_novel_jobs_table_columns():
 
 
 ensure_ai_novel_jobs_table_columns()
+
+
+def ensure_ai_chat_tables():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'ai_chat_characters'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "is_public" not in existing:
+                alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 0")
+            if "published_at" not in existing:
+                alters.append("ADD COLUMN published_at DATETIME NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE ai_chat_characters {clause}"))
+
+            msg_rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'ai_chat_messages'
+                    """
+                )
+            ).fetchall()
+            msg_existing = {r[0] for r in msg_rows}
+            msg_alters: list[str] = []
+            if "is_auto_dialogue" not in msg_existing:
+                msg_alters.append("ADD COLUMN is_auto_dialogue TINYINT(1) NOT NULL DEFAULT 0")
+            if "character_name_snapshot" not in msg_existing:
+                msg_alters.append("ADD COLUMN character_name_snapshot VARCHAR(80) NULL")
+            if "personality_snapshot" not in msg_existing:
+                msg_alters.append("ADD COLUMN personality_snapshot TEXT NULL")
+            if "language_style_snapshot" not in msg_existing:
+                msg_alters.append("ADD COLUMN language_style_snapshot VARCHAR(24) NULL")
+            for clause in msg_alters:
+                conn.execute(text(f"ALTER TABLE ai_chat_messages {clause}"))
+    except Exception as e:
+        print("[db] ensure_ai_chat_tables failed:", repr(e))
+
+
+ensure_ai_chat_tables()
 
 def ensure_tag_indexes():
     try:
@@ -4180,6 +4233,175 @@ class AIJobKillSelectedRequest(BaseModel):
     job_ids: list[int]
 
 
+class AIChatHistoryItem(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    mode: Literal["say", "do"] | None = None
+
+
+class AIChatRequest(BaseModel):
+    message: str
+    mode: Literal["say", "do"] = "say"
+    character_id: int | None = None
+    character_name: str | None = None
+    personality: str | None = None
+    long_reply: bool = False
+    short_reply: bool = False
+    model: str | None = None
+    provider: str | None = None
+    language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
+    auto_dialogue: bool = False
+    history: list[AIChatHistoryItem] = Field(default_factory=list)
+
+
+class AIChatAutoContinueRequest(BaseModel):
+    character_id: int | None = None
+    character_name: str | None = None
+    personality: str | None = None
+    long_reply: bool = False
+    short_reply: bool = False
+    model: str | None = None
+    provider: str | None = None
+    language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
+    history: list[AIChatHistoryItem] = Field(default_factory=list)
+
+
+class AIChatNextLineSuggestRequest(BaseModel):
+    character_id: int | None = None
+    character_name: str | None = None
+    personality: str | None = None
+    history: list[AIChatHistoryItem] = Field(default_factory=list)
+    input_hint: str | None = None
+    suggestions_count: int = 3
+    model: str | None = None
+    provider: str | None = None
+    language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
+
+
+class AIChatNextLineSuggestResponse(BaseModel):
+    character_name: str | None = None
+    suggestions: list[str] = Field(default_factory=list)
+    used_tokens: int | None = None
+    model: str | None = None
+
+
+class AIChatCharacterAugmentRequest(BaseModel):
+    character_name: str
+    personality: str | None = None
+    anime_title: str | None = None
+    model: str | None = None
+    provider: str | None = None
+
+
+class AIChatCharacterAugmentSource(BaseModel):
+    title: str
+    link: str | None = None
+    snippet: str | None = None
+
+
+class AIChatCharacterAugmentResponse(BaseModel):
+    character_name: str
+    anime_title: str | None = None
+    anime_like_name: bool = False
+    used_search: bool = False
+    base_personality: str | None = None
+    enriched_personality: str
+    notes: str | None = None
+    sources: list[AIChatCharacterAugmentSource] = Field(default_factory=list)
+
+
+class AIChatAnimeTitleCandidatesRequest(BaseModel):
+    character_name: str
+    model: str | None = None
+    provider: str | None = None
+    limit: int = 8
+
+
+class AIChatAnimeTitleCandidatesResponse(BaseModel):
+    character_name: str
+    candidates: list[str] = Field(default_factory=list)
+    used_search: bool = False
+    notes: str | None = None
+    sources: list[AIChatCharacterAugmentSource] = Field(default_factory=list)
+
+
+class AIChatResponse(BaseModel):
+    reply: str
+    mode: Literal["say", "do"]
+    say: str | None = None
+    do: str | None = None
+    extra_messages: list[AIChatHistoryItem] = Field(default_factory=list)
+    used_tokens: int | None = None
+    model: str | None = None
+
+
+class AIChatCharacterCreateRequest(BaseModel):
+    name: str
+    personality: str | None = None
+
+
+class AIChatCharacterUpdateRequest(BaseModel):
+    name: str | None = None
+    personality: str | None = None
+
+
+class AIChatCharacterResponse(BaseModel):
+    id: int
+    name: str
+    personality: str | None = None
+    is_public: bool = False
+    published_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class AIChatMessageResponse(BaseModel):
+    id: int
+    role: Literal["user", "assistant"]
+    mode: Literal["say", "do"]
+    is_auto_dialogue: bool = False
+    content: str
+    created_at: str | None = None
+
+
+class AIChatMessageDeleteResponse(BaseModel):
+    ok: bool = True
+    deleted: int = 0
+
+
+class AIChatPromptPreviewResponse(BaseModel):
+    source_message_id: int
+    mode: Literal["say", "do"]
+    message: str
+    history: list[AIChatHistoryItem]
+    prompt: str
+    system_instructions: str
+    character_name: str
+    personality: str
+    language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
+
+
+class AIChatPublishRequest(BaseModel):
+    is_public: bool
+
+
+class AIChatPublicCharacterListItem(BaseModel):
+    id: int
+    name: str
+    personality: str | None = None
+    author_username: str | None = None
+    published_at: str | None = None
+
+
+class AIChatPublicCharacterDetailResponse(BaseModel):
+    id: int
+    name: str
+    personality: str | None = None
+    author_username: str | None = None
+    published_at: str | None = None
+    messages: list[AIChatMessageResponse]
+
+
 def _serialize_ai_response(resp: AINovelResponse) -> dict:
     return resp.dict()
 
@@ -4792,6 +5014,1677 @@ async def create_ai_episode_continue_job(
     db.refresh(job)
     asyncio.create_task(_run_ai_job(job.id))
     return AINovelJobCreateResponse(job_id=job.id, status=job.status)
+
+
+def _build_ai_chat_style_guide(long_reply: bool = False, short_reply: bool = False) -> str:
+    if short_reply:
+        say_length = "1文・25〜80文字程度（1行）"
+        do_length = "1文・30〜90文字程度（1行）"
+    else:
+        say_length = "4〜8文・160〜400文字程度" if long_reply else "2〜4文・80〜200文字程度"
+        do_length = "4〜8文・200〜440文字程度" if long_reply else "2〜4文・100〜220文字程度"
+    line_rule = "- short_reply 有効時は say/do とも必ず1行で返す。" if short_reply else ""
+    return (
+        f"- say はキャラクターの口調を守り、{say_length}で返答する。\n"
+        "- 複数人数のやり取りを描く場合、say は「」を複数使って会話の往復を明確に示す。\n"
+        f"- do は地の文として{do_length}を目安に書く。\n"
+        "- do モードでは do の直後に、do の内容と整合した say を必ず続ける。\n"
+        "- 複数人が絡む指示がある場合、do でも複数人の動き・反応・視線の交差を入れて描写する。\n"
+        "- do には行動だけでなく、情景・間・感情のいずれかを必ず含める。\n"
+        "- 短すぎる一文だけで終わらせない。\n"
+        f"{line_rule}"
+    )
+
+
+def _build_ai_chat_system_instructions(long_reply: bool = False, short_reply: bool = False) -> str:
+    if short_reply:
+        length_instruction = "short_reply が有効な場合、say/do とも必ず1行で簡潔に返してください。"
+    else:
+        length_instruction = (
+            "long_reply が有効な場合、通常の約2倍の分量で返してください。"
+            if long_reply
+            else "冗長すぎない分量で返してください。"
+        )
+    return (
+        "あなたはキャラクターロールプレイAIです。"
+        "必ずJSON 1個のみを返してください。"
+        "JSONキーは say と do のみを使ってください。"
+        "ユーザーの同一入力が過去履歴にある場合でも、前回返答の焼き直しを避けて別分岐で続けてください。"
+        "入力された性格設定は最優先で厳守し、勝手に改変・薄化・上書きしないでください。"
+        "関係性メモに恋人・夫婦・相思相愛などの親密関係がある場合、"
+        "会話の温度感は高く、甘さ・近さ・相互好意が伝わる表現を優先してください。"
+        "親密関係なのに一方的に冷淡・突き放しになる返答は避けてください。"
+        "say は短文で終わらせず、やや長めに返してください。"
+        "複数人数の会話を描く場合は「」を複数使って表現してください。"
+        "do モード時は do のあとに、do の内容に関連した say を必ず返してください。"
+        "複数人が絡む指示がある場合、do でも複数人の相互作用を明確に描写してください。"
+        "do は地の文として十分な長さで、2〜4文・100文字以上を目安にしてください。"
+        f"{length_instruction}"
+    )
+
+
+def _normalize_chat_text_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip()).lower()
+
+
+def _build_ai_chat_branching_instruction(
+    history: list[AIChatHistoryItem],
+    message: str,
+) -> str:
+    normalized_message = _normalize_chat_text_for_match(message)
+    if not normalized_message:
+        return ""
+
+    latest_prior_reply = ""
+    items = history or []
+    for idx, item in enumerate(items):
+        if getattr(item, "role", None) != "user":
+            continue
+        if _normalize_chat_text_for_match(getattr(item, "content", "")) != normalized_message:
+            continue
+        for nxt in items[idx + 1 :]:
+            if getattr(nxt, "role", None) == "assistant":
+                latest_prior_reply = str(getattr(nxt, "content", "") or "").strip()
+                break
+
+    if not latest_prior_reply:
+        return ""
+
+    excerpt = latest_prior_reply[:260]
+    return (
+        "【会話分岐ルール】\n"
+        "- 今回のユーザー入力は過去にも登場しています。前回と同じ返答構成・言い回しを使わないこと。\n"
+        "- 前回返答を繰り返さず、異なる観点・展開・提案・問いかけのいずれかを必ず加えて続けること。\n"
+        f"- 直近の同入力への返答（要約参照）: {excerpt}\n"
+    )
+
+
+def _build_relationship_tone_rules(personality: str) -> str:
+    text = (personality or "").lower()
+    romantic_keywords = [
+        "恋人", "彼氏", "彼女", "夫婦", "婚約", "相思相愛", "両想い",
+        "カップル", "いちゃ", "ラブラブ",
+        "lover", "lovers", "boyfriend", "girlfriend", "couple", "romantic",
+    ]
+    if any(k in text for k in romantic_keywords):
+        return (
+            "【関係性トーン補正】\n"
+            "- 恋人/親密関係のため、返答は甘く近い距離感を保つ。\n"
+            "- 呼び方・愛情表現・相手への気遣いを会話内に明示する。\n"
+            "- 少なくとも一方のAIキャラは能動的に甘えて、ドキドキ感が高まる展開を作る。\n"
+            "- そっけない返答を避け、照れ・嫉妬・独占欲・安心させる言葉を自然に混ぜる。\n"
+            "- 不自然に冷淡・拒絶的な態度は避け、親密さを崩さない。"
+        )
+    return ""
+
+
+def _build_multi_character_relationship_rules(personality: str) -> str:
+    p = (personality or "").strip()
+    if not p:
+        return ""
+    text = p.lower()
+    has_relationship_hint = ("関係性" in p) or ("relationship" in p.lower())
+    has_participants_hint = ("会話に登場する他キャラクター" in p) or ("他キャラクター" in p)
+    if not has_relationship_hint and not has_participants_hint:
+        return ""
+    romantic_keywords = [
+        "恋人", "彼氏", "彼女", "夫婦", "婚約", "相思相愛", "両想い",
+        "カップル", "いちゃ", "ラブラブ",
+        "lover", "lovers", "boyfriend", "girlfriend", "couple", "romantic",
+    ]
+    has_romantic_hint = any(k in text for k in romantic_keywords)
+    romantic_emphasis = (
+        "- 恋人関係が含まれる場合、少なくとも一方のAIキャラを主導役にして積極的な甘さを出す。\n"
+        "- 心拍が上がるような密着感・視線・間・触れ方の描写を入れ、ベタベタした親密さを避けない。\n"
+        if has_romantic_hint
+        else ""
+    )
+    return (
+        "【関係性優先ルール】\n"
+        "- サブキャラごとの関係性メモを優先し、距離感・呼び方・態度を一貫させる。\n"
+        "- 親密関係が明記されている相手には、会話内で好意・配慮・近さを具体的に示す。\n"
+        f"{romantic_emphasis}"
+        "- 指示がない限り、既存の関係性をリセットしない。"
+    )
+
+
+def _normalize_language_style(style: str | None) -> Literal["normal", "daily", "iq80_crude"]:
+    s = str(style or "normal").strip().lower()
+    if s in {"daily", "iq80_crude"}:
+        return s  # type: ignore[return-value]
+    return "normal"
+
+
+def _build_language_style_rules(style: str | None) -> str:
+    normalized = _normalize_language_style(style)
+    if normalized == "daily":
+        return (
+            "【言語レベル指定】\n"
+            "- 日常会話に近い語彙・短文中心で、難しい言い回しを避ける。\n"
+            "- 友達と話すような自然なテンポにする。\n"
+            "- say だけでなく do（地の文）も平易な語彙で、状況がすぐ伝わる言い回しにする。\n"
+            "- do は説明を詰め込みすぎず、日常の口語に近い短い文でつなぐ。\n"
+        )
+    if normalized == "iq80_crude":
+        return (
+            "【言語レベル指定】\n"
+            "- IQ80程度を想定した、単純で砕けた語彙のみを使う。\n"
+            "- say と do の両方で難しい言葉・抽象語・専門語を使わない。\n"
+            "- 一文を短くし、同じ簡単な語（例: すごい/やばい/まじ/いい）を過度に繰り返してよい。\n"
+            "- 語尾は幼く雑にしてよい（例: 〜じゃん、〜だし、〜なの？）。\n"
+            "- 「あれ？」「おかしいな？」「なんで？」「は？」のような疑問系を多めに使う。\n"
+            "- 疑問符は多めに使ってよい（例: ?、??、???）。\n"
+            "- 下品語を強めに使ってよい（例: クソ、バカ、だる、うざ、キモ、しょーもな）。\n"
+            "- 雑なツッコミ・軽い煽り・悪態を混ぜ、行儀の悪いノリを優先する。\n"
+            "- ただし人格全否定や執拗ないじめ口調にはしない。\n"
+            "- 地の文 do でも、複雑な比喩や長い説明を避け、目の前の行動をバカっぽくあっけらかんと書く。\n"
+            "- 露骨な性的描写・差別・脅迫・違法扇動は行わない。\n"
+        )
+    return ""
+
+
+def _looks_like_fictional_character_name(name: str) -> bool:
+    n = (name or "").strip()
+    if len(n) < 2:
+        return False
+    if re.search(r"[ぁ-んァ-ヴー一-龥々〆ヵヶ]", n):
+        return True
+    if "・" in n or "_" in n:
+        return True
+    if re.search(r"[A-Za-z]", n) and len(n) <= 40:
+        return True
+    return False
+
+
+async def _search_character_reference_sources(
+    character_name: str,
+    *,
+    anime_title: str | None = None,
+) -> list[dict]:
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_CX:
+        return []
+    name = (character_name or "").strip()
+    if not name:
+        return []
+    title = (anime_title or "").strip()
+    if title:
+        queries = [
+            f"\"{title}\" \"{name}\" キャラクター",
+            f"\"{title}\" \"{name}\" 作品",
+        ]
+    else:
+        queries = [
+            f"\"{name}\" キャラクター 性格 アニメ",
+            f"\"{name}\" 作品 キャラ",
+        ]
+    aggregated_items: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for q in queries:
+                params = {
+                    "key": GOOGLE_CSE_API_KEY,
+                    "cx": GOOGLE_CSE_CX,
+                    "q": q,
+                    "num": 5,
+                    "gl": "jp",
+                    "hl": "ja",
+                    "lr": "lang_ja",
+                }
+                res = await client.get("https://www.googleapis.com/customsearch/v1", params=params)
+                if res.status_code != 200:
+                    continue
+                data = res.json() if res.content else {}
+                items = data.get("items") or []
+                if isinstance(items, list):
+                    aggregated_items.extend(items)
+    except Exception:
+        return []
+
+    dedup: list[dict] = []
+    seen: set[str] = set()
+    for item in aggregated_items:
+        link = str(item.get("link") or "").strip()
+        if not link or link in seen:
+            continue
+        seen.add(link)
+        dedup.append(item)
+
+    preferred = [i for i in dedup if _is_preferred_cse_host(i.get("link"))]
+    picked = preferred[:8] if preferred else dedup[:8]
+    return [
+        {
+            "title": (i.get("title") or "").strip(),
+            "link": i.get("link"),
+            "snippet": (i.get("snippet") or "").strip(),
+        }
+        for i in picked
+    ]
+
+
+async def _build_fanfic_personality_from_sources(
+    *,
+    character_name: str,
+    base_personality: str,
+    model: str | None,
+    provider: str | None,
+    sources: list[dict],
+) -> str:
+    snippets: list[str] = []
+    for s in sources[:8]:
+        title = str(s.get("title") or "").strip()
+        snippet = str(s.get("snippet") or "").strip()
+        if title and snippet:
+            snippets.append(f"- {title}: {snippet}")
+        elif title:
+            snippets.append(f"- {title}")
+        elif snippet:
+            snippets.append(f"- {snippet}")
+    sources_text = "\n".join(snippets)[:2200]
+    prompt = (
+        "あなたはロールプレイ設定を作る編集者です。\n"
+        "次の同名キャラ候補の検索要約を参考に、二次創作チャット用の性格設定を作ってください。\n"
+        "不確かな情報は断定しないでください。\n"
+        "元の性格設定があれば必ず統合してください。\n\n"
+        f"キャラクター名: {character_name}\n"
+        f"ユーザー指定の追加性格設定: {(base_personality or 'なし')[:1200]}\n\n"
+        f"検索要約:\n{sources_text or '(なし)'}\n\n"
+        "出力は必ずJSON 1個のみ。キーは personality のみ。\n"
+        "personality は箇条書きで6〜10行、口調・行動方針・NG表現・関係性の扱いを含めること。\n"
+        '例: {"personality":"- ..."}'
+    )
+    data, _, _ = await call_ai_json(
+        prompt,
+        model=model,
+        provider=provider,
+        system_instructions=(
+            "あなたはキャラクター設定編集AIです。"
+            "必ずJSON 1個のみを返してください。"
+            "キーは personality のみ。"
+            "曖昧な情報は断定せず、推測表現を使ってください。"
+        ),
+    )
+    personality = str(data.get("personality") or "").strip()
+    if personality:
+        return personality[:1800]
+
+    if base_personality:
+        return base_personality[:1800]
+    return (
+        f"- {character_name}らしい口調を維持する。\n"
+        "- 感情の起伏を一貫させる。\n"
+        "- 相手への反応は丁寧に段階を踏む。\n"
+        "- 不明な原作情報は断定しない。"
+    )
+
+
+def _merge_fanfic_with_base_personality(
+    *,
+    fanfic_personality: str,
+    base_personality: str,
+) -> str:
+    marker = "【二次創作モード補完】"
+    base_marker = "【元の性格設定】"
+    base = (base_personality or "").strip()
+    fanfic = (fanfic_personality or "").strip()
+
+    # 既に補完済みテキストだった場合は、元の性格設定セクションを取り出して再構成する
+    raw_base = base
+    if marker in base and base_marker in base:
+        try:
+            raw_base = base.split(base_marker, 1)[1].strip()
+        except Exception:
+            raw_base = base
+
+    if not raw_base:
+        return fanfic
+    if not fanfic:
+        return raw_base
+    if fanfic in raw_base:
+        return raw_base
+    return f"{marker}\n{fanfic}\n\n{base_marker}\n{raw_base}"
+
+
+def _extract_title_candidates_from_source_titles(
+    *,
+    character_name: str,
+    sources: list[dict],
+    limit: int,
+) -> list[str]:
+    name = (character_name or "").strip()
+    candidates: list[str] = []
+    for s in sources[:12]:
+        raw_title = str(s.get("title") or "").strip()
+        if not raw_title:
+            continue
+        parts = re.split(r"[|\-｜:：]", raw_title)
+        for part in parts:
+            text = re.sub(r"\s+", " ", part).strip()
+            if len(text) < 2:
+                continue
+            if name and text == name:
+                continue
+            if name and name in text and len(text) <= len(name) + 2:
+                continue
+            if text in candidates:
+                continue
+            candidates.append(text[:80])
+            if len(candidates) >= limit:
+                return candidates
+    return candidates
+
+
+async def _build_anime_title_candidates_from_sources(
+    *,
+    character_name: str,
+    sources: list[dict],
+    model: str | None,
+    provider: str | None,
+    limit: int,
+) -> list[str]:
+    snippets: list[str] = []
+    for s in sources[:10]:
+        title = str(s.get("title") or "").strip()
+        snippet = str(s.get("snippet") or "").strip()
+        if title and snippet:
+            snippets.append(f"- {title}: {snippet}")
+        elif title:
+            snippets.append(f"- {title}")
+        elif snippet:
+            snippets.append(f"- {snippet}")
+    sources_text = "\n".join(snippets)[:2600]
+    prompt = (
+        "あなたはアニメ作品名の候補抽出AIです。\n"
+        "検索要約から、指定キャラクターが登場する可能性が高い作品名候補を抽出してください。\n"
+        "不確かな場合は推測候補として扱ってください。\n\n"
+        f"キャラクター名: {character_name}\n"
+        f"検索要約:\n{sources_text or '(なし)'}\n\n"
+        f"出力は必ずJSON 1個のみ。キーは candidates のみ。件数は最大 {limit} 件。\n"
+        "作品名だけを短く返し、説明文は含めないこと。"
+    )
+    data, _, _ = await call_ai_json(
+        prompt,
+        model=model,
+        provider=provider,
+        system_instructions=(
+            "あなたは作品名抽出AIです。"
+            "必ずJSON 1個のみを返してください。"
+            "キーは candidates のみ。"
+        ),
+    )
+    out: list[str] = []
+    raw = data.get("candidates")
+    if isinstance(raw, list):
+        for item in raw:
+            text = re.sub(r"\s+", " ", str(item or "").strip())
+            if not text:
+                continue
+            if text in out:
+                continue
+            out.append(text[:80])
+            if len(out) >= limit:
+                break
+    elif isinstance(raw, str):
+        for item in re.split(r"[\r\n,、]+", raw):
+            text = re.sub(r"\s+", " ", str(item or "").strip())
+            if not text:
+                continue
+            if text in out:
+                continue
+            out.append(text[:80])
+            if len(out) >= limit:
+                break
+    return out[:limit]
+
+
+def _long_reply_min_chars(mode: Literal["say", "do"], *, auto_dialogue: bool = False) -> int:
+    if auto_dialogue:
+        return 280
+    return 220 if mode == "say" else 280
+
+
+async def _regenerate_long_reply_if_needed(
+    *,
+    reply_mode: Literal["say", "do"],
+    say_text: str,
+    do_text: str,
+    character_name: str,
+    personality: str,
+    history_text: str,
+    message: str,
+    short_reply: bool = False,
+    branching_instruction: str = "",
+    language_style_rules: str = "",
+    model: str | None,
+    provider: str | None,
+) -> tuple[str, str]:
+    target_text = say_text if reply_mode == "say" else do_text
+    min_chars = _long_reply_min_chars(reply_mode, auto_dialogue=False)
+    if len((target_text or "").strip()) >= min_chars:
+        return say_text, do_text
+
+    strict_prompt = (
+        _build_ai_chat_prompt(
+            character_name=character_name,
+            personality=personality,
+            mode=reply_mode,
+            long_reply=True,
+            short_reply=short_reply,
+            history_text=history_text,
+            message=message,
+            branching_instruction=branching_instruction,
+            language_style_rules=language_style_rules,
+        )
+        + "\n\n"
+        + (
+            f"重要: long_reply が有効です。say は最低 {_long_reply_min_chars('say')} 文字、"
+            f"do は最低 {_long_reply_min_chars('do')} 文字で返してください。"
+            "短すぎる場合は必ず内容を具体化して増やしてください。"
+        )
+    )
+    data2, _, _ = await call_ai_json(
+        strict_prompt,
+        model=model,
+        provider=provider,
+        system_instructions=(
+            _build_ai_chat_system_instructions(long_reply=True, short_reply=short_reply)
+            + " long_reply有効時は、必ず規定文字数を満たしてください。"
+        ),
+    )
+    next_say = str(data2.get("say") or "").strip() or say_text
+    next_do = str(data2.get("do") or "").strip() or do_text
+    return next_say, next_do
+
+
+async def _regenerate_auto_dialogue_if_needed(
+    *,
+    reply_text: str,
+    character_name: str,
+    personality: str,
+    history_text: str,
+    latest_reply: str,
+    latest_user_instruction: str,
+    model: str | None,
+    provider: str | None,
+) -> str:
+    min_chars = _long_reply_min_chars("say", auto_dialogue=True)
+    if len((reply_text or "").strip()) >= min_chars:
+        return reply_text
+
+    auto_prompt = (
+        _build_auto_dialogue_prompt(
+            character_name=character_name,
+            personality=personality,
+            history_text=history_text,
+            latest_reply=latest_reply,
+            latest_user_instruction=latest_user_instruction,
+            long_reply=True,
+        )
+        + "\n\n"
+        + f"重要: say は最低 {min_chars} 文字で返し、キャラクター同士の会話を十分に展開してください。"
+        + " 少なくとも10ターンは同じ主題を維持してください。"
+    )
+    data2, _, _ = await call_ai_json(
+        auto_prompt,
+        model=model,
+        provider=provider,
+        system_instructions=(
+            "あなたはキャラクターロールプレイAIです。"
+            "必ずJSON 1個のみを返してください。"
+            "JSONキーは say と do のみを使ってください。"
+            "say は最低文字数を必ず満たしてください。"
+        ),
+    )
+    retry_say = str(data2.get("say") or data2.get("do") or "").strip()
+    return retry_say or reply_text
+
+
+def _build_ai_chat_history_text(
+    history: list[AIChatHistoryItem],
+    character_name: str,
+) -> str:
+    history_lines: list[str] = []
+    for item in (history or [])[-20:]:
+        role = item.role if item.role in {"user", "assistant"} else "user"
+        role_label = "ユーザー" if role == "user" else (character_name or "キャラクター")
+        item_mode = item.mode if item.mode in {"say", "do"} else "say"
+        content = (item.content or "").strip()
+        if not content:
+            continue
+        history_lines.append(f"{role_label} [{item_mode}]: {content[:1200]}")
+    return "\n".join(history_lines) if history_lines else "(履歴なし)"
+
+
+def _build_ai_chat_prompt(
+    *,
+    character_name: str,
+    personality: str,
+    mode: Literal["say", "do"],
+    long_reply: bool,
+    short_reply: bool,
+    history_text: str,
+    message: str,
+    branching_instruction: str = "",
+    language_style_rules: str = "",
+) -> str:
+    style_guide = _build_ai_chat_style_guide(long_reply=long_reply, short_reply=short_reply)
+    relationship_tone_rules = _build_relationship_tone_rules(personality)
+    multi_character_rules = _build_multi_character_relationship_rules(personality)
+    char_label = character_name or "無名のキャラクター"
+    personality_text = personality or "未設定"
+    return (
+        "あなたはロールプレイ用の会話AIです。\n"
+        "必ずキャラクター設定を守り、会話を自然につなげてください。\n\n"
+        f"キャラクター名: {char_label}\n"
+        f"性格設定: {personality_text}\n"
+        "※性格設定は絶対条件です。矛盾する言動をしないこと。\n"
+        f"ユーザーが求める出力モード: {mode}\n"
+        f"短め返信: {'有効' if short_reply else '無効'}\n\n"
+        "出力スタイル:\n"
+        f"{style_guide}\n\n"
+        f"{relationship_tone_rules}\n\n"
+        f"{multi_character_rules}\n\n"
+        f"{language_style_rules}\n"
+        "会話履歴:\n"
+        f"{history_text}\n\n"
+        f"{branching_instruction}\n"
+        f"ユーザー最新入力: {message[:1200]}\n\n"
+        "出力は必ずJSON 1個のみ。キーは say と do。\n"
+        '例: {"say":"セリフ","do":"行動描写"}\n'
+        "say は発言文、do は行動描写として生成すること。"
+    )
+
+
+def _build_auto_dialogue_prompt(
+    *,
+    character_name: str,
+    personality: str,
+    history_text: str,
+    latest_reply: str,
+    latest_user_instruction: str,
+    long_reply: bool,
+    short_reply: bool = False,
+    language_style_rules: str = "",
+) -> str:
+    char_label = character_name or "無名のキャラクター"
+    personality_text = personality or "未設定"
+    topic_anchor = (latest_user_instruction or "").strip()[:180] or "直前の会話テーマ"
+    turns_instruction = (
+        "1往復で会話してください。"
+        if short_reply
+        else ("10〜14往復で会話してください。" if long_reply else "8〜12往復で会話してください。")
+    )
+    return (
+        "あなたはロールプレイ用の会話AIです。\n"
+        "登場キャラクター同士が会話を続けます。\n\n"
+        f"キャラクター名: {char_label}\n"
+        f"性格設定: {personality_text}\n\n"
+        f"主題アンカー: {topic_anchor}\n"
+        "話題固定ルール:\n"
+        "- 主題アンカーを会話の中心に据え、少なくとも10ターンは話題転換しないこと。\n"
+        "- 連想で別テーマへ飛ばず、同じ題材を深掘りして会話を続けること。\n"
+        "- 各ターンで直前発話に応答し、つながりの弱い独立発言を避けること。\n\n"
+        f"{language_style_rules}\n"
+        "会話履歴:\n"
+        f"{history_text}\n\n"
+        "最新のユーザー指示:\n"
+        f"{(latest_user_instruction or '特になし')[:1200]}\n\n"
+        "直前の返答:\n"
+        f"{latest_reply[:1200]}\n\n"
+        f"この続きとして、キャラクター同士が{turns_instruction}\n"
+        "会話は必ず、直前の会話内容と最新のユーザー指示に従って進めること。\n"
+        "会話は内容的につながっていること。\n"
+        "出力は必ずJSON 1個のみ。キーは say と do。\n"
+        "say に会話本文を書くこと（キャラ名を明示した台詞を含める）。\n"
+        '例: {"say":"アスナ「...」\\nキリト「...」","do":""}'
+    )
+
+
+def _build_ai_chat_next_line_suggest_prompt(
+    *,
+    character_name: str,
+    personality: str,
+    history_text: str,
+    input_hint: str,
+    suggestions_count: int,
+    language_style_rules: str = "",
+) -> str:
+    char_label = character_name or "無名のキャラクター"
+    personality_text = personality or "未設定"
+    return (
+        "あなたは会話台詞の提案AIです。\n"
+        "次に「ユーザー側のキャラクター」が言いそうなセリフ候補を作ってください。\n\n"
+        f"ユーザー側キャラクター名: {char_label}\n"
+        f"性格設定: {personality_text}\n\n"
+        f"{language_style_rules}\n"
+        "会話履歴:\n"
+        f"{history_text}\n\n"
+        f"ユーザーの現在入力中メモ: {(input_hint or 'なし')[:1200]}\n\n"
+        f"出力は必ずJSON 1個のみ。キーは suggestions のみ。要素数は必ず {suggestions_count} 件。\n"
+        "各候補は自然な日本語のセリフ1〜2文で、互いに言い回しを重複させないこと。\n"
+        "候補はユーザー側キャラの口調・関係性を守ること。"
+    )
+
+
+def _fallback_next_line_suggestions(
+    *,
+    input_hint: str,
+    suggestions_count: int,
+) -> list[str]:
+    hint = (input_hint or "").strip()
+    quoted = f"「{hint[:42]}」" if hint else "「うん」"
+    base = [
+        f"{quoted}って感じでいいかな？",
+        "それ、もう少し詳しく聞かせて。",
+        "じゃあ次は私から話してもいい？",
+        "今の流れ、すごく好き。",
+        "その続き、ちゃんと受け止めるね。",
+    ]
+    return base[: max(1, suggestions_count)]
+
+
+def _normalize_next_line_suggestion(text: str) -> str:
+    line = str(text or "").strip()
+    line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
+    return line[:220].strip()
+
+
+@app.post("/api/ai/chat/next_user_lines", response_model=AIChatNextLineSuggestResponse)
+async def ai_chat_next_user_lines(
+    req: AIChatNextLineSuggestRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user: models.User | None = None
+    character: models.AIChatCharacter | None = None
+    if req.character_id is not None:
+        user = require_current_user(request, db)
+        character = (
+            db.query(models.AIChatCharacter)
+            .filter(
+                models.AIChatCharacter.id == req.character_id,
+                models.AIChatCharacter.user_id == user.id,
+            )
+            .first()
+        )
+        if not character:
+            raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    count = max(1, min(5, int(getattr(req, "suggestions_count", 3) or 3)))
+    character_name = (req.character_name or "").strip()[:80]
+    personality = (req.personality or "").strip()[:4000]
+    if character is not None:
+        if not character_name:
+            character_name = str(character.name or "").strip()[:80]
+        if not personality:
+            personality = str(character.personality or "").strip()[:4000]
+    history_text = _build_ai_chat_history_text(req.history or [], character_name)
+    input_hint = (req.input_hint or "").strip()[:1200]
+    language_style_rules = _build_language_style_rules(getattr(req, "language_style", "normal"))
+
+    prompt = _build_ai_chat_next_line_suggest_prompt(
+        character_name=character_name,
+        personality=personality,
+        history_text=history_text,
+        input_hint=input_hint,
+        suggestions_count=count,
+        language_style_rules=language_style_rules,
+    )
+    data, tokens, model_used = await call_ai_json(
+        prompt,
+        model=req.model,
+        provider=req.provider,
+        system_instructions=(
+            "あなたは会話台詞の提案AIです。"
+            "必ずJSON 1個のみを返してください。"
+            "キーは suggestions のみ。"
+            "suggestions は文字列配列で、件数は必ず要求数に合わせてください。"
+            "冗長な前置きや解説は不要です。"
+        ),
+    )
+
+    suggestions: list[str] = []
+    raw = data.get("suggestions")
+    if isinstance(raw, list):
+        for item in raw:
+            line = _normalize_next_line_suggestion(str(item or ""))
+            if not line:
+                continue
+            if line in suggestions:
+                continue
+            suggestions.append(line)
+            if len(suggestions) >= count:
+                break
+    elif isinstance(raw, str):
+        for piece in re.split(r"[\r\n]+", raw):
+            line = _normalize_next_line_suggestion(piece)
+            if not line:
+                continue
+            if line in suggestions:
+                continue
+            suggestions.append(line)
+            if len(suggestions) >= count:
+                break
+
+    if len(suggestions) < count:
+        for line in _fallback_next_line_suggestions(input_hint=input_hint, suggestions_count=count):
+            n = _normalize_next_line_suggestion(line)
+            if not n or n in suggestions:
+                continue
+            suggestions.append(n)
+            if len(suggestions) >= count:
+                break
+
+    return AIChatNextLineSuggestResponse(
+        character_name=character_name or None,
+        suggestions=suggestions[:count],
+        used_tokens=tokens,
+        model=model_used,
+    )
+
+
+@app.post("/api/ai/chat", response_model=AIChatResponse)
+async def ai_chat(
+    req: AIChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="メッセージが空です。")
+
+    user: models.User | None = None
+    character: models.AIChatCharacter | None = None
+    if req.character_id is not None:
+        user = require_current_user(request, db)
+        character = (
+            db.query(models.AIChatCharacter)
+            .filter(
+                models.AIChatCharacter.id == req.character_id,
+                models.AIChatCharacter.user_id == user.id,
+            )
+            .first()
+        )
+        if not character:
+            raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    character_name = (req.character_name or "").strip()[:80]
+    personality = (req.personality or "").strip()[:4000]
+    if character is not None:
+        if not character_name:
+            character_name = str(character.name or "").strip()[:80]
+        if not personality:
+            personality = str(character.personality or "").strip()[:4000]
+    mode = req.mode if req.mode in {"say", "do"} else "say"
+    long_reply = bool(getattr(req, "long_reply", False))
+    short_reply = bool(getattr(req, "short_reply", False))
+    if short_reply:
+        long_reply = False
+    language_style = _normalize_language_style(getattr(req, "language_style", "normal"))
+    language_style_rules = _build_language_style_rules(language_style)
+
+    history_text = _build_ai_chat_history_text(req.history or [], character_name)
+    branching_instruction = _build_ai_chat_branching_instruction(req.history or [], message)
+    prompt = _build_ai_chat_prompt(
+        character_name=character_name,
+        personality=personality,
+        mode=mode,
+        long_reply=long_reply,
+        short_reply=short_reply,
+        history_text=history_text,
+        message=message,
+        branching_instruction=branching_instruction,
+        language_style_rules=language_style_rules,
+    )
+
+    data, tokens, model_used = await call_ai_json(
+        prompt,
+        model=req.model,
+        provider=req.provider,
+        system_instructions=_build_ai_chat_system_instructions(long_reply=long_reply, short_reply=short_reply),
+    )
+
+    say_text = str(data.get("say") or "").strip()
+    do_text = str(data.get("do") or "").strip()
+    if not say_text and isinstance(data.get("speech"), str):
+        say_text = str(data.get("speech") or "").strip()
+    if not do_text and isinstance(data.get("action"), str):
+        do_text = str(data.get("action") or "").strip()
+    if long_reply and not short_reply:
+        say_text, do_text = await _regenerate_long_reply_if_needed(
+            reply_mode=mode,
+            say_text=say_text,
+            do_text=do_text,
+            character_name=character_name,
+            personality=personality,
+            history_text=history_text,
+            message=message,
+            short_reply=short_reply,
+            branching_instruction=branching_instruction,
+            language_style_rules=language_style_rules,
+            model=req.model,
+            provider=req.provider,
+        )
+
+    reply = say_text if mode == "say" else do_text
+    if not reply:
+        reply = say_text or do_text or str(data.get("reply") or "").strip()
+    if not reply:
+        raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
+
+    extra_messages: list[AIChatHistoryItem] = []
+    if bool(getattr(req, "auto_dialogue", False)):
+        auto_prompt = _build_auto_dialogue_prompt(
+            character_name=character_name,
+            personality=personality,
+            history_text=history_text,
+            latest_reply=reply,
+            latest_user_instruction=message,
+            long_reply=long_reply,
+            short_reply=short_reply,
+            language_style_rules=language_style_rules,
+        )
+        auto_data, _, _ = await call_ai_json(
+            auto_prompt,
+            model=req.model,
+            provider=req.provider,
+            system_instructions=(
+                "あなたはキャラクターロールプレイAIです。"
+                "必ずJSON 1個のみを返してください。"
+                "JSONキーは say と do のみを使ってください。"
+                "say はキャラクター同士の会話を含むやや長めのテキストにしてください。"
+                "主題を維持し、少なくとも10ターンは同じ話題を継続してください。"
+                "long_reply が有効な場合は通常より約2倍の分量にしてください。"
+                "short_reply が有効な場合は1行で短く返してください。"
+            ),
+        )
+        auto_say = str(auto_data.get("say") or "").strip()
+        if long_reply and auto_say:
+            auto_say = await _regenerate_auto_dialogue_if_needed(
+                reply_text=auto_say,
+                character_name=character_name,
+                personality=personality,
+                history_text=history_text,
+                latest_reply=reply,
+                latest_user_instruction=message,
+                model=req.model,
+                provider=req.provider,
+            )
+        if auto_say:
+            extra_messages.append(
+                AIChatHistoryItem(
+                    role="assistant",
+                    mode="say",
+                    content=auto_say[:4000],
+                )
+            )
+
+    if character is not None and user is not None:
+        user_msg = models.AIChatMessage(
+            user_id=user.id,
+            character_id=character.id,
+            role="user",
+            mode=mode,
+            is_auto_dialogue=False,
+            character_name_snapshot=character_name or None,
+            personality_snapshot=personality or None,
+            language_style_snapshot=language_style,
+            content=message[:4000],
+        )
+        ai_do_msg = models.AIChatMessage(
+            user_id=user.id,
+            character_id=character.id,
+            role="assistant",
+            mode=mode,
+            is_auto_dialogue=False,
+            character_name_snapshot=character_name or None,
+            personality_snapshot=personality or None,
+            language_style_snapshot=language_style,
+            content=reply[:4000],
+        )
+        db.add(user_msg)
+        db.add(ai_do_msg)
+        if mode == "do" and say_text:
+            ai_say_msg = models.AIChatMessage(
+                user_id=user.id,
+                character_id=character.id,
+                role="assistant",
+                mode="say",
+                is_auto_dialogue=False,
+                character_name_snapshot=character_name or None,
+                personality_snapshot=personality or None,
+                language_style_snapshot=language_style,
+                content=say_text[:4000],
+            )
+            db.add(ai_say_msg)
+        for extra in extra_messages:
+            extra_msg = models.AIChatMessage(
+                user_id=user.id,
+                character_id=character.id,
+                role="assistant",
+                mode="say" if (extra.mode or "say") == "say" else "do",
+                is_auto_dialogue=True,
+                character_name_snapshot=character_name or None,
+                personality_snapshot=personality or None,
+                language_style_snapshot=language_style,
+                content=str(extra.content or "")[:4000],
+            )
+            db.add(extra_msg)
+        db.commit()
+
+    return AIChatResponse(
+        reply=reply,
+        mode=mode,
+        say=say_text or None,
+        do=do_text or None,
+        extra_messages=extra_messages,
+        used_tokens=tokens,
+        model=model_used,
+    )
+
+
+@app.post("/api/ai/chat/auto_continue", response_model=AIChatResponse)
+async def ai_chat_auto_continue(
+    req: AIChatAutoContinueRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user: models.User | None = None
+    character: models.AIChatCharacter | None = None
+    if req.character_id is not None:
+        user = require_current_user(request, db)
+        character = (
+            db.query(models.AIChatCharacter)
+            .filter(
+                models.AIChatCharacter.id == req.character_id,
+                models.AIChatCharacter.user_id == user.id,
+            )
+            .first()
+        )
+        if not character:
+            raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    character_name = (req.character_name or "").strip()[:80]
+    personality = (req.personality or "").strip()[:4000]
+    if character is not None:
+        if not character_name:
+            character_name = str(character.name or "").strip()[:80]
+        if not personality:
+            personality = str(character.personality or "").strip()[:4000]
+    long_reply = bool(getattr(req, "long_reply", False))
+    short_reply = bool(getattr(req, "short_reply", False))
+    if short_reply:
+        long_reply = False
+    language_style = _normalize_language_style(getattr(req, "language_style", "normal"))
+    language_style_rules = _build_language_style_rules(language_style)
+
+    history = req.history or []
+    history_text = _build_ai_chat_history_text(history, character_name)
+    latest_reply = ""
+    latest_user_instruction = ""
+    for item in reversed(history):
+        if not latest_user_instruction and item.role == "user" and (item.content or "").strip():
+            latest_user_instruction = (item.content or "").strip()
+        if item.role == "assistant" and (item.content or "").strip():
+            latest_reply = (item.content or "").strip()
+            break
+    if not latest_reply:
+        latest_reply = "前の流れを保って会話を続ける。"
+    if not latest_user_instruction:
+        latest_user_instruction = "特になし"
+
+    auto_prompt = _build_auto_dialogue_prompt(
+        character_name=character_name,
+        personality=personality,
+        history_text=history_text,
+        latest_reply=latest_reply,
+        latest_user_instruction=latest_user_instruction,
+        long_reply=long_reply,
+        short_reply=short_reply,
+        language_style_rules=language_style_rules,
+    )
+    data, tokens, model_used = await call_ai_json(
+        auto_prompt,
+        model=req.model,
+        provider=req.provider,
+        system_instructions=(
+            "あなたはキャラクターロールプレイAIです。"
+            "必ずJSON 1個のみを返してください。"
+            "JSONキーは say と do のみを使ってください。"
+            "say はキャラクター同士の会話を含むやや長めのテキストにしてください。"
+            "主題を維持し、少なくとも10ターンは同じ話題を継続してください。"
+            "long_reply が有効な場合は通常より約2倍の分量にしてください。"
+            "short_reply が有効な場合は1行で短く返してください。"
+        ),
+    )
+
+    say_text = str(data.get("say") or "").strip()
+    do_text = str(data.get("do") or "").strip()
+    reply = say_text or do_text or str(data.get("reply") or "").strip()
+    if long_reply and reply and not short_reply:
+        reply = await _regenerate_auto_dialogue_if_needed(
+            reply_text=reply,
+            character_name=character_name,
+            personality=personality,
+            history_text=history_text,
+            latest_reply=latest_reply,
+            latest_user_instruction=latest_user_instruction,
+            model=req.model,
+            provider=req.provider,
+        )
+    if not reply:
+        raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
+
+    if character is not None and user is not None:
+        msg = models.AIChatMessage(
+            user_id=user.id,
+            character_id=character.id,
+            role="assistant",
+            mode="say",
+            is_auto_dialogue=True,
+            character_name_snapshot=character_name or None,
+            personality_snapshot=personality or None,
+            language_style_snapshot=language_style,
+            content=reply[:4000],
+        )
+        db.add(msg)
+        db.commit()
+
+    return AIChatResponse(
+        reply=reply,
+        mode="say",
+        say=reply,
+        do=do_text or None,
+        extra_messages=[],
+        used_tokens=tokens,
+        model=model_used,
+    )
+
+
+@app.post("/api/ai/chat/character/augment", response_model=AIChatCharacterAugmentResponse)
+async def augment_ai_chat_character(
+    req: AIChatCharacterAugmentRequest,
+):
+    character_name = (req.character_name or "").strip()[:80]
+    if not character_name:
+        raise HTTPException(status_code=400, detail="キャラ名は必須です。")
+    base_personality = (req.personality or "").strip()[:1800]
+    anime_like_name = _looks_like_fictional_character_name(character_name)
+
+    anime_title = (req.anime_title or "").strip()[:120]
+    sources: list[dict] = []
+    notes: str | None = None
+    if anime_like_name:
+        sources = await _search_character_reference_sources(
+            character_name,
+            anime_title=anime_title or None,
+        )
+        if not sources:
+            notes = "検索結果が見つからないため、入力済み設定を優先しました。"
+    else:
+        notes = "キャラ名が一般名寄りのため、検索補完はスキップしました。"
+
+    enriched_personality = base_personality
+    if anime_like_name and sources:
+        try:
+            fanfic_personality = await _build_fanfic_personality_from_sources(
+                character_name=character_name,
+                base_personality=base_personality,
+                model=req.model,
+                provider=req.provider,
+                sources=sources,
+            )
+            enriched_personality = _merge_fanfic_with_base_personality(
+                fanfic_personality=fanfic_personality,
+                base_personality=base_personality,
+            )
+        except Exception:
+            enriched_personality = base_personality
+            notes = "検索補完の生成に失敗したため、入力済み設定を優先しました。"
+
+    if not enriched_personality:
+        enriched_personality = (
+            f"- {character_name}の既存イメージに合わせる。\n"
+            "- セリフと行動の一貫性を保つ。\n"
+            "- 不明な原作情報は断定しない。"
+        )
+
+    return AIChatCharacterAugmentResponse(
+        character_name=character_name,
+        anime_title=anime_title or None,
+        anime_like_name=anime_like_name,
+        used_search=bool(sources),
+        base_personality=base_personality or None,
+        enriched_personality=enriched_personality[:1800],
+        notes=notes,
+        sources=[
+            AIChatCharacterAugmentSource(
+                title=str(s.get("title") or ""),
+                link=s.get("link"),
+                snippet=str(s.get("snippet") or "")[:240],
+            )
+            for s in sources[:8]
+        ],
+    )
+
+
+@app.post(
+    "/api/ai/chat/character/anime_title_candidates",
+    response_model=AIChatAnimeTitleCandidatesResponse,
+)
+async def ai_chat_character_anime_title_candidates(
+    req: AIChatAnimeTitleCandidatesRequest,
+):
+    character_name = (req.character_name or "").strip()[:80]
+    if not character_name:
+        raise HTTPException(status_code=400, detail="キャラ名は必須です。")
+    limit = max(1, min(12, int(getattr(req, "limit", 8) or 8)))
+
+    sources = await _search_character_reference_sources(character_name)
+    if not sources:
+        return AIChatAnimeTitleCandidatesResponse(
+            character_name=character_name,
+            candidates=[],
+            used_search=False,
+            notes="候補検索結果が見つかりませんでした。",
+            sources=[],
+        )
+
+    extracted = _extract_title_candidates_from_source_titles(
+        character_name=character_name,
+        sources=sources,
+        limit=limit,
+    )
+    ai_candidates: list[str] = []
+    try:
+        ai_candidates = await _build_anime_title_candidates_from_sources(
+            character_name=character_name,
+            sources=sources,
+            model=req.model,
+            provider=req.provider,
+            limit=limit,
+        )
+    except Exception:
+        ai_candidates = []
+
+    merged: list[str] = []
+    for title in ai_candidates + extracted:
+        text = re.sub(r"\s+", " ", str(title or "").strip())
+        if len(text) < 2:
+            continue
+        if text in merged:
+            continue
+        merged.append(text[:80])
+        if len(merged) >= limit:
+            break
+
+    return AIChatAnimeTitleCandidatesResponse(
+        character_name=character_name,
+        candidates=merged,
+        used_search=True,
+        notes=None if merged else "候補抽出はできましたが、作品名を確定できませんでした。",
+        sources=[
+            AIChatCharacterAugmentSource(
+                title=str(s.get("title") or ""),
+                link=s.get("link"),
+                snippet=str(s.get("snippet") or "")[:240],
+            )
+            for s in sources[:8]
+        ],
+    )
+
+
+@app.get("/api/ai/chat/characters", response_model=list[AIChatCharacterResponse])
+def list_ai_chat_characters(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    items = (
+        db.query(models.AIChatCharacter)
+        .filter(models.AIChatCharacter.user_id == user.id)
+        .order_by(models.AIChatCharacter.updated_at.desc(), models.AIChatCharacter.id.desc())
+        .all()
+    )
+    return [
+        AIChatCharacterResponse(
+            id=int(item.id),
+            name=str(item.name or ""),
+            personality=item.personality,
+            is_public=bool(getattr(item, "is_public", False)),
+            published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+            created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+            updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
+        )
+        for item in items
+    ]
+
+
+@app.post("/api/ai/chat/characters", response_model=AIChatCharacterResponse)
+def create_ai_chat_character(
+    payload: AIChatCharacterCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="キャラ名は必須です。")
+    name = name[:80]
+    personality = (payload.personality or "").strip()[:4000] or None
+
+    exists = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.user_id == user.id,
+            models.AIChatCharacter.name == name,
+        )
+        .first()
+    )
+    if exists:
+        exists.personality = personality
+        db.add(exists)
+        db.commit()
+        db.refresh(exists)
+        return AIChatCharacterResponse(
+            id=int(exists.id),
+            name=str(exists.name or ""),
+            personality=exists.personality,
+            is_public=bool(getattr(exists, "is_public", False)),
+            published_at=exists.published_at.isoformat() if getattr(exists, "published_at", None) else None,
+            created_at=exists.created_at.isoformat() if getattr(exists, "created_at", None) else None,
+            updated_at=exists.updated_at.isoformat() if getattr(exists, "updated_at", None) else None,
+        )
+
+    item = models.AIChatCharacter(
+        user_id=user.id,
+        name=name,
+        personality=personality,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return AIChatCharacterResponse(
+        id=int(item.id),
+        name=str(item.name or ""),
+        personality=item.personality,
+        is_public=bool(getattr(item, "is_public", False)),
+        published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+        created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+        updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
+    )
+
+
+@app.put("/api/ai/chat/characters/{character_id}", response_model=AIChatCharacterResponse)
+def update_ai_chat_character(
+    character_id: int,
+    payload: AIChatCharacterUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    item = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.user_id == user.id,
+        )
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    if payload.name is not None:
+        name = (payload.name or "").strip()[:80]
+        if not name:
+            raise HTTPException(status_code=400, detail="キャラ名は必須です。")
+        item.name = name
+    if payload.personality is not None:
+        item.personality = (payload.personality or "").strip()[:4000] or None
+
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return AIChatCharacterResponse(
+        id=int(item.id),
+        name=str(item.name or ""),
+        personality=item.personality,
+        is_public=bool(getattr(item, "is_public", False)),
+        published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+        created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+        updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
+    )
+
+
+@app.patch("/api/ai/chat/characters/{character_id}/publish", response_model=AIChatCharacterResponse)
+def publish_ai_chat_character(
+    character_id: int,
+    payload: AIChatPublishRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    item = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.user_id == user.id,
+        )
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    item.is_public = bool(payload.is_public)
+    item.published_at = datetime.utcnow() if item.is_public else None
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    return AIChatCharacterResponse(
+        id=int(item.id),
+        name=str(item.name or ""),
+        personality=item.personality,
+        is_public=bool(getattr(item, "is_public", False)),
+        published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+        created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+        updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
+    )
+
+
+@app.delete("/api/ai/chat/characters/{character_id}")
+def delete_ai_chat_character(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    item = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.user_id == user.id,
+        )
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    db.delete(item)
+    db.commit()
+    return {"deleted": True}
+
+
+@app.get("/api/ai/chat/public/characters", response_model=list[AIChatPublicCharacterListItem])
+def list_public_ai_chat_characters(
+    q: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    keyword = (q or "").strip()
+    query = (
+        db.query(models.AIChatCharacter, models.User.username)
+        .join(models.User, models.User.id == models.AIChatCharacter.user_id)
+        .filter(models.AIChatCharacter.is_public == True)
+    )
+    if keyword:
+        needle = f"%{keyword.lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(models.AIChatCharacter.name).like(needle),
+                func.lower(func.coalesce(models.AIChatCharacter.personality, "")).like(needle),
+            )
+        )
+
+    rows = (
+        query.order_by(
+            models.AIChatCharacter.published_at.desc(),
+            models.AIChatCharacter.updated_at.desc(),
+            models.AIChatCharacter.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [
+        AIChatPublicCharacterListItem(
+            id=int(item.id),
+            name=str(item.name or ""),
+            personality=item.personality,
+            author_username=str(username or "") if username else None,
+            published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+        )
+        for item, username in rows
+    ]
+
+
+@app.get(
+    "/api/ai/chat/public/characters/{character_id}",
+    response_model=AIChatPublicCharacterDetailResponse,
+)
+def get_public_ai_chat_character_detail(
+    character_id: int,
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(models.AIChatCharacter, models.User.username)
+        .join(models.User, models.User.id == models.AIChatCharacter.user_id)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_public == True,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="公開キャラが見つかりません。")
+
+    character, username = row
+    messages = (
+        db.query(models.AIChatMessage)
+        .filter(models.AIChatMessage.character_id == character.id)
+        .order_by(models.AIChatMessage.created_at.asc(), models.AIChatMessage.id.asc())
+        .limit(200)
+        .all()
+    )
+    return AIChatPublicCharacterDetailResponse(
+        id=int(character.id),
+        name=str(character.name or ""),
+        personality=character.personality,
+        author_username=str(username or "") if username else None,
+        published_at=character.published_at.isoformat() if getattr(character, "published_at", None) else None,
+        messages=[
+            AIChatMessageResponse(
+                id=int(msg.id),
+                role="assistant" if msg.role == "assistant" else "user",
+                mode="do" if msg.mode == "do" else "say",
+                is_auto_dialogue=bool(getattr(msg, "is_auto_dialogue", False)),
+                content=str(msg.content or ""),
+                created_at=msg.created_at.isoformat() if getattr(msg, "created_at", None) else None,
+            )
+            for msg in messages
+        ],
+    )
+
+
+@app.get("/api/ai/chat/characters/{character_id}/messages", response_model=list[AIChatMessageResponse])
+def list_ai_chat_messages(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.user_id == user.id,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    items = (
+        db.query(models.AIChatMessage)
+        .filter(
+            models.AIChatMessage.user_id == user.id,
+            models.AIChatMessage.character_id == character_id,
+        )
+        .order_by(models.AIChatMessage.created_at.asc(), models.AIChatMessage.id.asc())
+        .limit(200)
+        .all()
+    )
+    return [
+        AIChatMessageResponse(
+            id=int(item.id),
+            role="assistant" if item.role == "assistant" else "user",
+            mode="do" if item.mode == "do" else "say",
+            is_auto_dialogue=bool(getattr(item, "is_auto_dialogue", False)),
+            content=str(item.content or ""),
+            created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+        )
+        for item in items
+    ]
+
+
+@app.delete(
+    "/api/ai/chat/characters/{character_id}/messages/{message_id}",
+    response_model=AIChatMessageDeleteResponse,
+)
+def delete_ai_chat_messages_from_point(
+    character_id: int,
+    message_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.user_id == user.id,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    target = (
+        db.query(models.AIChatMessage.id)
+        .filter(
+            models.AIChatMessage.id == message_id,
+            models.AIChatMessage.user_id == user.id,
+            models.AIChatMessage.character_id == character_id,
+        )
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="対象メッセージが見つかりません。")
+
+    deleted = (
+        db.query(models.AIChatMessage)
+        .filter(
+            models.AIChatMessage.user_id == user.id,
+            models.AIChatMessage.character_id == character_id,
+            models.AIChatMessage.id >= message_id,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return AIChatMessageDeleteResponse(ok=True, deleted=int(deleted or 0))
+
+
+@app.get(
+    "/api/ai/chat/characters/{character_id}/latest_prompt_preview",
+    response_model=AIChatPromptPreviewResponse,
+)
+def get_ai_chat_latest_prompt_preview(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.user_id == user.id,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    latest_user_msg = (
+        db.query(models.AIChatMessage)
+        .filter(
+            models.AIChatMessage.user_id == user.id,
+            models.AIChatMessage.character_id == character_id,
+            models.AIChatMessage.role == "user",
+        )
+        .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
+        .first()
+    )
+    if not latest_user_msg:
+        raise HTTPException(status_code=404, detail="会話ログがありません。")
+
+    history_rows = (
+        db.query(models.AIChatMessage)
+        .filter(
+            models.AIChatMessage.user_id == user.id,
+            models.AIChatMessage.character_id == character_id,
+            models.AIChatMessage.id <= latest_user_msg.id,
+        )
+        .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
+        .limit(20)
+        .all()
+    )
+    history_rows.reverse()
+
+    history_items: list[AIChatHistoryItem] = []
+    for row in history_rows:
+        history_items.append(
+            AIChatHistoryItem(
+                role="assistant" if row.role == "assistant" else "user",
+                mode="do" if row.mode == "do" else "say",
+                content=str(row.content or ""),
+            )
+        )
+
+    character_name = str(
+        latest_user_msg.character_name_snapshot or character.name or ""
+    ).strip()[:80]
+    personality = str(
+        latest_user_msg.personality_snapshot or character.personality or ""
+    ).strip()[:4000]
+    language_style = _normalize_language_style(
+        getattr(latest_user_msg, "language_style_snapshot", None) or "normal"
+    )
+    mode: Literal["say", "do"] = "do" if latest_user_msg.mode == "do" else "say"
+    message = str(latest_user_msg.content or "")
+    history_text = _build_ai_chat_history_text(history_items, character_name)
+    language_style_rules = _build_language_style_rules(language_style)
+    prompt = _build_ai_chat_prompt(
+        character_name=character_name,
+        personality=personality,
+        mode=mode,
+        long_reply=False,
+        short_reply=False,
+        history_text=history_text,
+        message=message,
+        language_style_rules=language_style_rules,
+    )
+
+    return AIChatPromptPreviewResponse(
+        source_message_id=int(latest_user_msg.id),
+        mode=mode,
+        message=message,
+        history=history_items,
+        prompt=prompt,
+        system_instructions=_build_ai_chat_system_instructions(long_reply=False, short_reply=False),
+        character_name=character_name or "無名のキャラクター",
+        personality=personality or "未設定",
+        language_style=language_style,
+    )
 
 @app.get("/api/ai/jobs/me", response_model=list[AIJobListItem])
 def list_my_ai_jobs(

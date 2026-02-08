@@ -94,6 +94,15 @@ a {
 .btn-border:hover { color: var(--bg); background: var(--text); }
 button.btn.btn-border { background: var(--surface); border: 2px solid var(--border-strong); color: var(--text); }
 button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
+button.btn.btn-border.bubble-send-btn {
+  min-width: 28px;
+  padding: 4px 4px;
+  line-height: 1;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  color: var(--text);
+}
 
 .ai-result-body::selection {
   background-color: #c7a7ff;
@@ -280,6 +289,17 @@ button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
 }
 .nav-toggle-open span:nth-child(3) {
   transform: translateY(-6px) rotate(-45deg);
+}
+
+/* 1150px以下ではPCメニューを2段表示 */
+@media (max-width: 1150px) and (min-width: 641px) {
+  .nav-links {
+    display: grid;
+    grid-template-columns: repeat(4, max-content);
+    justify-content: center;
+    column-gap: 12px;
+    row-gap: 8px;
+  }
 }
 
 /* 検索バー全体 */

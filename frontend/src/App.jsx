@@ -18,6 +18,8 @@ import Mypage from "./pages/Mypage";
 import UserPage from "./pages/UserPage";
 import AINovelPage from "./pages/AINovelPage";
 import AiLogsPage from "./pages/AiLogsPage";
+import AiChatPage from "./pages/AiChatPage";
+import AiChatPublicPage from "./pages/AiChatPublicPage";
 import DirectMessageThread from "./pages/DirectMessageThread";
 import ResetPassword from "./pages/ResetPassword";
 import CreatorDashboard from "./pages/CreatorDashboard";
@@ -88,6 +90,7 @@ export default function App() {
         path === "/" ||
         path === "/authors" ||
         path.startsWith("/ai-novel") ||
+        path.startsWith("/ai_chat") ||
         path.startsWith("/tags/") ||
         path.startsWith("/novels/") ||
         path.startsWith("/episodes/") ||
@@ -203,6 +206,13 @@ export default function App() {
             onClick={() => setMenuOpen(false)}
           >
             {t({ ja: "新規小説投稿", en: "Post New Novel" })}
+          </Link>
+          <Link
+            to="/ai_chat"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t({ ja: "AIチャット", en: "AI Chat" })}
           </Link>
           <Link
             to="/mypage"
@@ -338,6 +348,8 @@ export default function App() {
           <Route path="/novels/:id/edit" element={<EditNovel />} />
           <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
 	  <Route path="/ai-novel" element={<AINovelPage />} />
+	  <Route path="/ai_chat" element={<AiChatPage />} />
+	  <Route path="/ai_chat/public" element={<AiChatPublicPage />} />
 	  <Route path="/ai-logs" element={<AiLogsPage />} />
           <Route path="/episodes/:id/edit" element={<EditEpisode />} />
           <Route path="/episodes/:id" element={<EpisodeDetail />} />
