@@ -29,6 +29,8 @@ class User(Base):
     two_factor_expires_at = Column(DateTime, nullable=True)
     ai_novel_draft_json = Column(LONGTEXT, nullable=True)
     ai_novel_draft_updated_at = Column(DateTime, nullable=True)
+    ai_chat_tokens_used = Column(Integer, nullable=False, server_default="0")
+    ai_chat_paid_blocks = Column(Integer, nullable=False, server_default="0")
 
     # リレーション
     novels = relationship("Novel", back_populates="author")
@@ -634,6 +636,7 @@ class AIChatCharacter(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String(80), nullable=False)
     personality = Column(Text, nullable=True)
+    speech_gender = Column(String(16), nullable=False, server_default="auto")
     is_public = Column(Boolean, nullable=False, server_default="0", index=True)
     published_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
@@ -749,3 +752,18 @@ class AIGuestGenerateUsage(Base):
     generate_count = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+
+
+class AIChatAddonPurchase(Base):
+    __tablename__ = "ai_chat_addon_purchases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    stripe_checkout_session_id = Column(String(255), nullable=False, unique=True)
+    amount_yen = Column(Integer, nullable=False)
+    token_blocks = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, server_default="pending")
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    user = relationship("User")

@@ -187,6 +187,10 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN ai_novel_draft_json LONGTEXT NULL")
             if "ai_novel_draft_updated_at" not in existing:
                 alters.append("ADD COLUMN ai_novel_draft_updated_at DATETIME NULL")
+            if "ai_chat_tokens_used" not in existing:
+                alters.append("ADD COLUMN ai_chat_tokens_used INT NOT NULL DEFAULT 0")
+            if "ai_chat_paid_blocks" not in existing:
+                alters.append("ADD COLUMN ai_chat_paid_blocks INT NOT NULL DEFAULT 0")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE users {clause}"))
@@ -378,6 +382,8 @@ def ensure_ai_chat_tables():
                 alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 0")
             if "published_at" not in existing:
                 alters.append("ADD COLUMN published_at DATETIME NULL")
+            if "speech_gender" not in existing:
+                alters.append("ADD COLUMN speech_gender VARCHAR(16) NOT NULL DEFAULT 'auto'")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE ai_chat_characters {clause}"))
@@ -738,6 +744,10 @@ OAUTH_STATE_EXPIRE_MINUTES = int(os.getenv("OAUTH_STATE_EXPIRE_MINUTES", "10"))
 TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "").strip().lower()
 TRANSLATION_MODEL_TEXT = os.getenv("TRANSLATION_MODEL_TEXT", "").strip()
 AUTO_TRANSLATION_REQUIRED = os.getenv("AUTO_TRANSLATION_REQUIRED", "0") == "1"
+AI_CHAT_FREE_TOKENS = int(os.getenv("AI_CHAT_FREE_TOKENS", "2000000"))
+AI_CHAT_BLOCK_TOKENS = int(os.getenv("AI_CHAT_BLOCK_TOKENS", "2000000"))
+AI_CHAT_BLOCK_PRICE_YEN = int(os.getenv("AI_CHAT_BLOCK_PRICE_YEN", "1000"))
+AI_CHAT_DEMO_BYPASS_USERNAME = os.getenv("AI_CHAT_DEMO_BYPASS_USERNAME", "demo02").strip()
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -1553,6 +1563,62 @@ AI_USER_DAILY_MAX = 80
 AI_JOB_TIMEOUT_MINUTES = 10
 
 
+def _is_ai_chat_demo_bypass_user(user: models.User | None) -> bool:
+    if not user:
+        return False
+    marker = (AI_CHAT_DEMO_BYPASS_USERNAME or "").strip()
+    if not marker:
+        return False
+    return str(getattr(user, "username", "") or "").strip().lower() == marker.lower()
+
+
+def _ai_chat_allowed_tokens(user: models.User) -> int:
+    paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
+    return max(0, AI_CHAT_FREE_TOKENS) + paid_blocks * max(1, AI_CHAT_BLOCK_TOKENS)
+
+
+def _ensure_ai_chat_access(user: models.User) -> None:
+    if _is_ai_chat_demo_bypass_user(user):
+        return
+    if FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False)):
+        return
+
+    used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
+    allowed = _ai_chat_allowed_tokens(user)
+    if used < allowed:
+        return
+
+    over = max(0, used - max(0, AI_CHAT_FREE_TOKENS))
+    consumed_paid_blocks = over // max(1, AI_CHAT_BLOCK_TOKENS)
+    next_required_block = consumed_paid_blocks + 1
+    detail = (
+        f"AIチャットの無料枠（{max(0, AI_CHAT_FREE_TOKENS):,}トークン）に達しました。"
+        f"プレミアム登録、または追加課金（{AI_CHAT_BLOCK_TOKENS:,}トークンごとに{AI_CHAT_BLOCK_PRICE_YEN:,}円）で継続できます。"
+        f"次回解放に必要な追加ブロック: {next_required_block}"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail=detail,
+    )
+
+
+def _record_ai_chat_tokens(
+    db: Session,
+    user: models.User | None,
+    tokens_used: int | None,
+) -> None:
+    if not user:
+        return
+    if tokens_used is None:
+        return
+    n = int(tokens_used or 0)
+    if n <= 0:
+        return
+    user.ai_chat_tokens_used = int(getattr(user, "ai_chat_tokens_used", 0) or 0) + n
+    db.add(user)
+    db.commit()
+
+
 def get_optional_current_user(request: Request, db: Session) -> models.User | None:
     auth = request.headers.get("Authorization")
     if not auth:
@@ -1710,6 +1776,23 @@ class SupportCheckoutRequest(BaseModel):
 class MembershipCheckoutRequest(BaseModel):
     author_user_id: int
     plan_id: int
+
+
+class AIChatAddonCheckoutRequest(BaseModel):
+    blocks: int = 1
+
+
+class AIChatAccessStatusResponse(BaseModel):
+    is_premium: bool
+    demo_bypass: bool
+    used_tokens: int
+    free_tokens: int
+    block_tokens: int
+    block_price_yen: int
+    paid_blocks: int
+    allowed_tokens: int
+    needs_upgrade: bool
+    show_premium_prompt: bool
 
 
 class PayoutProfileUpdateRequest(BaseModel):
@@ -2672,6 +2755,9 @@ def admin_delete_user(
     db.execute(text("DELETE FROM episode_comments WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_comments WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_generate_logs WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_chat_messages WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_chat_characters WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_chat_addon_purchases WHERE user_id = :uid"), {"uid": user_id})
     db.execute(
         text("DELETE FROM supports WHERE supporter_user_id = :uid OR author_user_id = :uid"),
         {"uid": user_id},
@@ -3151,6 +3237,78 @@ def memberships_checkout(
     return {"checkout_url": session.url}
 
 
+@app.get("/api/ai/chat/access", response_model=AIChatAccessStatusResponse)
+def get_ai_chat_access_status(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
+    paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
+    allowed = _ai_chat_allowed_tokens(user)
+    demo_bypass = _is_ai_chat_demo_bypass_user(user)
+    is_premium = FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))
+    needs_upgrade = (not demo_bypass) and (not is_premium) and used >= allowed
+    show_premium_prompt = used >= max(0, AI_CHAT_FREE_TOKENS)
+    return AIChatAccessStatusResponse(
+        is_premium=is_premium,
+        demo_bypass=demo_bypass,
+        used_tokens=used,
+        free_tokens=max(0, AI_CHAT_FREE_TOKENS),
+        block_tokens=max(1, AI_CHAT_BLOCK_TOKENS),
+        block_price_yen=max(1, AI_CHAT_BLOCK_PRICE_YEN),
+        paid_blocks=paid_blocks,
+        allowed_tokens=allowed,
+        needs_upgrade=needs_upgrade,
+        show_premium_prompt=show_premium_prompt,
+    )
+
+
+@app.post("/api/ai/chat/addon/checkout")
+def create_ai_chat_addon_checkout(
+    payload: AIChatAddonCheckoutRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(500, "STRIPE_SECRET_KEY 未設定")
+    user = require_current_user(request, db)
+    if _is_ai_chat_demo_bypass_user(user):
+        raise HTTPException(400, "demoユーザーは追加課金なしで利用できます。")
+
+    blocks = int(getattr(payload, "blocks", 1) or 1)
+    blocks = max(1, min(20, blocks))
+    amount_yen = blocks * max(1, AI_CHAT_BLOCK_PRICE_YEN)
+
+    metadata = {
+        "type": "ai_chat_addon",
+        "user_id": str(user.id),
+        "token_blocks": str(blocks),
+        "block_tokens": str(max(1, AI_CHAT_BLOCK_TOKENS)),
+    }
+
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "jpy",
+                    "product_data": {"name": f"AIチャット追加 {blocks * max(1, AI_CHAT_BLOCK_TOKENS):,} トークン"},
+                    "unit_amount": amount_yen,
+                },
+                "quantity": 1,
+            }
+        ],
+        client_reference_id=str(user.id),
+        customer=getattr(user, "stripe_customer_id", None),
+        customer_email=getattr(user, "email", None),
+        metadata=metadata,
+        success_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=success",
+        cancel_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=cancel",
+    )
+    return {"checkout_url": session.url}
+
+
 # =========================================
 # Stripe Checkout
 # =========================================
@@ -3240,6 +3398,58 @@ async def stripe_webhook(
 
     if event_type == "checkout.session.completed":
         meta_type = metadata.get("type")
+        if meta_type == "ai_chat_addon":
+            session_id = _stripe_obj_get(data_object, "id")
+            if not session_id:
+                return {"ok": True, "skipped": True}
+            existing = (
+                db.query(models.AIChatAddonPurchase)
+                .filter(models.AIChatAddonPurchase.stripe_checkout_session_id == session_id)
+                .first()
+            )
+            if existing and existing.status == "paid":
+                return {"ok": True}
+
+            user_id = _meta_int("user_id")
+            if not user_id:
+                raw_uid = _stripe_obj_get(data_object, "client_reference_id")
+                try:
+                    user_id = int(raw_uid) if raw_uid is not None else None
+                except Exception:
+                    user_id = None
+            if not user_id:
+                print("[stripe] ai_chat_addon: user_id missing", metadata)
+                return {"ok": True, "skipped": True}
+
+            user = db.query(models.User).get(user_id)
+            if not user:
+                print("[stripe] ai_chat_addon: user not found", user_id)
+                return {"ok": True, "skipped": True}
+
+            blocks = _meta_int("token_blocks") or 1
+            blocks = max(1, min(100, int(blocks)))
+            amount_total = _stripe_obj_get(data_object, "amount_total") or blocks * max(1, AI_CHAT_BLOCK_PRICE_YEN)
+
+            if not existing:
+                existing = models.AIChatAddonPurchase(
+                    user_id=user.id,
+                    stripe_checkout_session_id=session_id,
+                    amount_yen=int(amount_total),
+                    token_blocks=blocks,
+                    status="paid",
+                    paid_at=now,
+                )
+            else:
+                existing.amount_yen = int(amount_total)
+                existing.token_blocks = blocks
+                existing.status = "paid"
+                existing.paid_at = now
+            user.ai_chat_paid_blocks = int(getattr(user, "ai_chat_paid_blocks", 0) or 0) + blocks
+            db.add(existing)
+            db.add(user)
+            db.commit()
+            return {"ok": True}
+
         if meta_type == "support":
             author_user_id = _meta_int("author_user_id")
             if not author_user_id:
@@ -3518,6 +3728,20 @@ async def stripe_webhook(
 
     if event_type in ("checkout.session.async_payment_failed", "checkout.session.expired"):
         meta_type = metadata.get("type")
+        if meta_type == "ai_chat_addon":
+            session_id = _stripe_obj_get(data_object, "id")
+            if not session_id:
+                return {"ok": True}
+            purchase = (
+                db.query(models.AIChatAddonPurchase)
+                .filter(models.AIChatAddonPurchase.stripe_checkout_session_id == session_id)
+                .first()
+            )
+            if purchase and purchase.status == "pending":
+                purchase.status = "canceled"
+                db.add(purchase)
+                db.commit()
+            return {"ok": True}
         if meta_type == "support":
             session_id = _stripe_obj_get(data_object, "id")
             support = (
@@ -4242,6 +4466,7 @@ class AIChatHistoryItem(BaseModel):
 class AIChatRequest(BaseModel):
     message: str
     mode: Literal["say", "do"] = "say"
+    r18: bool = False
     character_id: int | None = None
     character_name: str | None = None
     personality: str | None = None
@@ -4255,6 +4480,7 @@ class AIChatRequest(BaseModel):
 
 
 class AIChatAutoContinueRequest(BaseModel):
+    r18: bool = False
     character_id: int | None = None
     character_name: str | None = None
     personality: str | None = None
@@ -4267,6 +4493,7 @@ class AIChatAutoContinueRequest(BaseModel):
 
 
 class AIChatNextLineSuggestRequest(BaseModel):
+    r18: bool = False
     character_id: int | None = None
     character_name: str | None = None
     personality: str | None = None
@@ -4338,17 +4565,20 @@ class AIChatResponse(BaseModel):
 class AIChatCharacterCreateRequest(BaseModel):
     name: str
     personality: str | None = None
+    speech_gender: Literal["auto", "female", "male"] | None = None
 
 
 class AIChatCharacterUpdateRequest(BaseModel):
     name: str | None = None
     personality: str | None = None
+    speech_gender: Literal["auto", "female", "male"] | None = None
 
 
 class AIChatCharacterResponse(BaseModel):
     id: int
     name: str
     personality: str | None = None
+    speech_gender: Literal["auto", "female", "male"] = "auto"
     is_public: bool = False
     published_at: str | None = None
     created_at: str | None = None
@@ -4379,6 +4609,13 @@ class AIChatPromptPreviewResponse(BaseModel):
     character_name: str
     personality: str
     language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
+
+
+def normalize_speech_gender(value: str | None) -> Literal["auto", "female", "male"]:
+    v = str(value or "").strip().lower()
+    if v in {"female", "male"}:
+        return v  # type: ignore[return-value]
+    return "auto"
 
 
 class AIChatPublishRequest(BaseModel):
@@ -5036,7 +5273,25 @@ def _build_ai_chat_style_guide(long_reply: bool = False, short_reply: bool = Fal
     )
 
 
-def _build_ai_chat_system_instructions(long_reply: bool = False, short_reply: bool = False) -> str:
+def _build_ai_chat_content_safety_rules(r18: bool = False) -> str:
+    if r18:
+        return (
+            "成人向けモード: 成人同士の合意ある親密な雰囲気は許可します。"
+            "ただし露骨・過激な性描写、具体的な性器名や性行為の直接描写を強調し、"
+            "比喩や余韻を使った節度ある表現にしてください。"
+            "未成年・近親・強要/非同意を含む性的内容は扱わないでください。"
+        )
+    return (
+        "一般向けモード: 露骨な性的表現や過度な暴力表現は避け、"
+        "全年齢で読める範囲の表現にしてください。"
+    )
+
+
+def _build_ai_chat_system_instructions(
+    long_reply: bool = False,
+    short_reply: bool = False,
+    r18: bool = False,
+) -> str:
     if short_reply:
         length_instruction = "short_reply が有効な場合、say/do とも必ず1行で簡潔に返してください。"
     else:
@@ -5045,6 +5300,7 @@ def _build_ai_chat_system_instructions(long_reply: bool = False, short_reply: bo
             if long_reply
             else "冗長すぎない分量で返してください。"
         )
+    safety_instruction = _build_ai_chat_content_safety_rules(r18=r18)
     return (
         "あなたはキャラクターロールプレイAIです。"
         "必ずJSON 1個のみを返してください。"
@@ -5060,6 +5316,7 @@ def _build_ai_chat_system_instructions(long_reply: bool = False, short_reply: bo
         "複数人が絡む指示がある場合、do でも複数人の相互作用を明確に描写してください。"
         "do は地の文として十分な長さで、2〜4文・100文字以上を目安にしてください。"
         f"{length_instruction}"
+        f"{safety_instruction}"
     )
 
 
@@ -5292,7 +5549,7 @@ async def _build_fanfic_personality_from_sources(
         "personality は箇条書きで6〜10行、口調・行動方針・NG表現・関係性の扱いを含めること。\n"
         '例: {"personality":"- ..."}'
     )
-    data, _, _ = await call_ai_json(
+    data, _, _ = await _call_ai_chat_json_with_fallback(
         prompt,
         model=model,
         provider=provider,
@@ -5401,7 +5658,7 @@ async def _build_anime_title_candidates_from_sources(
         f"出力は必ずJSON 1個のみ。キーは candidates のみ。件数は最大 {limit} 件。\n"
         "作品名だけを短く返し、説明文は含めないこと。"
     )
-    data, _, _ = await call_ai_json(
+    data, _, _ = await _call_ai_chat_json_with_fallback(
         prompt,
         model=model,
         provider=provider,
@@ -5442,6 +5699,72 @@ def _long_reply_min_chars(mode: Literal["say", "do"], *, auto_dialogue: bool = F
     return 220 if mode == "say" else 280
 
 
+def _resolve_ai_chat_provider(provider: str | None, model: str | None) -> str:
+    explicit = (provider or "").strip().lower()
+    if explicit:
+        return explicit
+    return provider_from_model(model)
+
+
+def _ai_chat_provider_candidates(provider: str | None, model: str | None) -> list[str]:
+    primary = _resolve_ai_chat_provider(provider, model)
+    ordered = [primary, "openai", "deepseek", "openrouter"]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in ordered:
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+async def _call_ai_chat_json_with_fallback(
+    prompt: str,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    system_instructions: str | None = None,
+) -> tuple[dict, int | None, str | None]:
+    errors: list[str] = []
+    primary_provider = _resolve_ai_chat_provider(provider, model)
+    primary_model = (model or "").strip() or None
+
+    for candidate in _ai_chat_provider_candidates(provider, model):
+        candidate_model = primary_model if candidate == primary_provider else None
+        try:
+            return await call_ai_json(
+                prompt,
+                model=candidate_model,
+                provider=candidate,
+                system_instructions=system_instructions,
+            )
+        except HTTPException as e:
+            status_code = int(getattr(e, "status_code", 500) or 500)
+            detail = str(getattr(e, "detail", "") or "")
+            if status_code == 400 and "プロンプトが空です" in detail:
+                raise
+            errors.append(f"{candidate}:{status_code}:{detail[:160]}")
+            logger.warning(
+                "ai chat provider failed provider=%s model=%s status=%s detail=%s",
+                candidate,
+                candidate_model,
+                status_code,
+                detail[:260],
+            )
+        except Exception as e:
+            errors.append(f"{candidate}:{e!r}")
+            logger.warning(
+                "ai chat provider failed provider=%s model=%s err=%r",
+                candidate,
+                candidate_model,
+                e,
+            )
+
+    joined = "; ".join(errors) if errors else "no provider attempted"
+    raise HTTPException(status_code=502, detail=f"AI チャット API 呼び出しに失敗しました: {joined}")
+
+
 async def _regenerate_long_reply_if_needed(
     *,
     reply_mode: Literal["say", "do"],
@@ -5454,6 +5777,7 @@ async def _regenerate_long_reply_if_needed(
     short_reply: bool = False,
     branching_instruction: str = "",
     language_style_rules: str = "",
+    r18: bool = False,
     model: str | None,
     provider: str | None,
 ) -> tuple[str, str]:
@@ -5473,6 +5797,7 @@ async def _regenerate_long_reply_if_needed(
             message=message,
             branching_instruction=branching_instruction,
             language_style_rules=language_style_rules,
+            r18=r18,
         )
         + "\n\n"
         + (
@@ -5481,12 +5806,12 @@ async def _regenerate_long_reply_if_needed(
             "短すぎる場合は必ず内容を具体化して増やしてください。"
         )
     )
-    data2, _, _ = await call_ai_json(
+    data2, _, _ = await _call_ai_chat_json_with_fallback(
         strict_prompt,
         model=model,
         provider=provider,
         system_instructions=(
-            _build_ai_chat_system_instructions(long_reply=True, short_reply=short_reply)
+            _build_ai_chat_system_instructions(long_reply=True, short_reply=short_reply, r18=r18)
             + " long_reply有効時は、必ず規定文字数を満たしてください。"
         ),
     )
@@ -5503,6 +5828,7 @@ async def _regenerate_auto_dialogue_if_needed(
     history_text: str,
     latest_reply: str,
     latest_user_instruction: str,
+    r18: bool = False,
     model: str | None,
     provider: str | None,
 ) -> str:
@@ -5518,12 +5844,13 @@ async def _regenerate_auto_dialogue_if_needed(
             latest_reply=latest_reply,
             latest_user_instruction=latest_user_instruction,
             long_reply=True,
+            r18=r18,
         )
         + "\n\n"
         + f"重要: say は最低 {min_chars} 文字で返し、キャラクター同士の会話を十分に展開してください。"
         + " 少なくとも10ターンは同じ主題を維持してください。"
     )
-    data2, _, _ = await call_ai_json(
+    data2, _, _ = await _call_ai_chat_json_with_fallback(
         auto_prompt,
         model=model,
         provider=provider,
@@ -5532,6 +5859,7 @@ async def _regenerate_auto_dialogue_if_needed(
             "必ずJSON 1個のみを返してください。"
             "JSONキーは say と do のみを使ってください。"
             "say は最低文字数を必ず満たしてください。"
+            + _build_ai_chat_content_safety_rules(r18=r18)
         ),
     )
     retry_say = str(data2.get("say") or data2.get("do") or "").strip()
@@ -5565,10 +5893,12 @@ def _build_ai_chat_prompt(
     message: str,
     branching_instruction: str = "",
     language_style_rules: str = "",
+    r18: bool = False,
 ) -> str:
     style_guide = _build_ai_chat_style_guide(long_reply=long_reply, short_reply=short_reply)
     relationship_tone_rules = _build_relationship_tone_rules(personality)
     multi_character_rules = _build_multi_character_relationship_rules(personality)
+    safety_rules = _build_ai_chat_content_safety_rules(r18=r18)
     char_label = character_name or "無名のキャラクター"
     personality_text = personality or "未設定"
     return (
@@ -5583,6 +5913,7 @@ def _build_ai_chat_prompt(
         f"{style_guide}\n\n"
         f"{relationship_tone_rules}\n\n"
         f"{multi_character_rules}\n\n"
+        f"{safety_rules}\n\n"
         f"{language_style_rules}\n"
         "会話履歴:\n"
         f"{history_text}\n\n"
@@ -5604,6 +5935,7 @@ def _build_auto_dialogue_prompt(
     long_reply: bool,
     short_reply: bool = False,
     language_style_rules: str = "",
+    r18: bool = False,
 ) -> str:
     char_label = character_name or "無名のキャラクター"
     personality_text = personality or "未設定"
@@ -5613,6 +5945,7 @@ def _build_auto_dialogue_prompt(
         if short_reply
         else ("10〜14往復で会話してください。" if long_reply else "8〜12往復で会話してください。")
     )
+    safety_rules = _build_ai_chat_content_safety_rules(r18=r18)
     return (
         "あなたはロールプレイ用の会話AIです。\n"
         "登場キャラクター同士が会話を続けます。\n\n"
@@ -5623,6 +5956,7 @@ def _build_auto_dialogue_prompt(
         "- 主題アンカーを会話の中心に据え、少なくとも10ターンは話題転換しないこと。\n"
         "- 連想で別テーマへ飛ばず、同じ題材を深掘りして会話を続けること。\n"
         "- 各ターンで直前発話に応答し、つながりの弱い独立発言を避けること。\n\n"
+        f"{safety_rules}\n\n"
         f"{language_style_rules}\n"
         "会話履歴:\n"
         f"{history_text}\n\n"
@@ -5647,14 +5981,17 @@ def _build_ai_chat_next_line_suggest_prompt(
     input_hint: str,
     suggestions_count: int,
     language_style_rules: str = "",
+    r18: bool = False,
 ) -> str:
     char_label = character_name or "無名のキャラクター"
     personality_text = personality or "未設定"
+    safety_rules = _build_ai_chat_content_safety_rules(r18=r18)
     return (
         "あなたは会話台詞の提案AIです。\n"
         "次に「ユーザー側のキャラクター」が言いそうなセリフ候補を作ってください。\n\n"
         f"ユーザー側キャラクター名: {char_label}\n"
         f"性格設定: {personality_text}\n\n"
+        f"{safety_rules}\n"
         f"{language_style_rules}\n"
         "会話履歴:\n"
         f"{history_text}\n\n"
@@ -5696,6 +6033,9 @@ async def ai_chat_next_user_lines(
 ):
     user: models.User | None = None
     character: models.AIChatCharacter | None = None
+    viewer = get_optional_current_user(request, db)
+    if viewer is not None:
+        _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = (
@@ -5708,6 +6048,7 @@ async def ai_chat_next_user_lines(
         )
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+        viewer = user
 
     count = max(1, min(5, int(getattr(req, "suggestions_count", 3) or 3)))
     character_name = (req.character_name or "").strip()[:80]
@@ -5720,6 +6061,7 @@ async def ai_chat_next_user_lines(
     history_text = _build_ai_chat_history_text(req.history or [], character_name)
     input_hint = (req.input_hint or "").strip()[:1200]
     language_style_rules = _build_language_style_rules(getattr(req, "language_style", "normal"))
+    r18 = bool(getattr(req, "r18", False))
 
     prompt = _build_ai_chat_next_line_suggest_prompt(
         character_name=character_name,
@@ -5728,19 +6070,27 @@ async def ai_chat_next_user_lines(
         input_hint=input_hint,
         suggestions_count=count,
         language_style_rules=language_style_rules,
+        r18=r18,
     )
-    data, tokens, model_used = await call_ai_json(
-        prompt,
-        model=req.model,
-        provider=req.provider,
-        system_instructions=(
-            "あなたは会話台詞の提案AIです。"
-            "必ずJSON 1個のみを返してください。"
-            "キーは suggestions のみ。"
-            "suggestions は文字列配列で、件数は必ず要求数に合わせてください。"
-            "冗長な前置きや解説は不要です。"
-        ),
-    )
+    data: dict = {}
+    tokens: int | None = None
+    model_used: str | None = None
+    try:
+        data, tokens, model_used = await _call_ai_chat_json_with_fallback(
+            prompt,
+            model=req.model,
+            provider=req.provider,
+            system_instructions=(
+                "あなたは会話台詞の提案AIです。"
+                "必ずJSON 1個のみを返してください。"
+                "キーは suggestions のみ。"
+                "suggestions は文字列配列で、件数は必ず要求数に合わせてください。"
+                "冗長な前置きや解説は不要です。"
+                + _build_ai_chat_content_safety_rules(r18=r18)
+            ),
+        )
+    except Exception as e:
+        logger.warning("next_user_lines generation failed, fallback used: %r", e)
 
     suggestions: list[str] = []
     raw = data.get("suggestions")
@@ -5774,6 +6124,7 @@ async def ai_chat_next_user_lines(
             if len(suggestions) >= count:
                 break
 
+    _record_ai_chat_tokens(db, viewer, tokens)
     return AIChatNextLineSuggestResponse(
         character_name=character_name or None,
         suggestions=suggestions[:count],
@@ -5794,6 +6145,9 @@ async def ai_chat(
 
     user: models.User | None = None
     character: models.AIChatCharacter | None = None
+    viewer = get_optional_current_user(request, db)
+    if viewer is not None:
+        _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = (
@@ -5806,6 +6160,7 @@ async def ai_chat(
         )
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+        viewer = user
 
     character_name = (req.character_name or "").strip()[:80]
     personality = (req.personality or "").strip()[:4000]
@@ -5817,6 +6172,7 @@ async def ai_chat(
     mode = req.mode if req.mode in {"say", "do"} else "say"
     long_reply = bool(getattr(req, "long_reply", False))
     short_reply = bool(getattr(req, "short_reply", False))
+    r18 = bool(getattr(req, "r18", False))
     if short_reply:
         long_reply = False
     language_style = _normalize_language_style(getattr(req, "language_style", "normal"))
@@ -5834,14 +6190,16 @@ async def ai_chat(
         message=message,
         branching_instruction=branching_instruction,
         language_style_rules=language_style_rules,
+        r18=r18,
     )
 
-    data, tokens, model_used = await call_ai_json(
+    data, tokens, model_used = await _call_ai_chat_json_with_fallback(
         prompt,
         model=req.model,
         provider=req.provider,
-        system_instructions=_build_ai_chat_system_instructions(long_reply=long_reply, short_reply=short_reply),
+        system_instructions=_build_ai_chat_system_instructions(long_reply=long_reply, short_reply=short_reply, r18=r18),
     )
+    total_tokens_used = int(tokens or 0)
 
     say_text = str(data.get("say") or "").strip()
     do_text = str(data.get("do") or "").strip()
@@ -5861,6 +6219,7 @@ async def ai_chat(
             short_reply=short_reply,
             branching_instruction=branching_instruction,
             language_style_rules=language_style_rules,
+            r18=r18,
             model=req.model,
             provider=req.provider,
         )
@@ -5882,8 +6241,9 @@ async def ai_chat(
             long_reply=long_reply,
             short_reply=short_reply,
             language_style_rules=language_style_rules,
+            r18=r18,
         )
-        auto_data, _, _ = await call_ai_json(
+        auto_data, auto_tokens, _ = await _call_ai_chat_json_with_fallback(
             auto_prompt,
             model=req.model,
             provider=req.provider,
@@ -5895,8 +6255,10 @@ async def ai_chat(
                 "主題を維持し、少なくとも10ターンは同じ話題を継続してください。"
                 "long_reply が有効な場合は通常より約2倍の分量にしてください。"
                 "short_reply が有効な場合は1行で短く返してください。"
+                + _build_ai_chat_content_safety_rules(r18=r18)
             ),
         )
+        total_tokens_used += int(auto_tokens or 0)
         auto_say = str(auto_data.get("say") or "").strip()
         if long_reply and auto_say:
             auto_say = await _regenerate_auto_dialogue_if_needed(
@@ -5906,6 +6268,7 @@ async def ai_chat(
                 history_text=history_text,
                 latest_reply=reply,
                 latest_user_instruction=message,
+                r18=r18,
                 model=req.model,
                 provider=req.provider,
             )
@@ -5971,6 +6334,8 @@ async def ai_chat(
             db.add(extra_msg)
         db.commit()
 
+    _record_ai_chat_tokens(db, viewer, total_tokens_used)
+
     return AIChatResponse(
         reply=reply,
         mode=mode,
@@ -5990,6 +6355,9 @@ async def ai_chat_auto_continue(
 ):
     user: models.User | None = None
     character: models.AIChatCharacter | None = None
+    viewer = get_optional_current_user(request, db)
+    if viewer is not None:
+        _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = (
@@ -6002,6 +6370,7 @@ async def ai_chat_auto_continue(
         )
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+        viewer = user
 
     character_name = (req.character_name or "").strip()[:80]
     personality = (req.personality or "").strip()[:4000]
@@ -6012,6 +6381,7 @@ async def ai_chat_auto_continue(
             personality = str(character.personality or "").strip()[:4000]
     long_reply = bool(getattr(req, "long_reply", False))
     short_reply = bool(getattr(req, "short_reply", False))
+    r18 = bool(getattr(req, "r18", False))
     if short_reply:
         long_reply = False
     language_style = _normalize_language_style(getattr(req, "language_style", "normal"))
@@ -6041,8 +6411,9 @@ async def ai_chat_auto_continue(
         long_reply=long_reply,
         short_reply=short_reply,
         language_style_rules=language_style_rules,
+        r18=r18,
     )
-    data, tokens, model_used = await call_ai_json(
+    data, tokens, model_used = await _call_ai_chat_json_with_fallback(
         auto_prompt,
         model=req.model,
         provider=req.provider,
@@ -6054,6 +6425,7 @@ async def ai_chat_auto_continue(
             "主題を維持し、少なくとも10ターンは同じ話題を継続してください。"
             "long_reply が有効な場合は通常より約2倍の分量にしてください。"
             "short_reply が有効な場合は1行で短く返してください。"
+            + _build_ai_chat_content_safety_rules(r18=r18)
         ),
     )
 
@@ -6068,6 +6440,7 @@ async def ai_chat_auto_continue(
             history_text=history_text,
             latest_reply=latest_reply,
             latest_user_instruction=latest_user_instruction,
+            r18=r18,
             model=req.model,
             provider=req.provider,
         )
@@ -6088,6 +6461,8 @@ async def ai_chat_auto_continue(
         )
         db.add(msg)
         db.commit()
+
+    _record_ai_chat_tokens(db, viewer, tokens)
 
     return AIChatResponse(
         reply=reply,
@@ -6250,6 +6625,7 @@ def list_ai_chat_characters(
             id=int(item.id),
             name=str(item.name or ""),
             personality=item.personality,
+            speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
             is_public=bool(getattr(item, "is_public", False)),
             published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
             created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
@@ -6271,6 +6647,7 @@ def create_ai_chat_character(
         raise HTTPException(status_code=400, detail="キャラ名は必須です。")
     name = name[:80]
     personality = (payload.personality or "").strip()[:4000] or None
+    speech_gender = normalize_speech_gender(getattr(payload, "speech_gender", None))
 
     exists = (
         db.query(models.AIChatCharacter)
@@ -6282,6 +6659,8 @@ def create_ai_chat_character(
     )
     if exists:
         exists.personality = personality
+        if getattr(payload, "speech_gender", None) is not None:
+            exists.speech_gender = speech_gender
         db.add(exists)
         db.commit()
         db.refresh(exists)
@@ -6289,6 +6668,7 @@ def create_ai_chat_character(
             id=int(exists.id),
             name=str(exists.name or ""),
             personality=exists.personality,
+            speech_gender=normalize_speech_gender(getattr(exists, "speech_gender", None)),
             is_public=bool(getattr(exists, "is_public", False)),
             published_at=exists.published_at.isoformat() if getattr(exists, "published_at", None) else None,
             created_at=exists.created_at.isoformat() if getattr(exists, "created_at", None) else None,
@@ -6299,6 +6679,7 @@ def create_ai_chat_character(
         user_id=user.id,
         name=name,
         personality=personality,
+        speech_gender=speech_gender,
     )
     db.add(item)
     db.commit()
@@ -6307,6 +6688,7 @@ def create_ai_chat_character(
         id=int(item.id),
         name=str(item.name or ""),
         personality=item.personality,
+        speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
         is_public=bool(getattr(item, "is_public", False)),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
@@ -6340,6 +6722,8 @@ def update_ai_chat_character(
         item.name = name
     if payload.personality is not None:
         item.personality = (payload.personality or "").strip()[:4000] or None
+    if payload.speech_gender is not None:
+        item.speech_gender = normalize_speech_gender(payload.speech_gender)
 
     db.add(item)
     db.commit()
@@ -6348,6 +6732,7 @@ def update_ai_chat_character(
         id=int(item.id),
         name=str(item.name or ""),
         personality=item.personality,
+        speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
         is_public=bool(getattr(item, "is_public", False)),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
@@ -6384,6 +6769,7 @@ def publish_ai_chat_character(
         id=int(item.id),
         name=str(item.name or ""),
         personality=item.personality,
+        speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
         is_public=bool(getattr(item, "is_public", False)),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
@@ -6672,6 +7058,7 @@ def get_ai_chat_latest_prompt_preview(
         history_text=history_text,
         message=message,
         language_style_rules=language_style_rules,
+        r18=False,
     )
 
     return AIChatPromptPreviewResponse(
@@ -6680,7 +7067,7 @@ def get_ai_chat_latest_prompt_preview(
         message=message,
         history=history_items,
         prompt=prompt,
-        system_instructions=_build_ai_chat_system_instructions(long_reply=False, short_reply=False),
+        system_instructions=_build_ai_chat_system_instructions(long_reply=False, short_reply=False, r18=False),
         character_name=character_name or "無名のキャラクター",
         personality=personality or "未設定",
         language_style=language_style,
@@ -7287,6 +7674,53 @@ def _translation_provider() -> str | None:
     return None
 
 
+def _translation_provider_candidates() -> list[str]:
+    primary = (_translation_provider() or "openai").strip().lower()
+    ordered = [primary, "openai", "deepseek", "openrouter"]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in ordered:
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def _call_translation_ai_json(
+    *,
+    prompt: str,
+    system_prompt: str,
+) -> tuple[dict, int | None, str | None]:
+    errors: list[str] = []
+    primary_provider = (_translation_provider() or "openai").strip().lower()
+    primary_model = TRANSLATION_MODEL_TEXT or None
+
+    for provider in _translation_provider_candidates():
+        model = primary_model if provider == primary_provider else None
+        try:
+            return _run_async(
+                call_ai_json(
+                    prompt,
+                    model=model,
+                    provider=provider,
+                    system_instructions=system_prompt,
+                )
+            )
+        except Exception as e:
+            errors.append(f"{provider}:{e!r}")
+            logger.warning(
+                "translation provider failed provider=%s model=%s err=%r",
+                provider,
+                model,
+                e,
+            )
+            continue
+
+    joined = "; ".join(errors) if errors else "no provider attempted"
+    raise RuntimeError(f"all translation providers failed: {joined}")
+
+
 def upsert_novel_translation(
     db: Session,
     *,
@@ -7305,16 +7739,12 @@ def upsert_novel_translation(
     provider = _translation_provider()
     system_prompt = _translation_system_prompt(source_language, target_language)
     try:
-        data, _tokens, _model = _run_async(
-            call_ai_json(
-                prompt,
-                model=TRANSLATION_MODEL_TEXT or None,
-                provider=provider,
-                system_instructions=system_prompt,
-            )
+        data, _tokens, _model = _call_translation_ai_json(
+            prompt=prompt,
+            system_prompt=system_prompt,
         )
     except Exception as e:
-        logger.warning("translation failed novel_id=%s err=%r", novel.id, e)
+        logger.warning("translation failed novel_id=%s provider=%s err=%r", novel.id, provider, e)
         if AUTO_TRANSLATION_REQUIRED:
             raise
         return
@@ -7362,16 +7792,12 @@ def upsert_episode_translation(
     provider = _translation_provider()
     system_prompt = _translation_system_prompt(source_language, target_language)
     try:
-        data, _tokens, _model = _run_async(
-            call_ai_json(
-                prompt,
-                model=TRANSLATION_MODEL_TEXT or None,
-                provider=provider,
-                system_instructions=system_prompt,
-            )
+        data, _tokens, _model = _call_translation_ai_json(
+            prompt=prompt,
+            system_prompt=system_prompt,
         )
     except Exception as e:
-        logger.warning("translation failed episode_id=%s err=%r", episode.id, e)
+        logger.warning("translation failed episode_id=%s provider=%s err=%r", episode.id, provider, e)
         if AUTO_TRANSLATION_REQUIRED:
             raise
         return

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
 
@@ -40,6 +40,7 @@ const generateIllustTag = (usedTags) => {
 export default function NewEpisode() {
   const { id } = useParams(); // novel_id
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useI18n();
 
   const [episodeNumber, setEpisodeNumber] = useState(1);
@@ -60,6 +61,7 @@ export default function NewEpisode() {
   const [tagCandidates, setTagCandidates] = useState([]);
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
   const [tagSuggestError, setTagSuggestError] = useState("");
+  const [aiPrefillApplied, setAiPrefillApplied] = useState(false);
 
   // この作品用のローカルストレージキー
   const draftKey = `${EP_DRAFT_KEY_PREFIX}_${id ?? "unknown"}`;
@@ -104,6 +106,31 @@ export default function NewEpisode() {
     return () => clearTimeout(timer);
   }, [draftKey, episodeNumber, title, body, tags, status]);
   // === auto-save episode draft end ===
+
+  useEffect(() => {
+    if (aiPrefillApplied) return;
+    const prefill = location?.state?.aiPrefill;
+    if (!prefill || typeof prefill !== "object") return;
+
+    if (prefill.episodeNumber !== undefined && prefill.episodeNumber !== null) {
+      const num = Number(prefill.episodeNumber);
+      if (!Number.isNaN(num) && num > 0) {
+        setEpisodeNumber(num);
+      }
+    }
+    if (typeof prefill.title === "string") {
+      setTitle(prefill.title);
+    }
+    if (typeof prefill.body === "string") {
+      setBody(prefill.body);
+    }
+    if (prefill.status === "draft" || prefill.status === "public") {
+      setStatus(prefill.status);
+    } else {
+      setStatus("draft");
+    }
+    setAiPrefillApplied(true);
+  }, [aiPrefillApplied, location?.state]);
 
 
   // =========================

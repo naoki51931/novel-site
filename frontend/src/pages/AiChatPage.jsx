@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPaperPlane } from "@fortawesome/free-regular-svg-icons";
 import { useI18n } from "../lib/i18n";
@@ -33,6 +33,12 @@ function compactText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeSpeechGender(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "female" || v === "male") return v;
+  return "auto";
+}
+
 function truncateText(text, max = 56) {
   const normalized = compactText(text);
   if (!normalized) return "";
@@ -42,6 +48,7 @@ function truncateText(text, max = 56) {
 
 export default function AiChatPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [model, setModel] = useState("gpt-4.1-mini");
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -51,12 +58,14 @@ export default function AiChatPage() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem(AI_CHAT_PERSONALITY_KEY) || "";
   });
+  const [mainSpeechGender, setMainSpeechGender] = useState("auto");
   const [mode, setMode] = useState("say");
   const [autoDialogue, setAutoDialogue] = useState(false);
   const [longReply, setLongReply] = useState(false);
   const [shortReply, setShortReply] = useState(false);
   const [dailyTalkMode, setDailyTalkMode] = useState(false);
   const [iq80CrudeMode, setIq80CrudeMode] = useState(false);
+  const [r18Mode, setR18Mode] = useState(false);
   const [fanficMode, setFanficMode] = useState(false);
   const [augmentLoading, setAugmentLoading] = useState(false);
   const [augmentNotes, setAugmentNotes] = useState("");
@@ -72,6 +81,7 @@ export default function AiChatPage() {
   const [autoContinuing, setAutoContinuing] = useState(false);
   const [error, setError] = useState("");
   const [isResending, setIsResending] = useState(false);
+  const [creatingNovelFromChat, setCreatingNovelFromChat] = useState(false);
   const [lastRequest, setLastRequest] = useState(null);
   const [resendDraft, setResendDraft] = useState("");
   const [resendMode, setResendMode] = useState("say");
@@ -79,6 +89,8 @@ export default function AiChatPage() {
   const [selectedCharacterId, setSelectedCharacterId] = useState("");
   const [charactersLoading, setCharactersLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [chatAccess, setChatAccess] = useState(null);
+  const [addonCheckoutLoading, setAddonCheckoutLoading] = useState(false);
   const [latestPromptPreview, setLatestPromptPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [nextLineSuggestions, setNextLineSuggestions] = useState([]);
@@ -103,6 +115,249 @@ export default function AiChatPage() {
   });
   const fanficCacheRef = useRef(new Map());
 
+  const normalizeAiNovelResponse = (data) => {
+    if (!data || typeof data !== "object") return data;
+    const rawBody = String(data?.body || "").trim();
+    if (!rawBody) return data;
+    const rawTitle = String(data?.generated_title || "").trim();
+    if (rawBody.startsWith("{") && rawBody.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(rawBody);
+        return {
+          ...data,
+          generated_title: String(
+            rawTitle || parsed?.generated_title || parsed?.title || ""
+          ).trim(),
+          body: String(parsed?.body || parsed?.content || rawBody),
+        };
+      } catch {
+        return data;
+      }
+    }
+    return data;
+  };
+
+  const buildConversationTimelineForNovel = () => {
+    const list = Array.isArray(messages) ? messages : [];
+    if (!list.length) return [];
+
+    const normalized = list
+      .filter((m) => m?.role === "user" || m?.role === "assistant")
+      .map((m) => {
+        const role = m.role === "assistant" ? "assistant" : "user";
+        const mode = m.mode === "do" ? "do" : "say";
+        const speaker = String(m.speaker_name || "").trim();
+        const content = String(m.content || "").trim();
+        return { role, mode, speaker, content };
+      })
+      .filter((m) => m.content);
+
+    const firstUserIndex = normalized.findIndex((m) => m.role === "user");
+    if (firstUserIndex < 0) return [];
+    return normalized.slice(firstUserIndex);
+  };
+
+  const handleCreateNovelFromConversation = async () => {
+    if (creatingNovelFromChat || loading) return;
+    setError("");
+
+    const token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
+    if (!token) {
+      setError(
+        t({
+          ja: "この機能はログインが必要です。",
+          en: "Login is required for this feature.",
+        })
+      );
+      return;
+    }
+
+    const timeline = buildConversationTimelineForNovel();
+    const hasUser = timeline.some((m) => m.role === "user");
+    const hasAssistant = timeline.some((m) => m.role === "assistant");
+    if (!hasUser || !hasAssistant) {
+      setError(
+        t({
+          ja: "会話全体を小説化するには、ユーザー発言とGPT発言の両方が必要です。",
+          en: "Need both user and GPT messages to convert the full chat into a novel.",
+        })
+      );
+      return;
+    }
+
+    setCreatingNovelFromChat(true);
+    try {
+      const timelineText = timeline
+        .slice(0, 120)
+        .map((m, idx) => {
+          const who = m.role === "assistant" ? "GPT" : "ユーザー";
+          const modeText = m.mode === "do" ? "do" : "say";
+          const speakerLabel = m.speaker ? `(${m.speaker})` : "";
+          const line = m.content.length > 1200 ? `${m.content.slice(0, 1200)}...` : m.content;
+          return `${idx + 1}. ${who}${speakerLabel} [${modeText}]\n${line}`;
+        })
+        .join("\n\n");
+
+      const prompt = [
+        "次のチャットログを先頭から末尾まで時系列で読み、1本の日本語小説に再構成してください。",
+        "各ユーザー発言とGPT発言を素材に、会話内容をベースにした新しい物語へ発展させてください。",
+        "要約ではなく、小説として場面描写・心理描写・行動描写を追加し、起承転結のある展開にしてください。",
+        "分量は通常よりしっかり増やし、同内容の簡易版ではなく約1.5倍の読了感になるように肉付けしてください。",
+        "各ユーザー発言の行間を、直後のGPT発言を参考に地の文で自然につないでください。",
+        "会話の感情推移・関係性・出来事の順番は保ちつつ、因果関係と余韻を補って厚みを出してください。",
+        "途中の重要な発言は削除せず、台詞や描写として必ず反映してください。",
+        "1行目は作品タイトル、2行目は空行、3行目以降を本文にしてください。",
+        "本文は章見出しなしで連続した小説文にしてください。",
+        "",
+        "### チャットログ",
+        timelineText,
+      ].join("\n");
+
+      const generateRes = await fetch("/api/ai/novels/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          title_hint: "チャットから生まれた物語",
+          length: "xlong",
+          prompt,
+        }),
+      });
+      const generatedRaw = await generateRes.json().catch(() => ({}));
+      const generated = normalizeAiNovelResponse(generatedRaw || {});
+      if (!generateRes.ok) {
+        throw new Error(
+          generated?.detail ||
+            t(
+              {
+                ja: "会話からの小説生成に失敗しました (status={{status}})",
+                en: "Failed to generate novel from conversation (status={{status}})",
+              },
+              { status: generateRes.status }
+            )
+        );
+      }
+
+      const novelTitle =
+        String(generated?.generated_title || "").trim() ||
+        t({ ja: "チャットから生まれた物語", en: "A Story Born from Chat" });
+      const storyBody = String(generated?.body || "").trim();
+      if (!storyBody) {
+        throw new Error(
+          t({
+            ja: "生成された本文が空でした。",
+            en: "Generated story body was empty.",
+          })
+        );
+      }
+
+      let episodeTitle =
+        t({ ja: "第1話", en: "Episode 1" });
+      try {
+        const titleRes = await fetch("/api/ai/title_candidate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ text: storyBody.slice(0, 2000) }),
+        });
+        const titleData = await titleRes.json().catch(() => ({}));
+        if (titleRes.ok && titleData?.title) {
+          episodeTitle = String(titleData.title).trim() || episodeTitle;
+        }
+      } catch {
+        // ignore title generation failures
+      }
+
+      const novelRes = await fetch("/api/novels", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          title: novelTitle,
+          description: t({ ja: "AIチャット会話から自動作成", en: "Auto-created from AI chat conversation" }),
+          is_ai_generated: true,
+          is_public: false,
+          age_limit: "all",
+          tag_names: [],
+        }),
+      });
+      const novelData = await novelRes.json().catch(() => ({}));
+      if (!novelRes.ok) {
+        throw new Error(
+          novelData?.detail ||
+            t(
+              {
+                ja: "小説の自動作成に失敗しました (status={{status}})",
+                en: "Failed to auto-create novel (status={{status}})",
+              },
+              { status: novelRes.status }
+            )
+        );
+      }
+      const novelId = novelData?.id;
+      if (!novelId) {
+        throw new Error(
+          t({ ja: "小説IDが取得できませんでした。", en: "Could not get novel ID." })
+        );
+      }
+
+      const episodeRes = await fetch(`/api/novels/${novelId}/episodes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          episode_number: 1,
+          title: episodeTitle,
+          body: storyBody,
+          status: "draft",
+          tag_names: [],
+        }),
+      });
+      const episodeData = await episodeRes.json().catch(() => ({}));
+      if (!episodeRes.ok) {
+        throw new Error(
+          episodeData?.detail ||
+            t(
+              {
+                ja: "エピソード書き出しに失敗しました (status={{status}})",
+                en: "Failed to export episode (status={{status}})",
+              },
+              { status: episodeRes.status }
+            )
+        );
+      }
+      const episodeId = episodeData?.id || episodeData?.episode_id;
+      if (!episodeId) {
+        throw new Error(
+          t({ ja: "エピソードIDが取得できませんでした。", en: "Could not get episode ID." })
+        );
+      }
+
+      navigate(`/episodes/${episodeId}/edit`);
+    } catch (e) {
+      setError(
+        e?.message ||
+          t({
+            ja: "会話からの小説作成中にエラーが発生しました。",
+            en: "An error occurred while creating a novel from conversation.",
+          })
+      );
+    } finally {
+      setCreatingNovelFromChat(false);
+    }
+  };
+
   const historyPayload = useMemo(
     () =>
       messages.slice(-20).map((m) => ({
@@ -123,6 +378,7 @@ export default function AiChatPage() {
         name: t({ ja: "あなた", en: "You" }),
         personality: "",
         fanfic_mode: false,
+        speech_gender: "auto",
       };
     }
     if (key === "main") {
@@ -131,13 +387,14 @@ export default function AiChatPage() {
         name: characterName,
         personality,
         fanfic_mode: fanficMode,
+        speech_gender: mainSpeechGender,
       };
     }
     return castCharacters.find((c) => c.key === key) || null;
   };
   const userSpeakerProfile = useMemo(
     () => getSpeakerProfileByKey(userSpeakerKey) || getSpeakerProfileByKey("main"),
-    [userSpeakerKey, castCharacters, characterName, personality, fanficMode, t]
+    [userSpeakerKey, castCharacters, characterName, personality, fanficMode, mainSpeechGender, t]
   );
   const selectedSpeakerName = normalizeSpeakerName(userSpeakerProfile?.name || characterName)
     || t({ ja: "未選択", en: "Not selected" });
@@ -178,6 +435,7 @@ export default function AiChatPage() {
     personality: "",
     relationship: "",
     fanfic_mode: true,
+    speech_gender: "auto",
   });
 
   const updateCastCharacter = (key, patch) => {
@@ -206,6 +464,7 @@ export default function AiChatPage() {
       saved_id: selected.id,
       name: String(selected.name || "").trim(),
       personality: String(selected.personality || ""),
+      speech_gender: normalizeSpeechGender(selected.speech_gender),
     });
   };
 
@@ -375,6 +634,68 @@ export default function AiChatPage() {
     );
   };
 
+  const buildSpeechGenderConstraint = (speakerName, speechGender) => {
+    const s = String(speakerName || "").trim() || "このキャラ";
+    if (speechGender === "female") {
+      return (
+        "\n\n【一人称ルール】\n"
+        + `- ${s} の一人称は女性的に統一する（例: 「わたし」「あたし」）。\n`
+        + "- 「俺」「僕」など男性寄りの一人称は使わない。\n"
+        + "- 語尾・口調も女性的な自然さを優先する。"
+      );
+    }
+    if (speechGender === "male") {
+      return (
+        "\n\n【一人称ルール】\n"
+        + `- ${s} の一人称は男性的に統一する（例: 「俺」「僕」）。\n`
+        + "- 「わたし」「あたし」など女性寄りの一人称は使わない。\n"
+        + "- 語尾・口調も男性的な自然さを優先する。"
+      );
+    }
+    return "";
+  };
+
+  const renderSpeechGenderButtons = (value, onChange) => (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => onChange("female")}
+        style={{
+          fontWeight: value === "female" ? 700 : 400,
+          borderColor: value === "female" ? "#c75a8a" : undefined,
+          background: value === "female" ? "#ffeaf4" : undefined,
+        }}
+      >
+        {t({ ja: "女", en: "Female" })}
+      </button>
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => onChange("male")}
+        style={{
+          fontWeight: value === "male" ? 700 : 400,
+          borderColor: value === "male" ? "#4f79c8" : undefined,
+          background: value === "male" ? "#eaf1ff" : undefined,
+        }}
+      >
+        {t({ ja: "男", en: "Male" })}
+      </button>
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => onChange("auto")}
+        style={{
+          fontWeight: value === "auto" ? 700 : 400,
+          borderColor: value === "auto" ? "#6f7785" : undefined,
+          background: value === "auto" ? "#f2f4f8" : undefined,
+        }}
+      >
+        {t({ ja: "自動", en: "Auto" })}
+      </button>
+    </div>
+  );
+
   const runCharacterAugment = async ({
     name,
     personalityText,
@@ -432,6 +753,72 @@ export default function AiChatPage() {
       return resolved;
     } finally {
       setAugmentLoading(false);
+    }
+  };
+
+  const loadChatAccess = async () => {
+    const token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
+    if (!token) {
+      setChatAccess(null);
+      return;
+    }
+    try {
+      const res = await fetch("/api/ai/chat/access", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      setChatAccess(data || null);
+    } catch {
+      // ignore
+    }
+  };
+
+  const startAiChatAddonCheckout = async () => {
+    if (addonCheckoutLoading) return;
+    const token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
+    if (!token) {
+      setError(t({ ja: "ログインが必要です。", en: "Login required." }));
+      return;
+    }
+    setAddonCheckoutLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/ai/chat/addon/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ blocks: 1 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t({ ja: "追加課金Checkoutの作成に失敗しました。", en: "Failed to start add-on checkout." })
+        );
+      }
+      const url = String(data?.checkout_url || "").trim();
+      if (!url) {
+        throw new Error(
+          t({ ja: "Checkout URLが取得できませんでした。", en: "Checkout URL was missing." })
+        );
+      }
+      window.location.href = url;
+    } catch (e) {
+      setError(
+        e?.message ||
+          t({ ja: "追加課金Checkoutの開始中にエラーが発生しました。", en: "Failed to start add-on checkout." })
+      );
+    } finally {
+      setAddonCheckoutLoading(false);
     }
   };
 
@@ -578,6 +965,7 @@ export default function AiChatPage() {
               id: String(c.id),
               name: String(c.name || "").trim(),
               personality: String(c.personality || ""),
+              speech_gender: normalizeSpeechGender(c.speech_gender),
               is_public: !!c.is_public,
               published_at: c.published_at || null,
             }))
@@ -628,6 +1016,7 @@ export default function AiChatPage() {
         body: JSON.stringify({
           name: augmented.characterName || name,
           personality: augmented.personalityText || personality,
+          speech_gender: normalizeSpeechGender(mainSpeechGender),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -642,6 +1031,7 @@ export default function AiChatPage() {
         id: String(data.id),
         name: String(data.name || "").trim(),
         personality: String(data.personality || ""),
+        speech_gender: normalizeSpeechGender(data.speech_gender),
         is_public: !!data.is_public,
         published_at: data.published_at || null,
       };
@@ -650,6 +1040,7 @@ export default function AiChatPage() {
         return [saved, ...without];
       });
       setSelectedCharacterId(saved.id);
+      setMainSpeechGender(normalizeSpeechGender(saved.speech_gender));
       setMessages([]);
       setLastRequest(null);
       setResendDraft("");
@@ -667,6 +1058,7 @@ export default function AiChatPage() {
   const applySelectedCharacter = (id) => {
     if (!id) {
       setSelectedCharacterId("");
+      setMainSpeechGender("auto");
       setMessages([]);
       setLastRequest(null);
       setResendDraft("");
@@ -678,6 +1070,7 @@ export default function AiChatPage() {
     setSelectedCharacterId(item.id);
     setCharacterName(item.name || "");
     setPersonality(item.personality || "");
+    setMainSpeechGender(normalizeSpeechGender(item.speech_gender));
     setSelectedAnimeTitle("");
     setLatestPromptPreview(null);
     setError("");
@@ -749,7 +1142,12 @@ export default function AiChatPage() {
       setSavedCharacters((prev) =>
         prev.map((c) =>
           c.id === selectedCharacterId
-            ? { ...c, is_public: !!data.is_public, published_at: data.published_at || null }
+            ? {
+                ...c,
+                is_public: !!data.is_public,
+                published_at: data.published_at || null,
+                speech_gender: normalizeSpeechGender(data.speech_gender ?? c.speech_gender),
+              }
             : c
         )
       );
@@ -846,6 +1244,7 @@ export default function AiChatPage() {
         body: JSON.stringify({
           name: nextName,
           personality: nextPersonality,
+          speech_gender: normalizeSpeechGender(mainSpeechGender),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -859,12 +1258,14 @@ export default function AiChatPage() {
         id: String(data.id || selectedCharacterId),
         name: String(data.name || nextName).trim(),
         personality: String(data.personality || nextPersonality || ""),
+        speech_gender: normalizeSpeechGender(data.speech_gender ?? mainSpeechGender),
         is_public: !!data.is_public,
         published_at: data.published_at || null,
       };
       setSavedCharacters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       setCharacterName(updated.name);
       setPersonality(updated.personality);
+      setMainSpeechGender(normalizeSpeechGender(updated.speech_gender));
     };
     run().catch((e) => {
       setError(
@@ -908,6 +1309,7 @@ export default function AiChatPage() {
         body: JSON.stringify({
           name: resolved.characterName || name,
           personality: resolved.personalityText || cast.personality || "",
+          speech_gender: normalizeSpeechGender(cast.speech_gender),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -922,6 +1324,7 @@ export default function AiChatPage() {
         saved_id: savedId,
         name: String(data.name || resolved.characterName || name).trim(),
         personality: String(data.personality || resolved.personalityText || cast.personality || ""),
+        speech_gender: normalizeSpeechGender(data.speech_gender || cast.speech_gender),
       });
       if (savedId) {
         setSavedCharacters((prev) => {
@@ -929,6 +1332,7 @@ export default function AiChatPage() {
             id: savedId,
             name: String(data.name || resolved.characterName || name).trim(),
             personality: String(data.personality || resolved.personalityText || cast.personality || ""),
+            speech_gender: normalizeSpeechGender(data.speech_gender || cast.speech_gender),
             is_public: !!data.is_public,
             published_at: data.published_at || null,
           };
@@ -1007,6 +1411,7 @@ export default function AiChatPage() {
         body: JSON.stringify({
           message: text,
           mode: modeAtSend,
+          r18: r18Mode,
           character_id: selectedCharacterId ? Number(selectedCharacterId) : null,
           character_name: characterNameAtSend ?? characterName,
           personality: personalityAtSend ?? personality,
@@ -1085,6 +1490,7 @@ export default function AiChatPage() {
       );
     } finally {
       setLoading(false);
+      loadChatAccess();
     }
   };
 
@@ -1098,6 +1504,7 @@ export default function AiChatPage() {
       const assistantKey = String(assistantProfile?.key || "main");
       const assistantName = String(assistantProfile?.name || characterName || "").trim();
       const assistantPersonality = String(assistantProfile?.personality || personality || "");
+      const assistantSpeechGender = String(assistantProfile?.speech_gender || "auto");
       const token =
         typeof window !== "undefined"
           ? localStorage.getItem("token") || localStorage.getItem("access_token")
@@ -1110,9 +1517,10 @@ export default function AiChatPage() {
         method: "POST",
         headers,
         body: JSON.stringify({
+          r18: r18Mode,
           character_id: selectedCharacterId ? Number(selectedCharacterId) : null,
           character_name: assistantName,
-          personality: `${assistantPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(assistantName)}`,
+          personality: `${assistantPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(assistantName)}${buildSpeechGenderConstraint(assistantName, assistantSpeechGender)}`,
           long_reply: longReply,
           short_reply: shortReply,
           language_style: languageStyle,
@@ -1143,6 +1551,7 @@ export default function AiChatPage() {
       return false;
     } finally {
       setAutoContinuing(false);
+      loadChatAccess();
     }
   };
 
@@ -1173,6 +1582,7 @@ export default function AiChatPage() {
     const assistantKey = String(assistantProfile?.key || "main");
     let resolvedCharacterName = String(assistantProfile?.name || "").trim();
     let resolvedPersonality = String(assistantProfile?.personality || "");
+    const resolvedSpeechGender = String(assistantProfile?.speech_gender || "auto");
     const userSpeakerNameAtSend = String(userSpeakerProfile?.name || characterName || "").trim();
     const activeFanfic = !!assistantProfile?.fanfic_mode;
     try {
@@ -1205,7 +1615,7 @@ export default function AiChatPage() {
       modeAtSend: mode,
       explicitHistory,
       characterNameAtSend: resolvedCharacterName,
-      personalityAtSend: `${resolvedPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(userSpeakerNameAtSend)}`,
+      personalityAtSend: `${resolvedPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(userSpeakerNameAtSend)}${buildSpeechGenderConstraint(resolvedCharacterName, resolvedSpeechGender)}`,
     });
   };
 
@@ -1285,6 +1695,7 @@ export default function AiChatPage() {
       const assistantKey = String(assistantProfile?.key || "main");
       let resolvedCharacterName = String(assistantProfile?.name || "").trim();
       let resolvedPersonality = String(assistantProfile?.personality || "");
+      const resolvedSpeechGender = String(assistantProfile?.speech_gender || "auto");
       const userSpeakerNameAtSend = String(userSpeakerProfile?.name || characterName || "").trim();
       const activeFanfic = !!assistantProfile?.fanfic_mode;
       try {
@@ -1311,7 +1722,7 @@ export default function AiChatPage() {
         modeAtSend: resendMode === "do" ? "do" : "say",
         explicitHistory,
         characterNameAtSend: resolvedCharacterName,
-        personalityAtSend: `${resolvedPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(userSpeakerNameAtSend)}`,
+        personalityAtSend: `${resolvedPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(userSpeakerNameAtSend)}${buildSpeechGenderConstraint(resolvedCharacterName, resolvedSpeechGender)}`,
       });
     } finally {
       setIsResending(false);
@@ -1382,6 +1793,10 @@ export default function AiChatPage() {
   }, [selectedCharacterId, t, mode]);
 
   useEffect(() => {
+    loadChatAccess();
+  }, [selectedCharacterId]);
+
+  useEffect(() => {
     if (!autoDialogue) return;
     if (loading || autoContinuing || messagesLoading) return;
     if (messages.length === 0) return;
@@ -1417,20 +1832,21 @@ export default function AiChatPage() {
   }, [messages.length, selectedMessageIndex]);
 
   useEffect(() => {
-    const speakerName = normalizeSpeakerName(userSpeakerProfile?.name || characterName);
-    const speakerPersonality = userSpeakerKey === "you"
-      ? ""
-      : String(userSpeakerProfile?.personality || personality || "");
-    if (!speakerName && !compactText(input) && messages.length === 0) {
-      setNextLineSuggestions([]);
-      setNextLineLoading(false);
-      return;
-    }
     const fallback = [
       t({ ja: "「……」", en: "\"...\"" }),
       t({ ja: "それ、どう受け取ろうかな。", en: "How should I take that?" }),
       t({ ja: "次はこう返してみよう。", en: "Maybe I should reply like this next." }),
     ];
+    const speakerName = normalizeSpeakerName(userSpeakerProfile?.name || characterName);
+    const speakerPersonality = userSpeakerKey === "you"
+      ? ""
+      : String(userSpeakerProfile?.personality || personality || "");
+    const speakerSpeechGender = String(userSpeakerProfile?.speech_gender || "auto");
+    if (!speakerName && !compactText(input) && messages.length === 0) {
+      setNextLineSuggestions(fallback);
+      setNextLineLoading(false);
+      return;
+    }
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
@@ -1447,8 +1863,9 @@ export default function AiChatPage() {
           signal: controller.signal,
           body: JSON.stringify({
             character_id: token && selectedCharacterId ? Number(selectedCharacterId) : null,
+            r18: r18Mode,
             character_name: speakerName || characterName,
-            personality: `${speakerPersonality}${buildParticipantsContext(userSpeakerKey)}${buildRoleplayConstraint(speakerName || characterName)}`,
+            personality: `${speakerPersonality}${buildParticipantsContext(userSpeakerKey)}${buildRoleplayConstraint(speakerName || characterName)}${buildSpeechGenderConstraint(speakerName || characterName, speakerSpeechGender)}`,
             history: historyPayload,
             input_hint: input,
             suggestions_count: PREVIEW_BUBBLE_COUNT,
@@ -1488,22 +1905,95 @@ export default function AiChatPage() {
     messages.length,
     model,
     personality,
+    r18Mode,
     selectedCharacterId,
     t,
     userSpeakerKey,
     userSpeakerProfile,
   ]);
 
+  const toggleR18Mode = () => {
+    if (loading) return;
+    if (r18Mode) {
+      setR18Mode(false);
+      return;
+    }
+    const ok = window.confirm(
+      t({
+        ja: "あなたは18歳以上ですか？",
+        en: "Are you 18 years old or older?",
+      })
+    );
+    if (!ok) return;
+    setR18Mode(true);
+  };
+
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <Link to="/" className="btn btn-border">{t({ ja: "トップへ", en: "Home" })}</Link>
         <Link to="/ai-novel" className="btn btn-border">{t({ ja: "AI小説", en: "AI Novel" })}</Link>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleCreateNovelFromConversation}
+          disabled={loading || creatingNovelFromChat || messages.length < 2}
+        >
+          {creatingNovelFromChat
+            ? t({ ja: "書き出し中...", en: "Exporting..." })
+            : t({ ja: "先頭からAI小説化して書き出す", en: "Convert full chat to AI novel" })}
+        </button>
         <Link to="/ai_chat/public" className="btn btn-border">
           {t({ ja: "公開チャット検索", en: "Public Chat Search" })}
         </Link>
       </div>
       <h2>{t({ ja: "AIチャット", en: "AI Chat" })}</h2>
+      {chatAccess && (
+        <div
+          style={{
+            border: "1px solid #d5dbe7",
+            borderRadius: 8,
+            padding: 10,
+            marginBottom: 10,
+            background: "#f8fbff",
+          }}
+        >
+          <div style={{ fontSize: "0.9rem", marginBottom: 6 }}>
+            {t({ ja: "AIチャット利用量", en: "AI chat usage" })}: {Number(chatAccess.used_tokens || 0).toLocaleString()} / {Number(chatAccess.allowed_tokens || 0).toLocaleString()} tokens
+          </div>
+          {chatAccess.show_premium_prompt && (
+            <div style={{ fontSize: "0.9rem", color: "#5b4a1f", marginBottom: chatAccess.needs_upgrade ? 8 : 0 }}>
+              {t({
+                ja: `無料枠到達以降はプレミアム登録、または${Number(chatAccess.block_tokens || 0).toLocaleString()}トークンごと${Number(chatAccess.block_price_yen || 0).toLocaleString()}円の追加課金で継続できます。`,
+                en: `After the free quota, continue with premium or ¥${Number(chatAccess.block_price_yen || 0).toLocaleString()} per extra ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens.`,
+              })}
+            </div>
+          )}
+          {chatAccess.needs_upgrade && !chatAccess.demo_bypass && (
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={startAiChatAddonCheckout}
+              disabled={addonCheckoutLoading}
+            >
+              {addonCheckoutLoading
+                ? t({ ja: "Checkout準備中...", en: "Preparing checkout..." })
+                : t({
+                    ja: `${Number(chatAccess.block_price_yen || 0).toLocaleString()}円で${Number(chatAccess.block_tokens || 0).toLocaleString()}トークン追加`,
+                    en: `Add ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens for ¥${Number(chatAccess.block_price_yen || 0).toLocaleString()}`,
+                  })}
+            </button>
+          )}
+          {chatAccess.demo_bypass && chatAccess.show_premium_prompt && (
+            <div style={{ fontSize: "0.85rem", color: "#2f5b1f" }}>
+              {t({
+                ja: "demo02 はデモ特例で追加課金なしで利用できます。",
+                en: "demo02 can continue without add-on payment (demo exception).",
+              })}
+            </div>
+          )}
+        </div>
+      )}
       {animeTitleDialogOpen && (
         <div
           style={{
@@ -1764,6 +2254,13 @@ export default function AiChatPage() {
                 />
                 <span>{cast.name?.trim() || t({ ja: "サブキャラ", en: "Sub character" })}</span>
               </label>
+              <div style={{ fontSize: "0.84rem", color: "#5f6675", marginTop: 6 }}>
+                {t({ ja: "一人称", en: "First-person style" })}
+              </div>
+              {renderSpeechGenderButtons(
+                cast.speech_gender || "auto",
+                (next) => updateCastCharacter(cast.key, { speech_gender: next })
+              )}
               <select
                 value={cast.saved_id || ""}
                 onChange={(e) => applySavedCharacterToCast(cast.key, e.target.value)}
@@ -1854,6 +2351,10 @@ export default function AiChatPage() {
             placeholder={t({ ja: "例: レイ", en: "e.g. Rei" })}
             style={{ width: "100%", marginTop: 4 }}
           />
+          <div style={{ fontSize: "0.84rem", color: "#5f6675", marginTop: 6 }}>
+            {t({ ja: "メインキャラの一人称", en: "Main character first-person style" })}
+          </div>
+          {renderSpeechGenderButtons(mainSpeechGender, setMainSpeechGender)}
           <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
             <button
               type="button"
@@ -2251,6 +2752,29 @@ export default function AiChatPage() {
           })}
         </span>
       </label>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className={r18Mode ? "btn btn-border" : "btn"}
+          onClick={toggleR18Mode}
+          disabled={loading}
+          aria-pressed={r18Mode}
+          style={{
+            fontWeight: r18Mode ? 700 : 400,
+            background: r18Mode ? "#ffe1e1" : undefined,
+            borderColor: r18Mode ? "#c53f3f" : undefined,
+            color: r18Mode ? "#8a1f1f" : undefined,
+          }}
+        >
+          {r18Mode ? "R18: ON" : "R18: OFF"}
+        </button>
+        <span style={{ fontSize: "0.85rem", color: "#666" }}>
+          {t({
+            ja: "ON時は年齢確認済みとして扱います。",
+            en: "When ON, age confirmation is considered accepted.",
+          })}
+        </span>
+      </div>
       {autoDialogue && (
         <div style={{ marginTop: 4, fontSize: "0.85rem", color: autoContinuing ? "#235a93" : "#666" }}>
           {autoContinuing
