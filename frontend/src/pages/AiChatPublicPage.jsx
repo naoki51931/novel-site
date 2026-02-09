@@ -1,10 +1,31 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+
+function slugifyCharacterName(name) {
+  return String(name || "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function buildPublicCharacterPath(id, name) {
+  const slug = slugifyCharacterName(name) || "character";
+  return `/ai_chat/public/${encodeURIComponent(id)}/${encodeURIComponent(slug)}`;
+}
 
 export default function AiChatPublicPage() {
   const { t } = useI18n();
-  const [q, setQ] = useState("");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { characterId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const qFromUrl = (searchParams.get("q") || "").trim();
+  const [q, setQ] = useState(qFromUrl);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -12,12 +33,28 @@ export default function AiChatPublicPage() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const search = async () => {
+  const buildUrlSearch = (query) => {
+    const params = new URLSearchParams(searchParams.toString());
+    const normalized = String(query || "").trim();
+    if (normalized) params.set("q", normalized);
+    else params.delete("q");
+    return params.toString();
+  };
+
+  const search = async ({ query = q, syncUrl = true } = {}) => {
+    const normalizedQuery = String(query || "").trim();
+    if (syncUrl) {
+      const next = new URLSearchParams(searchParams.toString());
+      if (normalizedQuery) next.set("q", normalizedQuery);
+      else next.delete("q");
+      setSearchParams(next);
+      if (normalizedQuery !== qFromUrl) return;
+    }
     setLoading(true);
     setError("");
     try {
       const params = new URLSearchParams();
-      if (q.trim()) params.set("q", q.trim());
+      if (normalizedQuery) params.set("q", normalizedQuery);
       params.set("limit", "50");
       const res = await fetch(`/api/ai/chat/public/characters?${params.toString()}`);
       const data = await res.json().catch(() => []);
@@ -38,7 +75,7 @@ export default function AiChatPublicPage() {
     }
   };
 
-  const loadDetail = async (id) => {
+  const loadDetail = async (id, { name = "", syncUrl = true } = {}) => {
     setSelectedId(id);
     setDetailLoading(true);
     setError("");
@@ -52,6 +89,14 @@ export default function AiChatPublicPage() {
         );
       }
       setDetail(data);
+      const query = buildUrlSearch(q);
+      const targetPathBase = buildPublicCharacterPath(id, data?.name || name);
+      const targetPath = query ? `${targetPathBase}?${query}` : targetPathBase;
+      if (syncUrl) {
+        navigate(targetPath);
+      } else if (`${location.pathname}${location.search}` !== targetPath) {
+        navigate(targetPath, { replace: true });
+      }
     } catch (e) {
       setError(
         e?.message ||
@@ -63,9 +108,22 @@ export default function AiChatPublicPage() {
   };
 
   useEffect(() => {
-    search();
+    setQ(qFromUrl);
+    search({ query: qFromUrl, syncUrl: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [qFromUrl]);
+
+  useEffect(() => {
+    if (!characterId) {
+      setSelectedId(null);
+      setDetail(null);
+      return;
+    }
+    const parsedId = Number(characterId);
+    if (!Number.isFinite(parsedId) || parsedId <= 0) return;
+    loadDetail(parsedId, { syncUrl: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [characterId]);
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto" }}>
@@ -84,12 +142,12 @@ export default function AiChatPublicPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") search();
+            if (e.key === "Enter") search({ query: q, syncUrl: true });
           }}
           placeholder={t({ ja: "キャラ名 / 性格で検索", en: "Search by character name / personality" })}
           style={{ flex: 1 }}
         />
-        <button type="button" className="btn btn-border" onClick={search} disabled={loading}>
+        <button type="button" className="btn btn-border" onClick={() => search({ query: q, syncUrl: true })} disabled={loading}>
           {loading ? t({ ja: "検索中...", en: "Searching..." }) : t({ ja: "検索", en: "Search" })}
         </button>
       </div>
@@ -107,7 +165,7 @@ export default function AiChatPublicPage() {
             key={item.id}
             type="button"
             className="btn btn-border"
-            onClick={() => loadDetail(item.id)}
+            onClick={() => loadDetail(item.id, { name: item.name, syncUrl: true })}
             style={{
               textAlign: "left",
               padding: 10,
@@ -132,6 +190,14 @@ export default function AiChatPublicPage() {
       {detail && !detailLoading && (
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
           <h3 style={{ marginTop: 0, fontSize: "1.5rem", lineHeight: 1.25 }}>{detail.name}</h3>
+          <div style={{ marginBottom: 8 }}>
+            <Link
+              to={`${buildPublicCharacterPath(detail.id, detail.name)}${buildUrlSearch(q) ? `?${buildUrlSearch(q)}` : ""}`}
+              className="btn btn-border"
+            >
+              {t({ ja: "この公開チャットへのリンク", en: "Link to this public chat" })}
+            </Link>
+          </div>
           <p style={{ color: "#666", marginTop: 0 }}>@{detail.author_username || "unknown"}</p>
           <p style={{ whiteSpace: "pre-wrap", color: "#444" }}>
             {detail.personality || t({ ja: "性格設定なし", en: "No personality description" })}

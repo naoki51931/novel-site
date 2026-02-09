@@ -6835,7 +6835,7 @@ def list_public_ai_chat_characters(
         AIChatPublicCharacterListItem(
             id=int(item.id),
             name=str(item.name or ""),
-            personality=item.personality,
+            personality=_trim_public_character_intro(item.personality),
             author_username=str(username or "") if username else None,
             published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         )
@@ -6874,7 +6874,7 @@ def get_public_ai_chat_character_detail(
     return AIChatPublicCharacterDetailResponse(
         id=int(character.id),
         name=str(character.name or ""),
-        personality=character.personality,
+        personality=_trim_public_character_intro(character.personality),
         author_username=str(username or "") if username else None,
         published_at=character.published_at.isoformat() if getattr(character, "published_at", None) else None,
         messages=[
@@ -6889,6 +6889,15 @@ def get_public_ai_chat_character_detail(
             for msg in messages
         ],
     )
+
+
+def _trim_public_character_intro(text: str | None, max_chars: int = 450) -> str | None:
+    raw = str(text or "")
+    if len(raw) <= max_chars:
+        return raw or None
+    if max_chars <= 1:
+        return raw[:max_chars]
+    return f"{raw[: max_chars - 1]}…"
 
 
 @app.get("/api/ai/chat/characters/{character_id}/messages", response_model=list[AIChatMessageResponse])
@@ -6987,6 +6996,7 @@ def get_ai_chat_latest_prompt_preview(
     character_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    r18: bool = Query(default=False),
 ):
     user = require_current_user(request, db)
     character = (
@@ -7058,7 +7068,7 @@ def get_ai_chat_latest_prompt_preview(
         history_text=history_text,
         message=message,
         language_style_rules=language_style_rules,
-        r18=False,
+        r18=r18,
     )
 
     return AIChatPromptPreviewResponse(
@@ -7067,7 +7077,7 @@ def get_ai_chat_latest_prompt_preview(
         message=message,
         history=history_items,
         prompt=prompt,
-        system_instructions=_build_ai_chat_system_instructions(long_reply=False, short_reply=False, r18=False),
+        system_instructions=_build_ai_chat_system_instructions(long_reply=False, short_reply=False, r18=r18),
         character_name=character_name or "無名のキャラクター",
         personality=personality or "未設定",
         language_style=language_style,
@@ -10557,7 +10567,11 @@ def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
 
 def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
     base = FRONTEND_ORIGIN.rstrip("/")
-    urls: list[tuple[str, Optional[datetime]]] = [(f"{base}/", None)]
+    urls: list[tuple[str, Optional[datetime]]] = [
+        (f"{base}/", None),
+        (f"{base}/ai_chat", None),
+        (f"{base}/ai_chat/public", None),
+    ]
 
     novels = (
         db.query(models.Novel.id, models.Novel.created_at)

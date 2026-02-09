@@ -46,6 +46,31 @@ function truncateText(text, max = 56) {
   return `${normalized.slice(0, max)}…`;
 }
 
+function normalizeStoredToken(raw) {
+  let token = String(raw || "").trim();
+  if (!token) return "";
+  if (
+    (token.startsWith("\"") && token.endsWith("\"")) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    token = token.slice(1, -1).trim();
+  }
+  if (!token) return "";
+  const lower = token.toLowerCase();
+  if (lower === "null" || lower === "undefined") return "";
+  return token;
+}
+
+function getStoredAuthToken() {
+  if (typeof window === "undefined") return null;
+  const primary = normalizeStoredToken(localStorage.getItem("access_token"));
+  const fallback = normalizeStoredToken(localStorage.getItem("token"));
+  const candidates = [primary, fallback].filter(Boolean);
+  if (!candidates.length) return null;
+  const jwtLike = candidates.find((v) => v.split(".").length === 3);
+  return jwtLike || candidates[0];
+}
+
 export default function AiChatPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -161,10 +186,7 @@ export default function AiChatPage() {
     if (creatingNovelFromChat || loading) return;
     setError("");
 
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("token") || localStorage.getItem("access_token")
-        : null;
+    const token = getStoredAuthToken();
     if (!token) {
       setError(
         t({
@@ -719,10 +741,7 @@ export default function AiChatPage() {
     setAugmentLoading(true);
     setAugmentNotes("");
     try {
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch("/api/ai/chat/character/augment", {
@@ -757,10 +776,7 @@ export default function AiChatPage() {
   };
 
   const loadChatAccess = async () => {
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("token") || localStorage.getItem("access_token")
-        : null;
+    const token = getStoredAuthToken();
     if (!token) {
       setChatAccess(null);
       return;
@@ -779,10 +795,7 @@ export default function AiChatPage() {
 
   const startAiChatAddonCheckout = async () => {
     if (addonCheckoutLoading) return;
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("token") || localStorage.getItem("access_token")
-        : null;
+    const token = getStoredAuthToken();
     if (!token) {
       setError(t({ ja: "ログインが必要です。", en: "Login required." }));
       return;
@@ -831,10 +844,7 @@ export default function AiChatPage() {
     setError("");
     setAnimeTitleLoading(true);
     try {
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch("/api/ai/chat/character/anime_title_candidates", {
@@ -935,10 +945,7 @@ export default function AiChatPage() {
   };
 
   useEffect(() => {
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("token") || localStorage.getItem("access_token")
-        : null;
+    const token = getStoredAuthToken();
     if (!token) {
       setSavedCharacters([]);
       setSelectedCharacterId("");
@@ -984,10 +991,7 @@ export default function AiChatPage() {
 
   const saveCharacter = () => {
     const run = async () => {
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "キャラ登録はログインが必要です。", en: "Login is required to save characters." }));
       }
@@ -1079,10 +1083,7 @@ export default function AiChatPage() {
   const deleteSelectedCharacter = () => {
     const run = async () => {
       if (!selectedCharacterId) return;
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "キャラ削除はログインが必要です。", en: "Login is required to delete characters." }));
       }
@@ -1116,10 +1117,7 @@ export default function AiChatPage() {
   const togglePublishSelectedCharacter = () => {
     const run = async () => {
       if (!selectedCharacterId) return;
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "公開設定はログインが必要です。", en: "Login is required for publish settings." }));
       }
@@ -1228,10 +1226,7 @@ export default function AiChatPage() {
       if (!selectedCharacterId) {
         return;
       }
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "性格設定の変更はログインが必要です。", en: "Login is required to update personality." }));
       }
@@ -1279,10 +1274,7 @@ export default function AiChatPage() {
     const run = async () => {
       const cast = castCharacters.find((c) => c.key === castKey);
       if (!cast) return;
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "キャラ登録はログインが必要です。", en: "Login is required to save characters." }));
       }
@@ -1352,10 +1344,7 @@ export default function AiChatPage() {
 
   const loadLatestPromptPreview = async () => {
     if (!selectedCharacterId || previewLoading) return;
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("token") || localStorage.getItem("access_token")
-        : null;
+    const token = getStoredAuthToken();
     if (!token) {
       setError(t({ ja: "ログインが必要です。", en: "Login required." }));
       return;
@@ -1364,8 +1353,10 @@ export default function AiChatPage() {
     setPreviewLoading(true);
     setError("");
     try {
+      const previewParams = new URLSearchParams();
+      if (r18Mode) previewParams.set("r18", "1");
       const res = await fetch(
-        `/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}/latest_prompt_preview`,
+        `/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}/latest_prompt_preview?${previewParams.toString()}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await res.json().catch(() => ({}));
@@ -1397,10 +1388,7 @@ export default function AiChatPage() {
     setError("");
     setLoading(true);
     try {
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       const headers = { "Content-Type": "application/json" };
       if (token) {
         headers.Authorization = `Bearer ${token}`;
@@ -1505,10 +1493,7 @@ export default function AiChatPage() {
       const assistantName = String(assistantProfile?.name || characterName || "").trim();
       const assistantPersonality = String(assistantProfile?.personality || personality || "");
       const assistantSpeechGender = String(assistantProfile?.speech_gender || "auto");
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
       const headers = { "Content-Type": "application/json" };
       if (token) {
         headers.Authorization = `Bearer ${token}`;
@@ -1638,10 +1623,7 @@ export default function AiChatPage() {
       );
       if (!confirmed) return;
 
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("token") || localStorage.getItem("access_token")
-          : null;
+      const token = getStoredAuthToken();
 
       if (selectedCharacterId && token && target?.id != null) {
         const res = await fetch(
@@ -1730,10 +1712,7 @@ export default function AiChatPage() {
   };
 
   useEffect(() => {
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("token") || localStorage.getItem("access_token")
-        : null;
+    const token = getStoredAuthToken();
       if (!token || !selectedCharacterId) {
       if (!selectedCharacterId) setMessages([]);
       if (!selectedCharacterId) {
@@ -1851,10 +1830,7 @@ export default function AiChatPage() {
     const timer = setTimeout(async () => {
       try {
         setNextLineLoading(true);
-        const token =
-          typeof window !== "undefined"
-            ? localStorage.getItem("token") || localStorage.getItem("access_token")
-            : null;
+        const token = getStoredAuthToken();
         const headers = { "Content-Type": "application/json" };
         if (token) headers.Authorization = `Bearer ${token}`;
         const res = await fetch("/api/ai/chat/next_user_lines", {

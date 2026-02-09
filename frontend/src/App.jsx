@@ -350,6 +350,8 @@ export default function App() {
 	  <Route path="/ai-novel" element={<AINovelPage />} />
 	  <Route path="/ai_chat" element={<AiChatPage />} />
 	  <Route path="/ai_chat/public" element={<AiChatPublicPage />} />
+	  <Route path="/ai_chat/public/:characterId" element={<AiChatPublicPage />} />
+	  <Route path="/ai_chat/public/:characterId/:slug" element={<AiChatPublicPage />} />
 	  <Route path="/ai-logs" element={<AiLogsPage />} />
           <Route path="/episodes/:id/edit" element={<EditEpisode />} />
           <Route path="/episodes/:id" element={<EpisodeDetail />} />
