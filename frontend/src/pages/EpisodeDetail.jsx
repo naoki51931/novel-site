@@ -128,7 +128,7 @@ export default function EpisodeDetail() {
   const handleSubscribe = async () => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert(t({ ja: "ログインが必要です。", en: "Login required." }));
+      alert(t({ ja: "ログインしてください。ログインページへ移動します。", en: "Please log in. Redirecting to login page." }));
       navigate("/login");
       return;
     }
@@ -141,6 +141,13 @@ export default function EpisodeDetail() {
         },
         body: JSON.stringify({}),
       });
+      if (res.status === 401) {
+        alert(
+          t({ ja: "ログインしてください。ログインページへ移動します。", en: "Please log in. Redirecting to login page." })
+        );
+        navigate("/login");
+        return;
+      }
       if (!res.ok) {
         throw new Error(
           t({ ja: "決済セッションの作成に失敗しました", en: "Failed to create checkout session." })

@@ -8,11 +8,17 @@ const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
 
-async function startStripeCheckout() {
+async function startStripeCheckout(navigate) {
   try {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert(translate({ ja: "ログインが必要です。", en: "Login required." }, getStoredLanguage()));
+      alert(
+        translate(
+          { ja: "ログインしてください。ログインページへ移動します。", en: "Please log in. Redirecting to login page." },
+          getStoredLanguage()
+        )
+      );
+      navigate("/login");
       return;
     }
 
@@ -25,6 +31,17 @@ async function startStripeCheckout() {
     });
 
     const data = await res.json().catch(() => ({}));
+
+    if (res.status === 401) {
+      alert(
+        translate(
+          { ja: "ログインしてください。ログインページへ移動します。", en: "Please log in. Redirecting to login page." },
+          getStoredLanguage()
+        )
+      );
+      navigate("/login");
+      return;
+    }
 
     if (!res.ok) {
       throw new Error(
@@ -459,7 +476,7 @@ export default function Mypage() {
           <button
             type="button"
             className="btn btn-border"
-            onClick={startStripeCheckout}
+            onClick={() => startStripeCheckout(navigate)}
           >
             {t({ ja: "プレミアム会員になる（決済ページへ）", en: "Become Premium (go to payment)" })}
           </button>
