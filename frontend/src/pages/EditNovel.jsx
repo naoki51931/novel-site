@@ -34,7 +34,7 @@ export default function EditNovel() {
   
   // draft を読んだかどうか
   const hasDraftRef = useRef(false);
-const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -69,25 +69,28 @@ const [loading, setLoading] = useState(true);
         const data = await res.json();
         const canEdit = data?.can_edit_full !== false;
         setCanEditFull(canEdit);
-        setTitle(data.title || "");
-        setDescription(data.description || "");
-        setAgeLimit(data.age_limit || "all");
-        setIsAIGenerated(!!data.is_ai_generated);
-        setCreativeType(data.creative_type || "original");
+        // 下書きを読み込んでいる場合は、遅延レスポンスで入力を上書きしない
+        if (!hasDraftRef.current) {
+          setTitle(data.title || "");
+          setDescription(data.description || "");
+          setAgeLimit(data.age_limit || "all");
+          setIsAIGenerated(!!data.is_ai_generated);
+          setCreativeType(data.creative_type || "original");
 
-        // ★ tags（配列）→ "A, B" にしてセット
-        if (Array.isArray(data.tags)) {
-          setTagsInput(data.tags.map((t) => t.name).join(", "));
-        } else {
-          setTagsInput("");
-        }
+          // ★ tags（配列）→ "A, B" にしてセット
+          if (Array.isArray(data.tags)) {
+            setTagsInput(data.tags.map((t) => t.name).join(", "));
+          } else {
+            setTagsInput("");
+          }
 
-        // status が "draft" なら下書き。
-        // それ以外でも is_public === false なら下書き扱いにする（データ不整合の保険）
-        if (data.status === "draft" || data.is_public === false) {
-          setStatus("draft");
-        } else {
-          setStatus("public");
+          // status が "draft" なら下書き。
+          // それ以外でも is_public === false なら下書き扱いにする（データ不整合の保険）
+          if (data.status === "draft" || data.is_public === false) {
+            setStatus("draft");
+          } else {
+            setStatus("public");
+          }
         }
       } catch (err) {
         console.error(err);
@@ -109,9 +112,8 @@ const [loading, setLoading] = useState(true);
       if (!raw) return;
       const draft = JSON.parse(raw);
 
-      
       hasDraftRef.current = true;
-if (draft.title) setTitle(draft.title);
+      if (draft.title) setTitle(draft.title);
       if (draft.description) setDescription(draft.description);
       if (draft.ageLimit) setAgeLimit(draft.ageLimit);
       if (typeof draft.isAIGenerated === "boolean") setIsAIGenerated(draft.isAIGenerated);

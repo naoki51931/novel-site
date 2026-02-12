@@ -6,7 +6,7 @@ const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou
 
 export default function DirectMessageThread() {
   const { threadId } = useParams();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const normalizedThreadId = useMemo(
     () => (threadId ? String(threadId).trim() : ""),
     [threadId]
@@ -157,7 +157,10 @@ export default function DirectMessageThread() {
                 <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                   {msg.sender_username || t({ ja: "ユーザー", en: "User" })} /{" "}
                   {msg.created_at
-                    ? new Date(msg.created_at).toLocaleString()
+                    ? new Date(msg.created_at).toLocaleString(
+                        lang === "en" ? "en-US" : "ja-JP",
+                        { timeZone: "Asia/Tokyo" }
+                      )
                     : ""}
                   {currentUserId && msg.sender_id === currentUserId && (
                     <span style={{ marginLeft: 8 }}>

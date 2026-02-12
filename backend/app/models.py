@@ -116,6 +116,26 @@ class PushSubscription(Base):
     )
 
 
+class MobilePushToken(Base):
+    __tablename__ = "mobile_push_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    platform = Column(String(32), nullable=False, server_default="android")
+    token = Column(String(512), nullable=False)
+    device_id = Column(String(128), nullable=True)
+    app_version = Column(String(64), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    last_seen_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_mobile_push_token"),
+    )
+
+
 # =========================
 # Novel
 # =========================

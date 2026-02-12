@@ -6,6 +6,7 @@ services:
     container_name: novel-db
     restart: unless-stopped
     environment:
+      TZ: Asia/Tokyo
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
@@ -28,6 +29,7 @@ services:
     container_name: novel-backend
     restart: unless-stopped
     environment:
+      TZ: Asia/Tokyo
       DB_HOST: db
       DB_USER: ${MYSQL_USER}
       DB_PASS: ${MYSQL_PASSWORD}
@@ -64,6 +66,8 @@ services:
       WEBPUSH_VAPID_PUBLIC_KEY: ${WEBPUSH_VAPID_PUBLIC_KEY}
       WEBPUSH_VAPID_PRIVATE_KEY: ${WEBPUSH_VAPID_PRIVATE_KEY}
       WEBPUSH_VAPID_SUBJECT: ${WEBPUSH_VAPID_SUBJECT}
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON}
+      FIREBASE_SERVICE_ACCOUNT_FILE: ${FIREBASE_SERVICE_ACCOUNT_FILE}
 
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL_TEXT: ${OPENAI_MODEL_TEXT}
@@ -92,6 +96,8 @@ services:
     image: nginx:1.27-alpine
     container_name: novel-nginx
     restart: unless-stopped
+    environment:
+      TZ: Asia/Tokyo
     depends_on:
       - backend
     ports:

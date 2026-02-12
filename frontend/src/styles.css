@@ -135,6 +135,16 @@ button.btn.btn-border.bubble-send-btn {
   color: var(--bg);
 }
 
+.public-chat-character-card {
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.public-chat-character-card:hover {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 6px 16px var(--shadow);
+}
+
 .site-title-link {
   text-decoration: none;
   color: inherit;

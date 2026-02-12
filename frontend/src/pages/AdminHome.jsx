@@ -5,7 +5,7 @@ import { useI18n } from "../lib/i18n";
 
 export default function AdminHome() {
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [contactError, setContactError] = useState("");
   const [contactMessages, setContactMessages] = useState([]);
   const [contactLoading, setContactLoading] = useState(true);
@@ -156,7 +156,10 @@ export default function AdminHome() {
                     {message.admin_username
                       ? `${message.admin_username} / `
                       : ""}
-                    {new Date(message.created_at).toLocaleString()}
+                    {new Date(message.created_at).toLocaleString(
+                      lang === "en" ? "en-US" : "ja-JP",
+                      { timeZone: "Asia/Tokyo" }
+                    )}
                   </div>
                 </div>
               ))}

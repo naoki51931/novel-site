@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { redirectToAndroidAppLogin } from "../lib/mobileAppRedirect";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
@@ -146,12 +147,23 @@ export default function Login() {
         throw new Error(t({ ja: "トークンの取得に失敗しました。", en: "Failed to obtain token." }));
       }
 
+      const redirectPath = consumePostLoginRedirect();
+      const pending = loadPendingAiPost();
+
+      if (!pending?.body) {
+        const nextPath = redirectPath && redirectPath.startsWith("/") ? redirectPath : "/mypage";
+        const moved = redirectToAndroidAppLogin({
+          token: data.access_token,
+          username,
+          redirect: nextPath,
+        });
+        if (moved) return;
+      }
+
       // トークンとユーザー名を保存
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("username", username);
-      const redirectPath = consumePostLoginRedirect();
 
-      const pending = loadPendingAiPost();
       if (!pending || !pending.body) {
         if (redirectPath && redirectPath.startsWith("/")) {
           navigate(redirectPath);
@@ -348,7 +360,14 @@ export default function Login() {
     setInfo("");
     setOauthLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/oauth/${provider}/start`);
+      const isAppClient =
+        typeof window !== "undefined" &&
+        !!window.AndroidFormBridge &&
+        typeof window.AndroidFormBridge.registerMobilePush === "function";
+      const oauthClient = isAppClient ? "app" : "web";
+      const res = await fetch(
+        `${API_BASE}/api/auth/oauth/${provider}/start?client=${encodeURIComponent(oauthClient)}`
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.auth_url) {
         throw new Error(

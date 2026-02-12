@@ -127,12 +127,17 @@ export default function EpisodeDetail() {
 
   const handleSubscribe = async () => {
     const token = localStorage.getItem("token");
+    if (!token) {
+      alert(t({ ja: "ログインが必要です。", en: "Login required." }));
+      navigate("/login");
+      return;
+    }
     try {
       const res = await fetch(API_BASE + "/api/stripe/create-checkout-session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({}),
       });
@@ -438,7 +443,9 @@ export default function EpisodeDetail() {
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
-    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
+    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
+      timeZone: "Asia/Tokyo",
+    });
   };
 
   const titleStartsWithEpisodePrefix = (title) => {

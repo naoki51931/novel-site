@@ -41,6 +41,53 @@ import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
 import { useI18n } from "./lib/i18n";
 
+const ANDROID_NOTIFIED_KEY_PREFIX = "android_notified_notification_ids_v1_";
+const ANDROID_NOTIFIED_MAX_IDS = 300;
+
+function notifyAndroidSiteNotification(item) {
+  try {
+    if (typeof window === "undefined") return;
+    const bridge = window.AndroidFormBridge;
+    if (!bridge || typeof bridge.notifySiteNotification !== "function") return;
+    bridge.notifySiteNotification(
+      JSON.stringify({
+        id: item?.id ?? null,
+        type: item?.type || "",
+        title: item?.title || "",
+        body: item?.body || "",
+        link_url: item?.link_url || "",
+      })
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function loadNotifiedIds(storageKey) {
+  try {
+    if (typeof window === "undefined") return [];
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v))
+      .slice(0, ANDROID_NOTIFIED_MAX_IDS);
+  } catch {
+    return [];
+  }
+}
+
+function saveNotifiedIds(storageKey, ids) {
+  try {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(storageKey, JSON.stringify(ids.slice(0, ANDROID_NOTIFIED_MAX_IDS)));
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
   const [query, setQuery] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -129,7 +176,9 @@ export default function App() {
       }
 
       const hasToken =
-        typeof window !== "undefined" ? !!localStorage.getItem("token") : false;
+        typeof window !== "undefined"
+          ? !!(localStorage.getItem("token") || localStorage.getItem("access_token"))
+          : false;
       if (!hasToken && !isLoginRoute()) {
         const redirectPath = `${location.pathname}${location.search}${location.hash || ""}`;
         try {
@@ -149,11 +198,15 @@ export default function App() {
   const username =
     typeof window !== "undefined" ? localStorage.getItem("username") : null;
   const hasToken =
-    typeof window !== "undefined" ? !!localStorage.getItem("token") : false;
+    typeof window !== "undefined"
+      ? !!(localStorage.getItem("token") || localStorage.getItem("access_token"))
+      : false;
 
   useEffect(() => {
     const token =
-      typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
     if (!token) {
       setUnreadCount(0);
       return;
@@ -178,6 +231,94 @@ export default function App() {
 
     loadUnreadCount();
   }, [location.pathname, hasToken]);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
+    if (!token) return;
+    const bridge =
+      typeof window !== "undefined" ? window.AndroidFormBridge : null;
+    // AndroidアプリでFCM登録できる環境では、Web側の疑似通知を止めて二重通知を防ぐ
+    if (bridge && typeof bridge.registerMobilePush === "function") return;
+
+    const username =
+      typeof window !== "undefined" ? localStorage.getItem("username") || "user" : "user";
+    const storageKey = `${ANDROID_NOTIFIED_KEY_PREFIX}${username}`;
+    const notifiedIds = new Set(loadNotifiedIds(storageKey));
+
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/notifications?unread_only=true&limit=30", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.status === 401 || !res.ok) return;
+        const items = await res.json().catch(() => []);
+        if (!Array.isArray(items) || items.length === 0) return;
+        const ordered = items
+          .filter((n) => typeof n?.id === "number")
+          .slice()
+          .sort((a, b) => a.id - b.id);
+
+        let changed = false;
+        if (!bridge || typeof bridge.notifySiteNotification !== "function") return;
+        for (const item of ordered) {
+          if (notifiedIds.has(item.id)) continue;
+          notifyAndroidSiteNotification(item);
+          notifiedIds.add(item.id);
+          changed = true;
+        }
+        if (changed) {
+          saveNotifiedIds(storageKey, Array.from(notifiedIds).sort((a, b) => b - a));
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 15000);
+    return () => clearInterval(timer);
+  }, [hasToken]);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
+    if (!token) return;
+    let stopped = false;
+    let timer = null;
+
+    const tryRegister = () => {
+      if (stopped) return false;
+      try {
+        const bridge =
+          typeof window !== "undefined" ? window.AndroidFormBridge : null;
+        if (!bridge || typeof bridge.registerMobilePush !== "function") return false;
+        bridge.registerMobilePush(token);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const ok = tryRegister();
+    if (!ok) {
+      timer = setInterval(() => {
+        if (tryRegister()) {
+          if (timer) clearInterval(timer);
+          timer = null;
+        }
+      }, 3000);
+    }
+
+    return () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [hasToken, location.pathname]);
 
   return (
     <div>

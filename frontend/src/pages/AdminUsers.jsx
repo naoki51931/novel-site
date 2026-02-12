@@ -5,7 +5,7 @@ import { useI18n } from "../lib/i18n";
 
 export default function AdminUsers() {
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [users, setUsers] = useState([]);
@@ -207,7 +207,10 @@ export default function AdminUsers() {
                                   </div>
                                   <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
                                     {t({ ja: "作成日", en: "Created" })}:{" "}
-                                    {new Date(novel.created_at).toLocaleDateString()}
+                                    {new Date(novel.created_at).toLocaleDateString(
+                                      lang === "en" ? "en-US" : "ja-JP",
+                                      { timeZone: "Asia/Tokyo" }
+                                    )}
                                   </div>
                                 </div>
                               ))}

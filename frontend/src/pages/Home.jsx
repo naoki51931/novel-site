@@ -25,6 +25,9 @@ export default function Home({
   const [rankingEnabled, setRankingEnabled] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
   const [premiumChecked, setPremiumChecked] = useState(false);
+  const [recommendedNovels, setRecommendedNovels] = useState([]);
+  const [recommendedLoading, setRecommendedLoading] = useState(false);
+  const [recommendedError, setRecommendedError] = useState("");
 
   useEffect(() => {
     const fetchNovels = async () => {
@@ -187,9 +190,70 @@ export default function Home({
     fetchPremium();
   }, [location.pathname]);
 
+  useEffect(() => {
+    const fetchRecommended = async () => {
+      const token =
+        localStorage.getItem("token") || localStorage.getItem("access_token");
+      if (!token) {
+        setRecommendedNovels([]);
+        setRecommendedLoading(false);
+        setRecommendedError("");
+        return;
+      }
+
+      const params = new URLSearchParams(location.search);
+      const urlQuery = (params.get("q") ?? "").trim();
+      const urlExclude = (params.get("exclude") ?? "").trim();
+      const urlTag = (params.get("tag") ?? "").trim();
+      const effectiveTag = urlTag || (tag ?? "").trim();
+      const effectiveQuery = urlQuery || (query ?? "").trim();
+      const effectiveExclude = urlExclude || (excludeQuery ?? "").trim();
+      const isTopFeed = !effectiveTag && !effectiveQuery && !effectiveExclude;
+      if (!isTopFeed) {
+        setRecommendedNovels([]);
+        setRecommendedLoading(false);
+        setRecommendedError("");
+        return;
+      }
+
+      try {
+        setRecommendedLoading(true);
+        setRecommendedError("");
+        const res = await fetch(`${API_BASE}/api/public/novels/recommended?limit=8`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (res.status === 401) {
+          setRecommendedNovels([]);
+          setRecommendedLoading(false);
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(
+            t({ ja: "おすすめの取得に失敗しました", en: "Failed to load recommendations." })
+          );
+        }
+        const data = await res.json().catch(() => []);
+        setRecommendedNovels(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        setRecommendedError(
+          err.message ||
+            t({ ja: "おすすめの取得に失敗しました", en: "Failed to load recommendations." })
+        );
+      } finally {
+        setRecommendedLoading(false);
+      }
+    };
+
+    fetchRecommended();
+  }, [location.search, query, excludeQuery, tag, t]);
+
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
-    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
+    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
+      timeZone: "Asia/Tokyo",
+    });
   };
 
   const shorten = (text, max = 120) => {
@@ -198,11 +262,30 @@ export default function Home({
     return text.slice(0, max) + "…";
   };
 
+  const currentParams = new URLSearchParams(location.search);
+  const currentUrlQuery = (currentParams.get("q") ?? "").trim();
+  const currentUrlExclude = (currentParams.get("exclude") ?? "").trim();
+  const currentUrlTag = (currentParams.get("tag") ?? "").trim();
+  const currentEffectiveTag = currentUrlTag || (tag ?? "").trim();
+  const currentEffectiveQuery = currentUrlQuery || (query ?? "").trim();
+  const currentEffectiveExclude = currentUrlExclude || (excludeQuery ?? "").trim();
+  const hasAuthToken = !!(
+    localStorage.getItem("token") || localStorage.getItem("access_token")
+  );
+  const showRecommendedSection =
+    hasAuthToken &&
+    !currentEffectiveTag &&
+    !currentEffectiveQuery &&
+    !currentEffectiveExclude;
+
   const applyNovelUpdate = (novelId, updater) => {
     setNovels((prev) =>
       prev.map((item) => (item.id === novelId ? updater(item) : item))
     );
     setRanking((prev) =>
+      prev.map((item) => (item.id === novelId ? updater(item) : item))
+    );
+    setRecommendedNovels((prev) =>
       prev.map((item) => (item.id === novelId ? updater(item) : item))
     );
   };
@@ -517,6 +600,125 @@ export default function Home({
           </>
         )}
         </section>
+      )}
+
+      {showRecommendedSection && (
+      <section style={{ marginBottom: 24 }}>
+        <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+          {t({ ja: "あなたへのおすすめ", en: "Recommended for You" })}
+        </h3>
+        {recommendedError && (
+          <p style={{ color: "red", marginTop: 8 }}>{recommendedError}</p>
+        )}
+        {recommendedLoading ? (
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "おすすめを読み込み中...", en: "Loading recommendations..." })}
+          </p>
+        ) : recommendedNovels.length === 0 ? (
+          <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
+            {t({
+              ja: "ログイン中のブックマーク傾向に基づくおすすめはまだありません。",
+              en: "No bookmark-based recommendations yet.",
+            })}
+          </p>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+              gap: "16px",
+              marginTop: 12,
+            }}
+          >
+            {recommendedNovels.map((novel) => (
+              <div
+                key={`recommended-${novel.id}`}
+                style={{
+                  border: "1px solid var(--novel-card-border)",
+                  borderRadius: 8,
+                  padding: 12,
+                  boxShadow: "0 2px 4px var(--shadow)",
+                  backgroundColor: "var(--novel-card-bg)",
+                  color: "var(--text)",
+                }}
+              >
+                {novel.cover_image_url && (
+                  <img
+                    src={
+                      novel.cover_image_url.startsWith("http")
+                        ? novel.cover_image_url
+                        : API_BASE + novel.cover_image_url
+                    }
+                    alt={t({ ja: "表紙画像", en: "Cover image" })}
+                    style={{
+                      width: "100%",
+                      maxHeight: 220,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      boxShadow: "0 1px 4px var(--shadow)",
+                      marginBottom: 10,
+                    }}
+                  />
+                )}
+                <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
+                  <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
+                </h3>
+                <p
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontSize: 14,
+                    color: "var(--novel-card-desc)",
+                    marginBottom: 8,
+                    minHeight: "3.5em",
+                  }}
+                >
+                  {shorten(novel.description, 120) ||
+                    t({ ja: "説明がありません。", en: "No description." })}
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 10,
+                    fontSize: 12,
+                    color: "var(--novel-card-meta)",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+                  <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
+                  <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {novel.favorite_count ?? 0}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => toggleLike(novel)}
+                  >
+                    {novel.is_liked
+                      ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+                      : t({ ja: "♡ いいね", en: "♡ Like" })}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => toggleFavorite(novel)}
+                  >
+                    {novel.is_favorited
+                      ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
+                      : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
+                  </button>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <Link to={`/novels/${novel.id}`} className="btn btn-border">
+                    {t({ ja: "続きを読む", en: "Read more" })}
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       )}
 
       {novels.length === 0 && (

@@ -4,6 +4,9 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
+const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
+const MOBILE_APP_UPDATED_AT = "2026/02/12";
 
 async function startStripeCheckout() {
   try {
@@ -79,6 +82,8 @@ export default function Mypage() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
   });
+  const [androidAppReady, setAndroidAppReady] = useState(false);
+  const [iphoneAppReady, setIphoneAppReady] = useState(false);
   const navigate = useNavigate();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -165,6 +170,19 @@ export default function Mypage() {
   useEffect(() => {
     loadAiJobs();
   }, [token]);
+
+  useEffect(() => {
+    const checkFile = async (url, setter) => {
+      try {
+        const res = await fetch(url, { method: "HEAD" });
+        setter(res.ok);
+      } catch {
+        setter(false);
+      }
+    };
+    checkFile(ANDROID_APP_FILE, setAndroidAppReady);
+    checkFile(IPHONE_APP_FILE, setIphoneAppReady);
+  }, []);
 
   const aiJobsFiltered = aiJobs.filter((job) => {
     if (aiJobsFilter === "all") return true;
@@ -618,6 +636,52 @@ export default function Mypage() {
             {t({ ja: "通知センター", en: "Notifications" })}
           </Link>
         </div>
+      </section>
+
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          {t({ ja: "スマホアプリのダウンロード", en: "Mobile App Downloads" })}
+        </h3>
+        <p style={{ marginTop: 8, lineHeight: 1.6 }}>
+          {t({
+            ja: "Android / iPhone 向け実アプリファイルをダウンロードできます。",
+            en: "Download app binaries for Android and iPhone.",
+          })}
+        </p>
+        <p style={{ marginTop: 8, lineHeight: 1.6, fontWeight: 600 }}>
+          {t({
+            ja: `${MOBILE_APP_UPDATED_AT} にアプリを更新しました。`,
+            en: `App updated on ${MOBILE_APP_UPDATED_AT}.`,
+          })}
+        </p>
+        {androidAppReady ? (
+          <div style={{ marginTop: 12 }}>
+            <a className="btn btn-border" href={ANDROID_APP_FILE} download>
+              {t({ ja: "Android APKをダウンロード", en: "Download Android APK" })}
+            </a>
+          </div>
+        ) : (
+          <p style={{ marginTop: 12, color: "var(--muted-text)" }}>
+            {t({
+              ja: "Android APK は未配置です（/static/app_downloads/novelsite-android.apk）。",
+              en: "Android APK is not uploaded yet (/static/app_downloads/novelsite-android.apk).",
+            })}
+          </p>
+        )}
+        {iphoneAppReady ? (
+          <div style={{ marginTop: 8 }}>
+            <a className="btn btn-border" href={IPHONE_APP_FILE} download>
+              {t({ ja: "iPhone IPAをダウンロード", en: "Download iPhone IPA" })}
+            </a>
+          </div>
+        ) : (
+          <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
+            {t({
+              ja: "iPhone IPA は未配置です（/static/app_downloads/novelsite-iphone.ipa）。",
+              en: "iPhone IPA is not uploaded yet (/static/app_downloads/novelsite-iphone.ipa).",
+            })}
+          </p>
+        )}
       </section>
 
       {/* 作者ダッシュボード */}

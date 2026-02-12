@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPaperPlane } from "@fortawesome/free-regular-svg-icons";
 import { useI18n } from "../lib/i18n";
@@ -74,6 +74,7 @@ function getStoredAuthToken() {
 export default function AiChatPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
   const [model, setModel] = useState("gpt-4.1-mini");
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -139,6 +140,7 @@ export default function AiChatPage() {
     }
   });
   const fanficCacheRef = useRef(new Map());
+  const lastImportedPublicCharacterKeyRef = useRef("");
 
   const normalizeAiNovelResponse = (data) => {
     if (!data || typeof data !== "object") return data;
@@ -888,6 +890,27 @@ export default function AiChatPage() {
       setAnimeTitleLoading(false);
     }
   };
+
+  useEffect(() => {
+    const state = location.state;
+    if (!state || typeof state !== "object") return;
+    if (state.source !== "public_chat_character") return;
+
+    const importedName = String(state.prefillCharacterName || "").trim();
+    const importedPersonality = String(state.prefillPersonality || "");
+    if (!importedName && !importedPersonality) return;
+
+    const importKey = `${String(state.characterId || "")}|${importedName}|${importedPersonality}`;
+    if (lastImportedPublicCharacterKeyRef.current === importKey) return;
+    lastImportedPublicCharacterKeyRef.current = importKey;
+
+    if (importedName) setCharacterName(importedName);
+    setPersonality(importedPersonality);
+    setSelectedCharacterId("");
+    setMessages([]);
+    setSelectedMessageIndex(null);
+    setError("");
+  }, [location.state]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

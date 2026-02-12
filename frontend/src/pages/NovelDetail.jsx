@@ -31,7 +31,9 @@ export default function NovelDetail() {
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
-    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
+    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
+      timeZone: "Asia/Tokyo",
+    });
   };
 
   const titleStartsWithEpisodePrefix = (title) => {

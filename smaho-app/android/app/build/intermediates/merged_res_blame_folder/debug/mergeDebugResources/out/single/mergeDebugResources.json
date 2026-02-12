@@ -1,0 +1,26 @@
+[
+    {
+        "merged": "com.novelsite.mobile.app-debug-36:/menu_bottom_nav_menu.xml.flat",
+        "source": "com.novelsite.mobile.app-main-38:/menu/bottom_nav_menu.xml"
+    },
+    {
+        "merged": "com.novelsite.mobile.app-debug-36:/xml_network_security_config.xml.flat",
+        "source": "com.novelsite.mobile.app-main-38:/xml/network_security_config.xml"
+    },
+    {
+        "merged": "com.novelsite.mobile.app-debug-36:/drawable_ic_launcher_round.png.flat",
+        "source": "com.novelsite.mobile.app-main-38:/drawable/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.novelsite.mobile.app-debug-36:/layout_activity_main.xml.flat",
+        "source": "com.novelsite.mobile.app-main-38:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.novelsite.mobile.app-debug-36:/drawable_ic_launcher.png.flat",
+        "source": "com.novelsite.mobile.app-main-38:/drawable/ic_launcher.png"
+    },
+    {
+        "merged": "com.novelsite.mobile.app-debug-36:/color_bottom_nav_item_tint.xml.flat",
+        "source": "com.novelsite.mobile.app-main-38:/color/bottom_nav_item_tint.xml"
+    }
+]

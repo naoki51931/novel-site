@@ -164,7 +164,7 @@ export default function AiChatPublicPage() {
           <button
             key={item.id}
             type="button"
-            className="btn btn-border"
+            className="btn btn-border public-chat-character-card"
             onClick={() => loadDetail(item.id, { name: item.name, syncUrl: true })}
             style={{
               textAlign: "left",
@@ -173,7 +173,7 @@ export default function AiChatPublicPage() {
               background: selectedId === item.id ? "#eef6ff" : "#fff",
             }}
           >
-            <div style={{ fontWeight: 800, fontSize: "1.2rem", lineHeight: 1.3 }}>
+            <div style={{ fontWeight: 800, fontSize: "1.2rem", lineHeight: 1.3, color: "var(--text)" }}>
               {item.name || t({ ja: "無名", en: "Unnamed" })}
             </div>
             <div style={{ fontSize: "0.88rem", color: "#666" }}>
@@ -196,6 +196,19 @@ export default function AiChatPublicPage() {
               className="btn btn-border"
             >
               {t({ ja: "この公開チャットへのリンク", en: "Link to this public chat" })}
+            </Link>
+            <Link
+              to="/ai_chat"
+              className="btn btn-border"
+              style={{ marginLeft: 8 }}
+              state={{
+                source: "public_chat_character",
+                characterId: detail.id,
+                prefillCharacterName: detail.name || "",
+                prefillPersonality: detail.personality || "",
+              }}
+            >
+              {t({ ja: "このキャラでAIチャットを開始", en: "Start AI chat with this character" })}
             </Link>
           </div>
           <p style={{ color: "#666", marginTop: 0 }}>@{detail.author_username || "unknown"}</p>

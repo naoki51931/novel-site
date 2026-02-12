@@ -94,7 +94,9 @@ export default function AiLogsPage() {
 
   const formatDateTime = (iso) => {
     if (!iso) return "";
-    return new Date(iso).toLocaleString(lang === "en" ? "en-US" : "ja-JP");
+    return new Date(iso).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
+      timeZone: "Asia/Tokyo",
+    });
   };
 
   return (

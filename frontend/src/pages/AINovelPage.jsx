@@ -75,6 +75,23 @@ function clearPendingAiJob() {
   }
 }
 
+function notifyAndroidAiResult({ title = "", body = "", url = "" } = {}) {
+  try {
+    if (typeof window === "undefined") return;
+    const bridge = window.AndroidFormBridge;
+    if (!bridge || typeof bridge.notifyAiGeneration !== "function") return;
+    bridge.notifyAiGeneration(
+      JSON.stringify({
+        title: String(title || ""),
+        body: String(body || ""),
+        url: String(url || ""),
+      })
+    );
+  } catch {
+    // ignore
+  }
+}
+
 function normalizeAINovelResponse(data) {
   if (!data || typeof data !== "object") return data;
   if (typeof data.body !== "string") return data;
@@ -397,14 +414,19 @@ export default function AINovelPage() {
 
   const navigate = useNavigate();
   const resultBodyRef = useRef(null);
+  const charactersInputRef = useRef(null);
   const combinedBodyRef = useRef("");
   const lastSelectionContextRef = useRef(null);
   const jobPollTimerRef = useRef(null);
   const activeJobSessionRef = useRef(0);
   const localDraftRef = useRef(null);
   const draftSaveTimerRef = useRef(null);
+  const hasUserInputRef = useRef(false);
   const [pendingJob, setPendingJob] = useState(null);
   const hasAuthToken = Boolean(getAuthToken());
+  const markUserInput = () => {
+    hasUserInputRef.current = true;
+  };
 
   useEffect(() => {
     const fetchRemaining = async () => {
@@ -549,12 +571,25 @@ export default function AINovelPage() {
       if (nextBody) {
         setContinuationBody((prev) => (prev ? `${prev}\n\n${nextBody}` : nextBody));
       }
+      notifyAndroidAiResult({
+        title: t({ ja: "続き生成が完了しました", en: "Continuation is ready" }),
+        body: nextBody.slice(0, 120),
+        url: "/ai-novel",
+      });
       setContinuing(false);
       setRetryAttempts(0);
       setActiveRetryMax(null);
       return;
     }
-    setResult(normalizeAINovelResponse(payload || {}));
+    const normalized = normalizeAINovelResponse(payload || {});
+    setResult(normalized);
+    notifyAndroidAiResult({
+      title:
+        normalized?.generated_title ||
+        t({ ja: "AI小説生成が完了しました", en: "AI novel is ready" }),
+      body: String(normalized?.body || "").slice(0, 120),
+      url: "/ai-novel",
+    });
     setLoading(false);
     setRetryAttempts(0);
     setActiveRetryMax(null);
@@ -1049,6 +1084,7 @@ export default function AINovelPage() {
         const data = await res.json().catch(() => ({}));
         const serverDraft = data?.draft || null;
         if (!serverDraft) return;
+        if (hasUserInputRef.current) return;
         const localTs = extractDraftTimestamp(localDraftRef.current);
         const serverTs = extractDraftTimestamp(serverDraft);
         if (serverTs >= localTs) {
@@ -1062,7 +1098,7 @@ export default function AINovelPage() {
   }, []);
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    const timer = setTimeout(() => {
       const payload = buildDraftPayload();
       try {
         localStorage.setItem(AI_NOVEL_DRAFT_KEY, JSON.stringify(payload));
@@ -1070,9 +1106,9 @@ export default function AINovelPage() {
       } catch (e) {
         console.error("failed to save ai novel draft", e);
       }
-    }, 60 * 1000);
+    }, 300);
 
-    return () => clearInterval(timer);
+    return () => clearTimeout(timer);
   }, [
     titleHint,
     genre,
@@ -1081,6 +1117,8 @@ export default function AINovelPage() {
     length,
     model,
     isR18,
+    retryMode,
+    retryMax,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -1125,6 +1163,8 @@ export default function AINovelPage() {
     length,
     model,
     isR18,
+    retryMode,
+    retryMax,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -2240,9 +2280,13 @@ export default function AINovelPage() {
 
   const handleAutoFill = async () => {
     const q = (genre || "").trim();
-    const c = (characters || "").trim();
-    const t = (titleHint || "").trim();
-    if (!q && !c && !t) {
+    const liveCharactersRaw = charactersInputRef.current?.value ?? characters ?? "";
+    const c = liveCharactersRaw.trim();
+    if (liveCharactersRaw !== (characters || "")) {
+      setCharacters(liveCharactersRaw);
+    }
+    const titleQuery = (titleHint || "").trim();
+    if (!q && !c && !titleQuery) {
       setAutoFillError(
         t({
           ja: "タイトルのイメージ、ジャンル、登場人物・設定のいずれかを入力してください。",
@@ -2251,14 +2295,23 @@ export default function AINovelPage() {
       );
       return;
     }
+    markUserInput();
     setAutoFillLoading(true);
     setAutoFillError("");
     try {
-      const params = new URLSearchParams();
-      if (q) params.set("query", q);
-      else if (t) params.set("query", t);
-      if (c) params.set("characters", c);
-      const res = await fetchWithTimeout(`/api/ai/novels/auto-fill?${params.toString()}`, {}, 20000);
+      const payload = {
+        query: q || titleQuery || "",
+        characters: c || "",
+      };
+      const res = await fetchWithTimeout(
+        "/api/ai/novels/auto-fill",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        20000
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
@@ -2279,7 +2332,7 @@ export default function AINovelPage() {
       }
       if (appendCharacters) {
         setCharacters((prev) => {
-          const base = (prev || "").trim();
+          const base = (charactersInputRef.current?.value ?? prev ?? "").trim();
           return base ? `${base}\n\n${appendCharacters}` : appendCharacters;
         });
       }
@@ -2558,7 +2611,10 @@ export default function AINovelPage() {
           <input
             type="text"
             value={titleHint}
-            onChange={(e) => setTitleHint(e.target.value)}
+            onChange={(e) => {
+              markUserInput();
+              setTitleHint(e.target.value);
+            }}
             placeholder={
               isEditMode
                 ? t({
@@ -2591,7 +2647,10 @@ export default function AINovelPage() {
             <input
               type="text"
               value={genre}
-              onChange={(e) => setGenre(e.target.value)}
+              onChange={(e) => {
+                markUserInput();
+                setGenre(e.target.value);
+              }}
               placeholder={t({
                 ja: "例: ファンタジー / 日常 / SF / ラブコメ",
                 en: "e.g., Fantasy / Slice of Life / Sci-Fi / Romcom",
@@ -2713,8 +2772,12 @@ export default function AINovelPage() {
               : t({ ja: "登場人物・設定", en: "Characters & settings" })}
           </label>
           <textarea
+            ref={charactersInputRef}
             value={characters}
-            onChange={(e) => setCharacters(e.target.value)}
+            onChange={(e) => {
+              markUserInput();
+              setCharacters(e.target.value);
+            }}
             rows={3}
             placeholder={
               isContinueMode
@@ -2742,7 +2805,10 @@ export default function AINovelPage() {
             <input
               type="text"
               value={tone}
-              onChange={(e) => setTone(e.target.value)}
+              onChange={(e) => {
+                markUserInput();
+                setTone(e.target.value);
+              }}
               placeholder={t({
                 ja: "例: ほのぼの / 少し切ない / ダーク寄り など",
                 en: "e.g., Lighthearted / A little bittersweet / Dark",
@@ -2761,7 +2827,10 @@ export default function AINovelPage() {
           </label>
           <select
             value={length}
-            onChange={(e) => setLength(e.target.value)}
+            onChange={(e) => {
+              markUserInput();
+              setLength(e.target.value);
+            }}
             style={{ width: "100%", padding: "0.5rem" }}
           >
             <option value="short">{t({ ja: "短め（800〜1200文字程度）", en: "Short (800–1200 chars)" })}</option>
@@ -2780,7 +2849,10 @@ export default function AINovelPage() {
             <input
               type="checkbox"
               checked={isR18}
-              onChange={(e) => setIsR18(e.target.checked)}
+              onChange={(e) => {
+                markUserInput();
+                setIsR18(e.target.checked);
+              }}
             />
             {t({ ja: "R-18（成人向け・性的描写あり）", en: "R-18 (adult content, sexual depictions)" })}
           </label>
@@ -2792,7 +2864,10 @@ export default function AINovelPage() {
           </label>
           <select
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => {
+              markUserInput();
+              setModel(e.target.value);
+            }}
             style={{ width: "100%", padding: "0.5rem" }}
           >
             <option value="gpt-4.1-mini">{t({ ja: "GPT-4.1 Mini（高速・低コスト）", en: "GPT-4.1 Mini (fast, low cost)" })}</option>
@@ -2819,7 +2894,10 @@ export default function AINovelPage() {
             <input
               type="checkbox"
               checked={retryMode}
-              onChange={(e) => setRetryMode(e.target.checked)}
+              onChange={(e) => {
+                markUserInput();
+                setRetryMode(e.target.checked);
+              }}
             />
             {t({
               ja: "AIの返答が空/JSON不正のときに再試行する",
@@ -2836,6 +2914,7 @@ export default function AINovelPage() {
               max={99}
               value={retryMax}
               onChange={(e) => {
+                markUserInput();
                 const next = Number.parseInt(e.target.value, 10);
                 if (!Number.isFinite(next)) return;
                 const clamped = Math.max(0, Math.min(99, next));

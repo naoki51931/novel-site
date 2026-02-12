@@ -237,7 +237,9 @@ export default function Notifications() {
                     </div>
                     <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                       {n.created_at
-                        ? new Date(n.created_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP")
+                        ? new Date(n.created_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
+                            timeZone: "Asia/Tokyo",
+                          })
                         : ""}
                     </div>
                   </div>

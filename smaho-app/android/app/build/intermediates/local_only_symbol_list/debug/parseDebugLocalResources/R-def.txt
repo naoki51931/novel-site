@@ -1,0 +1,26 @@
+R_DEF: Internal format may change without notice
+local
+color bottom_nav_item_tint
+drawable ic_launcher
+drawable ic_launcher_round
+id bottomNav
+id navAiChat
+id navHome
+id navMypage
+id navNew
+id navNotifications
+id navSearch
+id nav_ai_chat
+id nav_home
+id nav_mypage
+id nav_new
+id nav_notifications
+id nav_search
+id progressBar
+id swipeRefresh
+id webview
+layout activity_main
+menu bottom_nav_menu
+string app_name
+style Theme.NovelSiteMobile
+xml network_security_config

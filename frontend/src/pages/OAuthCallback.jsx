@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { redirectToAndroidAppLogin } from "../lib/mobileAppRedirect";
 
 const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
 
@@ -30,6 +31,17 @@ export default function OAuthCallback() {
     }
 
     const username = params.get("username");
+    const redirect = params.get("redirect");
+    const appClient = params.get("app_client") === "1";
+    if (appClient) {
+      const moved = redirectToAndroidAppLogin({
+        token,
+        username: username || "",
+        redirect: redirect && redirect.startsWith("/") ? redirect : "/mypage",
+      });
+      if (moved) return;
+    }
+
     try {
       localStorage.setItem("token", token);
       if (username) {
@@ -42,7 +54,6 @@ export default function OAuthCallback() {
       return;
     }
 
-    const redirect = params.get("redirect");
     let nextPath = redirect && redirect.startsWith("/") ? redirect : null;
     if (!nextPath) {
       try {

@@ -56,6 +56,16 @@ except Exception:
     webpush = None
     WebPushException = Exception  # type: ignore
     WEBPUSH_AVAILABLE = False
+try:
+    import firebase_admin  # type: ignore
+    from firebase_admin import credentials as firebase_credentials  # type: ignore
+    from firebase_admin import messaging as firebase_messaging  # type: ignore
+    FIREBASE_AVAILABLE = True
+except Exception:
+    firebase_admin = None  # type: ignore
+    firebase_credentials = None  # type: ignore
+    firebase_messaging = None  # type: ignore
+    FIREBASE_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(
@@ -765,6 +775,8 @@ WEBPUSH_VAPID_SUBJECT = os.getenv(
     "WEBPUSH_VAPID_SUBJECT",
     f"mailto:{SMTP_FROM}" if SMTP_FROM and "@" in SMTP_FROM else "mailto:admin@example.com",
 ).strip()
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+FIREBASE_SERVICE_ACCOUNT_FILE = os.getenv("FIREBASE_SERVICE_ACCOUNT_FILE", "").strip()
 
 # =========================================
 # 通知ユーティリティ
@@ -812,6 +824,7 @@ def create_notification(
     body: str | None = None,
     link_url: str | None = None,
     actor_user_id: int | None = None,
+    send_push_immediately: bool = True,
 ) -> models.Notification:
     notif = models.Notification(
         user_id=user_id,
@@ -822,6 +835,18 @@ def create_notification(
         link_url=link_url,
     )
     db.add(notif)
+    if send_push_immediately:
+        try:
+            send_fcm_push_to_user(
+                db,
+                user_id=user_id,
+                title=title,
+                body=body,
+                link_url=link_url,
+                notif_type=notif_type,
+            )
+        except Exception as e:
+            print(f"[fcm] create_notification send failed user_id={user_id} err={e!r}")
     return notif
 
 
@@ -954,6 +979,119 @@ def send_web_push_to_user(
         db.commit()
 
 
+def _load_firebase_credential_dict() -> dict | None:
+    raw = FIREBASE_SERVICE_ACCOUNT_JSON
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception as e:
+            print("[fcm] FIREBASE_SERVICE_ACCOUNT_JSON parse failed:", repr(e))
+            return None
+    if FIREBASE_SERVICE_ACCOUNT_FILE:
+        try:
+            with open(FIREBASE_SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print("[fcm] FIREBASE_SERVICE_ACCOUNT_FILE load failed:", repr(e))
+            return None
+    return None
+
+
+def is_fcm_configured() -> bool:
+    if not FIREBASE_AVAILABLE:
+        return False
+    return bool(FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_FILE)
+
+
+_fcm_initialized = False
+
+
+def ensure_fcm_initialized() -> bool:
+    global _fcm_initialized
+    if not is_fcm_configured():
+        return False
+    if _fcm_initialized:
+        return True
+    try:
+        if firebase_admin is None or firebase_credentials is None:
+            return False
+        if firebase_admin._apps:  # type: ignore[attr-defined]
+            _fcm_initialized = True
+            return True
+        cred_dict = _load_firebase_credential_dict()
+        if not cred_dict:
+            return False
+        firebase_admin.initialize_app(firebase_credentials.Certificate(cred_dict))
+        _fcm_initialized = True
+        return True
+    except Exception as e:
+        print("[fcm] initialize failed:", repr(e))
+        return False
+
+
+def _is_stale_fcm_token_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    if "not-registered" in text:
+        return True
+    if "registration token is not a valid fcm registration token" in text:
+        return True
+    if "requested entity was not found" in text:
+        return True
+    if "unregistered" in text:
+        return True
+    return False
+
+
+def send_fcm_push_to_user(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    body: str | None = None,
+    link_url: str | None = None,
+    notif_type: str | None = None,
+) -> None:
+    if not user_id or not ensure_fcm_initialized():
+        return
+    if firebase_messaging is None:
+        return
+
+    tokens = (
+        db.query(models.MobilePushToken)
+        .filter(models.MobilePushToken.user_id == user_id)
+        .filter(models.MobilePushToken.platform == "android")
+        .all()
+    )
+    if not tokens:
+        return
+
+    target_url = _notification_target_url(link_url)
+    for item in tokens:
+        token_value = (item.token or "").strip()
+        if not token_value:
+            continue
+        try:
+            message = firebase_messaging.Message(
+                notification=firebase_messaging.Notification(
+                    title=title,
+                    body=body or title,
+                ),
+                data={
+                    "title": title or "",
+                    "body": body or title or "",
+                    "url": target_url,
+                    "type": notif_type or "site_notification",
+                },
+                token=token_value,
+                android=firebase_messaging.AndroidConfig(priority="high"),
+            )
+            firebase_messaging.send(message)
+        except Exception as e:
+            print(
+                f"[fcm] send failed user_id={user_id} push_token_id={item.id} err={e!r}"
+            )
+
+
 def notify_favorited_users_episode_published(
     db: Session,
     *,
@@ -995,6 +1133,87 @@ def notify_favorited_users_episode_published(
             body=notif_body,
             link_url=link_url,
         )
+
+
+def can_user_access_novel_age_limit(user: models.User | None, age_limit: str | None) -> bool:
+    if AGE_RESTRICTION_DISABLED:
+        return True
+    normalized = (age_limit or "all").strip().lower()
+    if normalized == "all":
+        return True
+    age = calc_age(getattr(user, "birth_date", None))
+    if age is None:
+        return False
+    if normalized == "r15":
+        return age >= 15
+    if normalized == "r18":
+        return age >= 18
+    return True
+
+
+def get_user_favorite_tag_weights(db: Session, user_id: int) -> dict[str, int]:
+    rows = (
+        db.query(
+            models.Tag.name,
+            func.count(models.NovelFavorite.id),
+        )
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(models.NovelFavorite, models.NovelFavorite.novel_id == models.NovelTag.novel_id)
+        .filter(models.NovelFavorite.user_id == user_id)
+        .group_by(models.Tag.name)
+        .all()
+    )
+    return {
+        str(name): int(weight or 0)
+        for name, weight in rows
+        if (name or "").strip()
+    }
+
+
+def notify_recommended_users_new_novel(
+    db: Session,
+    *,
+    novel: models.Novel,
+) -> None:
+    if not getattr(novel, "is_public", True):
+        return
+    novel_tag_names = [name for name in get_novel_tag_names(db, novel.id) if (name or "").strip()]
+    if not novel_tag_names:
+        return
+    candidates = (
+        db.query(models.User)
+        .join(models.NovelFavorite, models.NovelFavorite.user_id == models.User.id)
+        .join(models.NovelTag, models.NovelTag.novel_id == models.NovelFavorite.novel_id)
+        .join(models.Tag, models.Tag.id == models.NovelTag.tag_id)
+        .filter(models.Tag.name.in_(novel_tag_names))
+        .filter(models.User.id != novel.author_id)
+        .group_by(models.User.id)
+        .order_by(func.count(models.NovelFavorite.id).desc(), models.User.id.asc())
+        .limit(300)
+        .all()
+    )
+    if not candidates:
+        return
+
+    title = "おすすめの新着小説"
+    notif_body = f"あなたのブックマーク傾向に近い「{novel.title}」が投稿されました"
+    link_url = f"/novels/{novel.id}"
+    notified_count = 0
+    for target_user in candidates:
+        if not can_user_access_novel_age_limit(target_user, getattr(novel, "age_limit", "all")):
+            continue
+        create_notification(
+            db,
+            user_id=target_user.id,
+            notif_type="recommended_novel_new",
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=novel.author_id,
+        )
+        notified_count += 1
+    if notified_count > 0:
+        db.commit()
 
 
 def _truncate_text(value: str, limit: int = 120) -> str:
@@ -1040,12 +1259,19 @@ def _build_pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _build_oauth_state(provider: str, redirect_to: str | None, pkce_verifier: str) -> str:
+def _build_oauth_state(
+    provider: str,
+    redirect_to: str | None,
+    pkce_verifier: str,
+    *,
+    app_client: bool = False,
+) -> str:
     expire = datetime.utcnow() + timedelta(minutes=OAUTH_STATE_EXPIRE_MINUTES)
     payload = {
         "provider": provider,
         "redirect": redirect_to or "",
         "pkce": pkce_verifier,
+        "app_client": bool(app_client),
         "exp": expire,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -1097,7 +1323,13 @@ OAUTH1_REQUEST_TOKENS: dict[str, dict[str, str | float]] = {}
 OAUTH1_REQUEST_TOKEN_TTL_SECONDS = 600
 
 
-def _store_oauth1_request_token(oauth_token: str, token_secret: str, redirect_path: str | None) -> None:
+def _store_oauth1_request_token(
+    oauth_token: str,
+    token_secret: str,
+    redirect_path: str | None,
+    *,
+    app_client: bool = False,
+) -> None:
     now = time.time()
     for key, payload in list(OAUTH1_REQUEST_TOKENS.items()):
         if now - float(payload.get("ts", 0)) > OAUTH1_REQUEST_TOKEN_TTL_SECONDS:
@@ -1105,6 +1337,7 @@ def _store_oauth1_request_token(oauth_token: str, token_secret: str, redirect_pa
     OAUTH1_REQUEST_TOKENS[oauth_token] = {
         "secret": token_secret,
         "redirect": redirect_path or "",
+        "app_client": "1" if app_client else "0",
         "ts": now,
     }
 
@@ -1116,6 +1349,7 @@ def _pop_oauth1_request_token(oauth_token: str) -> dict[str, str] | None:
     return {
         "secret": str(payload.get("secret") or ""),
         "redirect": str(payload.get("redirect") or ""),
+        "app_client": str(payload.get("app_client") or "0"),
     }
 
 
@@ -2130,6 +2364,63 @@ def _oauth_frontend_url(params: dict) -> str:
     return f"{base}/oauth/callback?{urlencode(params)}"
 
 
+def _oauth_android_app_url(params: dict) -> str:
+    return f"novelsite://oauth/callback?{urlencode(params)}"
+
+
+def _oauth_result_url(params: dict, *, app_client: bool = False) -> str:
+    if app_client:
+        return _oauth_android_app_url(params)
+    return _oauth_frontend_url(params)
+
+
+def _oauth_app_bridge_response(params: dict) -> HTMLResponse:
+    deep_link = _oauth_android_app_url(params)
+    fallback_link = _oauth_frontend_url(params)
+    html_body = f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>アプリに戻る</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; color: #222; }}
+    .btn {{ display: inline-block; padding: 12px 16px; border: 1px solid #ccc; border-radius: 8px; text-decoration: none; color: #111; }}
+    .muted {{ color: #666; margin-top: 12px; }}
+  </style>
+</head>
+<body>
+  <h2>認証が完了しました</h2>
+  <p>アプリに戻ってログインを完了します。</p>
+  <p><a class="btn" href="{html.escape(deep_link)}">アプリに戻る</a></p>
+  <p class="muted">自動で戻らない場合は上のボタンを押してください。</p>
+  <p class="muted"><a href="{html.escape(fallback_link)}">Web版で続ける</a></p>
+  <script>
+    (function () {{
+      var deepLink = {json.dumps(deep_link)};
+      var fallback = {json.dumps(fallback_link)};
+      try {{
+        var iframe = document.createElement("iframe");
+        iframe.style.display = "none";
+        iframe.src = deepLink;
+        document.body.appendChild(iframe);
+      }} catch (e) {{
+        // ignore
+      }}
+    }})();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html_body)
+
+
+def _is_android_app_oauth_start(request: Request | None) -> bool:
+    if request is None:
+        return False
+    user_agent = (request.headers.get("user-agent") or "").strip()
+    return "NovelSiteAndroidApp" in user_agent
+
+
 def _get_oauth_account(db: Session, provider: str, provider_user_id: str) -> models.OAuthAccount | None:
     return (
         db.query(models.OAuthAccount)
@@ -2189,16 +2480,33 @@ def _get_or_create_user_from_oauth(
 
 
 @app.get("/api/auth/oauth/{provider}/start")
-async def oauth_start(provider: str, redirect: str | None = None):
+async def oauth_start(
+    provider: str,
+    redirect: str | None = None,
+    client: str | None = Query(None),
+    request: Request = None,
+):
     provider = provider.lower()
     redirect_path = _normalize_redirect_path(redirect)
     redirect_uri = _oauth_redirect_uri(provider)
+    client_hint = (client or "").strip().lower()
+    if client_hint == "web":
+        app_client = False
+    elif client_hint == "app":
+        app_client = True
+    else:
+        app_client = _is_android_app_oauth_start(request)
 
     if provider == "google":
         if not GOOGLE_OAUTH_CLIENT_ID or not GOOGLE_OAUTH_CLIENT_SECRET:
             raise HTTPException(500, "Google OAuth の設定が不足しています")
         pkce_verifier, pkce_challenge = _build_pkce_pair()
-        state = _build_oauth_state(provider, redirect_path, pkce_verifier)
+        state = _build_oauth_state(
+            provider,
+            redirect_path,
+            pkce_verifier,
+            app_client=app_client,
+        )
         params = {
             "response_type": "code",
             "client_id": GOOGLE_OAUTH_CLIENT_ID,
@@ -2235,7 +2543,12 @@ async def oauth_start(provider: str, redirect: str | None = None):
         callback_confirmed = (token_data.get("oauth_callback_confirmed") or [""])[0]
         if not oauth_token or not oauth_token_secret or callback_confirmed != "true":
             raise HTTPException(400, "X OAuth 1.0a request token の解析に失敗しました")
-        _store_oauth1_request_token(oauth_token, oauth_token_secret, redirect_path)
+        _store_oauth1_request_token(
+            oauth_token,
+            oauth_token_secret,
+            redirect_path,
+            app_client=app_client,
+        )
         auth_url = f"https://api.twitter.com/oauth/authorize?oauth_token={quote(oauth_token, safe='')}"
     else:
         raise HTTPException(404, "provider が不正です")
@@ -2252,12 +2565,26 @@ async def oauth_callback(
     oauth_verifier: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     provider = provider.lower()
+    inside_app_webview = _is_android_app_oauth_start(request)
+    app_client = inside_app_webview
+
+    def _redirect(params: dict):
+        redirect_params = dict(params or {})
+        if app_client:
+            redirect_params["app_client"] = "1"
+        if app_client:
+            if inside_app_webview:
+                return RedirectResponse(_oauth_frontend_url(redirect_params))
+            return _oauth_app_bridge_response(redirect_params)
+        return RedirectResponse(_oauth_result_url(redirect_params, app_client=False))
+
     if error:
         message = error_description or error
-        return RedirectResponse(_oauth_frontend_url({"error": message}))
+        return _redirect({"error": message})
 
     redirect_path = None
     pkce_verifier = ""
@@ -2265,29 +2592,30 @@ async def oauth_callback(
 
     if provider == "google":
         if not code or not state:
-            return RedirectResponse(_oauth_frontend_url({"error": "OAuth のコードが取得できませんでした"}))
+            return _redirect({"error": "OAuth のコードが取得できませんでした"})
         try:
             state_data = _decode_oauth_state(state)
         except HTTPException:
-            return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が不正です"}))
+            return _redirect({"error": "OAuth state が不正です"})
         if state_data.get("provider") != provider:
-            return RedirectResponse(_oauth_frontend_url({"error": "OAuth state が一致しません"}))
+            return _redirect({"error": "OAuth state が一致しません"})
 
         pkce_verifier = state_data.get("pkce") or ""
+        app_client = bool(state_data.get("app_client"))
         if not pkce_verifier:
-            return RedirectResponse(_oauth_frontend_url({"error": "OAuth PKCE が不正です"}))
+            return _redirect({"error": "OAuth PKCE が不正です"})
         redirect_path = _normalize_redirect_path(state_data.get("redirect") or "")
         code_key = f"{provider}:{code}"
         if not _mark_oauth_code_used(code_key):
-            return RedirectResponse(_oauth_frontend_url({"oauth": "retry"}))
+            return _redirect({"oauth": "retry"})
     elif provider == "x":
         if not oauth_token or not oauth_verifier:
-            return RedirectResponse(_oauth_frontend_url({"error": "OAuth のトークンが取得できませんでした"}))
+            return _redirect({"error": "OAuth のトークンが取得できませんでした"})
         code_key = f"{provider}:{oauth_token}:{oauth_verifier}"
         if not _mark_oauth_code_used(code_key):
-            return RedirectResponse(_oauth_frontend_url({"oauth": "retry"}))
+            return _redirect({"oauth": "retry"})
     else:
-        return RedirectResponse(_oauth_frontend_url({"error": "provider が不正です"}))
+        return _redirect({"error": "provider が不正です"})
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -2345,6 +2673,7 @@ async def oauth_callback(
                 if not request_payload:
                     raise HTTPException(400, "X OAuth 1.0a のトークンが無効です")
                 redirect_path = _normalize_redirect_path(request_payload.get("redirect") or "")
+                app_client = (request_payload.get("app_client") or "0") == "1"
                 request_token_secret = request_payload.get("secret") or ""
 
                 access_token_url = "https://api.twitter.com/oauth/access_token"
@@ -2415,12 +2744,12 @@ async def oauth_callback(
                 raise HTTPException(404, "provider が不正です")
     except HTTPException as e:
         message = str(getattr(e, "detail", "") or "OAuth 認証に失敗しました")
-        return RedirectResponse(_oauth_frontend_url({"error": message}))
+        return _redirect({"error": message})
     except Exception:
-        return RedirectResponse(_oauth_frontend_url({"error": "OAuth 処理中にエラーが発生しました"}))
+        return _redirect({"error": "OAuth 処理中にエラーが発生しました"})
 
     if not provider_user_id:
-        return RedirectResponse(_oauth_frontend_url({"error": "OAuth のユーザーIDが取得できませんでした"}))
+        return _redirect({"error": "OAuth のユーザーIDが取得できませんでした"})
 
     user = _get_or_create_user_from_oauth(
         db=db,
@@ -2440,7 +2769,7 @@ async def oauth_callback(
     if redirect_path:
         params["redirect"] = redirect_path
 
-    return RedirectResponse(_oauth_frontend_url(params))
+    return _redirect(params)
 
 
 # =========================================
@@ -2858,6 +3187,7 @@ def admin_delete_user(
     db.execute(text("DELETE FROM novels WHERE author_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM oauth_accounts WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM password_reset_tokens WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM mobile_push_tokens WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
     db.commit()
     return AdminUserDeleteOut(ok=True, user_id=user_id, username=user.username)
@@ -3319,21 +3649,18 @@ def stripe_checkout(request: Request, db: Session = Depends(get_db)):
     if not STRIPE_PRICE_ID:
         raise HTTPException(500, "STRIPE_PRICE_ID 未設定")
 
-    try:
-        user = require_current_user(request, db)
-        client_ref = str(user.id)
-    except Exception:
-        client_ref = None
-        user = None
+    user = require_current_user(request, db)
+    client_ref = str(user.id)
+    metadata = {"type": "premium", "user_id": client_ref}
 
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
         client_reference_id=client_ref,
-        customer=getattr(user, "stripe_customer_id", None) if user else None,
-        customer_email=getattr(user, "email", None) if user else None,
-        metadata={"user_id": client_ref} if client_ref else None,
-        subscription_data={"metadata": {"user_id": client_ref}} if client_ref else None,
+        customer=getattr(user, "stripe_customer_id", None),
+        customer_email=getattr(user, "email", None),
+        metadata=metadata,
+        subscription_data={"metadata": metadata},
         success_url=f"{FRONTEND_ORIGIN}/stripe/success",
         cancel_url=f"{FRONTEND_ORIGIN}/stripe/cancel",
     )
@@ -3759,6 +4086,10 @@ async def stripe_webhook(
     # プレミアム課金の既存フロー
     # ----------------------------
     raw_uid = _stripe_obj_get(data_object, "client_reference_id")
+    if raw_uid is None:
+        meta_uid = _meta_int("user_id")
+        if meta_uid is not None:
+            raw_uid = str(meta_uid)
     user: models.User | None = None
     if raw_uid is not None:
         try:
@@ -3766,6 +4097,18 @@ async def stripe_webhook(
             user = db.query(models.User).get(user_id)
         except Exception as e:
             print("stripe webhook: invalid client_reference_id:", raw_uid, repr(e))
+
+    if user is None:
+        customer_id = _stripe_obj_get(data_object, "customer")
+        if customer_id:
+            user = db.query(models.User).filter(models.User.stripe_customer_id == str(customer_id)).first()
+
+    if user is None:
+        customer_email = _stripe_obj_get(data_object, "customer_email")
+        customer_details = _stripe_obj_get(data_object, "customer_details", {}) or {}
+        customer_email = customer_email or _stripe_obj_get(customer_details, "email")
+        if customer_email:
+            user = db.query(models.User).filter(models.User.email == str(customer_email)).first()
 
     if user is None:
         print(f"stripe webhook: user not found for event_type={event_type}, object={data_object}")
@@ -4442,6 +4785,11 @@ class AIJobKillResponse(BaseModel):
 
 class AINovelDraftDeleteResponse(BaseModel):
     deleted: bool
+
+
+class AINovelAutoFillRequest(BaseModel):
+    query: str | None = None
+    characters: str | None = None
 
 
 class AIJobListItem(BaseModel):
@@ -7472,8 +7820,7 @@ def delete_ai_novel_draft(
     db.commit()
     return {"deleted": True}
 
-@app.get("/api/ai/novels/auto-fill")
-async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | None = None):
+async def _auto_fill_ai_novel_inputs_impl(query: str | None = None, characters: str | None = None):
     q = (query or "").strip()
     c = (characters or "").strip()
     if not q and not c:
@@ -7550,6 +7897,17 @@ async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | 
             for i in picked
         ],
     }
+
+@app.get("/api/ai/novels/auto-fill")
+async def auto_fill_ai_novel_inputs(query: str | None = None, characters: str | None = None):
+    return await _auto_fill_ai_novel_inputs_impl(query=query, characters=characters)
+
+@app.post("/api/ai/novels/auto-fill")
+async def auto_fill_ai_novel_inputs_post(payload: AINovelAutoFillRequest):
+    return await _auto_fill_ai_novel_inputs_impl(
+        query=payload.query,
+        characters=payload.characters,
+    )
 
 @app.post("/api/ai/episodes/{episode_id}/continue")
 async def generate_ai_episode_continue(
@@ -7904,6 +8262,8 @@ def create_novel(
     )
     db.commit()
     db.refresh(novel)
+    if bool(getattr(novel, "is_public", True)):
+        notify_recommended_users_new_novel(db, novel=novel)
     return novel
 
 
@@ -7972,6 +8332,7 @@ def update_novel(
     db.refresh(novel)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+    was_public = bool(getattr(novel, "is_public", True))
     has_non_tag_change = False
     if payload.language is not None and normalize_language(payload.language) != normalize_language(
         getattr(novel, "language", None)
@@ -8082,6 +8443,8 @@ def update_novel(
         )
     db.commit()
     db.refresh(novel)
+    if (not was_public) and bool(getattr(novel, "is_public", True)):
+        notify_recommended_users_new_novel(db, novel=novel)
     return novel
 
 
@@ -8712,6 +9075,149 @@ def list_public_novels(
             }
         )
     return result
+
+
+@app.get("/api/public/novels/recommended")
+def list_recommended_public_novels(
+    request: Request,
+    limit: int = Query(12, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    favorite_tag_weights = get_user_favorite_tag_weights(db, user.id)
+    if not favorite_tag_weights:
+        return []
+
+    favorite_novel_ids = {
+        row[0]
+        for row in db.query(models.NovelFavorite.novel_id)
+        .filter(models.NovelFavorite.user_id == user.id)
+        .all()
+    }
+
+    candidate_query = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.author),
+        )
+        .filter(models.Novel.is_public == True)
+        .filter(models.Novel.author_id != user.id)
+        .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+    )
+    if favorite_novel_ids:
+        candidate_query = candidate_query.filter(~models.Novel.id.in_(favorite_novel_ids))
+
+    candidates = candidate_query.limit(max(100, limit * 12)).all()
+    scored: list[tuple[int, models.Novel]] = []
+    for novel in candidates:
+        if not can_user_access_novel_age_limit(user, getattr(novel, "age_limit", "all")):
+            continue
+        tag_names = [
+            (getattr(nt.tag, "name", None) or "").strip()
+            for nt in (getattr(novel, "novel_tags", []) or [])
+            if getattr(nt, "tag", None) is not None
+        ]
+        score = sum(favorite_tag_weights.get(name, 0) for name in tag_names if name)
+        if score <= 0:
+            continue
+        scored.append((score, novel))
+    if not scored:
+        return []
+
+    ranked_items = sorted(
+        scored,
+        key=lambda item: (
+            -item[0],
+            -(getattr(item[1], "created_at", datetime.min) or datetime.min).timestamp(),
+            -item[1].id,
+        ),
+    )[:limit]
+    novels = [item[1] for item in ranked_items]
+    recommendation_scores = {item[1].id: item[0] for item in ranked_items}
+
+    novel_ids = [novel.id for novel in novels]
+    cover_map: dict[int, str] = {}
+    if novel_ids:
+        cover_rows = (
+            db.query(
+                models.Episode.novel_id,
+                models.Episode.cover_image_url,
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.cover_image_url.isnot(None))
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .order_by(
+                models.Episode.novel_id,
+                models.Episode.episode_number.is_(None),
+                models.Episode.episode_number,
+                models.Episode.id,
+            )
+            .all()
+        )
+        for novel_id, cover_url, _, __ in cover_rows:
+            if novel_id not in cover_map and cover_url:
+                cover_map[novel_id] = cover_url
+    favorite_counts: dict[int, int] = {}
+    if novel_ids:
+        favorite_rows = (
+            db.query(
+                models.NovelFavorite.novel_id,
+                func.count(models.NovelFavorite.id),
+            )
+            .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+            .group_by(models.NovelFavorite.novel_id)
+            .all()
+        )
+        favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+    liked_ids = {
+        row[0]
+        for row in db.query(models.NovelLike.novel_id)
+        .filter(
+            models.NovelLike.user_id == user.id,
+            models.NovelLike.novel_id.in_(novel_ids),
+        )
+        .all()
+    } if novel_ids else set()
+    favorited_ids = {
+        row[0]
+        for row in db.query(models.NovelFavorite.novel_id)
+        .filter(
+            models.NovelFavorite.user_id == user.id,
+            models.NovelFavorite.novel_id.in_(novel_ids),
+        )
+        .all()
+    } if novel_ids else set()
+
+    return [
+        {
+            "id": novel.id,
+            "title": novel.title,
+            "description": novel.description,
+            "created_at": novel.created_at,
+            "author_id": novel.author_id,
+            "author_username": novel.author.username if novel.author else None,
+            "tag_names": [
+                nt.tag.name
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+            "view_count": getattr(novel, "view_count", 0) or 0,
+            "like_count": getattr(novel, "like_count", 0) or 0,
+            "favorite_count": favorite_counts.get(novel.id, 0),
+            "total_char_count": char_counts.get(novel.id, 0),
+            "age_limit": getattr(novel, "age_limit", "all") or "all",
+            "is_liked": novel.id in liked_ids,
+            "is_favorited": novel.id in favorited_ids,
+            "cover_image_url": cover_map.get(novel.id),
+            "recommendation_score": recommendation_scores.get(novel.id, 0),
+        }
+        for novel in novels
+    ]
 
 
 @app.get("/api/public/novels/ranking")
@@ -9368,6 +9874,10 @@ def create_dm_message(
         raise HTTPException(400, "メッセージを入力してください")
 
     recipient_id = thread.user1_id if thread.user2_id == user.id else thread.user2_id
+    title = "新しいDMが届きました"
+    snippet = _truncate_text(body, 120)
+    notif_body = f"{user.username}からメッセージ: {snippet}"
+    link_url = f"/dms/{thread_id}"
     msg = models.DirectMessage(
         thread_id=thread_id,
         sender_id=user.id,
@@ -9379,27 +9889,47 @@ def create_dm_message(
     db.add(msg)
     db.add(thread)
     if recipient_id != user.id:
-        title = "新しいDMが届きました"
-        snippet = _truncate_text(body, 120)
-        notif_body = f"{user.username}からメッセージ: {snippet}"
         create_notification(
             db,
             user_id=recipient_id,
             notif_type="dm_message",
             title=title,
             body=notif_body,
-            link_url=f"/dms/{thread_id}",
+            link_url=link_url,
             actor_user_id=user.id,
+            send_push_immediately=False,
         )
     db.commit()
     db.refresh(msg)
     if recipient_id != user.id:
+        try:
+            send_fcm_push_to_user(
+                db,
+                user_id=recipient_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+                notif_type="dm_message",
+            )
+        except Exception as e:
+            print(f"[fcm] dm_message send failed recipient_id={recipient_id} err={e!r}")
+        try:
+            send_web_push_to_user(
+                db,
+                user_id=recipient_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+                tag="dm_message",
+            )
+        except Exception as e:
+            print(f"[webpush] dm_message send failed recipient_id={recipient_id} err={e!r}")
         send_notification_email_if_enabled(
             db,
             user_id=recipient_id,
             title=title,
             body=notif_body,
-            link_url=f"/dms/{thread_id}",
+            link_url=link_url,
         )
 
     return {
@@ -11137,6 +11667,17 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(novel)
     if novel.author_id != user.id:
+        try:
+            send_web_push_to_user(
+                db,
+                user_id=novel.author_id,
+                title=title,
+                body=notif_body,
+                link_url=f"/novels/{novel.id}",
+                tag="novel_like",
+            )
+        except Exception as e:
+            print(f"[webpush] novel_like send failed user_id={novel.author_id} err={e!r}")
         send_notification_email_if_enabled(
             db,
             user_id=novel.author_id,
@@ -11262,6 +11803,17 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
         .count()
     )
     if novel and novel.author_id != user.id:
+        try:
+            send_web_push_to_user(
+                db,
+                user_id=novel.author_id,
+                title=title,
+                body=notif_body,
+                link_url=f"/episodes/{ep.id}",
+                tag="episode_like",
+            )
+        except Exception as e:
+            print(f"[webpush] episode_like send failed user_id={novel.author_id} err={e!r}")
         send_notification_email_if_enabled(
             db,
             user_id=novel.author_id,
@@ -11682,6 +12234,17 @@ class PushDebugPayload(BaseModel):
     detail: str | None = None
 
 
+class MobilePushRegisterPayload(BaseModel):
+    token: str
+    platform: Literal["android"] = "android"
+    device_id: str | None = None
+    app_version: str | None = None
+
+
+class MobilePushUnregisterPayload(BaseModel):
+    token: str
+
+
 @app.get("/api/push/public_key")
 def get_push_public_key():
     return {
@@ -11748,6 +12311,67 @@ def unsubscribe_push_notifications(
             models.PushSubscription.user_id == user.id,
             models.PushSubscription.endpoint == endpoint,
         )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"ok": True, "deleted": int(deleted or 0)}
+
+
+@app.post("/api/mobile-push/register")
+def register_mobile_push_token(
+    payload: MobilePushRegisterPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    token_value = (payload.token or "").strip()
+    if not token_value:
+        raise HTTPException(400, "token が必要です")
+    platform = (payload.platform or "android").strip().lower()
+    if platform != "android":
+        raise HTTPException(400, "platform は android のみ対応です")
+
+    existing = (
+        db.query(models.MobilePushToken)
+        .filter(models.MobilePushToken.token == token_value)
+        .first()
+    )
+    if existing:
+        existing.user_id = user.id
+        existing.platform = platform
+        existing.device_id = (payload.device_id or "").strip()[:128] or None
+        existing.app_version = (payload.app_version or "").strip()[:64] or None
+        existing.last_seen_at = datetime.utcnow()
+        db.add(existing)
+    else:
+        db.add(
+            models.MobilePushToken(
+                user_id=user.id,
+                platform=platform,
+                token=token_value,
+                device_id=(payload.device_id or "").strip()[:128] or None,
+                app_version=(payload.app_version or "").strip()[:64] or None,
+                last_seen_at=datetime.utcnow(),
+            )
+        )
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/mobile-push/unregister")
+def unregister_mobile_push_token(
+    payload: MobilePushUnregisterPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    token_value = (payload.token or "").strip()
+    if not token_value:
+        raise HTTPException(400, "token が必要です")
+    deleted = (
+        db.query(models.MobilePushToken)
+        .filter(models.MobilePushToken.user_id == user.id)
+        .filter(models.MobilePushToken.token == token_value)
         .delete(synchronize_session=False)
     )
     db.commit()
@@ -11891,7 +12515,31 @@ def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db
     fav = models.NovelFavorite(user_id=user.id, novel_id=novel_id)
     db.add(fav)
     apply_novel_daily_metric(db, novel.id, favorite_delta=1)
+    if novel.author_id and novel.author_id != user.id:
+        title = "小説がブックマークされました"
+        notif_body = f"{user.username}が「{novel.title}」をブックマークしました"
+        create_notification(
+            db,
+            user_id=novel.author_id,
+            notif_type="novel_favorite",
+            title=title,
+            body=notif_body,
+            link_url=f"/novels/{novel.id}",
+            actor_user_id=user.id,
+        )
     db.commit()
+    if novel.author_id and novel.author_id != user.id:
+        try:
+            send_web_push_to_user(
+                db,
+                user_id=novel.author_id,
+                title=title,
+                body=notif_body,
+                link_url=f"/novels/{novel.id}",
+                tag="novel_favorite",
+            )
+        except Exception as e:
+            print(f"[webpush] novel_favorite send failed user_id={novel.author_id} err={e!r}")
     return {"ok": True, "favorited": True}
 
 
