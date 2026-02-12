@@ -5,3 +5,12 @@
 
 # vite build output
 frontend/dist/
+
+# --- build/cache/tools (do not commit) ---
+.gradle/
+.gradle-local/
+.tools/
+**/*.jar
+**/*.zip
+
+# If you actually need some jars/zips, remove the last two lines and whitelist explicitly.
