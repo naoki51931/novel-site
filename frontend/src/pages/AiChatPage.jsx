@@ -9,6 +9,61 @@ const AI_CHAT_PERSONALITY_KEY = "ai_chat_personality_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY = "ai_chat_relationship_memo_history_v1";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
 const PREVIEW_BUBBLE_COUNT = 3;
+const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
+  "優しい",
+  "かわいい",
+  "かっこいい",
+  "美しい",
+  "きれい",
+  "綺麗",
+  "すごい",
+  "素敵",
+  "幻想的",
+  "神秘的",
+  "エモい",
+  "おしゃれ",
+  "最高",
+  "ドラマチック",
+  "ロマンチック",
+  "感動的",
+  "抽象的",
+  "雰囲気",
+  "空気感",
+  "mood",
+  "emotional",
+  "dramatic",
+  "romantic",
+  "beautiful",
+  "pretty",
+  "cute",
+  "cool",
+  "amazing",
+  "awesome",
+  "abstract",
+  "感じ",
+  "気持ち",
+  "思い",
+  "世界観",
+  "関係性",
+  "日常",
+  "会話",
+  "シーン",
+  "描写",
+  "空間",
+  "印象",
+  "表現",
+  "quality",
+  "masterpiece",
+  "best",
+  "vibe",
+  "style",
+  "scene",
+  "feeling",
+  "emotion",
+  "story",
+  "daily",
+  "conversation",
+]);
 
 const AI_MODELS = [
   { value: "gpt-4.1-mini", labelJa: "GPT-4.1 mini（OpenAI）", labelEn: "GPT-4.1 mini (OpenAI)" },
@@ -31,6 +86,63 @@ function normalizeSpeakerName(name) {
 
 function compactText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function extractConcreteImagePromptWords(text, limit = 8) {
+  const source = compactText(text)
+    .replace(/[|/]/g, " ")
+    .replace(/[、。！？!?;:()[\]{}"“”'`]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!source) return [];
+  const chunks = source.match(/[A-Za-z0-9][A-Za-z0-9_-]{1,}|[一-龥ぁ-んァ-ヴー]{2,}/g) || [];
+  const picked = [];
+  const seen = new Set();
+  const blocked = new Set([
+    "する",
+    "した",
+    "して",
+    "いる",
+    "なる",
+    "ある",
+    "いる",
+    "こと",
+    "もの",
+    "それ",
+    "これ",
+    "あれ",
+    "よう",
+    "です",
+    "ます",
+    "with",
+    "from",
+    "into",
+    "about",
+    "very",
+    "really",
+    "just",
+    "like",
+    "look",
+    "looks",
+    "feel",
+    "feels",
+  ]);
+  for (const chunk of chunks) {
+    const token = String(chunk || "").trim();
+    if (!token) continue;
+    const lower = token.toLowerCase();
+    if (ABSTRACT_IMAGE_PROMPT_WORDS.has(token) || ABSTRACT_IMAGE_PROMPT_WORDS.has(lower)) continue;
+    if (blocked.has(token) || blocked.has(lower)) continue;
+    if (/^[0-9]+$/.test(token)) continue;
+    if (/^(this|that|these|those|they|them|you|your|our|their)$/i.test(token)) continue;
+    if (/[ぁ-ん一-龥]/.test(token) && /(的|感|性|らしさ)$/.test(token)) continue;
+    if (token.length > 24) continue;
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    picked.push(token);
+    if (picked.length >= limit) break;
+  }
+  return picked;
 }
 
 function normalizeSpeechGender(value) {
@@ -127,6 +239,9 @@ export default function AiChatPage() {
   const [animeTitleCandidates, setAnimeTitleCandidates] = useState([]);
   const [animeTitleCandidateName, setAnimeTitleCandidateName] = useState("");
   const [animeTitleDraft, setAnimeTitleDraft] = useState("");
+  const [imagePromptDraft, setImagePromptDraft] = useState("");
+  const [imageGenerating, setImageGenerating] = useState(false);
+  const [generatedSceneImages, setGeneratedSceneImages] = useState([]);
   const [relationshipMemoHistory, setRelationshipMemoHistory] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -182,6 +297,97 @@ export default function AiChatPage() {
     const firstUserIndex = normalized.findIndex((m) => m.role === "user");
     if (firstUserIndex < 0) return [];
     return normalized.slice(firstUserIndex);
+  };
+
+  const buildScenePromptFromCurrentChat = () => {
+    const mainName = compactText(characterName) || t({ ja: "メインキャラ", en: "Main character" });
+    const sceneCasts = castCharacters.slice(0, 4);
+    const normalizePromptToken = (value, fallback = "", limit = 8) => {
+      const primary = extractConcreteImagePromptWords(value, limit);
+      if (primary.length) return primary.join(", ");
+      const backup = extractConcreteImagePromptWords(fallback, limit);
+      return backup.join(", ");
+    };
+    const countTag = (count, singular, plural) => {
+      if (count <= 0) return "";
+      if (count === 1) return `1${singular}`;
+      return `${count}${plural}`;
+    };
+
+    const recent = (Array.isArray(messages) ? messages : [])
+      .filter((m) => compactText(m?.content))
+      .slice(-14);
+    const actionLines = recent
+      .filter((m) => m.mode === "do")
+      .slice(-8)
+      .map((m) => {
+        const who = compactText(m.speaker_name)
+          || (m.role === "assistant"
+            ? (compactText(characterName) || t({ ja: "AI", en: "AI" }))
+            : t({ ja: "あなた", en: "You" }));
+        const actionTokens = normalizePromptToken(m.content, "", 9);
+        return actionTokens ? `${who}, ${actionTokens}` : who;
+      });
+    const fallbackSpeechLines = recent
+      .filter((m) => m.mode !== "do")
+      .slice(-4)
+      .map((m) => {
+        const who = compactText(m.speaker_name)
+          || (m.role === "assistant"
+            ? (compactText(characterName) || t({ ja: "AI", en: "AI" }))
+            : t({ ja: "あなた", en: "You" }));
+        const speechTokens = normalizePromptToken(m.content, "", 8);
+        return speechTokens ? `${who}, ${speechTokens}` : who;
+      });
+    const sceneLines = actionLines.length ? actionLines : fallbackSpeechLines;
+    const participantGenders = [
+      normalizeSpeechGender(mainSpeechGender),
+      ...sceneCasts.map((cast) => normalizeSpeechGender(cast?.speech_gender)),
+    ];
+    const girlCount = participantGenders.filter((g) => g === "female").length;
+    const boyCount = participantGenders.filter((g) => g === "male").length;
+    const unknownCount = Math.max(0, participantGenders.length - girlCount - boyCount);
+    const peopleCountTags = [
+      countTag(girlCount, "girl", "girls"),
+      countTag(boyCount, "boy", "boys"),
+      countTag(unknownCount, "person", "people"),
+    ].filter(Boolean);
+    const characterTags = [
+      `${mainName}, ${normalizePromptToken(personality, t({ ja: "制服, 黒髪, 前髪, 青い目", en: "school uniform, black hair, bangs, blue eyes" }))}`,
+      ...sceneCasts.map((cast, idx) => {
+        const castName = compactText(cast?.name) || t({ ja: `サブキャラ${idx + 1}`, en: `Sub character ${idx + 1}` });
+        const castPersonality = normalizePromptToken(cast?.personality, t({ ja: "制服, 茶髪, ポニーテール", en: "school uniform, brown hair, ponytail" }));
+        const relation = normalizePromptToken(cast?.relationship);
+        return relation ? `${castName}, ${castPersonality}, ${relation}` : `${castName}, ${castPersonality}`;
+      }),
+    ];
+    const chatContextTags = normalizePromptToken(
+      recent.map((m) => m?.content || "").join(" "),
+      t({ ja: "教室, 窓, 机, 夕方, 廊下", en: "classroom, window, desk, sunset, hallway" })
+    );
+
+    return [
+      "anime, cel-shading, clean lineart, eye-level, medium shot, sharp focus",
+      r18Mode ? "nsfw, adult content" : "safe for work",
+      `${peopleCountTags.join(", ")}, full body, detailed eyes, visible fingers`,
+      "indoor, classroom, desk, chair, window, sunset light, wall, floor",
+      chatContextTags,
+      ...characterTags,
+      ...(sceneLines.length
+        ? sceneLines
+        : [t({ ja: "standing, facing each other, eye contact, hands visible", en: "standing, facing each other, eye contact, hands visible" })]),
+    ]
+      .map((line) => normalizePromptToken(line, "", 12))
+      .filter(Boolean)
+      .join(", ");
+  };
+
+  const withImageUrl = (url) => {
+    const raw = String(url || "").trim();
+    if (!raw) return "";
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith("/")) return `${window.location.origin}${raw}`;
+    return `${window.location.origin}/${raw}`;
   };
 
   const handleCreateNovelFromConversation = async () => {
@@ -382,6 +588,69 @@ export default function AiChatPage() {
     }
   };
 
+  const generateChatSceneImage = async () => {
+    if (loading || imageGenerating) return;
+    setError("");
+    const prompt = compactText(imagePromptDraft) ? imagePromptDraft : buildScenePromptFromCurrentChat();
+    if (!compactText(prompt)) {
+      setError(t({ ja: "画像生成プロンプトが空です。", en: "Image prompt is empty." }));
+      return;
+    }
+
+    setImageGenerating(true);
+    try {
+      const token = getStoredAuthToken();
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const res = await fetch("/api/ai/chat/generate_image", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt,
+          model_id: "anikawaxl_v3.safetensors",
+          width: 512,
+          height: 512,
+          steps: 25,
+          num_images: 1,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t({ ja: "画像生成に失敗しました。", en: "Failed to generate image." })
+        );
+      }
+      const images = Array.isArray(data?.images)
+        ? data.images
+          .map((item) => {
+            const rawUrl = String(item?.url || "").trim();
+            if (!rawUrl) return null;
+            return {
+              url: withImageUrl(rawUrl),
+              filename: String(item?.filename || "").trim(),
+            };
+          })
+          .filter(Boolean)
+        : [];
+      if (!images.length) {
+        throw new Error(
+          t({ ja: "画像URLを取得できませんでした。", en: "No image URL returned." })
+        );
+      }
+      setGeneratedSceneImages(images);
+      setImagePromptDraft(prompt);
+    } catch (e) {
+      setError(
+        e?.message ||
+          t({ ja: "画像生成中にエラーが発生しました。", en: "Image generation error occurred." })
+      );
+    } finally {
+      setImageGenerating(false);
+    }
+  };
+
   const historyPayload = useMemo(
     () =>
       messages.slice(-20).map((m) => ({
@@ -532,6 +801,22 @@ export default function AiChatPage() {
         key: `cast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         saved_id: "",
         name: nextName,
+      };
+      return [...prev, duplicate];
+    });
+  };
+  const duplicateMainCharacter = () => {
+    setCastCharacters((prev) => {
+      const nextName = buildDuplicatedCastName(
+        characterName,
+        prev.map((c) => c.name)
+      );
+      const duplicate = {
+        ...createCastCharacter(),
+        name: nextName,
+        personality: String(personality || ""),
+        fanfic_mode: !!fanficMode,
+        speech_gender: normalizeSpeechGender(mainSpeechGender),
       };
       return [...prev, duplicate];
     });
@@ -2358,6 +2643,14 @@ export default function AiChatPage() {
             <button
               type="button"
               className="btn btn-border"
+              onClick={duplicateMainCharacter}
+              disabled={loading || augmentLoading}
+            >
+              {t({ ja: "このキャラを複製", en: "Duplicate this character" })}
+            </button>
+            <button
+              type="button"
+              className="btn btn-border"
               onClick={openAnimeTitlePicker}
               disabled={loading || augmentLoading || animeTitleLoading || !fanficMode || !characterName.trim()}
             >
@@ -2500,6 +2793,64 @@ export default function AiChatPage() {
           </button>
         </div>
       )}
+      <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: "0.9rem", fontWeight: 700, marginBottom: 6 }}>
+          {t({ ja: "チャットシーン画像生成", en: "Chat scene image generation" })}
+        </div>
+        <textarea
+          value={imagePromptDraft}
+          onChange={(e) => setImagePromptDraft(e.target.value)}
+          rows={3}
+          placeholder={t({
+            ja: "空欄なら現在の会話ログから自動でプロンプトを作成します。",
+            en: "If blank, prompt is auto-built from current chat logs.",
+          })}
+          style={{ width: "100%", marginBottom: 8 }}
+          disabled={imageGenerating}
+        />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: generatedSceneImages.length ? 8 : 0 }}>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => setImagePromptDraft(buildScenePromptFromCurrentChat())}
+            disabled={imageGenerating}
+          >
+            {t({ ja: "会話からプロンプト作成", en: "Build prompt from chat" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={generateChatSceneImage}
+            disabled={imageGenerating}
+          >
+            {imageGenerating
+              ? t({ ja: "画像生成中...", en: "Generating image..." })
+              : t({ ja: "画像生成", en: "Generate image" })}
+          </button>
+        </div>
+        {generatedSceneImages.length > 0 && (
+          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+            {generatedSceneImages.map((img, idx) => (
+              <a
+                key={`${img.url}-${idx}`}
+                href={img.url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ border: "1px solid #d8dce6", borderRadius: 8, padding: 6, textDecoration: "none", color: "inherit" }}
+              >
+                <img
+                  src={img.url}
+                  alt={img.filename || `scene-${idx + 1}`}
+                  style={{ width: "100%", display: "block", borderRadius: 6 }}
+                />
+                <div style={{ marginTop: 6, fontSize: "0.8rem", color: "#5f6675", wordBreak: "break-all" }}>
+                  {img.filename || img.url}
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
       <div style={{ marginTop: -2, marginBottom: 10 }}>
         <div style={{ fontSize: "0.84rem", color: "#5f6675", marginBottom: 6 }}>
           {t({ ja: "次に言いそうなセリフ候補（3件）", en: "Likely next lines (3 suggestions)" })}: {selectedSpeakerBubbles.name}

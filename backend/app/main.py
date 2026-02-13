@@ -758,6 +758,11 @@ AI_CHAT_FREE_TOKENS = int(os.getenv("AI_CHAT_FREE_TOKENS", "2000000"))
 AI_CHAT_BLOCK_TOKENS = int(os.getenv("AI_CHAT_BLOCK_TOKENS", "2000000"))
 AI_CHAT_BLOCK_PRICE_YEN = int(os.getenv("AI_CHAT_BLOCK_PRICE_YEN", "1000"))
 AI_CHAT_DEMO_BYPASS_USERNAME = os.getenv("AI_CHAT_DEMO_BYPASS_USERNAME", "demo02").strip()
+AI_CHAT_IMAGE_API_BASE_URL = os.getenv("AI_CHAT_IMAGE_API_BASE_URL", "").strip().rstrip("/")
+AI_CHAT_IMAGE_API_KEY = os.getenv("AI_CHAT_IMAGE_API_KEY", "").strip()
+AI_CHAT_IMAGE_MODEL_ID = os.getenv("AI_CHAT_IMAGE_MODEL_ID", "").strip()
+AI_CHAT_IMAGE_NEGATIVE_PROMPT = os.getenv("AI_CHAT_IMAGE_NEGATIVE_PROMPT", "").strip()
+AI_CHAT_IMAGE_TIMEOUT_SEC = float(os.getenv("AI_CHAT_IMAGE_TIMEOUT_SEC", "45"))
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -4959,6 +4964,30 @@ class AIChatPromptPreviewResponse(BaseModel):
     language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
 
 
+class AIChatImageGenerateRequest(BaseModel):
+    prompt: str
+    negative_prompt: str | None = None
+    model_id: str | None = None
+    width: int = 768
+    height: int = 768
+    steps: int = 28
+    guidance_scale: float = 7.0
+    seed: int | None = None
+    num_images: int = 1
+
+
+class AIChatImageItem(BaseModel):
+    url: str
+    filename: str | None = None
+
+
+class AIChatImageGenerateResponse(BaseModel):
+    prompt: str
+    images: list[AIChatImageItem] = Field(default_factory=list)
+    job_id: str | None = None
+    meta: dict = Field(default_factory=dict)
+
+
 def normalize_speech_gender(value: str | None) -> Literal["auto", "female", "male"]:
     v = str(value or "").strip().lower()
     if v in {"female", "male"}:
@@ -6373,6 +6402,45 @@ def _normalize_next_line_suggestion(text: str) -> str:
     return line[:220].strip()
 
 
+def _normalize_ai_chat_image_url(base_url: str, raw_url: str) -> str:
+    url = str(raw_url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if not base_url:
+        return url
+    if url.startswith("/"):
+        return f"{base_url}{url}"
+    return f"{base_url}/{url}"
+
+
+def _extract_error_detail_from_response(res: httpx.Response, fallback: str) -> str:
+    try:
+        parsed = res.json()
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        detail = parsed.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+        message = parsed.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        error = parsed.get("error")
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+    return fallback
+
+
+def _extract_session_token_from_payload(payload: dict) -> str:
+    for key in ("session_token", "token", "access_token", "sessionToken", "session"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 @app.post("/api/ai/chat/next_user_lines", response_model=AIChatNextLineSuggestResponse)
 async def ai_chat_next_user_lines(
     req: AIChatNextLineSuggestRequest,
@@ -6478,6 +6546,134 @@ async def ai_chat_next_user_lines(
         suggestions=suggestions[:count],
         used_tokens=tokens,
         model=model_used,
+    )
+
+
+@app.post("/api/ai/chat/generate_image", response_model=AIChatImageGenerateResponse)
+async def ai_chat_generate_image(
+    req: AIChatImageGenerateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    viewer = get_optional_current_user(request, db)
+    if viewer is not None:
+        _ensure_ai_chat_access(viewer)
+    if not AI_CHAT_IMAGE_API_BASE_URL:
+        raise HTTPException(status_code=503, detail="AI画像APIが未設定です。")
+
+    prompt = str(req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt は必須です。")
+
+    width = max(256, min(1536, int(req.width or 768)))
+    height = max(256, min(1536, int(req.height or 768)))
+    steps = max(1, min(80, int(req.steps or 28)))
+    guidance_scale = max(1.0, min(20.0, float(req.guidance_scale or 7.0)))
+    num_images = max(1, min(4, int(req.num_images or 1)))
+    seed = req.seed
+    if seed is not None:
+        try:
+            seed = int(seed)
+        except Exception:
+            seed = None
+
+    payload: dict = {
+        "prompt": prompt,
+        "negative_prompt": str(req.negative_prompt or AI_CHAT_IMAGE_NEGATIVE_PROMPT or "").strip(),
+        "model_id": str(req.model_id or AI_CHAT_IMAGE_MODEL_ID or "").strip(),
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "guidance_scale": guidance_scale,
+        "num_images": num_images,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    if not payload["negative_prompt"]:
+        payload.pop("negative_prompt", None)
+    if not payload["model_id"]:
+        payload.pop("model_id", None)
+
+    try:
+        async with httpx.AsyncClient(timeout=AI_CHAT_IMAGE_TIMEOUT_SEC) as client:
+            session_headers = {}
+            if AI_CHAT_IMAGE_API_KEY:
+                session_headers["X-API-Key"] = AI_CHAT_IMAGE_API_KEY
+            session_res = await client.post(
+                f"{AI_CHAT_IMAGE_API_BASE_URL}/api/session",
+                headers=session_headers,
+            )
+            if not session_res.is_success:
+                detail = _extract_error_detail_from_response(
+                    session_res,
+                    "AI画像APIセッションの発行に失敗しました。",
+                )
+                raise HTTPException(status_code=session_res.status_code, detail=detail)
+            session_data = session_res.json()
+            if not isinstance(session_data, dict):
+                raise HTTPException(
+                    status_code=502,
+                    detail="AI画像APIセッション応答が不正です。",
+                )
+            session_token = _extract_session_token_from_payload(session_data)
+            if not session_token:
+                raise HTTPException(
+                    status_code=502,
+                    detail="AI画像APIセッショントークンを取得できませんでした。",
+                )
+
+            res = await client.post(
+                f"{AI_CHAT_IMAGE_API_BASE_URL}/api/generate",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Session-Token": session_token,
+                },
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        logger.exception("ai_chat_generate_image upstream request failed: %r", e)
+        raise HTTPException(status_code=502, detail="AI画像APIへの接続に失敗しました。")
+
+    data: dict = {}
+    try:
+        parsed = res.json()
+        if isinstance(parsed, dict):
+            data = parsed
+    except Exception:
+        data = {}
+
+    if not res.is_success:
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if isinstance(detail, str) and detail.strip():
+            raise HTTPException(status_code=res.status_code, detail=detail.strip())
+        raise HTTPException(status_code=res.status_code, detail="AI画像生成に失敗しました。")
+
+    raw_images = data.get("images")
+    images: list[AIChatImageItem] = []
+    if isinstance(raw_images, list):
+        for item in raw_images:
+            raw_url = ""
+            raw_filename = ""
+            if isinstance(item, str):
+                raw_url = item
+            elif isinstance(item, dict):
+                raw_url = str(item.get("url") or item.get("image_url") or item.get("path") or "").strip()
+                raw_filename = str(item.get("filename") or "").strip()
+            if not raw_url:
+                continue
+            resolved = _normalize_ai_chat_image_url(AI_CHAT_IMAGE_API_BASE_URL, raw_url)
+            if not resolved:
+                continue
+            filename = raw_filename or Path(urlparse(resolved).path).name or None
+            images.append(AIChatImageItem(url=resolved, filename=filename))
+
+    return AIChatImageGenerateResponse(
+        prompt=prompt,
+        images=images,
+        job_id=str(data.get("job_id") or "").strip() or None,
+        meta=data.get("meta") if isinstance(data.get("meta"), dict) else {},
     )
 
 
