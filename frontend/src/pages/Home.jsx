@@ -406,8 +406,8 @@ export default function Home({
                 display: "inline-block",
                 padding: "2px 8px",
                 borderRadius: 999,
-                backgroundColor: "#1f2937",
-                color: "#fff",
+                backgroundColor: "var(--header-bg)",
+                color: "var(--header-text)",
                 fontSize: 12,
                 letterSpacing: "0.04em",
               }}
@@ -447,7 +447,7 @@ export default function Home({
                 disabled={!rankingEnabled}
                 style={
                   rankingSort === option.key
-                    ? { borderColor: "#333", color: "#333" }
+                    ? { borderColor: "var(--cta)", color: "var(--cta)" }
                     : undefined
                 }
               >

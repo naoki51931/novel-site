@@ -111,7 +111,7 @@ export default function PremiumLP() {
         <div style={{ display: "inline-block", padding: "4px 10px", borderRadius: 999, background: "#2d2010", color: "#fff", fontSize: 12, fontWeight: 700 }}>
           {t({ ja: "PREMIUM", en: "PREMIUM" })}
         </div>
-        <h2 style={{ margin: "12px 0 8px", fontSize: "clamp(1.5rem, 3vw, 2.2rem)", lineHeight: 1.25 }}>
+        <h2 className="premium-lp-title" style={{ margin: "12px 0 8px", fontSize: "clamp(1.5rem, 3vw, 2.2rem)", lineHeight: 1.25 }}>
           {t({ ja: "創作を止めないためのプレミアム", en: "Premium to keep your creativity moving" })}
         </h2>
         <p style={{ margin: "0 0 14px", color: "#473a23", lineHeight: 1.7 }}>

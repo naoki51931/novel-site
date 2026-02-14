@@ -3594,8 +3594,9 @@ export default function AiChatPage() {
                   maxWidth: "86%",
                   borderRadius: 14,
                   padding: "8px 10px 8px 12px",
-                  background: "#f6f7fb",
-                  border: "1px solid #cfd4e2",
+                  background: "#1f4788",
+                  border: "1px solid #2e5ca8",
+                  color: "#f5f1e8",
                   whiteSpace: "pre-wrap",
                   lineHeight: 1.5,
                   display: "flex",
@@ -3884,13 +3885,13 @@ export default function AiChatPage() {
         </span>
         <button
           type="button"
-          className={mode === "say" ? "btn btn-border" : "btn"}
+          className={`ai-chat-mode-btn ${mode === "say" ? "btn btn-border" : "btn"}`}
           onClick={() => setMode("say")}
           disabled={loading}
           aria-pressed={mode === "say"}
           style={{
             fontWeight: mode === "say" ? 700 : 400,
-            background: mode === "say" ? "#dbeeff" : undefined,
+            background: mode === "say" ? "var(--ai-chat-say-active-bg)" : undefined,
             borderColor: mode === "say" ? "#4a87c2" : undefined,
           }}
         >
@@ -3898,13 +3899,13 @@ export default function AiChatPage() {
         </button>
         <button
           type="button"
-          className={mode === "do" ? "btn btn-border" : "btn"}
+          className={`ai-chat-mode-btn ${mode === "do" ? "btn btn-border" : "btn"}`}
           onClick={() => setMode("do")}
           disabled={loading}
           aria-pressed={mode === "do"}
           style={{
             fontWeight: mode === "do" ? 700 : 400,
-            background: mode === "do" ? "#ffe7d1" : undefined,
+            background: mode === "do" ? "var(--ai-chat-do-active-bg)" : undefined,
             borderColor: mode === "do" ? "#cf7a24" : undefined,
           }}
         >

@@ -225,7 +225,11 @@ export default function NewNovel() {
       </div>
 
       <div style={{ marginTop: 6, marginBottom: 12, fontSize: 14 }}>
-        <Link to="/register">
+        <Link
+          to="/register"
+          className="btn btn-border"
+          style={{ display: "inline-block", fontSize: 18, padding: "14px 22px", fontWeight: 700 }}
+        >
           {t({
             ja: "まずは、小説を作る前に会員登録！！",
             en: "First, create an account before posting your novel!!",

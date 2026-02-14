@@ -28,6 +28,14 @@
   --premium-bg: #eeffee;
   --premium-border: #00aa00;
   --premium-text: #006600;
+  --link: #1a5fa0;
+  --cta: #333333;
+  --cta-hover: #111111;
+  --header-bg: var(--surface);
+  --header-text: var(--text);
+  --heading: var(--text);
+  --ai-chat-say-active-bg: #dbeeff;
+  --ai-chat-do-active-bg: #ffe7d1;
 }
 
 :root[data-theme="dark"] {
@@ -57,12 +65,89 @@
   --premium-bg: #0f2a18;
   --premium-border: #1f7a3f;
   --premium-text: #e8e9ee;
+  --link: #90baf0;
+  --cta: #e8e9ee;
+  --cta-hover: #cfd3dd;
+  --header-bg: var(--surface);
+  --header-text: var(--text);
+  --heading: var(--text);
+  --ai-chat-say-active-bg: #447fb3;
+  --ai-chat-do-active-bg: rgb(229 146 69);
+}
+
+/* Revert option: localStorage.setItem("color_preset", "classic") then reload. */
+:root[data-color-preset="wa-modern"] {
+  --bg: #f5f1e8;
+  --text: #2c2c2c;
+  --muted-text: #5f5a53;
+  --surface: #fbf8f2;
+  --surface-2: #f0ebe1;
+  --login-status-bg: #f0ebe1;
+  --border: #d9cfbe;
+  --border-strong: #1f4788;
+  --primary: #e6b422;
+  --on-primary: #1f4788;
+  --shadow: rgba(27, 58, 75, 0.12);
+  --novel-card-bg: #fffdf8;
+  --novel-card-border: #d9cfbe;
+  --novel-card-desc: #3a3834;
+  --novel-card-meta: #666057;
+  --ai-desc-text: #555047;
+  --ai-result-bg: #f8f3ea;
+  --ai-result-surface: #fffdf8;
+  --ai-result-border: #d9cfbe;
+  --premium-bg: #f6edd0;
+  --premium-border: #c99a1b;
+  --premium-text: #674d0a;
+  --link: #8f78c7;
+  --cta: #e6b422;
+  --cta-hover: #c99a1b;
+  --header-bg: #1f4788;
+  --header-text: #f5f1e8;
+  --heading: #1f4788;
+}
+
+:root[data-color-preset="wa-modern"][data-theme="dark"] {
+  --bg: #141f28;
+  --text: #ede7db;
+  --muted-text: #c7bda9;
+  --surface: #1b2d3a;
+  --surface-2: #223644;
+  --login-status-bg: #223644;
+  --border: #385062;
+  --border-strong: #e6b422;
+  --primary: #e6b422;
+  --on-primary: #1f4788;
+  --shadow: rgba(0, 0, 0, 0.35);
+  --novel-card-bg: #1f3341;
+  --novel-card-border: #385062;
+  --novel-card-desc: #ede7db;
+  --novel-card-meta: #d4cbb8;
+  --ai-desc-text: #d9d0be;
+  --ai-result-bg: #1b2d3a;
+  --ai-result-surface: #223644;
+  --ai-result-border: #385062;
+  --premium-bg: #3b3218;
+  --premium-border: #c99a1b;
+  --premium-text: #f4e8c4;
+  --link: #b39ddb;
+  --cta: #e6b422;
+  --cta-hover: #c99a1b;
+  --header-bg: #1f4788;
+  --header-text: #f5f1e8;
+  --heading: #f5f1e8;
 }
 
 html,
 body {
   background: var(--bg);
   color: var(--text);
+  font-family: "Zen Maru Gothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--heading);
+  font-family: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
 }
 
 input,
@@ -74,7 +159,7 @@ select {
 }
 
 a {
-  color: inherit;
+  color: var(--link);
 }
 
 .user-link {
@@ -147,7 +232,7 @@ button.btn.btn-border.bubble-send-btn {
 
 .site-title-link {
   text-decoration: none;
-  color: inherit;
+  color: #ffffff;
   font-size: 20px;
   font-weight: bold;
 }
@@ -163,7 +248,8 @@ button.btn.btn-border.bubble-send-btn {
   gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--header-bg);
+  color: var(--header-text);
 }
 
 .site-header-left {
@@ -182,6 +268,7 @@ button.btn.btn-border.bubble-send-btn {
 .site-title {
   margin: 0;
   font-size: 22px;
+  color: #ffffff;
 }
 
 /* PC では横並びメニュー */
@@ -197,24 +284,33 @@ button.btn.btn-border.bubble-send-btn {
   border-radius: 6px;
   border: 1px solid transparent;
   text-decoration: none;
-  color: var(--text);
+  color: #1f4788;
   white-space: nowrap;
+}
+
+:root[data-theme="dark"] .nav-link:not(.nav-link-accent) {
+  color: #7db9de;
 }
 
 .nav-link:hover {
   border-color: var(--border-strong);
   background: var(--surface-2);
-  color: var(--text) !important;
+  color: #1f4788 !important;
+}
+
+:root[data-theme="dark"] .nav-link:not(.nav-link-accent):hover {
+  color: #7db9de !important;
 }
 
 .nav-link-accent {
-  border-color: #333;
+  border-color: var(--cta);
   font-weight: 600;
 }
 
 .login-status {
   font-size: 12px;
-  color: var(--muted-text);
+  color: var(--header-text);
+  opacity: 0.82;
   white-space: nowrap;
 }
 
@@ -233,8 +329,8 @@ button.btn.btn-border.bubble-send-btn {
   border-radius: 999px;
   border: none;
   text-decoration: none;
-  color: var(--text);
-  background: var(--surface);
+  color: var(--header-text);
+  background: var(--header-bg);
   transition: background 0.2s ease, border-color 0.2s ease;
   font-size: 16px;
   position: relative;
@@ -242,7 +338,7 @@ button.btn.btn-border.bubble-send-btn {
 
 .nav-bell:hover {
   background: var(--surface-2);
-  color: var(--text);
+  color: var(--header-text);
 }
 
 .nav-bell svg {
@@ -281,11 +377,17 @@ button.btn.btn-border.bubble-send-btn {
   cursor: pointer;
 }
 
+button.nav-toggle.btn.btn-border,
+button.nav-toggle.btn.btn-border:hover {
+  background: transparent !important;
+  border: none !important;
+}
+
 .nav-toggle span {
   display: block;
   width: 20px;
   height: 2px;
-  background: var(--text);
+  background: var(--header-text);
   border-radius: 999px;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
@@ -376,7 +478,7 @@ button.btn.btn-border.bubble-send-btn {
 /* ボタン（flex-shrink:0 相当 & 折り返し防止） */
 .search-button {
   padding: 6px 12px;
-  background: var(--primary);
+  background: var(--cta);
   color: var(--on-primary);
   border: none;
   border-radius: 4px;
@@ -418,6 +520,7 @@ button.btn.btn-border.bubble-send-btn {
 }
 
 .input {
+  box-sizing: border-box;
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -425,7 +528,7 @@ button.btn.btn-border.bubble-send-btn {
 }
 
 .btn-primary {
-  background: var(--primary);
+  background: var(--cta);
   color: var(--on-primary);
   padding: 10px 12px;
   border: none;
@@ -434,13 +537,13 @@ button.btn.btn-border.bubble-send-btn {
 }
 
 .btn-primary:hover {
-  background: var(--text);
-  color: var(--bg);
+  background: var(--cta-hover);
+  color: var(--on-primary);
 }
 
 .dm-icon-button {
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
@@ -486,7 +589,7 @@ button.btn.btn-border.bubble-send-btn {
     left: 0;
     right: 0;
     padding: 8px 16px 12px;
-    background: var(--surface);
+    background: var(--header-bg);
     border-bottom: 1px solid var(--border);
     display: none;
     flex-direction: column;
@@ -546,30 +649,35 @@ button.btn.btn-border.bubble-send-btn {
     box-sizing: border-box;
   }
 
+  .episode-cover-wrap {
+    text-align: center;
+  }
+
+  .episode-cover-image {
+    display: block;
+    margin: 0 auto;
+  }
+
 }
 
-.nav-link-accent:hover { background: var(--primary); color: var(--on-primary); }
 /* ===== アクセントボタン専用デザイン ===== */
-.nav-link-accent { border: 2px solid var(--danger); color: var(--danger); background: var(--surface); font-weight: bold; }
-.nav-link-accent:hover { background: var(--danger); color: #fff !important; border-color: var(--danger); }
+.nav-link-accent { border: 2px solid var(--cta); color: var(--cta); background: var(--surface); font-weight: bold; }
+.nav-link-accent:hover { background: var(--cta); color: var(--on-primary) !important; border-color: var(--cta); }
 
 /* ============================
    Author Landing Page
 ============================ */
 .author-lp {
-  --lp-ink: #1b1b1b;
-  --lp-muted: #4b463f;
-  --lp-accent: #e45b2c;
-  --lp-accent-soft: #f8b17e;
-  --lp-surface: #fff5ec;
-  --lp-surface-strong: #111111;
-  --lp-shadow: rgba(17, 17, 17, 0.12);
+  --lp-ink: #1f4788;
+  --lp-muted: #5f5a53;
+  --lp-accent: #e6b422;
+  --lp-accent-soft: #b39ddb;
+  --lp-surface: #f5f1e8;
+  --lp-surface-strong: #1f4788;
+  --lp-shadow: rgba(27, 58, 75, 0.14);
   font-family: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
   color: var(--lp-ink);
-  background:
-    radial-gradient(circle at 12% 18%, rgba(248, 177, 126, 0.45), transparent 50%),
-    radial-gradient(circle at 82% 10%, rgba(70, 65, 57, 0.18), transparent 45%),
-    linear-gradient(135deg, #fdf3e9 0%, #f7efe7 60%, #f2e6db 100%);
+  background: var(--lp-surface);
   border-radius: 28px;
   padding: 48px 32px 96px;
   margin: 24px auto 64px;
@@ -581,7 +689,7 @@ button.btn.btn-border.bubble-send-btn {
 
 .author-lp::before,
 .author-lp::after {
-  content: "";
+  content: none;
   position: absolute;
   border-radius: 999px;
   opacity: 0.25;
@@ -592,7 +700,7 @@ button.btn.btn-border.bubble-send-btn {
 .author-lp::before {
   width: 380px;
   height: 380px;
-  background: radial-gradient(circle, var(--lp-accent-soft), transparent 70%);
+  background: var(--lp-accent-soft);
   top: -120px;
   right: -160px;
 }
@@ -600,7 +708,7 @@ button.btn.btn-border.bubble-send-btn {
 .author-lp::after {
   width: 300px;
   height: 300px;
-  background: radial-gradient(circle, #f2c9a0, transparent 70%);
+  background: #d8c9f0;
   bottom: -140px;
   left: -120px;
 }
@@ -636,6 +744,7 @@ button.btn.btn-border.bubble-send-btn {
   font-size: clamp(32px, 5vw, 54px);
   line-height: 1.25;
   margin: 0 0 18px;
+  color: #1f2f45;
 }
 
 .lp-hero-lead {
@@ -681,14 +790,14 @@ button.btn.btn-border.bubble-send-btn {
 .lp-cta-primary.btn-border,
 .lp-cta-primary {
   background: var(--lp-accent);
-  color: #ffffff;
-  box-shadow: 0 12px 20px rgba(228, 91, 44, 0.28);
+  color: #1f2f45;
+  box-shadow: 0 12px 20px rgba(31, 71, 136, 0.22);
 }
 
 .lp-cta-primary:hover {
   transform: translateY(-2px);
   background: var(--lp-accent);
-  color: #ffffff;
+  color: #1f2f45;
 }
 
 .author-lp .lp-cta.lp-cta-white {
@@ -810,6 +919,10 @@ button.btn.btn-border.bubble-send-btn {
   margin: 0 0 28px;
 }
 
+.author-lp .lp-section:not(.lp-section-dark) .lp-section-title {
+  color: #1f2f45;
+}
+
 .lp-section-lead {
   margin: 24px 0 0;
   color: var(--lp-muted);
@@ -849,6 +962,7 @@ button.btn.btn-border.bubble-send-btn {
 .lp-feature h4 {
   margin: 0 0 8px;
   font-size: 16px;
+  color: #1f2f45;
 }
 
 .lp-feature p {
@@ -886,15 +1000,25 @@ button.btn.btn-border.bubble-send-btn {
 
 .lp-section-dark .lp-section-kicker,
 .lp-section-dark .lp-section-lead {
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(245, 241, 232, 0.88);
+}
+
+.lp-section-dark .lp-section-title {
+  color: #f5f1e8;
 }
 
 .lp-section-dark .lp-card,
 .lp-section-dark .lp-feature {
-  background: #ffffff54;
+  background: rgba(16, 37, 72, 0.58);
   color: #ffffff;
   box-shadow: none;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(179, 157, 219, 0.42);
+}
+
+.lp-section-dark .lp-card p,
+.lp-section-dark .lp-feature h4,
+.lp-section-dark .lp-feature p {
+  color: #f5f1e8;
 }
 
 .lp-card-dark {
@@ -916,6 +1040,7 @@ button.btn.btn-border.bubble-send-btn {
 .lp-cta-inner h3 {
   font-size: clamp(26px, 4vw, 40px);
   margin-bottom: 16px;
+  color: #1f2f45;
 }
 
 .lp-cta-inner p {
@@ -1005,4 +1130,16 @@ button.btn.btn-border.bubble-send-btn {
   .lp-hero-card {
     animation: none;
   }
+}
+
+:root[data-theme="dark"] .premium-lp-title {
+  color: #111111;
+}
+
+:root:not([data-theme="dark"]) .ai-chat-mode-btn:hover {
+  color: #2c2c2c !important;
+}
+
+:root[data-theme="dark"] .ai-chat-mode-btn:hover {
+  color: #f5f1e8 !important;
 }

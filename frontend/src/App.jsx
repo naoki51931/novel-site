@@ -103,6 +103,7 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t, lang, setLang } = useI18n();
+  const isAuthorsPage = location.pathname === "/authors";
   const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
   const LOGIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -449,25 +450,27 @@ export default function App() {
       </header>
 
       {/* 検索バーはヘッダーの下に固定 */}
-      <SearchBar
-        query={query}
-        excludeQuery={excludeQuery}
-        onChangeQuery={setQuery}
-        onChangeExcludeQuery={setExcludeQuery}
-        onSearch={({ query: inputQuery, excludeQuery: inputExclude } = {}) => {
-          setMenuOpen(false);
-          const q = (inputQuery ?? "").trim();
-          const exclude = (inputExclude ?? "").trim();
-          if (!q && !exclude) {
-            navigate("/");
-            return;
-          }
-          const params = new URLSearchParams();
-          if (q) params.set("q", q);
-          if (exclude) params.set("exclude", exclude);
-          navigate(`/?${params.toString()}`);
-        }}
-      />
+      {!isAuthorsPage && (
+        <SearchBar
+          query={query}
+          excludeQuery={excludeQuery}
+          onChangeQuery={setQuery}
+          onChangeExcludeQuery={setExcludeQuery}
+          onSearch={({ query: inputQuery, excludeQuery: inputExclude } = {}) => {
+            setMenuOpen(false);
+            const q = (inputQuery ?? "").trim();
+            const exclude = (inputExclude ?? "").trim();
+            if (!q && !exclude) {
+              navigate("/");
+              return;
+            }
+            const params = new URLSearchParams();
+            if (q) params.set("q", q);
+            if (exclude) params.set("exclude", exclude);
+            navigate(`/?${params.toString()}`);
+          }}
+        />
+      )}
 
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
@@ -550,24 +553,26 @@ export default function App() {
         </Routes>
       </main>
 
-      <footer
-        style={{
-          padding: "16px",
-          borderTop: "1px solid #eee",
-          display: "flex",
-          justifyContent: "center",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <Link className="btn btn-border" to="/contact">
-          {t({ ja: "お問い合わせ", en: "Contact" })}
-        </Link>
-        <Link className="btn btn-border" to="/admin">
-          {t({ ja: "管理画面", en: "Admin" })}
-        </Link>
-      </footer>
+      {!isAuthorsPage && (
+        <footer
+          style={{
+            padding: "16px",
+            borderTop: "1px solid #eee",
+            display: "flex",
+            justifyContent: "center",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <Link className="btn btn-border" to="/contact">
+            {t({ ja: "お問い合わせ", en: "Contact" })}
+          </Link>
+          <Link className="btn btn-border" to="/admin">
+            {t({ ja: "管理画面", en: "Admin" })}
+          </Link>
+        </footer>
+      )}
     </div>
   );
 }

@@ -634,9 +634,10 @@ export default function EpisodeDetail() {
 
       {/* 表紙画像 */}
       {episode.cover_image_url && (
-        <div style={{ margin: "12px 0" }}>
+        <div className="episode-cover-wrap" style={{ margin: "12px 0" }}>
           <p style={{ marginBottom: 4 }}>{t({ ja: "表紙:", en: "Cover:" })}</p>
           <img
+            className="episode-cover-image"
             src={API_BASE + episode.cover_image_url}
             alt={t({ ja: "表紙画像", en: "Cover image" })}
             style={{
