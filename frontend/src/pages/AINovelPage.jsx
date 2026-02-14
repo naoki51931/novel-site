@@ -2443,7 +2443,7 @@ export default function AINovelPage() {
             })}
           </div>
           <div style={{ marginTop: "0.5rem" }}>
-            <Link to="/mypage" className="btn btn-border">
+            <Link to="/premium" className="btn btn-border">
               {t({ ja: "プレミアム会員になる", en: "Become Premium" })}
             </Link>
           </div>

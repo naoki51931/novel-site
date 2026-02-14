@@ -6,9 +6,12 @@ import { useI18n } from "../lib/i18n";
 
 const AI_CHAT_CHARACTER_NAME_KEY = "ai_chat_character_name_v1";
 const AI_CHAT_PERSONALITY_KEY = "ai_chat_personality_v1";
+const AI_CHAT_APPEARANCE_KEY = "ai_chat_appearance_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY = "ai_chat_relationship_memo_history_v1";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
 const PREVIEW_BUBBLE_COUNT = 3;
+const APPEARANCE_SECTION_HEADER = "【見た目設定】";
+const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
 const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
   "優しい",
   "かわいい",
@@ -84,12 +87,45 @@ function normalizeSpeakerName(name) {
   return String(name || "").trim();
 }
 
+function parseGeneratedImageMessageContent(rawContent) {
+  const text = String(rawContent || "");
+  if (!text.startsWith(AI_CHAT_IMAGE_MESSAGE_PREFIX)) return null;
+  const rawJson = text.slice(AI_CHAT_IMAGE_MESSAGE_PREFIX.length).trim();
+  if (!rawJson) return null;
+  try {
+    const parsed = JSON.parse(rawJson);
+    const rawImages = Array.isArray(parsed?.images) ? parsed.images : [];
+    const images = rawImages
+      .map((img) => {
+        if (!img || typeof img !== "object") return null;
+        const url = String(img.url || "").trim();
+        if (!url) return null;
+        return {
+          url,
+          filename: String(img.filename || "").trim(),
+        };
+      })
+      .filter(Boolean);
+    if (!images.length) return null;
+    return {
+      images,
+      prompt: String(parsed?.prompt || "").trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function compactText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+function sanitizeImagePromptSourceText(text) {
+  return compactText(text);
+}
+
 function extractConcreteImagePromptWords(text, limit = 8) {
-  const source = compactText(text)
+  const source = sanitizeImagePromptSourceText(text)
     .replace(/[|/]/g, " ")
     .replace(/[、。！？!?;:()[\]{}"“”'`]/g, " ")
     .replace(/\s+/g, " ")
@@ -145,6 +181,97 @@ function extractConcreteImagePromptWords(text, limit = 8) {
   return picked;
 }
 
+function uniqueTokens(tokens, limit = 12) {
+  const picked = [];
+  const seen = new Set();
+  for (const raw of tokens || []) {
+    const token = compactText(raw);
+    if (!token) continue;
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(token);
+    if (picked.length >= limit) break;
+  }
+  return picked;
+}
+
+function splitPersonalityAndAppearance(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) return { personalityText: "", appearanceText: "" };
+  const idx = text.indexOf(APPEARANCE_SECTION_HEADER);
+  if (idx < 0) return { personalityText: text, appearanceText: "" };
+  const personalityText = text.slice(0, idx).trim();
+  const appearanceText = text.slice(idx + APPEARANCE_SECTION_HEADER.length).trim();
+  return { personalityText, appearanceText };
+}
+
+function mergePersonalityWithAppearance(personalityText, appearanceText) {
+  const base = String(personalityText || "").trim();
+  const appearance = String(appearanceText || "").trim();
+  if (!appearance) return base;
+  if (!base) return `${APPEARANCE_SECTION_HEADER}\n${appearance}`;
+  return `${base}\n\n${APPEARANCE_SECTION_HEADER}\n${appearance}`;
+}
+
+function hashStringSeed(text) {
+  const s = String(text || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+function pickBySeed(items, seed, offset = 0) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return "";
+  const idx = Math.abs((seed + offset) % list.length);
+  return String(list[idx] || "");
+}
+
+function buildRandomAppearanceText(name, speechGender = "auto") {
+  const seed = hashStringSeed(`${name || "character"}::${speechGender || "auto"}`);
+  const hairColors = ["black hair", "brown hair", "silver hair", "blonde hair", "navy hair"];
+  const hairStyles = ["short hair", "bob cut", "long hair", "ponytail", "twin tails"];
+  const eyes = ["blue eyes", "amber eyes", "green eyes", "violet eyes", "dark brown eyes"];
+  const outfits = [
+    "school uniform", "blazer and shirt", "hoodie and jeans", "long coat", "white shirt and slacks",
+  ];
+  const body = speechGender === "female"
+    ? "slim build"
+    : (speechGender === "male" ? "lean athletic build" : "balanced build");
+  return uniqueTokens([
+    pickBySeed(hairColors, seed, 3),
+    pickBySeed(hairStyles, seed, 7),
+    pickBySeed(eyes, seed, 11),
+    pickBySeed(outfits, seed, 17),
+    body,
+    "clean face",
+  ], 6).join(", ");
+}
+
+function deriveFanficAppearanceFromSources(characterName, sources, fallback = "") {
+  const joined = (Array.isArray(sources) ? sources : [])
+    .slice(0, 8)
+    .map((s) => `${String(s?.title || "")} ${String(s?.snippet || "")}`)
+    .join(" ");
+  const text = `${characterName || ""} ${joined}`.toLowerCase();
+  const keywords = [
+    "black hair", "brown hair", "blonde hair", "silver hair", "pink hair", "blue hair",
+    "short hair", "long hair", "ponytail", "twin tail", "ahoge",
+    "blue eyes", "red eyes", "green eyes", "gold eyes", "violet eyes",
+    "school uniform", "suit", "coat", "dress", "kimono", "armor", "cloak",
+    "制服", "黒髪", "茶髪", "金髪", "銀髪", "青髪", "ピンク髪",
+    "短髪", "長髪", "ポニーテール", "ツインテール",
+    "青い目", "赤い目", "緑の目", "金色の目", "紫の目",
+    "ブレザー", "シャツ", "コート", "ワンピース", "着物", "鎧",
+  ];
+  const matched = uniqueTokens(keywords.filter((k) => text.includes(String(k).toLowerCase())), 8);
+  if (matched.length) return matched.join(", ");
+  return String(fallback || "").trim();
+}
+
 function normalizeSpeechGender(value) {
   const v = String(value || "").trim().toLowerCase();
   if (v === "female" || v === "male") return v;
@@ -196,6 +323,10 @@ export default function AiChatPage() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem(AI_CHAT_PERSONALITY_KEY) || "";
   });
+  const [appearance, setAppearance] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(AI_CHAT_APPEARANCE_KEY) || "";
+  });
   const [mainSpeechGender, setMainSpeechGender] = useState("auto");
   const [mode, setMode] = useState("say");
   const [autoDialogue, setAutoDialogue] = useState(false);
@@ -215,6 +346,7 @@ export default function AiChatPage() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(null);
+  const [selectedGeneratedImageKey, setSelectedGeneratedImageKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [autoContinuing, setAutoContinuing] = useState(false);
   const [error, setError] = useState("");
@@ -225,6 +357,8 @@ export default function AiChatPage() {
   const [resendMode, setResendMode] = useState("say");
   const [savedCharacters, setSavedCharacters] = useState([]);
   const [selectedCharacterId, setSelectedCharacterId] = useState("");
+  const [characterImageFile, setCharacterImageFile] = useState(null);
+  const [characterImageUploading, setCharacterImageUploading] = useState(false);
   const [charactersLoading, setCharactersLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [chatAccess, setChatAccess] = useState(null);
@@ -240,8 +374,8 @@ export default function AiChatPage() {
   const [animeTitleCandidateName, setAnimeTitleCandidateName] = useState("");
   const [animeTitleDraft, setAnimeTitleDraft] = useState("");
   const [imagePromptDraft, setImagePromptDraft] = useState("");
+  const [imageNegativePromptDraft, setImageNegativePromptDraft] = useState("");
   const [imageGenerating, setImageGenerating] = useState(false);
-  const [generatedSceneImages, setGeneratedSceneImages] = useState([]);
   const [relationshipMemoHistory, setRelationshipMemoHistory] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -302,11 +436,15 @@ export default function AiChatPage() {
   const buildScenePromptFromCurrentChat = () => {
     const mainName = compactText(characterName) || t({ ja: "メインキャラ", en: "Main character" });
     const sceneCasts = castCharacters.slice(0, 4);
-    const normalizePromptToken = (value, fallback = "", limit = 8) => {
+    const effectiveMainAppearance = compactText(appearance)
+      || (fanficMode ? "" : buildRandomAppearanceText(mainName, mainSpeechGender));
+    if (!compactText(appearance) && effectiveMainAppearance) {
+      setAppearance(effectiveMainAppearance);
+    }
+    const normalizePromptTokens = (value, fallback = "", limit = 8) => {
       const primary = extractConcreteImagePromptWords(value, limit);
-      if (primary.length) return primary.join(", ");
-      const backup = extractConcreteImagePromptWords(fallback, limit);
-      return backup.join(", ");
+      if (primary.length) return primary;
+      return extractConcreteImagePromptWords(fallback, limit);
     };
     const countTag = (count, singular, plural) => {
       if (count <= 0) return "";
@@ -315,31 +453,54 @@ export default function AiChatPage() {
     };
 
     const recent = (Array.isArray(messages) ? messages : [])
+      .map((m) => ({ ...m, content: sanitizeImagePromptSourceText(m?.content || "") }))
       .filter((m) => compactText(m?.content))
       .slice(-14);
-    const actionLines = recent
-      .filter((m) => m.mode === "do")
-      .slice(-8)
-      .map((m) => {
-        const who = compactText(m.speaker_name)
-          || (m.role === "assistant"
-            ? (compactText(characterName) || t({ ja: "AI", en: "AI" }))
-            : t({ ja: "あなた", en: "You" }));
-        const actionTokens = normalizePromptToken(m.content, "", 9);
-        return actionTokens ? `${who}, ${actionTokens}` : who;
-      });
-    const fallbackSpeechLines = recent
-      .filter((m) => m.mode !== "do")
-      .slice(-4)
-      .map((m) => {
-        const who = compactText(m.speaker_name)
-          || (m.role === "assistant"
-            ? (compactText(characterName) || t({ ja: "AI", en: "AI" }))
-            : t({ ja: "あなた", en: "You" }));
-        const speechTokens = normalizePromptToken(m.content, "", 8);
-        return speechTokens ? `${who}, ${speechTokens}` : who;
-      });
-    const sceneLines = actionLines.length ? actionLines : fallbackSpeechLines;
+    const recentDoMessages = recent.filter((m) => m.mode === "do");
+    const recentDoText = sanitizeImagePromptSourceText(
+      recentDoMessages.map((m) => String(m?.content || "")).join(" ")
+    );
+    const latestDo = [...recent].reverse().find((m) => m.mode === "do" && compactText(m.content));
+    const pickByKeywords = (text, candidates, limit = 5) => {
+      const src = String(text || "").toLowerCase();
+      if (!src) return [];
+      return uniqueTokens(
+        candidates.filter((kw) => src.includes(String(kw || "").toLowerCase())),
+        limit
+      );
+    };
+    const locationCandidates = [
+      "classroom", "school", "hallway", "library", "rooftop", "station", "train", "park",
+      "cafe", "restaurant", "street", "office", "home", "bedroom", "living room", "kitchen",
+      "beach", "sea", "mountain", "forest", "river", "temple",
+      "教室", "学校", "廊下", "図書室", "屋上", "駅", "電車", "公園", "カフェ", "喫茶店", "通学路",
+      "道", "オフィス", "職場", "部屋", "自室", "リビング", "キッチン", "海", "浜辺", "山", "森", "神社",
+    ];
+    const outfitCandidates = [
+      "school uniform", "blazer", "shirt", "jacket", "hoodie", "coat", "dress", "skirt",
+      "pants", "jeans", "suit", "kimono", "armor", "swimsuit", "apron", "glasses",
+      "制服", "ブレザー", "シャツ", "ジャケット", "パーカー", "コート", "ワンピース", "スカート",
+      "ズボン", "ジーンズ", "スーツ", "和服", "着物", "鎧", "水着", "エプロン", "眼鏡", "メガネ",
+    ];
+    const locationTokens = pickByKeywords(recentDoText, locationCandidates, 5);
+    const outfitTokens = uniqueTokens([
+      ...pickByKeywords(recentDoText, outfitCandidates, 6),
+      ...pickByKeywords(effectiveMainAppearance, outfitCandidates, 4),
+      ...sceneCasts.flatMap((cast) => {
+        const castAppearance = compactText(cast?.appearance)
+          || (cast?.fanfic_mode ? "" : buildRandomAppearanceText(cast?.name, cast?.speech_gender));
+        return pickByKeywords(castAppearance || cast?.personality, outfitCandidates, 3);
+      }),
+    ], 6);
+    const actionTokens = normalizePromptTokens(
+      latestDo?.content || "",
+      t({ ja: "歩く, 立つ, 見つめる, 手を伸ばす", en: "standing, walking, eye contact, reaching hand" }),
+      8
+    );
+    const detailTokens = uniqueTokens([
+      ...normalizePromptTokens(latestDo?.content || "", "", 6),
+      ...normalizePromptTokens(recentDoText, "", 6),
+    ], 10);
     const participantGenders = [
       normalizeSpeechGender(mainSpeechGender),
       ...sceneCasts.map((cast) => normalizeSpeechGender(cast?.speech_gender)),
@@ -352,39 +513,174 @@ export default function AiChatPage() {
       countTag(boyCount, "boy", "boys"),
       countTag(unknownCount, "person", "people"),
     ].filter(Boolean);
+    const participantNames = uniqueTokens([
+      mainName,
+      ...recent
+        .map((m) => compactText(m?.speaker_name))
+        .filter(Boolean)
+        .slice(-4),
+      ...sceneCasts.map((cast, idx) => compactText(cast?.name) || t({ ja: `サブキャラ${idx + 1}`, en: `Sub character ${idx + 1}` })),
+    ], 3);
+    const companions = participantNames.slice(1, 3);
+    const mainLookTokens = normalizePromptTokens(
+      effectiveMainAppearance || personality,
+      t({ ja: "制服, 黒髪, 前髪, 青い目", en: "school uniform, black hair, bangs, blue eyes" }),
+      6
+    );
+    const castLookTokens = uniqueTokens(
+      sceneCasts.flatMap((cast) =>
+        normalizePromptTokens(
+          compactText(cast?.appearance)
+            || (cast?.fanfic_mode ? "" : buildRandomAppearanceText(cast?.name, cast?.speech_gender))
+            || cast?.personality,
+          t({ ja: "制服, 茶髪, ポニーテール", en: "school uniform, brown hair, ponytail" }),
+          4
+        )
+      ),
+      6
+    );
     const characterTags = [
-      `${mainName}, ${normalizePromptToken(personality, t({ ja: "制服, 黒髪, 前髪, 青い目", en: "school uniform, black hair, bangs, blue eyes" }))}`,
-      ...sceneCasts.map((cast, idx) => {
-        const castName = compactText(cast?.name) || t({ ja: `サブキャラ${idx + 1}`, en: `Sub character ${idx + 1}` });
-        const castPersonality = normalizePromptToken(cast?.personality, t({ ja: "制服, 茶髪, ポニーテール", en: "school uniform, brown hair, ponytail" }));
-        const relation = normalizePromptToken(cast?.relationship);
-        return relation ? `${castName}, ${castPersonality}, ${relation}` : `${castName}, ${castPersonality}`;
-      }),
+      ...participantNames,
+      ...mainLookTokens,
+      ...castLookTokens,
     ];
-    const chatContextTags = normalizePromptToken(
-      recent.map((m) => m?.content || "").join(" "),
+    const chatContextTags = normalizePromptTokens(
+      recentDoText,
       t({ ja: "教室, 窓, 机, 夕方, 廊下", en: "classroom, window, desk, sunset, hallway" })
     );
+    const mergedLocationTokens = uniqueTokens([
+      ...locationTokens,
+      ...chatContextTags,
+      "indoor",
+    ], 5);
+    const mergedOutfitTokens = uniqueTokens([
+      ...outfitTokens,
+      ...mainLookTokens.filter((v) => /uniform|blazer|shirt|jacket|dress|skirt|pants|suit|kimono|制服|ブレザー|シャツ|ジャケット|ワンピース|スカート|ズボン|スーツ|着物/.test(v.toLowerCase())),
+    ], 5);
+    const subjectClause = `subjects: ${uniqueTokens([...peopleCountTags, ...characterTags], 9).join(", ")}`;
+    const actionClause = `action: ${actionTokens.join(", ")}`;
+    const sceneClause = `scene: ${(mergedLocationTokens.length ? mergedLocationTokens : ["classroom", "indoor"]).join(", ")}`;
+    const outfitClause = `outfit: ${(mergedOutfitTokens.length ? mergedOutfitTokens : ["school uniform"]).join(", ")}`;
+    const companionClause = companions.length ? `companions: with ${companions.join(", ")}` : "companions: solo";
+    const detailClause = detailTokens.length ? `details: ${detailTokens.join(", ")}` : "";
+    const lightTokens = uniqueTokens([
+      ...pickByKeywords(recentDoText, ["sunset", "night", "window", "backlight", "逆光", "夕方", "夜", "窓", "木漏れ日"], 3),
+      r18Mode ? "soft dramatic lighting" : "soft rim light and window light",
+    ], 3);
+    const colorTokens = uniqueTokens([
+      ...pickByKeywords(recentDoText, ["blue", "amber", "gold", "teal", "neon", "青", "琥珀", "金", "暖色", "寒色"], 3),
+      "muted teal and amber",
+    ], 3);
+    const textureTokens = uniqueTokens([
+      "anime key visual",
+      "clean lineart",
+      "subtle skin texture",
+      "highly detailed",
+      "sharp focus",
+    ], 5);
+    const lensTokens = uniqueTokens([
+      "50mm lens",
+      "shallow depth of field",
+      "eye-level medium shot",
+      "hands visible",
+    ], 4);
+    const compositionTokens = uniqueTokens([
+      companionClause.includes("solo") ? "single subject composition" : "two-shot composition",
+      "balanced framing",
+      "clear silhouette",
+    ], 3);
+    const subjectTokens = uniqueTokens([
+      ...peopleCountTags,
+      ...participantNames,
+      ...mainLookTokens,
+      ...castLookTokens,
+    ], 10);
 
     return [
-      "anime, cel-shading, clean lineart, eye-level, medium shot, sharp focus",
-      r18Mode ? "nsfw, adult content" : "safe for work",
-      `${peopleCountTags.join(", ")}, full body, detailed eyes, visible fingers`,
-      "indoor, classroom, desk, chair, window, sunset light, wall, floor",
-      chatContextTags,
-      ...characterTags,
-      ...(sceneLines.length
-        ? sceneLines
-        : [t({ ja: "standing, facing each other, eye contact, hands visible", en: "standing, facing each other, eye contact, hands visible" })]),
-    ]
-      .map((line) => normalizePromptToken(line, "", 12))
-      .filter(Boolean)
-      .join(", ");
+      "prompt blueprint",
+      "style reference: anime girl, long black hair, white blouse with large ribbon, black skirt, shy expression, looking slightly down, arms behind back, upper body, indoor wooden floor, soft light",
+      `subject: ${subjectTokens.join(", ")}`,
+      `composition: ${compositionTokens.join(", ")}`,
+      `lighting: ${lightTokens.join(", ")}`,
+      `color: ${colorTokens.join(", ")}`,
+      `texture/style: ${textureTokens.join(", ")}`,
+      `lens/camera: ${lensTokens.join(", ")}`,
+      "workflow note: first pass for composition, second pass for hi-res detail polish",
+      r18Mode ? "nsfw, adult" : "safe for work",
+      "character design consistency, same face, same hairstyle, same outfit details",
+      `main character look: ${uniqueTokens([mainName, ...mainLookTokens], 7).join(", ")}`,
+      castLookTokens.length ? `other character look: ${castLookTokens.join(", ")}` : "",
+      "camera: eye-level, medium shot, full body, hands visible, sharp focus",
+      sceneClause,
+      outfitClause,
+      companionClause,
+      subjectClause,
+      actionClause,
+      detailClause,
+    ].filter(Boolean).join("; ");
+  };
+
+  const buildCharacterOutputTemplate = () => {
+    const resolvedName = compactText(characterName) || t({ ja: "未設定キャラ", en: "Unnamed character" });
+    const resolvedAppearance = compactText(appearance) || buildRandomAppearanceText(resolvedName, mainSpeechGender);
+    const traits = uniqueTokens(
+      normalizePromptTokens(
+        personality,
+        t({ ja: "やさしい, 知的, 少し皮肉屋", en: "kind, intelligent, slightly sarcastic" }),
+        3
+      ),
+      3
+    );
+    const intro = traits.length
+      ? `${traits.join("・")}案内役`
+      : t({ ja: "やさしく導く近未来の案内役", en: "A gentle guide from a near-future world" });
+    const firstGreeting = t(
+      {
+        ja: `はじめまして、${resolvedName}です。無理なく進められるように、必要なところだけ一緒に整理していきましょう。`,
+        en: `Hi, I'm ${resolvedName}. I'll help you organize only what you need, step by step.`,
+      }
+    );
+    return [
+      "【AIチャットキャラクター出力テンプレ】",
+      `名前: ${resolvedName}`,
+      `一言紹介(30字以内): ${intro.slice(0, 30)}`,
+      `外見(80字以内): ${resolvedAppearance.slice(0, 80)}`,
+      `性格: ${traits.join(", ") || t({ ja: "やさしい, 知的, 少し皮肉屋", en: "kind, intelligent, slightly sarcastic" })}`,
+      `話し方の特徴: ${t({ ja: "丁寧語ベース、たまに軽い冗談", en: "Mostly polite, with occasional light jokes" })}`,
+      `初回あいさつ(100字以内): ${firstGreeting.slice(0, 100)}`,
+      `サンプル会話: ${t({ ja: "ユーザー: 今日つらい / キャラ: 今日は深呼吸から始めましょう。次に、いちばん軽い1タスクだけ決めます。", en: "User: Today is rough / Character: Let's start with one deep breath, then pick the lightest single task." })}`,
+    ].join("\n");
+  };
+
+  const applyCharacterOutputTemplate = () => {
+    const nextAppearance = compactText(appearance) || buildRandomAppearanceText(characterName, mainSpeechGender);
+    setPersonality(buildCharacterOutputTemplate());
+    if (!compactText(appearance)) {
+      setAppearance(nextAppearance);
+    }
+  };
+
+  const buildSceneNegativePromptFromCurrentChat = () => {
+    const base = [
+      "smile, open mouth",
+      "worst quality, low quality, normal quality, lowres, blurry, pixelated, jpeg artifacts",
+      "extra limbs, missing limbs, distorted",
+      "bad anatomy, bad hands, fused fingers, extra fingers, missing fingers, malformed limbs",
+      "deformed face, asymmetrical eyes, cross-eye, duplicate face, cloned face",
+      "text, watermark, logo, signature, username, caption, speech bubble, subtitle",
+      "cropped, out of frame, duplicate body, extra arms, extra legs",
+      "3d, realistic photo, photorealistic, monochrome, sketch",
+    ];
+    if (!r18Mode) {
+      base.push("nsfw, nude, nipples, explicit, sexual content");
+    }
+    return base.join("; ");
   };
 
   const withImageUrl = (url) => {
     const raw = String(url || "").trim();
     if (!raw) return "";
+    if (raw.startsWith("data:image/")) return raw;
     if (/^https?:\/\//i.test(raw)) return raw;
     if (raw.startsWith("/")) return `${window.location.origin}${raw}`;
     return `${window.location.origin}/${raw}`;
@@ -592,6 +888,9 @@ export default function AiChatPage() {
     if (loading || imageGenerating) return;
     setError("");
     const prompt = compactText(imagePromptDraft) ? imagePromptDraft : buildScenePromptFromCurrentChat();
+    const negativePrompt = compactText(imageNegativePromptDraft)
+      ? imageNegativePromptDraft
+      : buildSceneNegativePromptFromCurrentChat();
     if (!compactText(prompt)) {
       setError(t({ ja: "画像生成プロンプトが空です。", en: "Image prompt is empty." }));
       return;
@@ -608,10 +907,12 @@ export default function AiChatPage() {
         headers,
         body: JSON.stringify({
           prompt,
-          model_id: "anikawaxl_v3.safetensors",
-          width: 512,
-          height: 512,
-          steps: 25,
+          negative_prompt: negativePrompt,
+          character_id: writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
+          width: 576,
+          height: 1024,
+          steps: 40,
+          guidance_scale: 6.5,
           num_images: 1,
         }),
       });
@@ -639,8 +940,21 @@ export default function AiChatPage() {
           t({ ja: "画像URLを取得できませんでした。", en: "No image URL returned." })
         );
       }
-      setGeneratedSceneImages(images);
       setImagePromptDraft(prompt);
+      setImageNegativePromptDraft(negativePrompt);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: null,
+          role: "assistant",
+          mode: "say",
+          is_auto_dialogue: false,
+          is_generated_image: true,
+          content: t({ ja: "画像を生成しました。", en: "Generated an image." }),
+          speaker_name: String(characterName || "").trim(),
+          generated_images: images,
+        },
+      ]);
     } catch (e) {
       setError(
         e?.message ||
@@ -653,17 +967,25 @@ export default function AiChatPage() {
 
   const historyPayload = useMemo(
     () =>
-      messages.slice(-20).map((m) => ({
-        role: m.role,
-        content: m.speaker_name ? `[${m.speaker_name}] ${m.content}` : m.content,
-        mode: m.mode,
-      })),
+      messages
+        .filter((m) => !m?.is_generated_image)
+        .slice(-20)
+        .map((m) => ({
+          role: m.role,
+          content: m.speaker_name ? `[${m.speaker_name}] ${m.content}` : m.content,
+          mode: m.mode,
+        })),
     [messages]
   );
   const selectedCharacter = useMemo(
     () => savedCharacters.find((c) => c.id === selectedCharacterId) || null,
     [savedCharacters, selectedCharacterId]
   );
+  const selectedCharacterReadonly =
+    !!selectedCharacter?.is_readonly
+    && String(selectedCharacter?.owner_username || "").trim().toLowerCase() !== "demo02";
+  const writableSelectedCharacterId =
+    selectedCharacterId && !selectedCharacterReadonly ? selectedCharacterId : "";
   const getSpeakerProfileByKey = (key) => {
     if (key === "you") {
       return {
@@ -679,6 +1001,7 @@ export default function AiChatPage() {
         key: "main",
         name: characterName,
         personality,
+        appearance,
         fanfic_mode: fanficMode,
         speech_gender: mainSpeechGender,
       };
@@ -726,6 +1049,7 @@ export default function AiChatPage() {
     saved_id: "",
     name: "",
     personality: "",
+    appearance: "",
     relationship: "",
     fanfic_mode: true,
     speech_gender: "auto",
@@ -753,10 +1077,12 @@ export default function AiChatPage() {
     }
     const selected = savedCharacters.find((c) => c.id === normalizedId);
     if (!selected) return;
+    const split = splitPersonalityAndAppearance(String(selected.personality || ""));
     updateCastCharacter(castKey, {
       saved_id: selected.id,
       name: String(selected.name || "").trim(),
-      personality: String(selected.personality || ""),
+      personality: split.personalityText,
+      appearance: split.appearanceText,
       speech_gender: normalizeSpeechGender(selected.speech_gender),
     });
   };
@@ -815,6 +1141,7 @@ export default function AiChatPage() {
         ...createCastCharacter(),
         name: nextName,
         personality: String(personality || ""),
+        appearance: String(appearance || ""),
         fanfic_mode: !!fanficMode,
         speech_gender: normalizeSpeechGender(mainSpeechGender),
       };
@@ -1008,21 +1335,31 @@ export default function AiChatPage() {
   const runCharacterAugment = async ({
     name,
     personalityText,
+    appearanceText = "",
+    speechGender = "auto",
     enabled,
     animeTitle = "",
   }) => {
     const normalizedName = String(name || "").trim();
-    const normalizedPersonality = String(personalityText || "");
+    const split = splitPersonalityAndAppearance(personalityText);
+    const normalizedPersonality = String(split.personalityText || personalityText || "");
+    const normalizedAppearance = String(appearanceText || split.appearanceText || "").trim();
     const normalizedAnimeTitle = String(animeTitle || "").trim();
     if (!enabled) {
-      return { characterName: normalizedName, personalityText: normalizedPersonality, notes: "" };
+      const fallbackAppearance = normalizedAppearance || buildRandomAppearanceText(normalizedName, speechGender);
+      return {
+        characterName: normalizedName,
+        personalityText: normalizedPersonality,
+        appearanceText: fallbackAppearance,
+        notes: normalizedAppearance ? "" : t({ ja: "通常モードのため見た目をランダム設定しました。", en: "Set random appearance for normal mode." }),
+      };
     }
     if (!normalizedName) {
       throw new Error(t({ ja: "二次創作モードではキャラ名が必要です。", en: "Character name is required in fanfic mode." }));
     }
-    const cacheKey = `${normalizedName}::${normalizedAnimeTitle}::${normalizedPersonality}`;
+    const cacheKey = `${normalizedName}::${normalizedAnimeTitle}::${normalizedPersonality}::${normalizedAppearance}`;
     const cached = fanficCacheRef.current.get(cacheKey);
-    if (cached?.personalityText) {
+    if (cached?.personalityText || cached?.appearanceText) {
       return cached;
     }
     setAugmentLoading(true);
@@ -1052,6 +1389,11 @@ export default function AiChatPage() {
       const resolved = {
         characterName: String(data?.character_name || normalizedName).trim(),
         personalityText: String(data?.enriched_personality || normalizedPersonality || "").trim(),
+        appearanceText: deriveFanficAppearanceFromSources(
+          normalizedName,
+          data?.sources,
+          normalizedAppearance || buildRandomAppearanceText(normalizedName, speechGender)
+        ),
         notes: String(data?.notes || "").trim(),
         animeTitle: String(data?.anime_title || normalizedAnimeTitle || "").trim(),
       };
@@ -1190,7 +1532,9 @@ export default function AiChatPage() {
     lastImportedPublicCharacterKeyRef.current = importKey;
 
     if (importedName) setCharacterName(importedName);
-    setPersonality(importedPersonality);
+    const split = splitPersonalityAndAppearance(importedPersonality);
+    setPersonality(split.personalityText);
+    setAppearance(split.appearanceText);
     setSelectedCharacterId("");
     setMessages([]);
     setSelectedMessageIndex(null);
@@ -1213,6 +1557,19 @@ export default function AiChatPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    localStorage.setItem(AI_CHAT_APPEARANCE_KEY, appearance || "");
+  }, [appearance]);
+
+  useEffect(() => {
+    const split = splitPersonalityAndAppearance(personality);
+    if (!split.appearanceText) return;
+    if (!appearance) setAppearance(split.appearanceText);
+    if (split.personalityText !== personality) setPersonality(split.personalityText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     try {
       localStorage.setItem(
         AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY,
@@ -1226,19 +1583,30 @@ export default function AiChatPage() {
   const maybeAugmentCharacterProfile = async ({
     nameOverride,
     personalityOverride,
+    appearanceOverride,
+    speechGenderOverride,
     force = false,
   } = {}) => {
     const currentName = String((nameOverride ?? characterName) || "").trim();
     const currentPersonality = String((personalityOverride ?? personality) || "");
+    const currentAppearance = String((appearanceOverride ?? appearance) || "").trim();
+    const currentSpeechGender = normalizeSpeechGender(speechGenderOverride ?? mainSpeechGender);
     if (!fanficMode) {
+      const fallbackAppearance = currentAppearance || buildRandomAppearanceText(currentName, currentSpeechGender);
+      if (!force && !currentAppearance && fallbackAppearance) {
+        setAppearance(fallbackAppearance);
+      }
       return {
         characterName: currentName,
         personalityText: currentPersonality,
+        appearanceText: fallbackAppearance,
       };
     }
     const resolved = await runCharacterAugment({
       name: currentName,
       personalityText: currentPersonality,
+      appearanceText: currentAppearance,
+      speechGender: currentSpeechGender,
       enabled: fanficMode,
       animeTitle: selectedAnimeTitle,
     });
@@ -1247,6 +1615,9 @@ export default function AiChatPage() {
     }
     if (!force && resolved.personalityText && resolved.personalityText !== personality) {
       setPersonality(resolved.personalityText);
+    }
+    if (!force && resolved.appearanceText && resolved.appearanceText !== appearance) {
+      setAppearance(resolved.appearanceText);
     }
     setAugmentNotes(String(resolved.notes || ""));
     return resolved;
@@ -1276,14 +1647,21 @@ export default function AiChatPage() {
         const list = Array.isArray(data) ? data : [];
         setSavedCharacters(
           list
-            .map((c) => ({
-              id: String(c.id),
-              name: String(c.name || "").trim(),
-              personality: String(c.personality || ""),
-              speech_gender: normalizeSpeechGender(c.speech_gender),
-              is_public: !!c.is_public,
-              published_at: c.published_at || null,
-            }))
+            .map((c) => {
+              const split = splitPersonalityAndAppearance(String(c.personality || ""));
+              return {
+                id: String(c.id),
+                name: String(c.name || "").trim(),
+                personality: split.personalityText,
+                appearance: split.appearanceText,
+                image_url: String(c.image_url || "").trim(),
+                speech_gender: normalizeSpeechGender(c.speech_gender),
+                owner_username: String(c.owner_username || "").trim(),
+                is_readonly: !!c.is_readonly,
+                is_public: !!c.is_public,
+                published_at: c.published_at || null,
+              };
+            })
             .filter((c) => c.name)
         );
       } catch (e) {
@@ -1296,6 +1674,29 @@ export default function AiChatPage() {
       }
     })();
   }, [t]);
+
+  const uploadCharacterImage = async (characterId, file, token) => {
+    if (!characterId || !file || !token) return null;
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(characterId)}/image`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        data?.detail ||
+          t({ ja: "キャラ画像のアップロードに失敗しました。", en: "Failed to upload character image." })
+      );
+    }
+    const imageUrl = String(data?.image_url || "").trim();
+    setSavedCharacters((prev) =>
+      prev.map((c) => (c.id === String(characterId) ? { ...c, image_url: imageUrl } : c))
+    );
+    return imageUrl || null;
+  };
 
   const saveCharacter = () => {
     const run = async () => {
@@ -1310,13 +1711,15 @@ export default function AiChatPage() {
       const augmented = await maybeAugmentCharacterProfile({
         nameOverride: name,
         personalityOverride: personality,
+        appearanceOverride: appearance,
+        speechGenderOverride: mainSpeechGender,
         force: true,
       });
       const selected = savedCharacters.find((c) => c.id === selectedCharacterId) || null;
       const shouldUpdateExisting =
-        !!selected && selected.name.trim() === name;
+        !!selected && !selected.is_readonly && selected.name.trim() === name;
       const url = shouldUpdateExisting
-        ? `/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}`
+        ? `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}`
         : "/api/ai/chat/characters";
       const method = shouldUpdateExisting ? "PUT" : "POST";
       const res = await fetch(url, {
@@ -1327,7 +1730,10 @@ export default function AiChatPage() {
         },
         body: JSON.stringify({
           name: augmented.characterName || name,
-          personality: augmented.personalityText || personality,
+          personality: mergePersonalityWithAppearance(
+            augmented.personalityText || personality,
+            augmented.appearanceText || appearance
+          ),
           speech_gender: normalizeSpeechGender(mainSpeechGender),
         }),
       });
@@ -1339,11 +1745,16 @@ export default function AiChatPage() {
         );
       }
 
+      const splitSaved = splitPersonalityAndAppearance(String(data.personality || ""));
       const saved = {
         id: String(data.id),
         name: String(data.name || "").trim(),
-        personality: String(data.personality || ""),
+        personality: splitSaved.personalityText,
+        appearance: splitSaved.appearanceText,
+        image_url: String(data.image_url || "").trim(),
         speech_gender: normalizeSpeechGender(data.speech_gender),
+        owner_username: String(data.owner_username || "").trim(),
+        is_readonly: !!data.is_readonly,
         is_public: !!data.is_public,
         published_at: data.published_at || null,
       };
@@ -1352,7 +1763,21 @@ export default function AiChatPage() {
         return [saved, ...without];
       });
       setSelectedCharacterId(saved.id);
+      setPersonality(saved.personality || "");
+      setAppearance(saved.appearance || "");
       setMainSpeechGender(normalizeSpeechGender(saved.speech_gender));
+      if (characterImageFile) {
+        setCharacterImageUploading(true);
+        try {
+          const uploadedImageUrl = await uploadCharacterImage(saved.id, characterImageFile, token);
+          if (uploadedImageUrl) {
+            saved.image_url = uploadedImageUrl;
+          }
+          setCharacterImageFile(null);
+        } finally {
+          setCharacterImageUploading(false);
+        }
+      }
       setMessages([]);
       setLastRequest(null);
       setResendDraft("");
@@ -1370,6 +1795,7 @@ export default function AiChatPage() {
   const applySelectedCharacter = (id) => {
     if (!id) {
       setSelectedCharacterId("");
+      setCharacterImageFile(null);
       setMainSpeechGender("auto");
       setMessages([]);
       setLastRequest(null);
@@ -1380,22 +1806,47 @@ export default function AiChatPage() {
     const item = savedCharacters.find((c) => c.id === id);
     if (!item) return;
     setSelectedCharacterId(item.id);
+    setCharacterImageFile(null);
     setCharacterName(item.name || "");
     setPersonality(item.personality || "");
+    setAppearance(String(item.appearance || ""));
     setMainSpeechGender(normalizeSpeechGender(item.speech_gender));
     setSelectedAnimeTitle("");
     setLatestPromptPreview(null);
     setError("");
   };
 
+  const uploadSelectedCharacterImage = () => {
+    const run = async () => {
+      if (!writableSelectedCharacterId || !characterImageFile) return;
+      const token = getStoredAuthToken();
+      if (!token) {
+        throw new Error(t({ ja: "画像登録はログインが必要です。", en: "Login is required to upload image." }));
+      }
+      setCharacterImageUploading(true);
+      try {
+        await uploadCharacterImage(writableSelectedCharacterId, characterImageFile, token);
+        setCharacterImageFile(null);
+      } finally {
+        setCharacterImageUploading(false);
+      }
+    };
+    run().catch((e) => {
+      setError(
+        e?.message ||
+          t({ ja: "キャラ画像のアップロード中にエラーが発生しました。", en: "Failed while uploading character image." })
+      );
+    });
+  };
+
   const deleteSelectedCharacter = () => {
     const run = async () => {
-      if (!selectedCharacterId) return;
+      if (!writableSelectedCharacterId) return;
       const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "キャラ削除はログインが必要です。", en: "Login is required to delete characters." }));
       }
-      const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}`, {
+      const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1406,7 +1857,7 @@ export default function AiChatPage() {
             t({ ja: "キャラ削除に失敗しました。", en: "Failed to delete character." })
         );
       }
-      setSavedCharacters((prev) => prev.filter((c) => c.id !== selectedCharacterId));
+      setSavedCharacters((prev) => prev.filter((c) => c.id !== writableSelectedCharacterId));
       setSelectedCharacterId("");
       setMessages([]);
       setLastRequest(null);
@@ -1424,13 +1875,13 @@ export default function AiChatPage() {
 
   const togglePublishSelectedCharacter = () => {
     const run = async () => {
-      if (!selectedCharacterId) return;
+      if (!writableSelectedCharacterId) return;
       const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "公開設定はログインが必要です。", en: "Login is required for publish settings." }));
       }
       const nextPublic = !(selectedCharacter?.is_public || false);
-      const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}/publish`, {
+      const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/publish`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -1447,7 +1898,7 @@ export default function AiChatPage() {
       }
       setSavedCharacters((prev) =>
         prev.map((c) =>
-          c.id === selectedCharacterId
+          c.id === writableSelectedCharacterId
             ? {
                 ...c,
                 is_public: !!data.is_public,
@@ -1474,6 +1925,7 @@ export default function AiChatPage() {
         : null;
       const baseName = String(selected?.name || characterName || "").trim();
       const basePersonality = String(selected?.personality || personality || "");
+      const baseAppearance = String(selected?.appearance || appearance || "");
 
       if (!baseName && !basePersonality) {
         throw new Error(
@@ -1488,6 +1940,8 @@ export default function AiChatPage() {
         const augmented = await maybeAugmentCharacterProfile({
           nameOverride: baseName,
           personalityOverride: basePersonality,
+          appearanceOverride: baseAppearance,
+          speechGenderOverride: selected?.speech_gender || mainSpeechGender,
           force: true,
         });
         if (augmented.characterName && augmented.characterName !== characterName) {
@@ -1496,12 +1950,16 @@ export default function AiChatPage() {
         if (augmented.personalityText && augmented.personalityText !== personality) {
           setPersonality(augmented.personalityText);
         }
+        if (augmented.appearanceText && augmented.appearanceText !== appearance) {
+          setAppearance(augmented.appearanceText);
+        }
         return;
       }
 
       if (selected) {
         setCharacterName(selected.name || "");
         setPersonality(selected.personality || "");
+        setAppearance(String(selected.appearance || ""));
         return;
       }
       throw new Error(
@@ -1524,21 +1982,26 @@ export default function AiChatPage() {
       setError("");
       let nextName = characterName.trim();
       let nextPersonality = personality;
+      let nextAppearance = String(appearance || "").trim();
       if (!nextName) {
         throw new Error(t({ ja: "キャラ名を入力してください。", en: "Please enter a character name." }));
+      }
+      if (!nextAppearance && !fanficMode) {
+        nextAppearance = buildRandomAppearanceText(nextName, mainSpeechGender);
       }
       // 「性格設定を変更」は入力値をそのまま確定させる。自動補完はここでは行わない。
       if (nextName !== characterName) setCharacterName(nextName);
       if (nextPersonality !== personality) setPersonality(nextPersonality);
+      if (nextAppearance !== appearance) setAppearance(nextAppearance);
 
-      if (!selectedCharacterId) {
+      if (!writableSelectedCharacterId) {
         return;
       }
       const token = getStoredAuthToken();
       if (!token) {
         throw new Error(t({ ja: "性格設定の変更はログインが必要です。", en: "Login is required to update personality." }));
       }
-      const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}`, {
+      const res = await fetch(`/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -1546,7 +2009,7 @@ export default function AiChatPage() {
         },
         body: JSON.stringify({
           name: nextName,
-          personality: nextPersonality,
+          personality: mergePersonalityWithAppearance(nextPersonality, nextAppearance),
           speech_gender: normalizeSpeechGender(mainSpeechGender),
         }),
       });
@@ -1557,17 +2020,23 @@ export default function AiChatPage() {
             t({ ja: "性格設定の変更に失敗しました。", en: "Failed to update personality setting." })
         );
       }
+      const updatedSplit = splitPersonalityAndAppearance(String(data.personality || mergePersonalityWithAppearance(nextPersonality, nextAppearance)));
       const updated = {
-        id: String(data.id || selectedCharacterId),
+        id: String(data.id || writableSelectedCharacterId),
         name: String(data.name || nextName).trim(),
-        personality: String(data.personality || nextPersonality || ""),
+        personality: updatedSplit.personalityText,
+        appearance: updatedSplit.appearanceText,
+        image_url: String(data.image_url || "").trim(),
         speech_gender: normalizeSpeechGender(data.speech_gender ?? mainSpeechGender),
+        owner_username: String(data.owner_username || "").trim(),
+        is_readonly: !!data.is_readonly,
         is_public: !!data.is_public,
         published_at: data.published_at || null,
       };
       setSavedCharacters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       setCharacterName(updated.name);
       setPersonality(updated.personality);
+      setAppearance(updated.appearance || "");
       setMainSpeechGender(normalizeSpeechGender(updated.speech_gender));
     };
     run().catch((e) => {
@@ -1593,11 +2062,15 @@ export default function AiChatPage() {
       const resolved = await runCharacterAugment({
         name,
         personalityText: String(cast.personality || ""),
+        appearanceText: String(cast.appearance || ""),
+        speechGender: normalizeSpeechGender(cast.speech_gender),
         enabled: !!cast.fanfic_mode,
         animeTitle: "",
       });
-      const method = cast.saved_id ? "PUT" : "POST";
-      const url = cast.saved_id
+      const castSaved = savedCharacters.find((c) => c.id === String(cast.saved_id || ""));
+      const canUpdateSaved = !!cast.saved_id && !castSaved?.is_readonly;
+      const method = canUpdateSaved ? "PUT" : "POST";
+      const url = canUpdateSaved
         ? `/api/ai/chat/characters/${encodeURIComponent(cast.saved_id)}`
         : "/api/ai/chat/characters";
       const res = await fetch(url, {
@@ -1608,7 +2081,10 @@ export default function AiChatPage() {
         },
         body: JSON.stringify({
           name: resolved.characterName || name,
-          personality: resolved.personalityText || cast.personality || "",
+          personality: mergePersonalityWithAppearance(
+            resolved.personalityText || cast.personality || "",
+            resolved.appearanceText || cast.appearance || ""
+          ),
           speech_gender: normalizeSpeechGender(cast.speech_gender),
         }),
       });
@@ -1620,10 +2096,20 @@ export default function AiChatPage() {
         );
       }
       const savedId = String(data.id || cast.saved_id || "");
+      const splitSaved = splitPersonalityAndAppearance(
+        String(
+          data.personality
+          || mergePersonalityWithAppearance(
+            resolved.personalityText || cast.personality || "",
+            resolved.appearanceText || cast.appearance || ""
+          )
+        )
+      );
       updateCastCharacter(castKey, {
         saved_id: savedId,
         name: String(data.name || resolved.characterName || name).trim(),
-        personality: String(data.personality || resolved.personalityText || cast.personality || ""),
+        personality: splitSaved.personalityText,
+        appearance: splitSaved.appearanceText,
         speech_gender: normalizeSpeechGender(data.speech_gender || cast.speech_gender),
       });
       if (savedId) {
@@ -1631,8 +2117,12 @@ export default function AiChatPage() {
           const normalized = {
             id: savedId,
             name: String(data.name || resolved.characterName || name).trim(),
-            personality: String(data.personality || resolved.personalityText || cast.personality || ""),
+            personality: splitSaved.personalityText,
+            appearance: splitSaved.appearanceText,
+            image_url: String(data.image_url || "").trim(),
             speech_gender: normalizeSpeechGender(data.speech_gender || cast.speech_gender),
+            owner_username: String(data.owner_username || "").trim(),
+            is_readonly: !!data.is_readonly,
             is_public: !!data.is_public,
             published_at: data.published_at || null,
           };
@@ -1651,7 +2141,7 @@ export default function AiChatPage() {
   };
 
   const loadLatestPromptPreview = async () => {
-    if (!selectedCharacterId || previewLoading) return;
+    if (!writableSelectedCharacterId || previewLoading) return;
     const token = getStoredAuthToken();
     if (!token) {
       setError(t({ ja: "ログインが必要です。", en: "Login required." }));
@@ -1664,7 +2154,7 @@ export default function AiChatPage() {
       const previewParams = new URLSearchParams();
       if (r18Mode) previewParams.set("r18", "1");
       const res = await fetch(
-        `/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}/latest_prompt_preview?${previewParams.toString()}`,
+        `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/latest_prompt_preview?${previewParams.toString()}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await res.json().catch(() => ({}));
@@ -1708,7 +2198,7 @@ export default function AiChatPage() {
           message: text,
           mode: modeAtSend,
           r18: r18Mode,
-          character_id: selectedCharacterId ? Number(selectedCharacterId) : null,
+          character_id: writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
           character_name: characterNameAtSend ?? characterName,
           personality: personalityAtSend ?? personality,
           long_reply: longReply,
@@ -1811,7 +2301,7 @@ export default function AiChatPage() {
         headers,
         body: JSON.stringify({
           r18: r18Mode,
-          character_id: selectedCharacterId ? Number(selectedCharacterId) : null,
+          character_id: writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
           character_name: assistantName,
           personality: `${assistantPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(assistantName)}${buildSpeechGenderConstraint(assistantName, assistantSpeechGender)}`,
           long_reply: longReply,
@@ -1875,25 +2365,37 @@ export default function AiChatPage() {
     const assistantKey = String(assistantProfile?.key || "main");
     let resolvedCharacterName = String(assistantProfile?.name || "").trim();
     let resolvedPersonality = String(assistantProfile?.personality || "");
+    let resolvedAppearance = String(assistantProfile?.appearance || "");
     const resolvedSpeechGender = String(assistantProfile?.speech_gender || "auto");
     const userSpeakerNameAtSend = String(userSpeakerProfile?.name || characterName || "").trim();
     const activeFanfic = !!assistantProfile?.fanfic_mode;
     try {
       const augmented =
         assistantKey === "main"
-          ? await maybeAugmentCharacterProfile({ nameOverride: resolvedCharacterName, personalityOverride: resolvedPersonality })
+          ? await maybeAugmentCharacterProfile({
+              nameOverride: resolvedCharacterName,
+              personalityOverride: resolvedPersonality,
+              appearanceOverride: resolvedAppearance,
+              speechGenderOverride: resolvedSpeechGender,
+            })
           : await runCharacterAugment({
               name: resolvedCharacterName,
               personalityText: resolvedPersonality,
+              appearanceText: resolvedAppearance,
+              speechGender: resolvedSpeechGender,
               enabled: activeFanfic,
             });
       resolvedCharacterName = augmented.characterName || resolvedCharacterName;
       resolvedPersonality = augmented.personalityText || resolvedPersonality;
+      resolvedAppearance = augmented.appearanceText || resolvedAppearance;
       setAugmentNotes(String(augmented.notes || ""));
-      if (assistantKey !== "main") {
+      if (assistantKey === "main" && resolvedAppearance && resolvedAppearance !== appearance) {
+        setAppearance(resolvedAppearance);
+      } else if (assistantKey !== "main") {
         updateCastCharacter(assistantKey, {
           name: resolvedCharacterName,
           personality: resolvedPersonality,
+          appearance: resolvedAppearance,
         });
       }
     } catch (e) {
@@ -1918,6 +2420,55 @@ export default function AiChatPage() {
     submitChat(text);
   };
 
+  const removeGeneratedImageAt = (messageIndex, imageIndex) => {
+    const run = async () => {
+      if (messageIndex < 0 || imageIndex < 0) return;
+      const target = messages[messageIndex];
+      if (!target || !Array.isArray(target.generated_images) || target.generated_images.length <= imageIndex) return;
+      const token = getStoredAuthToken();
+      if (writableSelectedCharacterId && token && target?.id != null) {
+        const res = await fetch(
+          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/${encodeURIComponent(target.id)}/images/${encodeURIComponent(imageIndex)}`,
+          {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data?.detail ||
+              t({ ja: "画像削除に失敗しました。", en: "Failed to delete image." })
+          );
+        }
+      }
+
+      setMessages((prev) => {
+        if (messageIndex < 0 || messageIndex >= prev.length) return prev;
+        const current = prev[messageIndex];
+        const list = Array.isArray(current?.generated_images) ? [...current.generated_images] : [];
+        if (imageIndex < 0 || imageIndex >= list.length) return prev;
+        list.splice(imageIndex, 1);
+        if (!list.length) {
+          return prev.filter((_, idx) => idx !== messageIndex);
+        }
+        const next = [...prev];
+        next[messageIndex] = {
+          ...current,
+          generated_images: list,
+        };
+        return next;
+      });
+      setSelectedGeneratedImageKey("");
+    };
+    run().catch((e) => {
+      setError(
+        e?.message ||
+          t({ ja: "画像削除中にエラーが発生しました。", en: "Failed while deleting image." })
+      );
+    });
+  };
+
   const deleteFromSelectedMessage = () => {
     const run = async () => {
       if (selectedMessageIndex === null || selectedMessageIndex < 0 || selectedMessageIndex >= messages.length) return;
@@ -1933,9 +2484,9 @@ export default function AiChatPage() {
 
       const token = getStoredAuthToken();
 
-      if (selectedCharacterId && token && target?.id != null) {
+      if (writableSelectedCharacterId && token && target?.id != null) {
         const res = await fetch(
-          `/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}/messages/${encodeURIComponent(target.id)}`,
+          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/${encodeURIComponent(target.id)}`,
           {
             method: "DELETE",
             headers: { Authorization: `Bearer ${token}` },
@@ -1985,21 +2536,33 @@ export default function AiChatPage() {
       const assistantKey = String(assistantProfile?.key || "main");
       let resolvedCharacterName = String(assistantProfile?.name || "").trim();
       let resolvedPersonality = String(assistantProfile?.personality || "");
+      let resolvedAppearance = String(assistantProfile?.appearance || "");
       const resolvedSpeechGender = String(assistantProfile?.speech_gender || "auto");
       const userSpeakerNameAtSend = String(userSpeakerProfile?.name || characterName || "").trim();
       const activeFanfic = !!assistantProfile?.fanfic_mode;
       try {
         const augmented =
           assistantKey === "main"
-            ? await maybeAugmentCharacterProfile({ nameOverride: resolvedCharacterName, personalityOverride: resolvedPersonality })
+            ? await maybeAugmentCharacterProfile({
+                nameOverride: resolvedCharacterName,
+                personalityOverride: resolvedPersonality,
+                appearanceOverride: resolvedAppearance,
+                speechGenderOverride: resolvedSpeechGender,
+              })
             : await runCharacterAugment({
                 name: resolvedCharacterName,
                 personalityText: resolvedPersonality,
+                appearanceText: resolvedAppearance,
+                speechGender: resolvedSpeechGender,
                 enabled: activeFanfic,
               });
         resolvedCharacterName = augmented.characterName || resolvedCharacterName;
         resolvedPersonality = augmented.personalityText || resolvedPersonality;
+        resolvedAppearance = augmented.appearanceText || resolvedAppearance;
         setAugmentNotes(String(augmented.notes || ""));
+        if (assistantKey === "main" && resolvedAppearance && resolvedAppearance !== appearance) {
+          setAppearance(resolvedAppearance);
+        }
       } catch (e) {
         setError(
           e?.message ||
@@ -2021,9 +2584,9 @@ export default function AiChatPage() {
 
   useEffect(() => {
     const token = getStoredAuthToken();
-      if (!token || !selectedCharacterId) {
-      if (!selectedCharacterId) setMessages([]);
-      if (!selectedCharacterId) {
+    if (!token || !writableSelectedCharacterId) {
+      if (!writableSelectedCharacterId) setMessages([]);
+      if (!writableSelectedCharacterId) {
         setLastRequest(null);
         setResendDraft("");
       }
@@ -2034,7 +2597,7 @@ export default function AiChatPage() {
       try {
         setMessagesLoading(true);
         const res = await fetch(
-          `/api/ai/chat/characters/${encodeURIComponent(selectedCharacterId)}/messages`,
+          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages`,
           {
             headers: { Authorization: `Bearer ${token}` },
           }
@@ -2048,14 +2611,25 @@ export default function AiChatPage() {
         }
         const list = Array.isArray(data) ? data : [];
         setMessages(
-          list.map((m) => ({
-            id: m?.id != null ? Number(m.id) : null,
-            role: m?.role === "assistant" ? "assistant" : "user",
-            mode: m?.mode === "do" ? "do" : "say",
-            is_auto_dialogue: !!m?.is_auto_dialogue,
-            content: String(m?.content || ""),
-            speaker_name: String(characterName || ""),
-          }))
+          list.map((m) => {
+            const parsedImage = parseGeneratedImageMessageContent(String(m?.content || ""));
+            return {
+              id: m?.id != null ? Number(m.id) : null,
+              role: m?.role === "assistant" ? "assistant" : "user",
+              mode: m?.mode === "do" ? "do" : "say",
+              is_auto_dialogue: !!m?.is_auto_dialogue,
+              content: parsedImage
+                ? t({ ja: "画像を生成しました。", en: "Generated an image." })
+                : String(m?.content || ""),
+              speaker_name: String(characterName || ""),
+              ...(parsedImage
+                ? {
+                    is_generated_image: true,
+                    generated_images: parsedImage.images,
+                  }
+                : {}),
+            };
+          })
         );
         const lastUser = [...list].reverse().find((m) => (m?.role || "") === "user");
         if (lastUser) {
@@ -2077,7 +2651,7 @@ export default function AiChatPage() {
         setMessagesLoading(false);
       }
     })();
-  }, [selectedCharacterId, t, mode]);
+  }, [writableSelectedCharacterId, t, mode]);
 
   useEffect(() => {
     loadChatAccess();
@@ -2119,6 +2693,10 @@ export default function AiChatPage() {
   }, [messages.length, selectedMessageIndex]);
 
   useEffect(() => {
+    setSelectedGeneratedImageKey("");
+  }, [selectedCharacterId]);
+
+  useEffect(() => {
     const fallback = [
       t({ ja: "「……」", en: "\"...\"" }),
       t({ ja: "それ、どう受け取ろうかな。", en: "How should I take that?" }),
@@ -2146,7 +2724,7 @@ export default function AiChatPage() {
           headers,
           signal: controller.signal,
           body: JSON.stringify({
-            character_id: token && selectedCharacterId ? Number(selectedCharacterId) : null,
+            character_id: token && writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
             r18: r18Mode,
             character_name: speakerName || characterName,
             personality: `${speakerPersonality}${buildParticipantsContext(userSpeakerKey)}${buildRoleplayConstraint(speakerName || characterName)}${buildSpeechGenderConstraint(speakerName || characterName, speakerSpeechGender)}`,
@@ -2368,7 +2946,7 @@ export default function AiChatPage() {
               </option>
               {savedCharacters.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {`${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                 </option>
               ))}
             </select>
@@ -2383,7 +2961,7 @@ export default function AiChatPage() {
               type="button"
               className="btn btn-border"
               onClick={deleteSelectedCharacter}
-              disabled={!selectedCharacterId}
+              disabled={!writableSelectedCharacterId}
             >
               {t({ ja: "選択キャラ削除", en: "Delete selected" })}
             </button>
@@ -2391,7 +2969,7 @@ export default function AiChatPage() {
               type="button"
               className="btn btn-border"
               onClick={togglePublishSelectedCharacter}
-              disabled={!selectedCharacterId}
+              disabled={!writableSelectedCharacterId}
             >
               {selectedCharacter?.is_public
                 ? t({ ja: "公開を停止", en: "Unpublish" })
@@ -2401,7 +2979,7 @@ export default function AiChatPage() {
               type="button"
               className="btn btn-border"
               onClick={loadLatestPromptPreview}
-              disabled={!selectedCharacterId || previewLoading}
+              disabled={!writableSelectedCharacterId || previewLoading}
             >
               {previewLoading
                 ? t({ ja: "取得中...", en: "Loading..." })
@@ -2415,6 +2993,14 @@ export default function AiChatPage() {
                 : t({ ja: "このキャラのチャットは非公開です。", en: "This character's chat is private." })}
             </div>
           )}
+          {selectedCharacterReadonly && (
+            <div style={{ marginTop: 6, fontSize: "0.9rem", color: "#7a5b1b" }}>
+              {t({
+                ja: "このキャラは他ユーザー作成のため読み込み専用です。更新・削除・公開変更・履歴保存はできません。",
+                en: "This character belongs to another user and is read-only. Update/delete/publish/history save are disabled.",
+              })}
+            </div>
+          )}
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "0.92rem" }}>
             <input
               type="checkbox"
@@ -2424,15 +3010,15 @@ export default function AiChatPage() {
             />
             <span>
               {t({
-                ja: "二次創作モード（アニメ系のキャラ名を検索して性格設定を自動補完）",
-                en: "Fanfic mode (search anime-like character names and auto-augment personality)",
+                ja: "二次創作モード（アニメ系のキャラ名を検索して性格・見た目を自動補完）",
+                en: "Fanfic mode (search anime-like character names and auto-augment personality and appearance)",
               })}
             </span>
           </label>
           {(augmentLoading || augmentNotes) && (
             <div style={{ marginTop: 4, fontSize: "0.85rem", color: augmentLoading ? "#235a93" : "#666" }}>
               {augmentLoading
-                ? t({ ja: "二次創作向けのキャラ設定を補完中...", en: "Augmenting fanfic character profile..." })
+                ? t({ ja: "二次創作向けのキャラ設定（性格・見た目）を補完中...", en: "Augmenting fanfic character profile (personality and appearance)..." })
                 : augmentNotes}
             </div>
           )}
@@ -2558,7 +3144,7 @@ export default function AiChatPage() {
                 </option>
                 {savedCharacters.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {`${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                   </option>
                 ))}
               </select>
@@ -2573,6 +3159,13 @@ export default function AiChatPage() {
                 onChange={(e) => updateCastCharacter(cast.key, { personality: e.target.value })}
                 rows={2}
                 placeholder={t({ ja: "サブキャラの性格設定", en: "Sub character personality" })}
+                style={{ width: "100%", marginTop: 6 }}
+              />
+              <textarea
+                value={cast.appearance || ""}
+                onChange={(e) => updateCastCharacter(cast.key, { appearance: e.target.value })}
+                rows={2}
+                placeholder={t({ ja: "サブキャラの見た目（例: 黒髪, 制服, 青い目）", en: "Sub character appearance (e.g. black hair, uniform, blue eyes)" })}
                 style={{ width: "100%", marginTop: 6 }}
               />
               <input
@@ -2677,6 +3270,66 @@ export default function AiChatPage() {
             rows={3}
             style={{ width: "100%", marginTop: 4 }}
           />
+          <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={applyCharacterOutputTemplate}
+              disabled={loading || augmentLoading}
+            >
+              {t({ ja: "キャラ出力テンプレを適用", en: "Apply character output template" })}
+            </button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: "0.9rem", fontWeight: 700 }}>
+            {t({ ja: "見た目設定（画像生成で優先）", en: "Appearance (prioritized for image generation)" })}
+          </div>
+          <textarea
+            value={appearance}
+            onChange={(e) => setAppearance(e.target.value)}
+            placeholder={t(
+              { ja: "例: 黒髪ロング, 青い目, 制服, 細身", en: "e.g. long black hair, blue eyes, school uniform, slim build" }
+            )}
+            rows={2}
+            style={{ width: "100%", marginTop: 4 }}
+          />
+          <div style={{ marginTop: 8, fontSize: "0.9rem", fontWeight: 700 }}>
+            {t({ ja: "キャラ参照画像（1枚）", en: "Character reference image (1 file)" })}
+          </div>
+          {selectedCharacter?.image_url && (
+            <div style={{ marginTop: 6, marginBottom: 6 }}>
+              <img
+                src={selectedCharacter.image_url}
+                alt={t({ ja: "キャラ参照画像", en: "Character reference image" })}
+                style={{ width: "100%", maxWidth: 220, borderRadius: 8, border: "1px solid #d8dce6", display: "block" }}
+              />
+            </div>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setCharacterImageFile(e.target.files?.[0] || null)}
+            style={{ width: "100%", marginTop: 4 }}
+          />
+          <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={uploadSelectedCharacterImage}
+              disabled={loading || augmentLoading || characterImageUploading || !characterImageFile || !writableSelectedCharacterId}
+            >
+              {characterImageUploading
+                ? t({ ja: "画像登録中...", en: "Uploading image..." })
+                : t({ ja: "この画像をキャラに登録", en: "Register this image to character" })}
+            </button>
+          </div>
+          {!writableSelectedCharacterId && characterImageFile && (
+            <div style={{ marginTop: 4, fontSize: "0.8rem", color: "#5f6675" }}>
+              {t({
+                ja: "先にキャラ登録/更新を押すと、この画像も自動で登録されます。",
+                en: "Save/Update character first, then this image will be uploaded automatically.",
+              })}
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
             <button
               type="button"
@@ -2774,7 +3427,76 @@ export default function AiChatPage() {
                       ? ` ${t({ ja: "[自動会話]", en: "[Auto]" })}`
                       : ""}
                   </div>
-                  <div>{m.content}</div>
+                  {m.content ? <div>{m.content}</div> : null}
+                  {Array.isArray(m.generated_images) && m.generated_images.length > 0 && (
+                    <div style={{ marginTop: m.content ? 8 : 0, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                      {m.generated_images.map((img, gidx) => {
+                        const imageKey = `${m.id ?? `tmp-${idx}`}:${gidx}`;
+                        const selected = selectedGeneratedImageKey === imageKey;
+                        return (
+                          <div
+                            key={`${img.url}-${gidx}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                            onDoubleClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSelectedGeneratedImageKey(imageKey);
+                            }}
+                            style={{
+                              border: selected ? "2px solid #d32f2f" : "1px solid #d8dce6",
+                              borderRadius: 8,
+                              padding: 6,
+                              textDecoration: "none",
+                              color: "inherit",
+                              width: "100%",
+                              maxWidth: 330,
+                              marginRight: "auto",
+                              background: "#fff",
+                            }}
+                          >
+                            <img
+                              src={img.url}
+                              alt={img.filename || `scene-${gidx + 1}`}
+                              style={{ width: "100%", display: "block", borderRadius: 6 }}
+                            />
+                            <div style={{ marginTop: 6, fontSize: "0.8rem", color: "#5f6675", wordBreak: "break-all" }}>
+                              {img.filename || img.url}
+                            </div>
+                            <div style={{ marginTop: 4, display: "flex", justifyContent: "flex-end" }}>
+                              <a
+                                href={img.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ fontSize: "0.78rem", color: "#3b5ccc", textDecoration: "underline" }}
+                              >
+                                {t({ ja: "画像を開く", en: "Open image" })}
+                              </a>
+                            </div>
+                            {selected && (
+                              <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-border"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    removeGeneratedImageAt(idx, gidx);
+                                  }}
+                                  style={{ borderColor: "#d32f2f", color: "#d32f2f" }}
+                                >
+                                  {t({ ja: "この画像を削除", en: "Delete this image" })}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -2808,11 +3530,25 @@ export default function AiChatPage() {
           style={{ width: "100%", marginBottom: 8 }}
           disabled={imageGenerating}
         />
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: generatedSceneImages.length ? 8 : 0 }}>
+        <textarea
+          value={imageNegativePromptDraft}
+          onChange={(e) => setImageNegativePromptDraft(e.target.value)}
+          rows={2}
+          placeholder={t({
+            ja: "ネガティブプロンプト。空欄なら自動生成します。",
+            en: "Negative prompt. If blank, auto-generated.",
+          })}
+          style={{ width: "100%", marginBottom: 8 }}
+          disabled={imageGenerating}
+        />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
             className="btn btn-border"
-            onClick={() => setImagePromptDraft(buildScenePromptFromCurrentChat())}
+            onClick={() => {
+              setImagePromptDraft(buildScenePromptFromCurrentChat());
+              setImageNegativePromptDraft(buildSceneNegativePromptFromCurrentChat());
+            }}
             disabled={imageGenerating}
           >
             {t({ ja: "会話からプロンプト作成", en: "Build prompt from chat" })}
@@ -2828,28 +3564,17 @@ export default function AiChatPage() {
               : t({ ja: "画像生成", en: "Generate image" })}
           </button>
         </div>
-        {generatedSceneImages.length > 0 && (
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-            {generatedSceneImages.map((img, idx) => (
-              <a
-                key={`${img.url}-${idx}`}
-                href={img.url}
-                target="_blank"
-                rel="noreferrer"
-                style={{ border: "1px solid #d8dce6", borderRadius: 8, padding: 6, textDecoration: "none", color: "inherit" }}
-              >
-                <img
-                  src={img.url}
-                  alt={img.filename || `scene-${idx + 1}`}
-                  style={{ width: "100%", display: "block", borderRadius: 6 }}
-                />
-                <div style={{ marginTop: 6, fontSize: "0.8rem", color: "#5f6675", wordBreak: "break-all" }}>
-                  {img.filename || img.url}
-                </div>
-              </a>
-            ))}
-          </div>
-        )}
+        <div style={{ marginTop: 8, fontSize: "0.8rem", color: "#5f6675" }}>
+          {t({ ja: "生成元", en: "Source" })}:{" "}
+          <a
+            href="https://gazou.shosetsu-toukou-site.org/"
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: "#3b5ccc", textDecoration: "underline" }}
+          >
+            https://gazou.shosetsu-toukou-site.org/
+          </a>
+        </div>
       </div>
       <div style={{ marginTop: -2, marginBottom: 10 }}>
         <div style={{ fontSize: "0.84rem", color: "#5f6675", marginBottom: 6 }}>

@@ -1,74 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
-import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
+import { useI18n } from "../lib/i18n";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
-
-async function startStripeCheckout(navigate) {
-  try {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      alert(
-        translate(
-          { ja: "ログインしてください。ログインページへ移動します。", en: "Please log in. Redirecting to login page." },
-          getStoredLanguage()
-        )
-      );
-      navigate("/login");
-      return;
-    }
-
-    const res = await fetch("/api/stripe/create-checkout-session", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + token,
-      },
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (res.status === 401) {
-      alert(
-        translate(
-          { ja: "ログインしてください。ログインページへ移動します。", en: "Please log in. Redirecting to login page." },
-          getStoredLanguage()
-        )
-      );
-      navigate("/login");
-      return;
-    }
-
-    if (!res.ok) {
-      throw new Error(
-        data.detail ||
-          translate(
-            { ja: "決済セッションの作成に失敗しました ({{status}})", en: "Failed to create checkout session ({{status}})" },
-            getStoredLanguage(),
-            { status: res.status }
-          )
-      );
-    }
-
-    if (data.url) {
-      window.location.href = data.url;
-    } else {
-      throw new Error(
-        translate({ ja: "決済URLが取得できませんでした。", en: "Could not get checkout URL." }, getStoredLanguage())
-      );
-    }
-  } catch (err) {
-    console.error(err);
-    alert(
-      err.message ||
-        translate({ ja: "決済の開始に失敗しました。", en: "Failed to start payment." }, getStoredLanguage())
-    );
-  }
-}
 
 export default function Mypage() {
   const { t } = useI18n();
@@ -476,9 +414,9 @@ export default function Mypage() {
           <button
             type="button"
             className="btn btn-border"
-            onClick={() => startStripeCheckout(navigate)}
+            onClick={() => navigate("/premium")}
           >
-            {t({ ja: "プレミアム会員になる（決済ページへ）", en: "Become Premium (go to payment)" })}
+            {t({ ja: "プレミアム詳細を見る", en: "View Premium details" })}
           </button>
         )}
 

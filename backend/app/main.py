@@ -8,7 +8,7 @@ import re
 import time
 import asyncio
 import logging
-from urllib.parse import urlencode, quote, parse_qs, urlparse
+from urllib.parse import urlencode, quote, parse_qs, urlparse, urljoin
 import json
 import html
 import io
@@ -77,6 +77,10 @@ STATIC_DIR = Path(
 EPISODE_IMAGE_DIR = os.getenv(
     "EPISODE_IMAGE_DIR",
     str(STATIC_DIR / "episode_images"),
+)
+AI_CHAT_CHARACTER_IMAGE_DIR = os.getenv(
+    "AI_CHAT_CHARACTER_IMAGE_DIR",
+    str(STATIC_DIR / "ai_chat_character_images"),
 )
 from fastapi import UploadFile, File
 from fastapi import Form
@@ -394,6 +398,8 @@ def ensure_ai_chat_tables():
                 alters.append("ADD COLUMN published_at DATETIME NULL")
             if "speech_gender" not in existing:
                 alters.append("ADD COLUMN speech_gender VARCHAR(16) NOT NULL DEFAULT 'auto'")
+            if "image_url" not in existing:
+                alters.append("ADD COLUMN image_url VARCHAR(512) NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE ai_chat_characters {clause}"))
@@ -718,6 +724,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
+    os.makedirs(AI_CHAT_CHARACTER_IMAGE_DIR, exist_ok=True)
 
 # =========================================
 # JWT / Stripe 設定
@@ -763,6 +770,15 @@ AI_CHAT_IMAGE_API_KEY = os.getenv("AI_CHAT_IMAGE_API_KEY", "").strip()
 AI_CHAT_IMAGE_MODEL_ID = os.getenv("AI_CHAT_IMAGE_MODEL_ID", "").strip()
 AI_CHAT_IMAGE_NEGATIVE_PROMPT = os.getenv("AI_CHAT_IMAGE_NEGATIVE_PROMPT", "").strip()
 AI_CHAT_IMAGE_TIMEOUT_SEC = float(os.getenv("AI_CHAT_IMAGE_TIMEOUT_SEC", "45"))
+AI_CHAT_IMAGE_QUALITY_RETRY_ENABLED = os.getenv("AI_CHAT_IMAGE_QUALITY_RETRY_ENABLED", "1") == "1"
+AI_CHAT_IMAGE_QUALITY_MIN_SCORE = float(os.getenv("AI_CHAT_IMAGE_QUALITY_MIN_SCORE", "42"))
+AI_CHAT_IMAGE_QUALITY_MAX_RETRIES = max(0, min(10, int(os.getenv("AI_CHAT_IMAGE_QUALITY_MAX_RETRIES", "1"))))
+AI_CHAT_IMAGE_QUALITY_SAMPLE_SIZE = max(1, min(4, int(os.getenv("AI_CHAT_IMAGE_QUALITY_SAMPLE_SIZE", "1"))))
+AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:"
+AI_CHAT_IMAGE_OOM_RETRY_ENABLED = os.getenv("AI_CHAT_IMAGE_OOM_RETRY_ENABLED", "1") == "1"
+AI_CHAT_IMAGE_OOM_RETRY_SCALE = float(os.getenv("AI_CHAT_IMAGE_OOM_RETRY_SCALE", "0.78"))
+AI_CHAT_IMAGE_OOM_RETRY_STEPS = max(8, min(80, int(os.getenv("AI_CHAT_IMAGE_OOM_RETRY_STEPS", "28"))))
+AI_CHAT_IMAGE_INIT_STRENGTH = max(0.1, min(0.95, float(os.getenv("AI_CHAT_IMAGE_INIT_STRENGTH", "0.75"))))
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -1809,6 +1825,65 @@ def _is_ai_chat_demo_bypass_user(user: models.User | None) -> bool:
     if not marker:
         return False
     return str(getattr(user, "username", "") or "").strip().lower() == marker.lower()
+
+
+def _is_ai_chat_demo_bypass_username(username: str | None) -> bool:
+    marker = (AI_CHAT_DEMO_BYPASS_USERNAME or "").strip()
+    if not marker:
+        return False
+    return str(username or "").strip().lower() == marker.lower()
+
+
+def _can_edit_ai_chat_character(
+    *,
+    viewer: models.User | None,
+    owner_user_id: int | None,
+    owner_username: str | None = None,
+    db: Session | None = None,
+) -> bool:
+    if viewer is None or owner_user_id is None:
+        return False
+    if int(owner_user_id) == int(getattr(viewer, "id", 0) or 0):
+        return True
+    if _is_ai_chat_demo_bypass_username(owner_username):
+        return True
+    if db is None:
+        return False
+    marker = (AI_CHAT_DEMO_BYPASS_USERNAME or "").strip()
+    if not marker:
+        return False
+    row = (
+        db.query(models.User.id)
+        .filter(func.lower(models.User.username) == marker.lower())
+        .first()
+    )
+    if not row:
+        return False
+    demo_owner_id = int(row[0] or 0)
+    return demo_owner_id > 0 and int(owner_user_id) == demo_owner_id
+
+
+def _find_editable_ai_chat_character(
+    *,
+    db: Session,
+    viewer: models.User | None,
+    character_id: int,
+) -> models.AIChatCharacter | None:
+    item = (
+        db.query(models.AIChatCharacter)
+        .filter(models.AIChatCharacter.id == character_id)
+        .first()
+    )
+    if not item:
+        return None
+    if _can_edit_ai_chat_character(
+        viewer=viewer,
+        owner_user_id=getattr(item, "user_id", None),
+        owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
+        db=db,
+    ):
+        return item
+    return None
 
 
 def _ai_chat_allowed_tokens(user: models.User) -> int:
@@ -4931,7 +5006,10 @@ class AIChatCharacterResponse(BaseModel):
     id: int
     name: str
     personality: str | None = None
+    image_url: str | None = None
     speech_gender: Literal["auto", "female", "male"] = "auto"
+    owner_username: str | None = None
+    is_readonly: bool = False
     is_public: bool = False
     published_at: str | None = None
     created_at: str | None = None
@@ -4952,6 +5030,17 @@ class AIChatMessageDeleteResponse(BaseModel):
     deleted: int = 0
 
 
+class AIChatCharacterImageUploadResponse(BaseModel):
+    ok: bool = True
+    image_url: str | None = None
+
+
+class AIChatMessageImageDeleteResponse(BaseModel):
+    ok: bool = True
+    deleted_message: bool = False
+    remaining_images: int = 0
+
+
 class AIChatPromptPreviewResponse(BaseModel):
     source_message_id: int
     mode: Literal["say", "do"]
@@ -4968,10 +5057,11 @@ class AIChatImageGenerateRequest(BaseModel):
     prompt: str
     negative_prompt: str | None = None
     model_id: str | None = None
-    width: int = 768
-    height: int = 768
-    steps: int = 28
-    guidance_scale: float = 7.0
+    character_id: int | None = None
+    width: int = 576
+    height: int = 1024
+    steps: int = 40
+    guidance_scale: float = 6.5
     seed: int | None = None
     num_images: int = 1
 
@@ -6406,6 +6496,8 @@ def _normalize_ai_chat_image_url(base_url: str, raw_url: str) -> str:
     url = str(raw_url or "").strip()
     if not url:
         return ""
+    if url.startswith("data:image/"):
+        return url
     if url.startswith("http://") or url.startswith("https://"):
         return url
     if not base_url:
@@ -6441,6 +6533,221 @@ def _extract_session_token_from_payload(payload: dict) -> str:
     return ""
 
 
+def _serialize_ai_chat_image_message(
+    *,
+    prompt: str,
+    images: list[AIChatImageItem],
+    meta: dict | None = None,
+) -> str:
+    payload = {
+        "kind": "generated_images",
+        "prompt": str(prompt or "").strip(),
+        "images": [
+            {"url": str(img.url or "").strip(), "filename": (str(img.filename).strip() if img.filename is not None else None)}
+            for img in (images or [])
+            if str(getattr(img, "url", "") or "").strip()
+        ],
+        "meta": meta if isinstance(meta, dict) else {},
+    }
+    return f"{AI_CHAT_IMAGE_MESSAGE_PREFIX}{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
+
+
+def _parse_ai_chat_image_message(content: str) -> dict | None:
+    text = str(content or "")
+    if not text.startswith(AI_CHAT_IMAGE_MESSAGE_PREFIX):
+        return None
+    raw = text[len(AI_CHAT_IMAGE_MESSAGE_PREFIX):].strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    images = parsed.get("images")
+    if not isinstance(images, list):
+        return None
+    return parsed
+
+
+def _local_static_path_from_url(url: str | None) -> str | None:
+    raw = str(url or "").strip()
+    if not raw.startswith("/static/"):
+        return None
+    rel = os.path.normpath(raw[len("/static/"):].lstrip("/"))
+    if not rel or rel.startswith(".."):
+        return None
+    return str(STATIC_DIR / rel)
+
+
+def _build_data_url_from_local_image(local_path: str) -> str | None:
+    path = str(local_path or "").strip()
+    if not path or not os.path.exists(path):
+        return None
+    ext = Path(path).suffix.lower()
+    mime = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }.get(ext, "application/octet-stream")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        if not raw:
+            return None
+        encoded = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    except Exception:
+        return None
+
+
+def _extract_image_field_from_payload(data_obj: dict) -> str:
+    for key in ("image", "result", "output", "image_url", "url"):
+        value = data_obj.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    imgs = data_obj.get("images")
+    if isinstance(imgs, list):
+        for item in imgs:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+            if isinstance(item, dict):
+                value = str(item.get("image") or item.get("url") or item.get("image_url") or item.get("path") or "").strip()
+                if value:
+                    return value
+    return ""
+
+
+async def _resolve_image_to_data_url(
+    client: httpx.AsyncClient,
+    base_url: str,
+    image_value: str,
+) -> str:
+    value = str(image_value or "").strip()
+    if not value:
+        return ""
+    if value.startswith("data:image/"):
+        return value
+    target = value
+    if value.startswith("/"):
+        target = urljoin(f"{base_url.rstrip('/')}/", value.lstrip("/"))
+    elif not value.startswith("http://") and not value.startswith("https://"):
+        target = urljoin(f"{base_url.rstrip('/')}/", value)
+    res = await client.get(target)
+    if not res.is_success or not res.content:
+        return ""
+    ct = str(res.headers.get("content-type") or "image/png").split(";")[0].strip() or "image/png"
+    b64 = base64.b64encode(res.content).decode("ascii")
+    return f"data:{ct};base64,{b64}"
+
+
+def _extract_background_place_prompt(raw_prompt: str) -> str:
+    source = re.sub(r"\s+", " ", str(raw_prompt or "").strip())
+    if not source:
+        return "indoor room, empty background, no people, no human"
+
+    parts = [p.strip() for p in re.split(r"[,/\n、。]", source) if p.strip()]
+    place_keys = {
+        "indoor", "outdoor", "room", "floor", "wooden floor", "classroom", "street", "cafe", "park", "sky",
+        "sunset", "night", "lighting", "background", "indoors", "city", "school", "beach", "library", "garden",
+        "室内", "屋外", "床", "木床", "教室", "街", "カフェ", "公園", "空", "夕方", "夜", "背景", "光", "学校",
+        "海", "図書館", "庭", "部屋", "廊下", "駅", "通学路", "神社", "公園",
+    }
+    person_keys = {
+        "girl", "boy", "woman", "man", "character", "person", "people", "face", "eyes", "hair", "smile",
+        "手", "腕", "表情", "顔", "髪", "人物", "キャラ", "女の子", "男の子",
+    }
+
+    location_parts: list[str] = []
+    for p in parts:
+        lower = p.lower()
+        if any(k in lower for k in place_keys) and not any(k in lower for k in person_keys):
+            location_parts.append(p)
+    if not location_parts:
+        location_parts = [p for p in parts if not any(k in p.lower() for k in person_keys)][:3]
+    scene = ", ".join(dict.fromkeys(location_parts)) if location_parts else "indoor room"
+    return f"{scene}, empty background, no people, no person, no human"
+
+
+def _extract_ai_chat_images_from_generate_data(base_url: str, data: dict) -> list[AIChatImageItem]:
+    raw_images = data.get("images")
+    images: list[AIChatImageItem] = []
+    if isinstance(raw_images, list):
+        for item in raw_images:
+            raw_url = ""
+            raw_filename = ""
+            if isinstance(item, str):
+                raw_url = item
+            elif isinstance(item, dict):
+                raw_url = str(item.get("url") or item.get("image_url") or item.get("path") or "").strip()
+                raw_filename = str(item.get("filename") or "").strip()
+            if not raw_url:
+                continue
+            resolved = _normalize_ai_chat_image_url(base_url, raw_url)
+            if not resolved:
+                continue
+            filename = raw_filename or Path(urlparse(resolved).path).name or None
+            images.append(AIChatImageItem(url=resolved, filename=filename))
+    if not images:
+        single = str(
+            data.get("image")
+            or data.get("image_url")
+            or data.get("url")
+            or data.get("result")
+            or data.get("output")
+            or ""
+        ).strip()
+        if single:
+            resolved = _normalize_ai_chat_image_url(base_url, single)
+            if resolved:
+                filename = Path(urlparse(resolved).path).name or None
+                images.append(AIChatImageItem(url=resolved, filename=filename))
+    return images
+
+
+async def _score_ai_chat_image_quality(url: str) -> tuple[float | None, dict]:
+    if not PIL_AVAILABLE:
+        return None, {"reason": "pil_unavailable"}
+    try:
+        from PIL import ImageFilter, ImageStat  # type: ignore
+    except Exception:
+        return None, {"reason": "pil_feature_unavailable"}
+
+    try:
+        async with httpx.AsyncClient(timeout=min(20.0, AI_CHAT_IMAGE_TIMEOUT_SEC), follow_redirects=True) as client:
+            res = await client.get(url)
+        if not res.is_success or not res.content:
+            return None, {"reason": f"download_failed:{res.status_code}"}
+        with Image.open(io.BytesIO(res.content)) as raw_img:
+            img = raw_img.convert("RGB")
+            w, h = img.size
+            if w <= 0 or h <= 0:
+                return None, {"reason": "invalid_size"}
+            gray = ImageOps.grayscale(img)
+            gray_stat = ImageStat.Stat(gray)
+            mean_luma = float(gray_stat.mean[0]) if gray_stat.mean else 0.0
+            std_luma = float(gray_stat.stddev[0]) if gray_stat.stddev else 0.0
+            edge = gray.filter(ImageFilter.FIND_EDGES)
+            edge_stat = ImageStat.Stat(edge)
+            edge_mean = float(edge_stat.mean[0]) if edge_stat.mean else 0.0
+            # Heuristic score: blur/flat images become low score, rich detail gets higher score.
+            score = (std_luma * 1.2) + (edge_mean * 1.8) - (abs(mean_luma - 128.0) * 0.2)
+            if w < 384 or h < 384:
+                score -= 10.0
+            return score, {
+                "width": int(w),
+                "height": int(h),
+                "mean_luma": round(mean_luma, 2),
+                "std_luma": round(std_luma, 2),
+                "edge_mean": round(edge_mean, 2),
+            }
+    except Exception:
+        return None, {"reason": "quality_check_error"}
+
+
 @app.post("/api/ai/chat/next_user_lines", response_model=AIChatNextLineSuggestResponse)
 async def ai_chat_next_user_lines(
     req: AIChatNextLineSuggestRequest,
@@ -6454,13 +6761,10 @@ async def ai_chat_next_user_lines(
         _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
-        character = (
-            db.query(models.AIChatCharacter)
-            .filter(
-                models.AIChatCharacter.id == req.character_id,
-                models.AIChatCharacter.user_id == user.id,
-            )
-            .first()
+        character = _find_editable_ai_chat_character(
+            db=db,
+            viewer=user,
+            character_id=int(req.character_id),
         )
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -6556,8 +6860,17 @@ async def ai_chat_generate_image(
     db: Session = Depends(get_db),
 ):
     viewer = get_optional_current_user(request, db)
+    character: models.AIChatCharacter | None = None
     if viewer is not None:
         _ensure_ai_chat_access(viewer)
+        if req.character_id is not None:
+            character = _find_editable_ai_chat_character(
+                db=db,
+                viewer=viewer,
+                character_id=int(req.character_id),
+            )
+            if not character:
+                raise HTTPException(status_code=404, detail="キャラが見つかりません。")
     if not AI_CHAT_IMAGE_API_BASE_URL:
         raise HTTPException(status_code=503, detail="AI画像APIが未設定です。")
 
@@ -6565,11 +6878,11 @@ async def ai_chat_generate_image(
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt は必須です。")
 
-    width = max(256, min(1536, int(req.width or 768)))
-    height = max(256, min(1536, int(req.height or 768)))
-    steps = max(1, min(80, int(req.steps or 28)))
-    guidance_scale = max(1.0, min(20.0, float(req.guidance_scale or 7.0)))
-    num_images = max(1, min(4, int(req.num_images or 1)))
+    width = max(256, min(1536, int(req.width or 576)))
+    height = max(256, min(1536, int(req.height or 1024)))
+    steps = max(1, min(80, int(req.steps or 40)))
+    guidance_scale = max(1.0, min(20.0, float(req.guidance_scale or 6.5)))
+    num_images = 1
     seed = req.seed
     if seed is not None:
         try:
@@ -6593,6 +6906,141 @@ async def ai_chat_generate_image(
         payload.pop("negative_prompt", None)
     if not payload["model_id"]:
         payload.pop("model_id", None)
+    bg_prompt = _extract_background_place_prompt(prompt)
+    if character is not None:
+        char_image_url = str(getattr(character, "image_url", "") or "").strip()
+        local_char_path = _local_static_path_from_url(char_image_url)
+        if local_char_path:
+            data_url = _build_data_url_from_local_image(local_char_path)
+            if data_url:
+                payload["init_image"] = data_url
+                payload["strength"] = AI_CHAT_IMAGE_INIT_STRENGTH
+
+    request_log_meta = {
+        "prompt": prompt,
+        "negative_prompt": str(payload.get("negative_prompt") or ""),
+        "model_id": str(payload.get("model_id") or ""),
+        "width": int(payload.get("width") or width),
+        "height": int(payload.get("height") or height),
+        "steps": int(payload.get("steps") or steps),
+        "guidance_scale": float(payload.get("guidance_scale") or guidance_scale),
+        "seed": payload.get("seed"),
+        "num_images": int(payload.get("num_images") or num_images),
+        "has_character_init_image": bool(payload.get("init_image")),
+        "strength": float(payload.get("strength") or 0.0),
+        "character_id": int(character.id) if character is not None else None,
+        "background_prompt": bg_prompt,
+        "timeout_sec": AI_CHAT_IMAGE_TIMEOUT_SEC,
+    }
+
+    async def _request_image_once(
+        client: httpx.AsyncClient,
+        session_token: str,
+        request_payload: dict,
+        *,
+        endpoint_path: str,
+    ) -> httpx.Response:
+        generate_headers = {
+            "Content-Type": "application/json",
+            "X-Session-Token": session_token,
+        }
+        endpoint = f"{AI_CHAT_IMAGE_API_BASE_URL}{endpoint_path}"
+        res = await client.post(
+            endpoint,
+            json=request_payload,
+            headers=generate_headers,
+        )
+        # Some providers reject unknown model_id values.
+        # Retry once without model_id so the upstream default model can be used.
+        if request_payload.get("model_id") and not res.is_success:
+            retry_detail = ""
+            try:
+                retry_body = res.json()
+                retry_detail = str(retry_body.get("detail") or "").strip().lower() if isinstance(retry_body, dict) else ""
+            except Exception:
+                retry_detail = ""
+            if "unsupported model_id" in retry_detail:
+                retry_payload = dict(request_payload)
+                retry_payload.pop("model_id", None)
+                return await client.post(
+                    endpoint,
+                    json=retry_payload,
+                    headers=generate_headers,
+                )
+
+        if AI_CHAT_IMAGE_OOM_RETRY_ENABLED and not res.is_success:
+            oom_detail = ""
+            try:
+                oom_body = res.json()
+                oom_detail = str(oom_body.get("detail") or "").strip().lower() if isinstance(oom_body, dict) else ""
+            except Exception:
+                oom_detail = ""
+            if "cuda out of memory" in oom_detail or "out of memory" in oom_detail:
+                retry_payload = dict(request_payload)
+                try:
+                    raw_w = int(retry_payload.get("width") or 576)
+                    raw_h = int(retry_payload.get("height") or 1024)
+                except Exception:
+                    raw_w, raw_h = 576, 1024
+                scaled_w = int(raw_w * AI_CHAT_IMAGE_OOM_RETRY_SCALE)
+                scaled_h = int(raw_h * AI_CHAT_IMAGE_OOM_RETRY_SCALE)
+                # Keep dimensions practical for SD-like models (multiple of 64, min 256).
+                scaled_w = max(256, (scaled_w // 64) * 64)
+                scaled_h = max(256, (scaled_h // 64) * 64)
+                retry_payload["width"] = scaled_w
+                retry_payload["height"] = scaled_h
+                retry_payload["steps"] = min(
+                    int(retry_payload.get("steps") or AI_CHAT_IMAGE_OOM_RETRY_STEPS),
+                    AI_CHAT_IMAGE_OOM_RETRY_STEPS,
+                )
+                retry_payload["seed"] = secrets.randbelow(2_147_483_647)
+                retry_res = await client.post(
+                    endpoint,
+                    json=retry_payload,
+                    headers=generate_headers,
+                )
+                if retry_res.is_success:
+                    return retry_res
+
+                retry_oom_detail = ""
+                try:
+                    retry_body = retry_res.json()
+                    retry_oom_detail = str(retry_body.get("detail") or "").strip().lower() if isinstance(retry_body, dict) else ""
+                except Exception:
+                    retry_oom_detail = ""
+                if "cuda out of memory" in retry_oom_detail or "out of memory" in retry_oom_detail:
+                    heavy_retry_payload = dict(retry_payload)
+                    try:
+                        heavy_w = int(heavy_retry_payload.get("width") or scaled_w)
+                        heavy_h = int(heavy_retry_payload.get("height") or scaled_h)
+                    except Exception:
+                        heavy_w, heavy_h = scaled_w, scaled_h
+                    heavy_w = max(256, (int(heavy_w * 0.62) // 64) * 64)
+                    heavy_h = max(256, (int(heavy_h * 0.62) // 64) * 64)
+                    heavy_retry_payload["width"] = heavy_w
+                    heavy_retry_payload["height"] = heavy_h
+                    try:
+                        heavy_steps = int(heavy_retry_payload.get("steps") or AI_CHAT_IMAGE_OOM_RETRY_STEPS)
+                    except Exception:
+                        heavy_steps = AI_CHAT_IMAGE_OOM_RETRY_STEPS
+                    heavy_retry_payload["steps"] = max(12, min(20, heavy_steps))
+                    try:
+                        heavy_guidance = float(heavy_retry_payload.get("guidance_scale") or 6.0)
+                    except Exception:
+                        heavy_guidance = 6.0
+                    heavy_retry_payload["guidance_scale"] = min(6.0, heavy_guidance)
+                    heavy_retry_payload["seed"] = secrets.randbelow(2_147_483_647)
+                    if endpoint_path == "/api/generate":
+                        heavy_retry_payload.pop("init_image", None)
+                        heavy_retry_payload.pop("image", None)
+                        heavy_retry_payload.pop("strength", None)
+                    return await client.post(
+                        endpoint,
+                        json=heavy_retry_payload,
+                        headers=generate_headers,
+                    )
+                return retry_res
+        return res
 
     try:
         async with httpx.AsyncClient(timeout=AI_CHAT_IMAGE_TIMEOUT_SEC) as client:
@@ -6622,27 +7070,221 @@ async def ai_chat_generate_image(
                     detail="AI画像APIセッショントークンを取得できませんでした。",
                 )
 
-            res = await client.post(
-                f"{AI_CHAT_IMAGE_API_BASE_URL}/api/generate",
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Session-Token": session_token,
-                },
-            )
+            processed_init_image = str(payload.get("init_image") or "").strip()
+            use_pose_pipeline = bool(processed_init_image)
+            pipeline_used = "generate"
+
+            def _is_not_found_response(resp: httpx.Response, body: dict) -> bool:
+                if int(resp.status_code) != 404:
+                    return False
+                detail = str(body.get("detail") or "").strip().lower() if isinstance(body, dict) else ""
+                return (not detail) or ("not found" in detail) or ("見つか" in detail)
+
+            def _is_device_mismatch_response(resp: httpx.Response, body: dict) -> bool:
+                if resp.is_success:
+                    return False
+                detail = str(body.get("detail") or "").strip().lower() if isinstance(body, dict) else ""
+                return (
+                    "expected all tensors to be on the same device" in detail
+                    or ("cuda:0" in detail and "cpu" in detail and "device" in detail)
+                )
+
+            def _build_plain_generate_payload(base_payload: dict, *, merged_prompt: str | None = None) -> dict:
+                p = dict(base_payload)
+                p.pop("init_image", None)
+                p.pop("image", None)
+                p.pop("strength", None)
+                if merged_prompt:
+                    p["prompt"] = merged_prompt
+                return p
+
+            quality_attempts: list[dict] = []
+            max_attempts = 1
+            if AI_CHAT_IMAGE_QUALITY_RETRY_ENABLED and PIL_AVAILABLE:
+                max_attempts += AI_CHAT_IMAGE_QUALITY_MAX_RETRIES
+
+            res: httpx.Response | None = None
+            data: dict = {}
+            images: list[AIChatImageItem] = []
+            quality_threshold_met = False
+            selected_best_after_exhaustion = False
+            best_attempt_number: int | None = None
+            best_attempt_score: float | None = None
+            best_attempt_data: dict | None = None
+            for attempt in range(1, max_attempts + 1):
+                attempt_payload = dict(payload)
+                if attempt > 1:
+                    attempt_payload["seed"] = secrets.randbelow(2_147_483_647)
+                if use_pose_pipeline and processed_init_image:
+                    # Phase 1: remove background from character image
+                    remove_bg_res = await _request_image_once(
+                        client,
+                        session_token,
+                        {"image": processed_init_image},
+                        endpoint_path="/api/remove-bg",
+                    )
+                    remove_bg_data: dict = {}
+                    try:
+                        parsed_remove_bg = remove_bg_res.json()
+                        if isinstance(parsed_remove_bg, dict):
+                            remove_bg_data = parsed_remove_bg
+                    except Exception:
+                        remove_bg_data = {}
+                    if not remove_bg_res.is_success:
+                        if _is_not_found_response(remove_bg_res, remove_bg_data):
+                            use_pose_pipeline = False
+                            fallback_payload = _build_plain_generate_payload(attempt_payload)
+                            res = await _request_image_once(
+                                client,
+                                session_token,
+                                fallback_payload,
+                                endpoint_path="/api/generate",
+                            )
+                            pipeline_used = "generate (fallback: remove-bg not found)"
+                        if _is_device_mismatch_response(remove_bg_res, remove_bg_data):
+                            use_pose_pipeline = False
+                            fallback_payload = _build_plain_generate_payload(attempt_payload)
+                            res = await _request_image_once(
+                                client,
+                                session_token,
+                                fallback_payload,
+                                endpoint_path="/api/generate",
+                            )
+                            pipeline_used = "generate (fallback: remove-bg device mismatch)"
+                        detail = _extract_error_detail_from_response(
+                            remove_bg_res,
+                            "背景除去に失敗しました。",
+                        )
+                        raise HTTPException(status_code=remove_bg_res.status_code, detail=detail)
+                    else:
+                        removed_bg_image = _extract_image_field_from_payload(remove_bg_data)
+                        removed_bg_data_url = await _resolve_image_to_data_url(
+                            client,
+                            AI_CHAT_IMAGE_API_BASE_URL,
+                            removed_bg_image,
+                        )
+                        if not removed_bg_data_url:
+                            raise HTTPException(status_code=502, detail="背景除去結果の画像を取得できませんでした。")
+
+                        # Phase 2: add background only (no pose phase)
+                        add_bg_payload = {
+                            "prompt": bg_prompt,
+                            "negative_prompt": str(attempt_payload.get("negative_prompt") or "").strip() or None,
+                            "image": removed_bg_data_url,
+                            "model_id": str(attempt_payload.get("model_id") or "").strip() or None,
+                            "width": int(attempt_payload.get("width") or width),
+                            "height": int(attempt_payload.get("height") or height),
+                            "steps": int(attempt_payload.get("steps") or steps),
+                            "guidance_scale": float(attempt_payload.get("guidance_scale") or guidance_scale),
+                            "seed": attempt_payload.get("seed"),
+                            "num_images": int(attempt_payload.get("num_images") or num_images),
+                        }
+                        res = await _request_image_once(
+                            client,
+                            session_token,
+                            add_bg_payload,
+                            endpoint_path="/api/add-bg",
+                        )
+                        add_bg_data: dict = {}
+                        try:
+                            parsed_add_bg = res.json()
+                            if isinstance(parsed_add_bg, dict):
+                                add_bg_data = parsed_add_bg
+                        except Exception:
+                            add_bg_data = {}
+                        if (not res.is_success) and _is_not_found_response(res, add_bg_data):
+                            fallback_generate_payload = _build_plain_generate_payload(
+                                attempt_payload,
+                                merged_prompt=bg_prompt,
+                            )
+                            res = await _request_image_once(
+                                client,
+                                session_token,
+                                fallback_generate_payload,
+                                endpoint_path="/api/generate",
+                            )
+                            pipeline_used = "remove-bg -> generate (fallback: add-bg not found)"
+                        elif (not res.is_success) and _is_device_mismatch_response(res, add_bg_data):
+                            fallback_generate_payload = _build_plain_generate_payload(
+                                attempt_payload,
+                                merged_prompt=bg_prompt,
+                            )
+                            res = await _request_image_once(
+                                client,
+                                session_token,
+                                fallback_generate_payload,
+                                endpoint_path="/api/generate",
+                            )
+                            pipeline_used = "remove-bg -> generate (fallback: add-bg device mismatch)"
+                        else:
+                            pipeline_used = "remove-bg -> add-bg"
+                else:
+                    res = await _request_image_once(
+                        client,
+                        session_token,
+                        attempt_payload,
+                        endpoint_path="/api/generate",
+                    )
+                data = {}
+                try:
+                    parsed = res.json()
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except Exception:
+                    data = {}
+                if not res.is_success:
+                    break
+                images = _extract_ai_chat_images_from_generate_data(AI_CHAT_IMAGE_API_BASE_URL, data)
+                if not images:
+                    break
+                if max_attempts <= 1:
+                    break
+                sample = images[:AI_CHAT_IMAGE_QUALITY_SAMPLE_SIZE]
+                scores: list[float] = []
+                score_debug: list[dict] = []
+                for img in sample:
+                    score, debug = await _score_ai_chat_image_quality(img.url)
+                    if score is not None:
+                        scores.append(float(score))
+                    score_debug.append({"url": img.url, "score": None if score is None else round(float(score), 2), **debug})
+                avg_score = (sum(scores) / len(scores)) if scores else None
+                if best_attempt_data is None:
+                    best_attempt_data = dict(data)
+                    best_attempt_number = attempt
+                    best_attempt_score = avg_score
+                elif avg_score is not None and (best_attempt_score is None or avg_score > best_attempt_score):
+                    best_attempt_data = dict(data)
+                    best_attempt_number = attempt
+                    best_attempt_score = avg_score
+                quality_attempts.append(
+                    {
+                        "attempt": attempt,
+                        "average_score": None if avg_score is None else round(avg_score, 2),
+                        "min_score": AI_CHAT_IMAGE_QUALITY_MIN_SCORE,
+                        "checked": len(sample),
+                        "details": score_debug,
+                    }
+                )
+                if avg_score is None or avg_score >= AI_CHAT_IMAGE_QUALITY_MIN_SCORE:
+                    quality_threshold_met = True
+                    break
+            if (
+                res is not None
+                and res.is_success
+                and quality_attempts
+                and not quality_threshold_met
+                and len(quality_attempts) >= max_attempts
+                and best_attempt_data is not None
+            ):
+                data = dict(best_attempt_data)
+                selected_best_after_exhaustion = True
+            if res is None:
+                raise HTTPException(status_code=502, detail="AI画像生成の応答を取得できませんでした。")
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
         logger.exception("ai_chat_generate_image upstream request failed: %r", e)
         raise HTTPException(status_code=502, detail="AI画像APIへの接続に失敗しました。")
-
-    data: dict = {}
-    try:
-        parsed = res.json()
-        if isinstance(parsed, dict):
-            data = parsed
-    except Exception:
-        data = {}
 
     if not res.is_success:
         detail = data.get("detail") if isinstance(data, dict) else None
@@ -6650,30 +7292,56 @@ async def ai_chat_generate_image(
             raise HTTPException(status_code=res.status_code, detail=detail.strip())
         raise HTTPException(status_code=res.status_code, detail="AI画像生成に失敗しました。")
 
-    raw_images = data.get("images")
-    images: list[AIChatImageItem] = []
-    if isinstance(raw_images, list):
-        for item in raw_images:
-            raw_url = ""
-            raw_filename = ""
-            if isinstance(item, str):
-                raw_url = item
-            elif isinstance(item, dict):
-                raw_url = str(item.get("url") or item.get("image_url") or item.get("path") or "").strip()
-                raw_filename = str(item.get("filename") or "").strip()
-            if not raw_url:
-                continue
-            resolved = _normalize_ai_chat_image_url(AI_CHAT_IMAGE_API_BASE_URL, raw_url)
-            if not resolved:
-                continue
-            filename = raw_filename or Path(urlparse(resolved).path).name or None
-            images.append(AIChatImageItem(url=resolved, filename=filename))
+    images = _extract_ai_chat_images_from_generate_data(AI_CHAT_IMAGE_API_BASE_URL, data)
+    response_meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    response_meta = {
+        **response_meta,
+        "request_log": request_log_meta,
+    }
+    if use_pose_pipeline or pipeline_used != "generate":
+        response_meta = {
+            **response_meta,
+            "pipeline": pipeline_used,
+            "background_prompt": bg_prompt,
+        }
+    if AI_CHAT_IMAGE_QUALITY_RETRY_ENABLED:
+        response_meta = {
+            **response_meta,
+            "quality_retry_enabled": True,
+            "quality_min_score": AI_CHAT_IMAGE_QUALITY_MIN_SCORE,
+            "quality_max_retries": AI_CHAT_IMAGE_QUALITY_MAX_RETRIES,
+            "quality_attempts": quality_attempts,
+            "quality_selected_best_after_exhaustion": selected_best_after_exhaustion,
+            "quality_selected_attempt": best_attempt_number,
+            "quality_selected_score": None if best_attempt_score is None else round(float(best_attempt_score), 2),
+        }
+
+    if viewer is not None and character is not None:
+        stored_content = _serialize_ai_chat_image_message(
+            prompt=prompt,
+            images=images,
+            meta=response_meta,
+        )
+        db.add(
+            models.AIChatMessage(
+                user_id=viewer.id,
+                character_id=character.id,
+                role="assistant",
+                mode="say",
+                is_auto_dialogue=False,
+                character_name_snapshot=str(character.name or "").strip()[:80] or None,
+                personality_snapshot=str(character.personality or "").strip()[:4000] or None,
+                language_style_snapshot="normal",
+                content=stored_content,
+            )
+        )
+        db.commit()
 
     return AIChatImageGenerateResponse(
         prompt=prompt,
         images=images,
         job_id=str(data.get("job_id") or "").strip() or None,
-        meta=data.get("meta") if isinstance(data.get("meta"), dict) else {},
+        meta=response_meta,
     )
 
 
@@ -6694,13 +7362,10 @@ async def ai_chat(
         _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
-        character = (
-            db.query(models.AIChatCharacter)
-            .filter(
-                models.AIChatCharacter.id == req.character_id,
-                models.AIChatCharacter.user_id == user.id,
-            )
-            .first()
+        character = _find_editable_ai_chat_character(
+            db=db,
+            viewer=user,
+            character_id=int(req.character_id),
         )
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -6904,13 +7569,10 @@ async def ai_chat_auto_continue(
         _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
-        character = (
-            db.query(models.AIChatCharacter)
-            .filter(
-                models.AIChatCharacter.id == req.character_id,
-                models.AIChatCharacter.user_id == user.id,
-            )
-            .first()
+        character = _find_editable_ai_chat_character(
+            db=db,
+            viewer=user,
+            character_id=int(req.character_id),
         )
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -7158,24 +7820,43 @@ def list_ai_chat_characters(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    items = (
-        db.query(models.AIChatCharacter)
+    rows = (
+        db.query(models.AIChatCharacter, models.User.username)
+        .join(models.User, models.User.id == models.AIChatCharacter.user_id)
         .filter(models.AIChatCharacter.user_id == user.id)
         .order_by(models.AIChatCharacter.updated_at.desc(), models.AIChatCharacter.id.desc())
         .all()
     )
+    is_demo_reader = _is_ai_chat_demo_bypass_user(user)
+    if is_demo_reader:
+        extra_rows = (
+            db.query(models.AIChatCharacter, models.User.username)
+            .join(models.User, models.User.id == models.AIChatCharacter.user_id)
+            .filter(models.AIChatCharacter.user_id != user.id)
+            .order_by(models.AIChatCharacter.updated_at.desc(), models.AIChatCharacter.id.desc())
+            .all()
+        )
+        rows.extend(extra_rows)
     return [
         AIChatCharacterResponse(
             id=int(item.id),
             name=str(item.name or ""),
             personality=item.personality,
+            image_url=str(getattr(item, "image_url", "") or "").strip() or None,
             speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
+            owner_username=str(username or "") if username else None,
+            is_readonly=not _can_edit_ai_chat_character(
+                viewer=user,
+                owner_user_id=getattr(item, "user_id", None),
+                owner_username=str(username or "") if username else None,
+                db=db,
+            ),
             is_public=bool(getattr(item, "is_public", False)),
             published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
             created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
             updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
         )
-        for item in items
+        for item, username in rows
     ]
 
 
@@ -7212,7 +7893,10 @@ def create_ai_chat_character(
             id=int(exists.id),
             name=str(exists.name or ""),
             personality=exists.personality,
+            image_url=str(getattr(exists, "image_url", "") or "").strip() or None,
             speech_gender=normalize_speech_gender(getattr(exists, "speech_gender", None)),
+            owner_username=str(getattr(user, "username", "") or "").strip() or None,
+            is_readonly=False,
             is_public=bool(getattr(exists, "is_public", False)),
             published_at=exists.published_at.isoformat() if getattr(exists, "published_at", None) else None,
             created_at=exists.created_at.isoformat() if getattr(exists, "created_at", None) else None,
@@ -7232,7 +7916,10 @@ def create_ai_chat_character(
         id=int(item.id),
         name=str(item.name or ""),
         personality=item.personality,
+        image_url=str(getattr(item, "image_url", "") or "").strip() or None,
         speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
+        owner_username=str(getattr(user, "username", "") or "").strip() or None,
+        is_readonly=False,
         is_public=bool(getattr(item, "is_public", False)),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
@@ -7248,13 +7935,10 @@ def update_ai_chat_character(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    item = (
-        db.query(models.AIChatCharacter)
-        .filter(
-            models.AIChatCharacter.id == character_id,
-            models.AIChatCharacter.user_id == user.id,
-        )
-        .first()
+    item = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
     )
     if not item:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -7276,11 +7960,100 @@ def update_ai_chat_character(
         id=int(item.id),
         name=str(item.name or ""),
         personality=item.personality,
+        image_url=str(getattr(item, "image_url", "") or "").strip() or None,
         speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
+        owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
+        is_readonly=False,
         is_public=bool(getattr(item, "is_public", False)),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
         updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
+    )
+
+
+@app.post(
+    "/api/ai/chat/characters/{character_id}/image",
+    response_model=AIChatCharacterImageUploadResponse,
+)
+async def upload_ai_chat_character_image(
+    character_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    item = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    content_type = (file.content_type or "").lower()
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    if content_type not in ext_map:
+        raise HTTPException(400, "画像ファイル（jpg/png/webp/gif）のみアップロードできます")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "画像ファイルが空です")
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "画像サイズが大きすぎます（最大 10MB）")
+
+    old_path = _local_static_path_from_url(getattr(item, "image_url", None))
+    if old_path and os.path.exists(old_path):
+        try:
+            os.remove(old_path)
+        except Exception:
+            pass
+
+    token = secrets.token_hex(8)
+    ext = ext_map[content_type]
+    filename = f"chat_char_{character_id}_{token}{ext}"
+    save_path = os.path.join(AI_CHAT_CHARACTER_IMAGE_DIR, filename)
+
+    if ext == ".gif":
+        with open(save_path, "wb") as f:
+            f.write(data)
+    elif PIL_AVAILABLE:
+        try:
+            img = Image.open(io.BytesIO(data))
+            img = ImageOps.exif_transpose(img)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            img.thumbnail((1280, 1280))
+            if ext == ".jpg":
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(save_path, format="JPEG", quality=90, optimize=True)
+            elif ext == ".png":
+                img.save(save_path, format="PNG", optimize=True)
+            elif ext == ".webp":
+                img.save(save_path, format="WEBP", quality=88, method=6)
+            else:
+                with open(save_path, "wb") as f:
+                    f.write(data)
+        except Exception:
+            with open(save_path, "wb") as f:
+                f.write(data)
+    else:
+        with open(save_path, "wb") as f:
+            f.write(data)
+
+    item.image_url = f"/static/ai_chat_character_images/{filename}"
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return AIChatCharacterImageUploadResponse(
+        ok=True,
+        image_url=str(item.image_url or "").strip() or None,
     )
 
 
@@ -7292,13 +8065,10 @@ def publish_ai_chat_character(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    item = (
-        db.query(models.AIChatCharacter)
-        .filter(
-            models.AIChatCharacter.id == character_id,
-            models.AIChatCharacter.user_id == user.id,
-        )
-        .first()
+    item = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
     )
     if not item:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -7313,7 +8083,10 @@ def publish_ai_chat_character(
         id=int(item.id),
         name=str(item.name or ""),
         personality=item.personality,
+        image_url=str(getattr(item, "image_url", "") or "").strip() or None,
         speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
+        owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
+        is_readonly=False,
         is_public=bool(getattr(item, "is_public", False)),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
@@ -7328,16 +8101,19 @@ def delete_ai_chat_character(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    item = (
-        db.query(models.AIChatCharacter)
-        .filter(
-            models.AIChatCharacter.id == character_id,
-            models.AIChatCharacter.user_id == user.id,
-        )
-        .first()
+    item = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
     )
     if not item:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    old_path = _local_static_path_from_url(getattr(item, "image_url", None))
+    if old_path and os.path.exists(old_path):
+        try:
+            os.remove(old_path)
+        except Exception:
+            pass
     db.delete(item)
     db.commit()
     return {"deleted": True}
@@ -7451,13 +8227,10 @@ def list_ai_chat_messages(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    character = (
-        db.query(models.AIChatCharacter)
-        .filter(
-            models.AIChatCharacter.id == character_id,
-            models.AIChatCharacter.user_id == user.id,
-        )
-        .first()
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
     )
     if not character:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -7496,13 +8269,10 @@ def delete_ai_chat_messages_from_point(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    character = (
-        db.query(models.AIChatCharacter)
-        .filter(
-            models.AIChatCharacter.id == character_id,
-            models.AIChatCharacter.user_id == user.id,
-        )
-        .first()
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
     )
     if not character:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
@@ -7532,6 +8302,79 @@ def delete_ai_chat_messages_from_point(
     return AIChatMessageDeleteResponse(ok=True, deleted=int(deleted or 0))
 
 
+@app.delete(
+    "/api/ai/chat/characters/{character_id}/messages/{message_id}/images/{image_index}",
+    response_model=AIChatMessageImageDeleteResponse,
+)
+def delete_ai_chat_message_image(
+    character_id: int,
+    message_id: int,
+    image_index: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    target = (
+        db.query(models.AIChatMessage)
+        .filter(
+            models.AIChatMessage.id == message_id,
+            models.AIChatMessage.user_id == user.id,
+            models.AIChatMessage.character_id == character_id,
+        )
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="対象メッセージが見つかりません。")
+    parsed = _parse_ai_chat_image_message(str(target.content or ""))
+    if not parsed:
+        raise HTTPException(status_code=400, detail="画像メッセージではありません。")
+    images = parsed.get("images")
+    if not isinstance(images, list) or not images:
+        raise HTTPException(status_code=400, detail="削除できる画像がありません。")
+    if image_index < 0 or image_index >= len(images):
+        raise HTTPException(status_code=404, detail="対象画像が見つかりません。")
+
+    del images[image_index]
+    if not images:
+        db.delete(target)
+        db.commit()
+        return AIChatMessageImageDeleteResponse(
+            ok=True,
+            deleted_message=True,
+            remaining_images=0,
+        )
+
+    prompt = str(parsed.get("prompt") or "").strip()
+    meta = parsed.get("meta") if isinstance(parsed.get("meta"), dict) else {}
+    serialized = _serialize_ai_chat_image_message(
+        prompt=prompt,
+        images=[
+            AIChatImageItem(
+                url=str(img.get("url") or "").strip(),
+                filename=(str(img.get("filename")).strip() if img.get("filename") is not None else None),
+            )
+            for img in images
+            if isinstance(img, dict) and str(img.get("url") or "").strip()
+        ],
+        meta=meta,
+    )
+    target.content = serialized
+    db.add(target)
+    db.commit()
+    return AIChatMessageImageDeleteResponse(
+        ok=True,
+        deleted_message=False,
+        remaining_images=len(images),
+    )
+
+
 @app.get(
     "/api/ai/chat/characters/{character_id}/latest_prompt_preview",
     response_model=AIChatPromptPreviewResponse,
@@ -7543,13 +8386,10 @@ def get_ai_chat_latest_prompt_preview(
     r18: bool = Query(default=False),
 ):
     user = require_current_user(request, db)
-    character = (
-        db.query(models.AIChatCharacter)
-        .filter(
-            models.AIChatCharacter.id == character_id,
-            models.AIChatCharacter.user_id == user.id,
-        )
-        .first()
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
     )
     if not character:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")

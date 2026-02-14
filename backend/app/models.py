@@ -656,6 +656,7 @@ class AIChatCharacter(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String(80), nullable=False)
     personality = Column(Text, nullable=True)
+    image_url = Column(String(512), nullable=True)
     speech_gender = Column(String(16), nullable=False, server_default="auto")
     is_public = Column(Boolean, nullable=False, server_default="0", index=True)
     published_at = Column(DateTime, nullable=True, index=True)

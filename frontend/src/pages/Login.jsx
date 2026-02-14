@@ -391,6 +391,11 @@ export default function Login() {
       </div>
 
       <h2>{t({ ja: "ログイン（二段階認証）", en: "Login (2FA)" })}</h2>
+      <div style={{ marginTop: 6, marginBottom: 14, fontSize: 13 }}>
+        <Link to="/register">
+          {t({ ja: "会員登録はこちら", en: "Create an account" })}
+        </Link>
+      </div>
 
       <div style={{ marginBottom: 16, display: "grid", gap: 8 }}>
         <button

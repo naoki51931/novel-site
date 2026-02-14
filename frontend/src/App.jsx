@@ -34,6 +34,7 @@ import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
 import Notifications from "./pages/Notifications";
 import AuthorLanding from "./pages/AuthorLanding";
+import PremiumLP from "./pages/PremiumLP";
 import Contact from "./pages/Contact";
 import TagPage from "./pages/TagPage";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -142,6 +143,7 @@ export default function App() {
         path.startsWith("/novels/") ||
         path.startsWith("/episodes/") ||
         path.startsWith("/users/") ||
+        path === "/premium" ||
         path === "/contact" ||
         path === "/login" ||
         path === "/register" ||
@@ -356,6 +358,13 @@ export default function App() {
             {t({ ja: "AIチャット", en: "AI Chat" })}
           </Link>
           <Link
+            to="/premium"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t({ ja: "プレミアム", en: "Premium" })}
+          </Link>
+          <Link
             to="/mypage"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
@@ -471,6 +480,7 @@ export default function App() {
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/premium" element={<PremiumLP />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
