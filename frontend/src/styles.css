@@ -71,8 +71,8 @@
   --header-bg: var(--surface);
   --header-text: var(--text);
   --heading: var(--text);
-  --ai-chat-say-active-bg: #447fb3;
-  --ai-chat-do-active-bg: rgb(229 146 69);
+  --ai-chat-say-active-bg: #3a5f9b;
+  --ai-chat-do-active-bg: #d2691e;
 }
 
 /* Revert option: localStorage.setItem("color_preset", "classic") then reload. */
