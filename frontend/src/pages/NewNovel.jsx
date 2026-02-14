@@ -224,6 +224,14 @@ export default function NewNovel() {
         <Link to="/">{t({ ja: "← 小説一覧に戻る", en: "← Back to novel list" })}</Link>
       </div>
 
+      <div style={{ marginTop: 6, marginBottom: 12, fontSize: 14 }}>
+        <Link to="/register">
+          {t({
+            ja: "まずは、小説を作る前に会員登録！！",
+            en: "First, create an account before posting your novel!!",
+          })}
+        </Link>
+      </div>
       <h2>{t({ ja: "新しい小説を作成", en: "Create New Novel" })}</h2>
 
       {/* 🔹 AI小説生成ページへのショートカットボタン */}
