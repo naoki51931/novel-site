@@ -36,6 +36,9 @@
   --heading: var(--text);
   --ai-chat-say-active-bg: #dbeeff;
   --ai-chat-do-active-bg: #ffe7d1;
+  --field-radius: 10px;
+  --field-padding: 8px;
+  --field-box-sizing: border-box;
 }
 
 :root[data-theme="dark"] {
@@ -73,6 +76,9 @@
   --heading: var(--text);
   --ai-chat-say-active-bg: #3a5f9b;
   --ai-chat-do-active-bg: #d2691e;
+  --field-radius: 10px;
+  --field-padding: 8px;
+  --field-box-sizing: border-box;
 }
 
 /* Revert option: localStorage.setItem("color_preset", "classic") then reload. */
@@ -156,6 +162,19 @@ select {
   background: var(--surface);
   color: var(--text);
   border-color: var(--border);
+  border-radius: var(--field-radius);
+}
+
+input,
+textarea {
+  padding: var(--field-padding);
+  box-sizing: var(--field-box-sizing);
+}
+
+/* Normalize inline-padded fields so one token controls all input/textarea padding. */
+input[style*="padding"],
+textarea[style*="padding"] {
+  padding: var(--field-padding) !important;
 }
 
 a {
@@ -522,9 +541,9 @@ button.nav-toggle.btn.btn-border:hover {
 .input {
   box-sizing: border-box;
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--field-padding);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--field-radius);
 }
 
 .btn-primary {
