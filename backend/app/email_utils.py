@@ -21,11 +21,11 @@ def send_login_code_email(to_email: str, code: str) -> None:
         return
 
     msg = EmailMessage()
-    msg["Subject"] = "小説投稿サイト ログイン確認コード"
+    msg["Subject"] = "小説投稿サイトLexis ログイン確認コード"
     msg["From"] = EMAIL_FROM
     msg["To"] = to_email
     msg.set_content(
-        f"小説投稿サイトへのログイン確認コードは {code} です。\n\n"
+        f"小説投稿サイトLexisへのログイン確認コードは {code} です。\n\n"
         "このコードは10分間のみ有効です。\n"
         "心当たりがない場合は、このメールは破棄してください。"
     )

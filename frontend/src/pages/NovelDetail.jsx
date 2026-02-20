@@ -4,8 +4,10 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
+const TRANSLATABLE_LANGS = new Set(["en", "zh-cn", "zh-tw", "ko"]);
 
 export default function NovelDetail() {
   const { id } = useParams(); // novel_id
@@ -160,6 +162,7 @@ export default function NovelDetail() {
         setError("");
 
         const token = localStorage.getItem("token");
+        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
   const toggleFavorite = async () => {
     if (!token) {
       alert(t({ ja: "ログインが必要です", en: "Login required." }));
@@ -185,9 +188,7 @@ export default function NovelDetail() {
       console.error(e);
     }
   };
-        const res = await fetch(`${API_BASE}/api/novels/${id}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
+        const res = await fetch(`${API_BASE}/api/novels/${id}`, { headers: authHeaders });
 
         if (!res.ok) {
           throw new Error(
@@ -198,7 +199,46 @@ export default function NovelDetail() {
           );
         }
 
-        const data = await res.json();
+        let data = await res.json();
+
+        // Non-Japanese UI: show translated novel + episode fields when available.
+        if (TRANSLATABLE_LANGS.has(lang) && data?.id) {
+          const fetchJson = async (path) => {
+            const r = await fetch(`${API_BASE}${path}`, { headers: authHeaders });
+            if (!r.ok) return null;
+            return await r.json().catch(() => null);
+          };
+          const tr = await fetchJson(
+            `/api/novels/${data.id}/translations/${encodeURIComponent(lang)}`
+          );
+          if (tr) {
+            data = {
+              ...data,
+              title: tr.title || data.title,
+              description: tr.description ?? data.description,
+              tags: Array.isArray(tr.tags) ? tr.tags.map((name) => ({ name })) : data.tags,
+            };
+          }
+          if (Array.isArray(data?.episodes) && data.episodes.length > 0) {
+            const translatedEpisodes = await Promise.all(
+              data.episodes.map(async (ep) => {
+                if (!ep?.id) return ep;
+                const epTr = await fetchJson(
+                  `/api/episodes/${ep.id}/translations/${encodeURIComponent(lang)}`
+                );
+                if (!epTr) return ep;
+                return {
+                  ...ep,
+                  title: epTr.title || ep.title,
+                  tags: Array.isArray(epTr.tags)
+                    ? epTr.tags.map((name) => ({ name }))
+                    : ep.tags,
+                };
+              })
+            );
+            data = { ...data, episodes: translatedEpisodes };
+          }
+        }
         console.log("NOVEL DATA:", data);
         setNovel(data);
         setIsFavorited(!!data.is_favorited);
@@ -237,7 +277,7 @@ export default function NovelDetail() {
       .then((res) => res.json())
       .then((data) => setComments(Array.isArray(data) ? data : []));
 
-  }, [id]);
+  }, [id, lang]);
 
   // ★ 小説 いいねトグル
   const handlePostComment = async () => {

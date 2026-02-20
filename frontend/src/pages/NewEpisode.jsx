@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 const EP_DRAFT_KEY_PREFIX = "draft_new_episode"; // 作品ごとの下書き用プレフィックス
 const ILLUST_TAG_PREFIX = "illust:";
 const ILLUST_TAG_RE = /^illust:(\d{8})$/;
@@ -62,6 +63,12 @@ export default function NewEpisode() {
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
   const [tagSuggestError, setTagSuggestError] = useState("");
   const [aiPrefillApplied, setAiPrefillApplied] = useState(false);
+  const [aiAssistEnabled, setAiAssistEnabled] = useState(false);
+  const [assistCandidates, setAssistCandidates] = useState([]);
+  const [assistSelectedIndex, setAssistSelectedIndex] = useState(0);
+  const [assistLoading, setAssistLoading] = useState(false);
+  const [assistError, setAssistError] = useState("");
+  const bodyRef = useRef(null);
 
   // この作品用のローカルストレージキー
   const draftKey = `${EP_DRAFT_KEY_PREFIX}_${id ?? "unknown"}`;
@@ -315,6 +322,143 @@ export default function NewEpisode() {
     const remaining = tagCandidates.filter((tag) => !selectedTagCandidates.has(tag));
     setTagCandidates(remaining);
     setSelectedTagCandidates(new Set());
+  };
+
+  const moveAssistSelection = (delta) => {
+    setAssistSelectedIndex((prev) => {
+      if (!assistCandidates.length) return 0;
+      const next = (prev + delta + assistCandidates.length) % assistCandidates.length;
+      return next;
+    });
+  };
+
+  const normalizeAssistCandidate = (text) => {
+    let out = String(text || "").replace(/^\s+/, "");
+    out = out
+      .replace(/、。/g, "。")
+      .replace(/。。+/g, "。")
+      .replace(/、、+/g, "、");
+    return out;
+  };
+
+  const trimOverlapWithBodyTail = (bodyText, candidateText) => {
+    const before = String(bodyText || "");
+    const cand = String(candidateText || "");
+    const max = Math.min(before.length, cand.length);
+    // Avoid trivial 1-char overlaps (e.g., punctuation only).
+    for (let n = max; n >= 2; n -= 1) {
+      if (before.slice(-n) === cand.slice(0, n)) {
+        return cand.slice(n);
+      }
+    }
+    return cand;
+  };
+
+  const applyAssistCandidate = (candidate) => {
+    if (!candidate) return;
+    const textArea = bodyRef.current;
+    const current = body || "";
+    let normalizedCandidate = normalizeAssistCandidate(candidate);
+    normalizedCandidate = trimOverlapWithBodyTail(current, normalizedCandidate);
+    normalizedCandidate = normalizeAssistCandidate(normalizedCandidate);
+    if (!normalizedCandidate) return;
+    if (current.endsWith(normalizedCandidate)) return;
+    if (!textArea) {
+      setBody(`${current}${normalizedCandidate}`);
+      return;
+    }
+    const start = textArea.selectionStart ?? current.length;
+    const end = textArea.selectionEnd ?? current.length;
+    const before = current.slice(0, start);
+    const after = current.slice(end);
+    const insertText = normalizedCandidate;
+    const next = `${before}${insertText}${after}`;
+    const cursor = before.length + insertText.length;
+    setBody(next);
+    requestAnimationFrame(() => {
+      try {
+        textArea.focus();
+        textArea.setSelectionRange(cursor, cursor);
+      } catch (_) {
+        // no-op
+      }
+    });
+  };
+
+  useEffect(() => {
+    if (!aiAssistEnabled) return;
+    const source = (body || "").trim();
+    if (!source) {
+      setAssistCandidates([]);
+      setAssistSelectedIndex(0);
+      setAssistError("");
+      setAssistLoading(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setAssistLoading(true);
+      setAssistError("");
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
+        const res = await fetch(`${API_BASE}/api/ai/episodes/assist_candidates`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+          },
+          body: JSON.stringify({
+            title,
+            text: body,
+            tags: parseTagsInput(tags),
+            suggestions_count: 4,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.detail || t({ ja: "候補の生成に失敗しました。", en: "Failed to generate candidates." }));
+        }
+        const candidates = Array.isArray(data?.candidates)
+          ? data.candidates.map((x) => String(x || "").trim()).filter(Boolean)
+          : [];
+        if (!candidates.length) {
+          setAssistCandidates([]);
+          setAssistSelectedIndex(0);
+          setAssistError(t({ ja: "候補が生成できませんでした。", en: "No candidates were generated." }));
+          return;
+        }
+        setAssistCandidates(candidates);
+        setAssistSelectedIndex(0);
+      } catch (err) {
+        console.error(err);
+        setAssistError(err.message || t({ ja: "候補の生成中にエラーが発生しました。", en: "An error occurred while generating candidates." }));
+      } finally {
+        setAssistLoading(false);
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [aiAssistEnabled, body, title, tags, t]);
+
+  const handleBodyKeyDown = (e) => {
+    if (!aiAssistEnabled || !assistCandidates.length) return;
+    if (e.nativeEvent?.isComposing) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight" || (e.key === "Tab" && !e.shiftKey)) {
+      e.preventDefault();
+      moveAssistSelection(1);
+      return;
+    }
+    if (e.key === "ArrowUp" || e.key === "ArrowLeft" || (e.key === "Tab" && e.shiftKey)) {
+      e.preventDefault();
+      moveAssistSelection(-1);
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      const selected = assistCandidates[assistSelectedIndex] || assistCandidates[0];
+      applyAssistCandidate(selected);
+    }
   };
 
   
@@ -655,13 +799,77 @@ export default function NewEpisode() {
           <label>
             {t({ ja: "本文", en: "Body" })}
             <br />
+            <div style={{ margin: "6px 0 8px", display: "flex", gap: 12, alignItems: "center" }}>
+              <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+                <input
+                  type="checkbox"
+                  checked={aiAssistEnabled}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setAiAssistEnabled(checked);
+                    if (!checked) {
+                      setAssistCandidates([]);
+                      setAssistError("");
+                    }
+                  }}
+                />
+                {t({ ja: "AI補助モード", en: "AI assist mode" })}
+              </label>
+              {aiAssistEnabled && (
+                <span style={{ fontSize: 12, color: "#666" }}>
+                  {assistLoading
+                    ? t({ ja: "候補を自動生成中...", en: "Auto-generating candidates..." })
+                    : t({ ja: "入力後に候補を自動生成します。", en: "Candidates auto-generate after typing." })}
+                </span>
+              )}
+            </div>
             <textarea
+              ref={bodyRef}
               value={body}
               onChange={(e) => setBody(e.target.value)}
+              onKeyDown={handleBodyKeyDown}
               rows={10}
               style={{ width: "100%", padding: 4 }}
             />
           </label>
+          {aiAssistEnabled && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+                {t({
+                  ja: "Tab / ↑↓←→ で候補選択、Enter で本文へ挿入",
+                  en: "Use Tab / arrows to select, Enter to insert",
+                })}
+              </div>
+              {assistError && <div style={{ color: "red", marginBottom: 6 }}>{assistError}</div>}
+              {assistCandidates.length > 0 && (
+                <div style={{ display: "grid", gap: 6 }}>
+                  {assistCandidates.map((candidate, idx) => (
+                    <button
+                      key={`${idx}-${candidate.slice(0, 16)}`}
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setAssistSelectedIndex(idx);
+                        applyAssistCandidate(candidate);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        background: idx === assistSelectedIndex ? "var(--surface-2)" : "transparent",
+                        borderColor: idx === assistSelectedIndex ? "var(--link)" : "var(--border)",
+                        borderWidth: 1,
+                        borderStyle: "solid",
+                        borderRadius: 4,
+                        color: "var(--text)",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {candidate}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {error && <p style={{ color: "red" }}>{error}</p>}

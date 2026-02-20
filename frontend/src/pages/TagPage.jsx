@@ -27,8 +27,8 @@ export default function TagPage() {
     const previousCanonical = canonicalLink?.getAttribute("href");
 
     const nextTitle = t({
-      ja: `${tagName}小説一覧｜小説投稿サイト`,
-      en: `Novels tagged "${tagName}" | Novel Submission Site`,
+      ja: `${tagName}小説一覧｜小説投稿サイトLexis`,
+      en: `Novels tagged "${tagName}" | Lexis`,
     });
     const nextDescription = t({
       ja: `「${tagName}」をテーマにした小説作品一覧です。一次創作・二次創作を含む${tagName}関連の物語を掲載しています。`,

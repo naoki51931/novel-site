@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useLocation } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { trackEvent } from "../lib/analytics";
 
 const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
 
 export default function Register() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState(""); // ← 追加
@@ -41,6 +43,10 @@ export default function Register() {
       if (data.access_token) {
         localStorage.setItem("token", data.access_token);
       }
+      trackEvent("sign_up", {
+        method: "email",
+        page_path: location.pathname,
+      });
 
       navigate("/");
 

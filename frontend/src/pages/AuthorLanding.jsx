@@ -11,8 +11,8 @@ export default function AuthorLanding() {
     const metaDescription = document.querySelector('meta[name="description"]');
     const previousDescription = metaDescription?.getAttribute("content");
     const nextTitle = t({
-      ja: "作者向けLP｜小説投稿サイト",
-      en: "For Authors | Novel Submission Site",
+      ja: "作者向けLP｜小説投稿サイトLexis",
+      en: "For Authors | Lexis",
     });
     const nextDescription = t({
       ja: "初投稿でも埋もれない設計。評価やコメントが返ってくる、小説を書く人のための投稿サイト。無料・非公開OK・途中保存可。",
@@ -424,6 +424,48 @@ export default function AuthorLanding() {
           <p className="lp-note">
             {t({ ja: "※初投稿まで最短3分（非公開OK）", en: "First post in as little as 3 minutes (private OK)." })}
           </p>
+        </div>
+      </section>
+
+      <section className="lp-section lp-section-muted lp-alt-sites">
+        <div className="lp-section-inner">
+          <p className="lp-section-kicker">
+            {t({ ja: "ジャンル別サイト", en: "Genre Sites" })}
+          </p>
+          <h3 className="lp-section-title">
+            {t({
+              ja: "テーマが決まっている方はこちら",
+              en: "Choose a site by your theme",
+            })}
+          </h3>
+          <div className="lp-alt-sites-grid">
+            <a
+              className="lp-alt-site-card"
+              href="https://renai.shosetsu-toukou-site.org/"
+              onClick={() => handleCtaClick("author_to_romance")}
+            >
+              <h4>{t({ ja: "恋愛小説を書きたい", en: "Write Romance" })}</h4>
+              <p>
+                {t({
+                  ja: "恋愛特化の恋愛小説Lexisへ移動",
+                  en: "Go to Romance Lexis",
+                })}
+              </p>
+            </a>
+            <a
+              className="lp-alt-site-card"
+              href="https://rekishi.shosetsu-toukou-site.org/"
+              onClick={() => handleCtaClick("author_to_history")}
+            >
+              <h4>{t({ ja: "歴史小説を書きたい", en: "Write History" })}</h4>
+              <p>
+                {t({
+                  ja: "歴史特化の歴史小説Lexisへ移動",
+                  en: "Go to History Lexis",
+                })}
+              </p>
+            </a>
+          </div>
         </div>
       </section>
     </div>

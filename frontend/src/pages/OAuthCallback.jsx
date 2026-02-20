@@ -35,6 +35,7 @@ export default function OAuthCallback() {
     const appClient = params.get("app_client") === "1";
     if (appClient) {
       const moved = redirectToAndroidAppLogin({
+        appClient: true,
         token,
         username: username || "",
         redirect: redirect && redirect.startsWith("/") ? redirect : "/mypage",

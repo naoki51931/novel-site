@@ -29,6 +29,7 @@ class User(Base):
     two_factor_expires_at = Column(DateTime, nullable=True)
     ai_novel_draft_json = Column(LONGTEXT, nullable=True)
     ai_novel_draft_updated_at = Column(DateTime, nullable=True)
+    ai_novel_paid_generations = Column(Integer, nullable=False, server_default="0")
     ai_chat_tokens_used = Column(Integer, nullable=False, server_default="0")
     ai_chat_paid_blocks = Column(Integer, nullable=False, server_default="0")
 
@@ -151,7 +152,10 @@ class Novel(Base):
     title = Column(String(200), index=True, nullable=False)
     description = Column(Text, nullable=True)
     language = Column(String(8), nullable=False, server_default="ja")
+    site_key = Column(String(32), nullable=False, server_default="main", index=True)
     is_public = Column(Boolean, nullable=False, default=True)
+    # Keep in sync with DB (status is used throughout backend via getattr).
+    status = Column(String(20), nullable=False, server_default="public")
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     view_count = Column(Integer, nullable=False, server_default="0")
@@ -238,6 +242,7 @@ class Episode(Base):
     title = Column(String(200), nullable=False)
     body = Column(LONGTEXT)
     language = Column(String(8), nullable=False, server_default="ja")
+    site_key = Column(String(32), nullable=False, server_default="main", index=True)
     episode_number = Column(Integer, nullable=True)
     cover_image_url = Column(String(255))
     status = Column(String(16), nullable=False, server_default="public")
@@ -301,6 +306,7 @@ class EpisodeTranslation(Base):
     language = Column(String(8), nullable=False, index=True)
     title = Column(String(200), nullable=False)
     body = Column(Text, nullable=True)
+    tag_names = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -680,6 +686,8 @@ class AIChatMessage(Base):
     role = Column(String(16), nullable=False)  # user / assistant
     mode = Column(String(16), nullable=False, server_default="say")  # say / do
     is_auto_dialogue = Column(Boolean, nullable=False, server_default="0", index=True)
+    is_deleted = Column(Boolean, nullable=False, server_default="0", index=True)
+    deleted_at = Column(DateTime, nullable=True, index=True)
     character_name_snapshot = Column(String(80), nullable=True)
     personality_snapshot = Column(Text, nullable=True)
     language_style_snapshot = Column(String(24), nullable=True)
@@ -756,6 +764,50 @@ class Notification(Base):
     actor = relationship("User", foreign_keys=[actor_user_id])
 
 
+class UII18nJob(Base):
+    __tablename__ = "ui_i18n_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_key = Column(String(64), nullable=False, unique=True, index=True)
+    status = Column(String(16), nullable=False, server_default="pending", index=True)
+    target_langs_json = Column(Text, nullable=False)
+    source_items_json = Column(LONGTEXT, nullable=False)
+    batch_size = Column(Integer, nullable=False, server_default="10")
+    notify_username = Column(String(64), nullable=False, server_default="demo02")
+    source_item_count = Column(Integer, nullable=False, server_default="0")
+    total_chunks = Column(Integer, nullable=False, server_default="0")
+    processed_chunks = Column(Integer, nullable=False, server_default="0")
+    translated_count = Column(Integer, nullable=False, server_default="0")
+    failed_count = Column(Integer, nullable=False, server_default="0")
+    current_target_lang = Column(String(8), nullable=True)
+    current_source_lang = Column(String(8), nullable=True)
+    current_offset = Column(Integer, nullable=False, server_default="0")
+    current_chunk_size = Column(Integer, nullable=False, server_default="0")
+    failed_items_json = Column(LONGTEXT, nullable=True)
+    error = Column(Text, nullable=True)
+    cancel_requested = Column(Boolean, nullable=False, server_default="0")
+    hang_notified = Column(Boolean, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class UII18nDictionary(Base):
+    __tablename__ = "ui_i18n_dictionary"
+
+    id = Column(Integer, primary_key=True, index=True)
+    target_lang = Column(String(8), nullable=False, index=True)
+    source_text = Column(String(500), nullable=False)
+    translated_text = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("target_lang", "source_text", name="uq_ui_i18n_dictionary_lang_source"),
+    )
+
+
 class AdminContactMessage(Base):
     __tablename__ = "admin_contact_messages"
 
@@ -783,6 +835,21 @@ class AIChatAddonPurchase(Base):
     stripe_checkout_session_id = Column(String(255), nullable=False, unique=True)
     amount_yen = Column(Integer, nullable=False)
     token_blocks = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, server_default="pending")
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    user = relationship("User")
+
+
+class AINovelAddonPurchase(Base):
+    __tablename__ = "ai_novel_addon_purchases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    stripe_checkout_session_id = Column(String(255), nullable=False, unique=True)
+    amount_yen = Column(Integer, nullable=False)
+    generation_units = Column(Integer, nullable=False)
     status = Column(String(16), nullable=False, server_default="pending")
     paid_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)

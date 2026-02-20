@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 
 // 要約などの長文を折りたたみ/展開するコンポーネント
 function ExpandableText({ text, max = 120 }) {

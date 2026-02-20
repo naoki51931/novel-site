@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/aiPolish.test.mjs"
+    "test": "node tests/aiPolish.test.mjs",
+    "i18n:check-ui": "node scripts/check_ui_translations.mjs"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^6.5.2",

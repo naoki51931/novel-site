@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 
 export default function DirectMessageThread() {
   const { threadId } = useParams();

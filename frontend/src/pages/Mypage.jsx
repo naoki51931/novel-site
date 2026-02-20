@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import { useI18n } from "../lib/i18n";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
+const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 
 export default function Mypage() {
   const { t } = useI18n();
@@ -37,11 +39,22 @@ export default function Mypage() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
   });
+  const [showR18, setShowR18] = useState(() => {
+    if (typeof window === "undefined") return true;
+    const v = localStorage.getItem(MYPAGE_SHOW_R18_STORAGE_KEY);
+    if (v === null) return true; // default: show
+    return v === "1" || v === "true";
+  });
   const [androidAppReady, setAndroidAppReady] = useState(false);
   const [iphoneAppReady, setIphoneAppReady] = useState(false);
   const navigate = useNavigate();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const siteKey =
+    typeof document !== "undefined"
+      ? (document.documentElement?.dataset?.siteKey || "main").toLowerCase()
+      : "main";
+  const hideAppDownloads = siteKey === "romance" || siteKey === "history";
   const formatErrorDetail = (detail, fallback) => {
     if (typeof detail === "string" && detail.trim()) return detail;
     if (detail) return JSON.stringify(detail);
@@ -127,6 +140,11 @@ export default function Mypage() {
   }, [token]);
 
   useEffect(() => {
+    if (hideAppDownloads) {
+      setAndroidAppReady(false);
+      setIphoneAppReady(false);
+      return;
+    }
     const checkFile = async (url, setter) => {
       try {
         const res = await fetch(url, { method: "HEAD" });
@@ -137,7 +155,16 @@ export default function Mypage() {
     };
     checkFile(ANDROID_APP_FILE, setAndroidAppReady);
     checkFile(IPHONE_APP_FILE, setIphoneAppReady);
-  }, []);
+  }, [hideAppDownloads]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(MYPAGE_SHOW_R18_STORAGE_KEY, showR18 ? "1" : "0");
+  }, [showR18]);
+
+  const isR18Novel = (novel) => String(novel?.age_limit || "all").toLowerCase() === "r18";
+  const novelsVisible = showR18 ? novels : novels.filter((n) => !isR18Novel(n));
+  const favoritesVisible = showR18 ? favorites : favorites.filter((n) => !isR18Novel(n));
 
   const aiJobsFiltered = aiJobs.filter((job) => {
     if (aiJobsFilter === "all") return true;
@@ -198,6 +225,14 @@ export default function Mypage() {
 
     fetchFavoritesAndProfile();
   }, [token]);
+
+  useEffect(() => {
+    if (showR18) return;
+    if (!selectedNovelId) return;
+    const list = Array.isArray(analyticsData?.novels) ? analyticsData.novels : [];
+    const found = list.find((n) => String(n?.id) === String(selectedNovelId));
+    if (found && isR18Novel(found)) setSelectedNovelId("");
+  }, [showR18, selectedNovelId, analyticsData]);
 
   useEffect(() => {
     if (!token) return;
@@ -388,8 +423,8 @@ export default function Mypage() {
               display: "inline-block",
               padding: "2px 8px",
               borderRadius: "999px",
-              backgroundColor: "#f0b400",
-              color: "#fff",
+              backgroundColor: "var(--accent)",
+              color: "var(--on-accent)",
               fontSize: 12,
             }}
           >
@@ -425,6 +460,42 @@ export default function Mypage() {
             {t({ ja: "現在プレミアム会員中です。", en: "You are currently Premium." })}
           </p>
         )}
+      </section>
+
+      <section style={{ marginTop: 16 }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          {t({ ja: "表示設定", en: "Display" })}
+        </h3>
+        <div
+          style={{
+            marginTop: 10,
+            padding: "10px 12px",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            background: "var(--surface)",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 10,
+            alignItems: "center",
+          }}
+        >
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showR18}
+              onChange={(e) => setShowR18(e.target.checked)}
+            />
+            <span>{t({ ja: "R18作品を表示", en: "Show R18 works" })}</span>
+          </label>
+          {!showR18 && (
+            <span style={{ fontSize: 12, color: "var(--muted-text)" }}>
+              {t({
+                ja: "R18は「作成した小説」「お気に入り」「アクセス解析(小説別)」から非表示になります。",
+                en: "R18 items are hidden from your lists and per-novel analytics.",
+              })}
+            </span>
+          )}
+        </div>
       </section>
 
       {/* AIジョブ管理 */}
@@ -597,45 +668,64 @@ export default function Mypage() {
         <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
           {t({ ja: "スマホアプリのダウンロード", en: "Mobile App Downloads" })}
         </h3>
-        <p style={{ marginTop: 8, lineHeight: 1.6 }}>
-          {t({
-            ja: "Android / iPhone 向け実アプリファイルをダウンロードできます。",
-            en: "Download app binaries for Android and iPhone.",
-          })}
-        </p>
-        <p style={{ marginTop: 8, lineHeight: 1.6, fontWeight: 600 }}>
-          {t({
-            ja: `${MOBILE_APP_UPDATED_AT} にアプリを更新しました。`,
-            en: `App updated on ${MOBILE_APP_UPDATED_AT}.`,
-          })}
-        </p>
-        {androidAppReady ? (
-          <div style={{ marginTop: 12 }}>
-            <a className="btn btn-border" href={ANDROID_APP_FILE} download>
-              {t({ ja: "Android APKをダウンロード", en: "Download Android APK" })}
-            </a>
-          </div>
+        {hideAppDownloads ? (
+          <>
+            <p style={{ marginTop: 12, color: "var(--muted-text)" }}>
+              {t({
+                ja: "Android アプリは未配置です。",
+                en: "Android app is not uploaded yet.",
+              })}
+            </p>
+            <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
+              {t({
+                ja: "iPhone アプリは未配置です。",
+                en: "iPhone app is not uploaded yet.",
+              })}
+            </p>
+          </>
         ) : (
-          <p style={{ marginTop: 12, color: "var(--muted-text)" }}>
-            {t({
-              ja: "Android APK は未配置です（/static/app_downloads/novelsite-android.apk）。",
-              en: "Android APK is not uploaded yet (/static/app_downloads/novelsite-android.apk).",
-            })}
-          </p>
-        )}
-        {iphoneAppReady ? (
-          <div style={{ marginTop: 8 }}>
-            <a className="btn btn-border" href={IPHONE_APP_FILE} download>
-              {t({ ja: "iPhone IPAをダウンロード", en: "Download iPhone IPA" })}
-            </a>
-          </div>
-        ) : (
-          <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
-            {t({
-              ja: "iPhone IPA は未配置です（/static/app_downloads/novelsite-iphone.ipa）。",
-              en: "iPhone IPA is not uploaded yet (/static/app_downloads/novelsite-iphone.ipa).",
-            })}
-          </p>
+          <>
+            <p style={{ marginTop: 8, lineHeight: 1.6 }}>
+              {t({
+                ja: "Android / iPhone 向け実アプリファイルをダウンロードできます。",
+                en: "Download app binaries for Android and iPhone.",
+              })}
+            </p>
+            <p style={{ marginTop: 8, lineHeight: 1.6, fontWeight: 600 }}>
+              {t({
+                ja: `${MOBILE_APP_UPDATED_AT} にアプリを更新しました。`,
+                en: `App updated on ${MOBILE_APP_UPDATED_AT}.`,
+              })}
+            </p>
+            {androidAppReady ? (
+              <div style={{ marginTop: 12 }}>
+                <a className="btn btn-border" href={ANDROID_APP_FILE} download>
+                  {t({ ja: "Android APKをダウンロード", en: "Download Android APK" })}
+                </a>
+              </div>
+            ) : (
+              <p style={{ marginTop: 12, color: "var(--muted-text)" }}>
+                {t({
+                  ja: "Android APK は未配置です（/static/app_downloads/novelsite-android.apk）。",
+                  en: "Android APK is not uploaded yet (/static/app_downloads/novelsite-android.apk).",
+                })}
+              </p>
+            )}
+            {iphoneAppReady ? (
+              <div style={{ marginTop: 8 }}>
+                <a className="btn btn-border" href={IPHONE_APP_FILE} download>
+                  {t({ ja: "iPhone IPAをダウンロード", en: "Download iPhone IPA" })}
+                </a>
+              </div>
+            ) : (
+              <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
+                {t({
+                  ja: "iPhone IPA は未配置です（/static/app_downloads/novelsite-iphone.ipa）。",
+                  en: "iPhone IPA is not uploaded yet (/static/app_downloads/novelsite-iphone.ipa).",
+                })}
+              </p>
+            )}
+          </>
         )}
       </section>
 
@@ -821,14 +911,22 @@ export default function Mypage() {
                   }}
                 >
                   <option value="">{t({ ja: "選択してください", en: "Choose a novel" })}</option>
-                  {(analyticsData.novels || []).map((novel) => (
-                    <option key={novel.id} value={novel.id}>
-                      {novel.title || t({ ja: "無題", en: "Untitled" })}
-                    </option>
-                  ))}
+                  {(() => {
+                    const all = Array.isArray(analyticsData?.novels) ? analyticsData.novels : [];
+                    const visible = showR18 ? all : all.filter((n) => !isR18Novel(n));
+                    return visible.map((novel) => (
+                      <option key={novel.id} value={novel.id}>
+                        {novel.title || t({ ja: "無題", en: "Untitled" })}
+                      </option>
+                    ));
+                  })()}
                 </select>
               </div>
-              {Array.isArray(analyticsData.novels) && analyticsData.novels.length > 0 ? (
+              {(() => {
+                const all = Array.isArray(analyticsData?.novels) ? analyticsData.novels : [];
+                const visible = showR18 ? all : all.filter((n) => !isR18Novel(n));
+                if (visible.length > 0) {
+                  return (
                 <div style={{ display: "grid", gap: 6 }}>
                   <div
                     style={{
@@ -845,7 +943,7 @@ export default function Mypage() {
                     <span>{t({ ja: "いいね", en: "Likes" })}</span>
                     <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}</span>
                   </div>
-                  {analyticsData.novels.map((novel) => (
+                  {visible.map((novel) => (
                     <div
                       key={novel.id}
                       style={{
@@ -867,11 +965,21 @@ export default function Mypage() {
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p style={{ marginTop: 8 }}>
-                  {t({ ja: "小説別のデータがありません。", en: "No per-novel data." })}
-                </p>
-              )}
+                  );
+                }
+                if (all.length > 0 && !showR18) {
+                  return (
+                    <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
+                      {t({ ja: "R18作品を非表示にしているため、表示できるデータがありません。", en: "No visible data (R18 is hidden)." })}
+                    </p>
+                  );
+                }
+                return (
+                  <p style={{ marginTop: 8 }}>
+                    {t({ ja: "小説別のデータがありません。", en: "No per-novel data." })}
+                  </p>
+                );
+              })()}
             </div>
 
             <div style={{ marginTop: 20 }}>
@@ -987,13 +1095,15 @@ export default function Mypage() {
           {t({ ja: "お気に入り小説", en: "Favorite novels" })}
         </h3>
 
-        {favorites.length === 0 ? (
+        {favoritesVisible.length === 0 ? (
           <p style={{ marginTop: 10 }}>
-            {t({ ja: "お気に入りはまだありません。", en: "No favorites yet." })}
+            {favorites.length > 0 && !showR18
+              ? t({ ja: "R18作品を非表示にしているため、表示できるお気に入りがありません。", en: "No visible favorites (R18 is hidden)." })
+              : t({ ja: "お気に入りはまだありません。", en: "No favorites yet." })}
           </p>
         ) : (
           <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
-            {favorites.map((novel) => (
+            {favoritesVisible.map((novel) => (
               <div
                 key={novel.id}
                 style={{
@@ -1071,14 +1181,16 @@ export default function Mypage() {
 
         {error && <p style={{ color: "red" }}>{error}</p>}
 
-        {novels.length === 0 && (
+        {novelsVisible.length === 0 && (
           <p style={{ marginTop: 10 }}>
-            {t({ ja: "まだ作成した小説がありません。", en: "You haven't created any novels yet." })}
+            {novels.length > 0 && !showR18
+              ? t({ ja: "R18作品を非表示にしているため、表示できる小説がありません。", en: "No visible novels (R18 is hidden)." })
+              : t({ ja: "まだ作成した小説がありません。", en: "You haven't created any novels yet." })}
           </p>
         )}
 
         <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
-          {novels.map((novel) => (
+          {novelsVisible.map((novel) => (
             <div
               key={novel.id}
               style={{

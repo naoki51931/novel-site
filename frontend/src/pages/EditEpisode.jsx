@@ -2,8 +2,9 @@ import {useEffect, useState, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 const EDIT_EPISODE_DRAFT_PREFIX = "edit_episode_draft";
 const ILLUST_TAG_PREFIX = "illust:";
 const ILLUST_TAG_RE = /^illust:(\d{8})$/;

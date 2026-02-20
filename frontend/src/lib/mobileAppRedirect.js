@@ -25,6 +25,9 @@ export function buildAndroidAppLoginUrl({ token, username, redirect = "/mypage" 
 }
 
 export function redirectToAndroidAppLogin(payload) {
+  // Only redirect back to the native app when the current flow explicitly opts-in.
+  // Otherwise Android web users who happen to have the app installed get kicked out of the web site.
+  if (!payload?.appClient) return false;
   if (!shouldRedirectToAndroidApp()) return false;
   const url = buildAndroidAppLoginUrl(payload || {});
   window.location.href = url;

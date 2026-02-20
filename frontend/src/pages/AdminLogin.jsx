@@ -22,7 +22,7 @@ export default function AdminLogin() {
         body: { username, password },
         credentials: "include",
       });
-      navigate("/admin/payouts", { replace: true });
+      navigate("/admin", { replace: true });
     } catch (e2) {
       setError(e2.message || t({ ja: "ログインに失敗しました", en: "Login failed." }));
     } finally {

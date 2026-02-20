@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { redirectToAndroidAppLogin } from "../lib/mobileAppRedirect";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
@@ -151,8 +152,20 @@ export default function Login() {
       const pending = loadPendingAiPost();
 
       if (!pending?.body) {
+        const appClientHint =
+          typeof window !== "undefined" &&
+          (() => {
+            try {
+              const params = new URLSearchParams(window.location.search || "");
+              const client = (params.get("client") || "").toLowerCase();
+              return client === "app" || params.get("app_client") === "1";
+            } catch {
+              return false;
+            }
+          })();
         const nextPath = redirectPath && redirectPath.startsWith("/") ? redirectPath : "/mypage";
         const moved = redirectToAndroidAppLogin({
+          appClient: appClientHint,
           token: data.access_token,
           username,
           redirect: nextPath,

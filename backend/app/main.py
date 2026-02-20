@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import math
 import base64
 import hashlib
 import hmac
@@ -8,6 +9,7 @@ import re
 import time
 import asyncio
 import logging
+import threading
 from urllib.parse import urlencode, quote, parse_qs, urlparse, urljoin
 import json
 import html
@@ -28,6 +30,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Request,
+    BackgroundTasks,
     Body,
     status,
     Header,
@@ -39,10 +42,11 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import text, or_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 
 from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas
@@ -201,6 +205,8 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN ai_novel_draft_json LONGTEXT NULL")
             if "ai_novel_draft_updated_at" not in existing:
                 alters.append("ADD COLUMN ai_novel_draft_updated_at DATETIME NULL")
+            if "ai_novel_paid_generations" not in existing:
+                alters.append("ADD COLUMN ai_novel_paid_generations INT NOT NULL DEFAULT 0")
             if "ai_chat_tokens_used" not in existing:
                 alters.append("ADD COLUMN ai_chat_tokens_used INT NOT NULL DEFAULT 0")
             if "ai_chat_paid_blocks" not in existing:
@@ -296,16 +302,57 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 1")
             if "language" not in existing:
                 alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
+            if "site_key" not in existing:
+                alters.append("ADD COLUMN site_key VARCHAR(32) NOT NULL DEFAULT 'main'")
             if "body" in existing and existing["body"] != "longtext":
                 alters.append("MODIFY COLUMN body LONGTEXT NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE episodes {clause}"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE episodes e
+                    JOIN novels n ON n.id = e.novel_id
+                    SET e.site_key = n.site_key
+                    WHERE (e.site_key IS NULL OR e.site_key = '')
+                    """
+                )
+            )
     except Exception as e:
         print("[db] ensure_episodes_table_columns failed:", repr(e))
 
 
 ensure_episodes_table_columns()
+
+
+def ensure_episode_translations_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'episode_translations'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "tag_names" not in existing:
+                alters.append("ADD COLUMN tag_names TEXT NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE episode_translations {clause}"))
+    except Exception as e:
+        print("[db] ensure_episode_translations_table_columns failed:", repr(e))
+
+
+ensure_episode_translations_table_columns()
+
 
 def ensure_novels_table_columns():
     try:
@@ -327,6 +374,8 @@ def ensure_novels_table_columns():
                 alters.append("ADD COLUMN creative_type ENUM('original','fanfic') NOT NULL DEFAULT 'original'")
             if "language" not in existing:
                 alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
+            if "site_key" not in existing:
+                alters.append("ADD COLUMN site_key VARCHAR(32) NOT NULL DEFAULT 'main'")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE novels {clause}"))
@@ -418,6 +467,10 @@ def ensure_ai_chat_tables():
             msg_alters: list[str] = []
             if "is_auto_dialogue" not in msg_existing:
                 msg_alters.append("ADD COLUMN is_auto_dialogue TINYINT(1) NOT NULL DEFAULT 0")
+            if "is_deleted" not in msg_existing:
+                msg_alters.append("ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0")
+            if "deleted_at" not in msg_existing:
+                msg_alters.append("ADD COLUMN deleted_at DATETIME NULL")
             if "character_name_snapshot" not in msg_existing:
                 msg_alters.append("ADD COLUMN character_name_snapshot VARCHAR(80) NULL")
             if "personality_snapshot" not in msg_existing:
@@ -667,11 +720,22 @@ def normalize_language(value: str | None) -> str:
         return "ja"
     if normalized in ("en", "eng", "english"):
         return "en"
-    raise HTTPException(400, "language は ja/en のみ指定できます")
+    if normalized in ("zh-cn", "zh_cn", "zh-hans", "zh_hans", "cn", "chs", "chinese-simplified"):
+        return "zh-cn"
+    if normalized in ("zh-tw", "zh_tw", "zh-hant", "zh_hant", "tw", "cht", "chinese-traditional"):
+        return "zh-tw"
+    if normalized in ("ko", "kr", "kor", "korean"):
+        return "ko"
+    raise HTTPException(400, "language は ja/en/zh-cn/zh-tw/ko のみ指定できます")
 
 
-def other_language(language: str) -> str:
-    return "en" if language == "ja" else "ja"
+def translation_target_languages(source_language: str) -> list[str]:
+    src = normalize_language(source_language)
+    if src == "ja":
+        return ["en", "zh-cn", "zh-tw", "ko"]
+    if src in ("en", "zh-cn", "zh-tw", "ko"):
+        return ["ja"]
+    return ["en"]
 
 
 def serialize_tag_names(tag_names: list[str]) -> str | None:
@@ -725,6 +789,9 @@ app.add_middleware(
 def on_startup() -> None:
     os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
     os.makedirs(AI_CHAT_CHARACTER_IMAGE_DIR, exist_ok=True)
+    _start_daily_translation_bot_if_enabled()
+    _start_ui_i18n_watchdog_if_enabled()
+    _recover_ui_i18n_jobs_on_startup()
 
 # =========================================
 # JWT / Stripe 設定
@@ -735,6 +802,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 300
 PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
 
 FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
+FORCE_PREMIUM_USERNAMES = {
+    s.strip().lower()
+    for s in (os.getenv("FORCE_PREMIUM_USERNAMES", "") or "").split(",")
+    if s.strip()
+}
 PREMIUM_REVALIDATE_DAYS = int(os.getenv("PREMIUM_REVALIDATE_DAYS", "30"))
 AGE_RESTRICTION_DISABLED = os.getenv("AGE_RESTRICTION_DISABLED", "0") == "1"
 
@@ -750,6 +822,28 @@ ADMIN_JWT_EXPIRES_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRES_MINUTES", "120"))
 ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "1") == "1"
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
+SITE_KEY_DEFAULT = (os.getenv("SITE_KEY_DEFAULT", "main") or "main").strip().lower()
+SITE_KEY_ALLOWED = {
+    s.strip().lower()
+    for s in (os.getenv("SITE_KEY_ALLOWED", "main,romance,history") or "").split(",")
+    if s.strip()
+}
+if SITE_KEY_DEFAULT not in SITE_KEY_ALLOWED:
+    SITE_KEY_ALLOWED.add(SITE_KEY_DEFAULT)
+
+_site_host_map_raw = (os.getenv("SITE_HOST_MAP_JSON", "") or "").strip()
+SITE_HOST_MAP: dict[str, str] = {}
+if _site_host_map_raw:
+    try:
+        parsed = json.loads(_site_host_map_raw)
+        if isinstance(parsed, dict):
+            for k, v in parsed.items():
+                host = str(k or "").strip().lower()
+                site = str(v or "").strip().lower()
+                if host and site:
+                    SITE_HOST_MAP[host] = site
+    except Exception as e:
+        print("[site] SITE_HOST_MAP_JSON parse failed:", repr(e))
 
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
@@ -760,7 +854,27 @@ OAUTH_STATE_EXPIRE_MINUTES = int(os.getenv("OAUTH_STATE_EXPIRE_MINUTES", "10"))
 
 TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "").strip().lower()
 TRANSLATION_MODEL_TEXT = os.getenv("TRANSLATION_MODEL_TEXT", "").strip()
+try:
+    TRANSLATION_AI_TIMEOUT_SECONDS = float(os.getenv("TRANSLATION_AI_TIMEOUT_SECONDS", "120") or 120)
+except Exception:
+    TRANSLATION_AI_TIMEOUT_SECONDS = 120.0
+TRANSLATION_AI_TIMEOUT_SECONDS = max(15.0, min(900.0, TRANSLATION_AI_TIMEOUT_SECONDS))
 AUTO_TRANSLATION_REQUIRED = os.getenv("AUTO_TRANSLATION_REQUIRED", "0") == "1"
+DAILY_TRANSLATION_BOT_ENABLED = os.getenv("DAILY_TRANSLATION_BOT_ENABLED", "1") == "1"
+DAILY_TRANSLATION_BOT_INTERVAL_SECONDS = max(
+    3600,
+    int(os.getenv("DAILY_TRANSLATION_BOT_INTERVAL_SECONDS", "86400") or 86400),
+)
+DAILY_TRANSLATION_BOT_MAX_NOVELS = max(
+    0,
+    min(5000, int(os.getenv("DAILY_TRANSLATION_BOT_MAX_NOVELS", "200") or 200)),
+)
+DAILY_TRANSLATION_BOT_MAX_EPISODES = max(
+    0,
+    min(10000, int(os.getenv("DAILY_TRANSLATION_BOT_MAX_EPISODES", "400") or 400)),
+)
+DAILY_TRANSLATION_BOT_ONLY_PUBLIC = os.getenv("DAILY_TRANSLATION_BOT_ONLY_PUBLIC", "0") == "1"
+DAILY_TRANSLATION_BOT_SITE_KEY = (os.getenv("DAILY_TRANSLATION_BOT_SITE_KEY", "") or "").strip().lower() or None
 AI_CHAT_FREE_TOKENS = int(os.getenv("AI_CHAT_FREE_TOKENS", "2000000"))
 AI_CHAT_BLOCK_TOKENS = int(os.getenv("AI_CHAT_BLOCK_TOKENS", "2000000"))
 AI_CHAT_BLOCK_PRICE_YEN = int(os.getenv("AI_CHAT_BLOCK_PRICE_YEN", "1000"))
@@ -781,6 +895,564 @@ AI_CHAT_IMAGE_OOM_RETRY_STEPS = max(8, min(80, int(os.getenv("AI_CHAT_IMAGE_OOM_
 AI_CHAT_IMAGE_INIT_STRENGTH = max(0.1, min(0.95, float(os.getenv("AI_CHAT_IMAGE_INIT_STRENGTH", "0.75"))))
 
 stripe.api_key = STRIPE_SECRET_KEY
+
+
+def normalize_site_key(value: str | None) -> str:
+    key = (value or "").strip().lower()
+    if not key:
+        return SITE_KEY_DEFAULT
+    if key in SITE_KEY_ALLOWED:
+        return key
+    return SITE_KEY_DEFAULT
+
+
+def resolve_site_key(request: Request | None) -> str:
+    if request is None:
+        return SITE_KEY_DEFAULT
+    header_key = request.headers.get("x-site-key")
+    if header_key:
+        return normalize_site_key(header_key)
+    query_key = request.query_params.get("site_key")
+    if query_key:
+        return normalize_site_key(query_key)
+
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or (request.url.hostname or "")
+    ).strip().lower()
+    if host in SITE_HOST_MAP:
+        return normalize_site_key(SITE_HOST_MAP.get(host))
+    host_no_port = host.split(":")[0]
+    if host_no_port in SITE_HOST_MAP:
+        return normalize_site_key(SITE_HOST_MAP.get(host_no_port))
+
+    # fallback: common subdomain naming conventions
+    if "renai" in host_no_port or "romance" in host_no_port:
+        return normalize_site_key("romance")
+    if "rekishi" in host_no_port or "history" in host_no_port:
+        return normalize_site_key("history")
+    return SITE_KEY_DEFAULT
+
+
+def get_novel_in_site_or_404(db: Session, request: Request, novel_id: int) -> models.Novel:
+    site_key = resolve_site_key(request)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    return novel
+
+
+def get_episode_in_site_or_404(db: Session, request: Request, episode_id: int) -> models.Episode:
+    site_key = resolve_site_key(request)
+    ep = (
+        db.query(models.Episode)
+        .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+        .first()
+    )
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    return ep
+
+
+def _normalize_tag_names(tag_names: list[str] | None) -> list[str]:
+    if not tag_names:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in tag_names:
+        name = (raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _get_or_create_tags(db: Session, names: list[str]) -> dict[str, models.Tag]:
+    """
+    Return mapping name -> Tag. Creates missing tags with minimal commits.
+    Handles unique constraint races by retrying via SELECT after flush.
+    """
+    names = _normalize_tag_names(names)
+    if not names:
+        return {}
+
+    existing = (
+        db.query(models.Tag)
+        .filter(models.Tag.name.in_(names))
+        .all()
+    )
+    by_name: dict[str, models.Tag] = {t.name: t for t in existing if t and t.name}
+    missing = [n for n in names if n not in by_name]
+    for name in missing:
+        tag = models.Tag(name=name)
+        db.add(tag)
+        try:
+            db.flush()  # assign id without committing
+            by_name[name] = tag
+        except IntegrityError:
+            # Another request created it concurrently.
+            db.rollback()
+            found = db.query(models.Tag).filter(models.Tag.name == name).first()
+            if found:
+                by_name[name] = found
+            else:
+                raise
+    return by_name
+
+
+def _has_recent_multilingual_ready_notification(
+    db: Session,
+    *,
+    user_id: int,
+    link_url: str,
+    minutes: int = 60,
+) -> bool:
+    if not user_id or not link_url:
+        return False
+    since = datetime.utcnow() - timedelta(minutes=max(1, int(minutes)))
+    existing = (
+        db.query(models.Notification.id)
+        .filter(models.Notification.user_id == user_id)
+        .filter(models.Notification.type == "multilingual_ready")
+        .filter(models.Notification.link_url == link_url)
+        .filter(models.Notification.created_at >= since)
+        .first()
+    )
+    return existing is not None
+
+
+def _is_novel_translation_complete(
+    db: Session,
+    *,
+    novel: models.Novel,
+    source_language: str,
+) -> bool:
+    targets = translation_target_languages(source_language)
+    if not targets:
+        return True
+    rows = (
+        db.query(
+            models.NovelTranslation.language,
+            models.NovelTranslation.title,
+            models.NovelTranslation.description,
+        )
+        .filter(models.NovelTranslation.novel_id == novel.id)
+        .filter(models.NovelTranslation.language.in_(targets))
+        .all()
+    )
+    by_lang = {str(lang): (title, description) for lang, title, description in rows}
+    needs_description = bool((getattr(novel, "description", None) or "").strip())
+    for target in targets:
+        row = by_lang.get(target)
+        if not row:
+            return False
+        title, description = row
+        if not (title or "").strip():
+            return False
+        if needs_description and not (description or "").strip():
+            return False
+    return True
+
+
+def _is_episode_translation_complete(
+    db: Session,
+    *,
+    episode: models.Episode,
+    source_language: str,
+) -> bool:
+    targets = translation_target_languages(source_language)
+    if not targets:
+        return True
+    rows = (
+        db.query(
+            models.EpisodeTranslation.language,
+            models.EpisodeTranslation.title,
+            models.EpisodeTranslation.body,
+            models.EpisodeTranslation.tag_names,
+        )
+        .filter(models.EpisodeTranslation.episode_id == episode.id)
+        .filter(models.EpisodeTranslation.language.in_(targets))
+        .all()
+    )
+    by_lang = {str(lang): (title, body, tag_names) for lang, title, body, tag_names in rows}
+    needs_body = bool((getattr(episode, "body", None) or "").strip())
+    source_tags = _normalize_tag_names(get_episode_tag_names(db, episode.id))
+    needs_tags = bool(source_tags)
+    for target in targets:
+        row = by_lang.get(target)
+        if not row:
+            return False
+        title, body, tag_names = row
+        if not (title or "").strip():
+            return False
+        if needs_body and not (body or "").strip():
+            return False
+        if needs_tags:
+            translated_tags = _normalize_tag_names(deserialize_tag_names(tag_names))
+            if not translated_tags:
+                return False
+    return True
+
+
+def _notify_multilingual_ready_for_novel(
+    db: Session,
+    *,
+    novel: models.Novel,
+    source_language: str,
+) -> None:
+    user_id = int(getattr(novel, "author_id", 0) or 0)
+    if user_id <= 0:
+        return
+    if not _is_novel_translation_complete(db, novel=novel, source_language=source_language):
+        return
+    link_url = f"/novels/{novel.id}"
+    if _has_recent_multilingual_ready_notification(db, user_id=user_id, link_url=link_url):
+        return
+    create_notification(
+        db,
+        user_id=user_id,
+        notif_type="multilingual_ready",
+        title="多言語化対応しました",
+        body=f"「{novel.title}」の翻訳が対応言語分そろいました。",
+        link_url=link_url,
+    )
+
+
+def _notify_multilingual_ready_for_episode(
+    db: Session,
+    *,
+    episode: models.Episode,
+    source_language: str,
+) -> None:
+    novel = db.query(models.Novel).filter(models.Novel.id == episode.novel_id).first()
+    user_id = int(getattr(novel, "author_id", 0) or 0)
+    if user_id <= 0:
+        return
+    if not _is_episode_translation_complete(db, episode=episode, source_language=source_language):
+        return
+    link_url = f"/episodes/{episode.id}"
+    if _has_recent_multilingual_ready_notification(db, user_id=user_id, link_url=link_url):
+        return
+    create_notification(
+        db,
+        user_id=user_id,
+        notif_type="multilingual_ready",
+        title="多言語化対応しました",
+        body=f"「{episode.title}」の翻訳が対応言語分そろいました。",
+        link_url=link_url,
+    )
+
+
+def _run_daily_translation_bot_once() -> dict[str, int]:
+    db = SessionLocal()
+    stats = {
+        "novels_checked": 0,
+        "novels_translated": 0,
+        "novels_failed": 0,
+        "episodes_checked": 0,
+        "episodes_translated": 0,
+        "episodes_failed": 0,
+    }
+    try:
+        novels_q = db.query(models.Novel).order_by(models.Novel.id.asc())
+        if DAILY_TRANSLATION_BOT_ONLY_PUBLIC:
+            novels_q = novels_q.filter(models.Novel.status == "public").filter(models.Novel.is_public == True)
+        if DAILY_TRANSLATION_BOT_SITE_KEY:
+            novels_q = novels_q.filter(models.Novel.site_key == DAILY_TRANSLATION_BOT_SITE_KEY)
+        if DAILY_TRANSLATION_BOT_MAX_NOVELS > 0:
+            novels_q = novels_q.limit(DAILY_TRANSLATION_BOT_MAX_NOVELS)
+        for novel in novels_q.all():
+            stats["novels_checked"] += 1
+            source_language = normalize_language(getattr(novel, "language", None))
+            if _is_novel_translation_complete(db, novel=novel, source_language=source_language):
+                continue
+            try:
+                upsert_novel_translation(
+                    db,
+                    novel=novel,
+                    source_language=source_language,
+                    tag_names=get_novel_tag_names(db, novel.id),
+                )
+                db.commit()
+                stats["novels_translated"] += 1
+            except Exception as e:
+                db.rollback()
+                stats["novels_failed"] += 1
+                logger.warning("daily translation bot failed novel_id=%s err=%r", novel.id, e)
+
+        episodes_q = db.query(models.Episode).order_by(models.Episode.id.asc())
+        if DAILY_TRANSLATION_BOT_ONLY_PUBLIC:
+            episodes_q = episodes_q.filter(models.Episode.status == "public").filter(models.Episode.is_public == True)
+        if DAILY_TRANSLATION_BOT_SITE_KEY:
+            episodes_q = episodes_q.filter(models.Episode.site_key == DAILY_TRANSLATION_BOT_SITE_KEY)
+        if DAILY_TRANSLATION_BOT_MAX_EPISODES > 0:
+            episodes_q = episodes_q.limit(DAILY_TRANSLATION_BOT_MAX_EPISODES)
+        for episode in episodes_q.all():
+            stats["episodes_checked"] += 1
+            if is_episode_draft(episode):
+                continue
+            source_language = normalize_language(getattr(episode, "language", None))
+            if _is_episode_translation_complete(db, episode=episode, source_language=source_language):
+                continue
+            try:
+                upsert_episode_translation(
+                    db,
+                    episode=episode,
+                    source_language=source_language,
+                )
+                db.commit()
+                stats["episodes_translated"] += 1
+            except Exception as e:
+                db.rollback()
+                stats["episodes_failed"] += 1
+                logger.warning("daily translation bot failed episode_id=%s err=%r", episode.id, e)
+    finally:
+        db.close()
+    return stats
+
+
+def _daily_translation_bot_loop() -> None:
+    while True:
+        started = time.time()
+        if _daily_translation_bot_lock.acquire(blocking=False):
+            try:
+                stats = _run_daily_translation_bot_once()
+                logger.info(
+                    "daily translation bot done novels=%s/%s failed=%s episodes=%s/%s failed=%s",
+                    stats["novels_translated"],
+                    stats["novels_checked"],
+                    stats["novels_failed"],
+                    stats["episodes_translated"],
+                    stats["episodes_checked"],
+                    stats["episodes_failed"],
+                )
+            except Exception as e:
+                logger.warning("daily translation bot crashed err=%r", e)
+            finally:
+                _daily_translation_bot_lock.release()
+        elapsed = max(0, int(time.time() - started))
+        sleep_seconds = max(60, DAILY_TRANSLATION_BOT_INTERVAL_SECONDS - elapsed)
+        time.sleep(sleep_seconds)
+
+
+def _start_daily_translation_bot_if_enabled() -> None:
+    global _daily_translation_bot_started
+    if not DAILY_TRANSLATION_BOT_ENABLED:
+        return
+    if _daily_translation_bot_started:
+        return
+    worker = threading.Thread(
+        target=_daily_translation_bot_loop,
+        name="daily-translation-bot",
+        daemon=True,
+    )
+    worker.start()
+    _daily_translation_bot_started = True
+    logger.info(
+        "daily translation bot started interval=%ss max_novels=%s max_episodes=%s",
+        DAILY_TRANSLATION_BOT_INTERVAL_SECONDS,
+        DAILY_TRANSLATION_BOT_MAX_NOVELS,
+        DAILY_TRANSLATION_BOT_MAX_EPISODES,
+    )
+
+
+def _background_upsert_episode_translation(episode_id: int) -> None:
+    db = SessionLocal()
+    try:
+        ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
+        if not ep:
+            return
+        source_language = normalize_language(getattr(ep, "language", None))
+        upsert_episode_translation(db, episode=ep, source_language=source_language)
+        db.commit()
+    except Exception as e:
+        logger.warning("bg translation failed episode_id=%s err=%r", episode_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def _background_upsert_episode_and_novel_translation(episode_id: int) -> None:
+    db = SessionLocal()
+    try:
+        ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
+        if not ep:
+            return
+        episode_source_language = normalize_language(getattr(ep, "language", None))
+        upsert_episode_translation(db, episode=ep, source_language=episode_source_language)
+
+        novel = db.query(models.Novel).filter(models.Novel.id == ep.novel_id).first()
+        if novel:
+            novel_source_language = normalize_language(getattr(novel, "language", None))
+            tag_names = get_novel_tag_names(db, novel.id)
+            upsert_novel_translation(
+                db,
+                novel=novel,
+                source_language=novel_source_language,
+                tag_names=tag_names,
+            )
+        db.commit()
+    except Exception as e:
+        logger.warning("bg translation failed episode_id=%s err=%r", episode_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def _background_upsert_novel_translation(novel_id: int) -> None:
+    db = SessionLocal()
+    try:
+        novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+        if not novel:
+            return
+        source_language = normalize_language(getattr(novel, "language", None))
+        tag_names = get_novel_tag_names(db, novel.id)
+        upsert_novel_translation(
+            db,
+            novel=novel,
+            source_language=source_language,
+            tag_names=tag_names,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("bg novel translation failed novel_id=%s err=%r", novel_id, e)
+    finally:
+        db.close()
+
+
+def _should_enqueue_feed_novel_translation(novel_id: int, target_language: str) -> bool:
+    now = time.time()
+    key = (int(novel_id), str(target_language))
+    cooldown_seconds = 300.0
+    with _feed_novel_translation_enqueue_lock:
+        last = _feed_novel_translation_enqueue_at.get(key)
+        if last and (now - last) < cooldown_seconds:
+            return False
+        _feed_novel_translation_enqueue_at[key] = now
+        # Prevent unbounded growth.
+        if len(_feed_novel_translation_enqueue_at) > 20000:
+            cutoff = now - cooldown_seconds
+            stale_keys = [k for k, ts in _feed_novel_translation_enqueue_at.items() if ts < cutoff]
+            for stale_key in stale_keys:
+                _feed_novel_translation_enqueue_at.pop(stale_key, None)
+    return True
+
+
+def _resolve_public_novel_card_translations(
+    db: Session,
+    *,
+    novels: list[models.Novel],
+    target_language: str | None,
+    background_tasks: BackgroundTasks | None = None,
+    enqueue_limit: int = 8,
+) -> dict[int, dict]:
+    out: dict[int, dict] = {}
+    lang = (target_language or "").strip().lower()
+    if lang not in ("en", "zh-cn", "zh-tw", "ko"):
+        for novel in novels:
+            source_tags = [nt.tag.name for nt in (getattr(novel, "novel_tags", []) or []) if getattr(nt, "tag", None)]
+            out[int(novel.id)] = {
+                "title": novel.title,
+                "description": novel.description,
+                "tag_names": source_tags,
+            }
+        return out
+
+    novel_ids = [int(novel.id) for novel in novels if getattr(novel, "id", None)]
+    by_id: dict[int, models.NovelTranslation] = {}
+    if novel_ids:
+        rows = (
+            db.query(models.NovelTranslation)
+            .filter(models.NovelTranslation.novel_id.in_(novel_ids))
+            .filter(models.NovelTranslation.language == lang)
+            .all()
+        )
+        for row in rows:
+            by_id[int(row.novel_id)] = row
+
+    enqueued = 0
+    for novel in novels:
+        novel_id = int(novel.id)
+        source_language = normalize_language(getattr(novel, "language", None))
+        source_tags = [nt.tag.name for nt in (getattr(novel, "novel_tags", []) or []) if getattr(nt, "tag", None)]
+        source_description = (getattr(novel, "description", None) or "").strip()
+        tr = by_id.get(novel_id)
+        translated_tags = deserialize_tag_names(getattr(tr, "tag_names", None)) if tr else []
+        translated_tags = [t for t in translated_tags if (t or "").strip()]
+
+        has_title = bool((getattr(tr, "title", None) or "").strip()) if tr else False
+        has_description = (not source_description) or bool((getattr(tr, "description", None) or "").strip()) if tr else False
+        has_tags = (not source_tags) or (len(translated_tags) >= len(source_tags)) if tr else False
+        complete = bool(tr) and has_title and has_description and has_tags
+
+        if complete:
+            out[novel_id] = {
+                "title": (tr.title or novel.title),
+                "description": (tr.description if (tr.description or "").strip() else novel.description),
+                "tag_names": translated_tags if translated_tags else source_tags,
+            }
+        else:
+            out[novel_id] = {
+                "title": novel.title,
+                "description": novel.description,
+                "tag_names": source_tags,
+            }
+            if (
+                background_tasks is not None
+                and enqueued < max(0, int(enqueue_limit))
+                and lang in translation_target_languages(source_language)
+                and _should_enqueue_feed_novel_translation(novel_id, lang)
+            ):
+                background_tasks.add_task(_background_upsert_novel_translation, novel_id)
+                enqueued += 1
+    return out
+
+
+def _background_notify_episode_published(novel_id: int, episode_id: int, site_key: str) -> None:
+    db = SessionLocal()
+    try:
+        novel = (
+            db.query(models.Novel)
+            .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+            .first()
+        )
+        ep = (
+            db.query(models.Episode)
+            .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+            .first()
+        )
+        if not novel or not ep:
+            return
+        if is_episode_draft(ep):
+            return
+        notify_favorited_users_episode_published(db, novel=novel, episode=ep)
+        db.commit()
+    except Exception as e:
+        logger.warning(
+            "bg notify failed novel_id=%s episode_id=%s err=%r",
+            novel_id,
+            episode_id,
+            e,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 # =========================================
 # 2FA 用 SMTP 設定
@@ -1250,6 +1922,10 @@ logger = logging.getLogger("uvicorn.error")
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 admin_pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+_daily_translation_bot_started = False
+_daily_translation_bot_lock = threading.Lock()
+_feed_novel_translation_enqueue_lock = threading.Lock()
+_feed_novel_translation_enqueue_at: dict[tuple[int, str], float] = {}
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -1286,6 +1962,7 @@ def _build_oauth_state(
     pkce_verifier: str,
     *,
     app_client: bool = False,
+    frontend_origin: str | None = None,
 ) -> str:
     expire = datetime.utcnow() + timedelta(minutes=OAUTH_STATE_EXPIRE_MINUTES)
     payload = {
@@ -1293,6 +1970,8 @@ def _build_oauth_state(
         "redirect": redirect_to or "",
         "pkce": pkce_verifier,
         "app_client": bool(app_client),
+        # Initiating web origin (romance/history subdomains) for post-auth redirect.
+        "fo": (frontend_origin or "").rstrip("/"),
         "exp": expire,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -1350,6 +2029,7 @@ def _store_oauth1_request_token(
     redirect_path: str | None,
     *,
     app_client: bool = False,
+    frontend_origin: str | None = None,
 ) -> None:
     now = time.time()
     for key, payload in list(OAUTH1_REQUEST_TOKENS.items()):
@@ -1359,6 +2039,7 @@ def _store_oauth1_request_token(
         "secret": token_secret,
         "redirect": redirect_path or "",
         "app_client": "1" if app_client else "0",
+        "fo": (frontend_origin or "").rstrip("/"),
         "ts": now,
     }
 
@@ -1371,6 +2052,7 @@ def _pop_oauth1_request_token(oauth_token: str) -> dict[str, str] | None:
         "secret": str(payload.get("secret") or ""),
         "redirect": str(payload.get("redirect") or ""),
         "app_client": str(payload.get("app_client") or "0"),
+        "fo": str(payload.get("fo") or ""),
     }
 
 
@@ -1479,12 +2161,27 @@ def verify_premium_with_stripe(user: models.User) -> tuple[bool, str | None, str
     return False, None, None
 
 
+def _is_force_premium_username(username: str | None) -> bool:
+    uname = str(username or "").strip().lower()
+    return bool(uname) and uname in FORCE_PREMIUM_USERNAMES
+
+
+def is_effective_premium_user(user: models.User | None) -> bool:
+    if not user:
+        return False
+    if FORCE_ALL_PREMIUM:
+        return True
+    if _is_force_premium_username(getattr(user, "username", None)):
+        return True
+    return bool(getattr(user, "is_premium", False))
+
+
 def revalidate_premium_on_login(user: models.User, db: Session) -> None:
     """
     ログイン時にプレミアム状態を一定期間ごとに再確認する。
     期限切れ（デフォルト30日）なら一旦OFFにして Stripe で課金状態を再判定する。
     """
-    if FORCE_ALL_PREMIUM:
+    if FORCE_ALL_PREMIUM or _is_force_premium_username(getattr(user, "username", None)):
         return
 
     now = datetime.utcnow()
@@ -1799,11 +2496,12 @@ def require_premium_user(request: Request, db: Session) -> models.User:
     """
     課金ユーザー専用機能向けの共通チェック。
     - FORCE_ALL_PREMIUM=1 のときは全ユーザーをプレミアム扱い
-    - そうでない場合は User.is_premium を見る
+    - FORCE_PREMIUM_USERNAMES に含まれる username は常時プレミアム扱い
+    - 上記以外は User.is_premium を見る
     """
     user = require_current_user(request, db)
 
-    is_premium = FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))
+    is_premium = is_effective_premium_user(user)
     if not is_premium:
         # 402 を返してフロント側で「有料プラン専用です」と表示させる想定
         raise HTTPException(
@@ -1815,6 +2513,8 @@ def require_premium_user(request: Request, db: Session) -> models.User:
 AI_GUEST_COOKIE_NAME = "ai_guest_id"
 AI_GUEST_FREE_MAX = 10
 AI_USER_DAILY_MAX = 80
+AI_NOVEL_ADDON_UNIT_GENERATIONS = int(os.getenv("AI_NOVEL_ADDON_UNIT_GENERATIONS", "80"))
+AI_NOVEL_ADDON_PRICE_YEN = int(os.getenv("AI_NOVEL_ADDON_PRICE_YEN", "1000"))
 AI_JOB_TIMEOUT_MINUTES = 10
 
 
@@ -1894,7 +2594,7 @@ def _ai_chat_allowed_tokens(user: models.User) -> int:
 def _ensure_ai_chat_access(user: models.User) -> None:
     if _is_ai_chat_demo_bypass_user(user):
         return
-    if FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False)):
+    if is_effective_premium_user(user):
         return
 
     used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
@@ -2096,6 +2796,10 @@ class AIChatAddonCheckoutRequest(BaseModel):
     blocks: int = 1
 
 
+class AINovelAddonCheckoutRequest(BaseModel):
+    units: int = 1
+
+
 class AIChatAccessStatusResponse(BaseModel):
     is_premium: bool
     demo_bypass: bool
@@ -2242,11 +2946,30 @@ class TitleCandidateOut(BaseModel):
     used_tokens: int | None = None
 
 
+class EpisodeAssistCandidatesRequest(BaseModel):
+    title: str | None = None
+    text: str
+    tags: list[str] = Field(default_factory=list)
+    suggestions_count: int = 4
+    model: str | None = None
+    provider: str | None = None
+
+
+class EpisodeAssistCandidatesOut(BaseModel):
+    candidates: List[str]
+    model: str | None = None
+    used_tokens: int | None = None
+
+
 class AdminIndexingUrlItem(BaseModel):
     url: str
     indexed: bool | None = None
     inspection_verdict: str | None = None
     inspection_error: str | None = None
+    page_type: str | None = None
+    view_count: int = 0
+    importance: float = 0.0
+    score: float = 0.0
 
 
 class AdminIndexingUrlsOut(BaseModel):
@@ -2331,7 +3054,7 @@ def send_password_reset_email(to_email: str, reset_url: str, expires_minutes: in
         print(f"[password-reset] SMTP設定が不足しているためログにのみ出力: url={reset_url}, to={to_email}")
         return
 
-    subject = "小説投稿サイト パスワード再設定"
+    subject = "小説投稿サイトLexis パスワード再設定"
     body = (
         "以下のリンクからパスワードを再設定してください。\n\n"
         f"{reset_url}\n\n"
@@ -2435,12 +3158,45 @@ def password_reset_confirm(payload: PasswordResetConfirm, db: Session = Depends(
     return {"ok": True}
 
 
-def _oauth_redirect_uri(provider: str) -> str:
-    return f"{BACKEND_ORIGIN.rstrip('/')}/api/auth/oauth/{provider}/callback"
+def _request_origin(request: Request | None, *, fallback: str) -> str:
+    """
+    Build a public origin (scheme://host) from the current request.
+    We prefer nginx-provided headers so OAuth redirects stay on the active subdomain.
+    """
+    if request is None:
+        return (fallback or "").rstrip("/")
+
+    xf_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    scheme = xf_proto if xf_proto in ("http", "https") else (request.url.scheme or "http")
+
+    host = (request.headers.get("host") or "").split(",")[0].strip()
+    if not host:
+        # This can be backend-internal when behind a proxy, so prefer Host above.
+        host = request.url.netloc
+
+    if not host:
+        return (fallback or "").rstrip("/")
+
+    return f"{scheme}://{host}".rstrip("/")
 
 
-def _oauth_frontend_url(params: dict) -> str:
-    base = FRONTEND_ORIGIN.rstrip("/")
+def _oauth_redirect_uri(provider: str, request: Request | None = None) -> str:
+    # Keep redirect_uri stable so Google/X console settings don't need every subdomain.
+    # If BACKEND_ORIGIN isn't set, fall back to request-derived origin.
+    base = (BACKEND_ORIGIN or "").rstrip("/") or _request_origin(request, fallback="")
+    return f"{base}/api/auth/oauth/{provider}/callback"
+
+
+def _oauth_frontend_url(
+    params: dict,
+    request: Request | None = None,
+    *,
+    frontend_origin: str | None = None,
+) -> str:
+    # Web clients must return to the same subdomain they started from.
+    base = (frontend_origin or "").rstrip("/") or _request_origin(
+        request, fallback=FRONTEND_ORIGIN.rstrip("/")
+    )
     return f"{base}/oauth/callback?{urlencode(params)}"
 
 
@@ -2448,15 +3204,20 @@ def _oauth_android_app_url(params: dict) -> str:
     return f"novelsite://oauth/callback?{urlencode(params)}"
 
 
-def _oauth_result_url(params: dict, *, app_client: bool = False) -> str:
+def _oauth_result_url(params: dict, *, app_client: bool = False, request: Request | None = None) -> str:
     if app_client:
         return _oauth_android_app_url(params)
-    return _oauth_frontend_url(params)
+    return _oauth_frontend_url(params, request=request)
 
 
-def _oauth_app_bridge_response(params: dict) -> HTMLResponse:
+def _oauth_app_bridge_response(
+    params: dict,
+    request: Request | None = None,
+    *,
+    frontend_origin: str | None = None,
+) -> HTMLResponse:
     deep_link = _oauth_android_app_url(params)
-    fallback_link = _oauth_frontend_url(params)
+    fallback_link = _oauth_frontend_url(params, request=request, frontend_origin=frontend_origin)
     html_body = f"""<!doctype html>
 <html lang="ja">
 <head>
@@ -2568,7 +3329,8 @@ async def oauth_start(
 ):
     provider = provider.lower()
     redirect_path = _normalize_redirect_path(redirect)
-    redirect_uri = _oauth_redirect_uri(provider)
+    redirect_uri = _oauth_redirect_uri(provider, request=request)
+    frontend_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
     client_hint = (client or "").strip().lower()
     if client_hint == "web":
         app_client = False
@@ -2586,6 +3348,7 @@ async def oauth_start(
             redirect_path,
             pkce_verifier,
             app_client=app_client,
+            frontend_origin=frontend_origin,
         )
         params = {
             "response_type": "code",
@@ -2628,6 +3391,7 @@ async def oauth_start(
             oauth_token_secret,
             redirect_path,
             app_client=app_client,
+            frontend_origin=frontend_origin,
         )
         auth_url = f"https://api.twitter.com/oauth/authorize?oauth_token={quote(oauth_token, safe='')}"
     else:
@@ -2651,6 +3415,7 @@ async def oauth_callback(
     provider = provider.lower()
     inside_app_webview = _is_android_app_oauth_start(request)
     app_client = inside_app_webview
+    frontend_origin: str | None = None
 
     def _redirect(params: dict):
         redirect_params = dict(params or {})
@@ -2658,9 +3423,25 @@ async def oauth_callback(
             redirect_params["app_client"] = "1"
         if app_client:
             if inside_app_webview:
-                return RedirectResponse(_oauth_frontend_url(redirect_params))
-            return _oauth_app_bridge_response(redirect_params)
-        return RedirectResponse(_oauth_result_url(redirect_params, app_client=False))
+                return RedirectResponse(
+                    _oauth_frontend_url(
+                        redirect_params,
+                        request=request,
+                        frontend_origin=frontend_origin,
+                    )
+                )
+            return _oauth_app_bridge_response(
+                redirect_params,
+                request=request,
+                frontend_origin=frontend_origin,
+            )
+        return RedirectResponse(
+            _oauth_frontend_url(
+                redirect_params,
+                request=request,
+                frontend_origin=frontend_origin,
+            )
+        )
 
     if error:
         message = error_description or error
@@ -2668,7 +3449,7 @@ async def oauth_callback(
 
     redirect_path = None
     pkce_verifier = ""
-    redirect_uri = _oauth_redirect_uri(provider)
+    redirect_uri = _oauth_redirect_uri(provider, request=request)
 
     if provider == "google":
         if not code or not state:
@@ -2682,6 +3463,7 @@ async def oauth_callback(
 
         pkce_verifier = state_data.get("pkce") or ""
         app_client = bool(state_data.get("app_client"))
+        frontend_origin = str(state_data.get("fo") or "").rstrip("/") or None
         if not pkce_verifier:
             return _redirect({"error": "OAuth PKCE が不正です"})
         redirect_path = _normalize_redirect_path(state_data.get("redirect") or "")
@@ -2754,6 +3536,7 @@ async def oauth_callback(
                     raise HTTPException(400, "X OAuth 1.0a のトークンが無効です")
                 redirect_path = _normalize_redirect_path(request_payload.get("redirect") or "")
                 app_client = (request_payload.get("app_client") or "0") == "1"
+                frontend_origin = (request_payload.get("fo") or "").rstrip("/") or None
                 request_token_secret = request_payload.get("secret") or ""
 
                 access_token_url = "https://api.twitter.com/oauth/access_token"
@@ -3084,7 +3867,7 @@ def admin_list_users(
             id=user.id,
             username=user.username,
             email=user.email,
-            is_premium=bool(user.is_premium),
+            is_premium=is_effective_premium_user(user),
             email_notifications_enabled=bool(user.email_notifications_enabled),
             novel_count=int(novel_count or 0),
         )
@@ -3167,6 +3950,7 @@ def admin_delete_user(
     db.execute(text("DELETE FROM ai_chat_messages WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_characters WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_addon_purchases WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_novel_addon_purchases WHERE user_id = :uid"), {"uid": user_id})
     db.execute(
         text("DELETE FROM supports WHERE supporter_user_id = :uid OR author_user_id = :uid"),
         {"uid": user_id},
@@ -3280,68 +4064,130 @@ def admin_backfill_translations(
     db: Session = Depends(get_db),
 ):
     require_admin(request)
-    limit = payload.get("limit")
+    only_public = bool(payload.get("only_public") or False)
+    site_key = (payload.get("site_key") or "").strip().lower() or None
+    max_novels = payload.get("max_novels", payload.get("limit"))
+    max_episodes = payload.get("max_episodes", payload.get("limit"))
     try:
-        limit_value = int(limit) if limit is not None else None
+        max_novels_value = int(max_novels) if max_novels is not None else 200
+        max_episodes_value = int(max_episodes) if max_episodes is not None else 400
     except Exception:
-        raise HTTPException(400, "limit は数値で指定してください")
+        raise HTTPException(400, "max_novels/max_episodes/limit は数値で指定してください")
+    max_novels_value = max(0, min(5000, max_novels_value))
+    max_episodes_value = max(0, min(10000, max_episodes_value))
 
     novels_done = 0
     episodes_done = 0
+    novels_failed = 0
+    episodes_failed = 0
 
-    novel_query = db.query(models.Novel).order_by(models.Novel.id.asc())
-    if limit_value:
-        novel_query = novel_query.limit(limit_value)
-    for novel in novel_query.all():
-        source_language = normalize_language(getattr(novel, "language", None))
-        target_language = other_language(source_language)
-        exists = (
-            db.query(models.NovelTranslation)
-            .filter(
-                models.NovelTranslation.novel_id == novel.id,
-                models.NovelTranslation.language == target_language,
-            )
-            .first()
-        )
-        if exists:
-            continue
-        tag_names = get_novel_tag_names(db, novel.id)
-        upsert_novel_translation(
-            db,
-            novel=novel,
-            source_language=source_language,
-            tag_names=tag_names,
-        )
-        db.commit()
-        novels_done += 1
+    def _apply_public_filters(q, model):
+        if not only_public:
+            return q
+        return q.filter(getattr(model, "status") == "public").filter(getattr(model, "is_public") == True)
 
-    episode_query = db.query(models.Episode).order_by(models.Episode.id.asc())
-    if limit_value:
-        episode_query = episode_query.limit(limit_value)
-    for episode in episode_query.all():
-        source_language = normalize_language(getattr(episode, "language", None))
-        target_language = other_language(source_language)
-        exists = (
-            db.query(models.EpisodeTranslation)
-            .filter(
-                models.EpisodeTranslation.episode_id == episode.id,
-                models.EpisodeTranslation.language == target_language,
+    def _apply_site_key_filter(q, model):
+        if not site_key:
+            return q
+        if hasattr(model, "site_key"):
+            return q.filter(getattr(model, "site_key") == site_key)
+        return q
+
+    # ---- Novels missing translations (ja->en/zh-cn/zh-tw/ko and en/zh/ko->ja) ----
+    if max_novels_value:
+        ja_targets = translation_target_languages("ja")
+        NTr = aliased(models.NovelTranslation)
+        ja_missing = (
+            db.query(models.Novel)
+            .outerjoin(
+                NTr,
+                and_(
+                    NTr.novel_id == models.Novel.id,
+                    NTr.language.in_(ja_targets),
+                ),
             )
-            .first()
+            .filter(or_(models.Novel.language.is_(None), models.Novel.language == "ja"))
+            .group_by(models.Novel.id)
+            .having(func.count(func.distinct(NTr.language)) < len(ja_targets))
         )
-        if exists:
-            continue
-        upsert_episode_translation(
-            db,
-            episode=episode,
-            source_language=source_language,
-        )
-        db.commit()
-        episodes_done += 1
+        ja_missing = _apply_public_filters(ja_missing, models.Novel)
+        ja_missing = _apply_site_key_filter(ja_missing, models.Novel)
+        ja_missing = ja_missing.order_by(models.Novel.id.asc()).limit(max_novels_value).all()
+        for novel in ja_missing:
+            tag_names = get_novel_tag_names(db, novel.id)
+            upsert_novel_translation(db, novel=novel, source_language="ja", tag_names=tag_names)
+            db.commit()
+            translated_count = (
+                db.query(func.count(func.distinct(models.NovelTranslation.language)))
+                .filter(
+                    models.NovelTranslation.novel_id == novel.id,
+                    models.NovelTranslation.language.in_(ja_targets),
+                )
+                .scalar()
+                or 0
+            )
+            if int(translated_count) >= len(ja_targets):
+                novels_done += 1
+            else:
+                novels_failed += 1
+
+        remaining = max_novels_value - novels_done
+        if remaining > 0:
+            NTr2 = aliased(models.NovelTranslation)
+            en_missing = (
+                db.query(models.Novel)
+                .outerjoin(
+                    NTr2,
+                    and_(
+                        NTr2.novel_id == models.Novel.id,
+                        NTr2.language == "ja",
+                    ),
+                )
+                .filter(models.Novel.language.in_(["en", "zh-cn", "zh-tw", "ko"]))
+                .filter(NTr2.novel_id.is_(None))
+            )
+            en_missing = _apply_public_filters(en_missing, models.Novel)
+            en_missing = _apply_site_key_filter(en_missing, models.Novel)
+            en_missing = en_missing.order_by(models.Novel.id.asc()).limit(remaining).all()
+            for novel in en_missing:
+                tag_names = get_novel_tag_names(db, novel.id)
+                upsert_novel_translation(db, novel=novel, source_language="en", tag_names=tag_names)
+                db.commit()
+                created = (
+                    db.query(models.NovelTranslation)
+                    .filter(
+                        models.NovelTranslation.novel_id == novel.id,
+                        models.NovelTranslation.language == "ja",
+                    )
+                    .first()
+                )
+                if created:
+                    novels_done += 1
+                else:
+                    novels_failed += 1
+
+    # ---- Episodes missing translations (ja->en/zh-cn/zh-tw/ko and en/zh/ko->ja) ----
+    if max_episodes_value:
+        episodes_q = db.query(models.Episode).order_by(models.Episode.id.asc())
+        episodes_q = _apply_public_filters(episodes_q, models.Episode)
+        episodes_q = _apply_site_key_filter(episodes_q, models.Episode)
+        candidates = episodes_q.limit(max_episodes_value).all()
+        for episode in candidates:
+            source_language = normalize_language(getattr(episode, "language", None))
+            if _is_episode_translation_complete(db, episode=episode, source_language=source_language):
+                continue
+            upsert_episode_translation(db, episode=episode, source_language=source_language)
+            db.commit()
+            if _is_episode_translation_complete(db, episode=episode, source_language=source_language):
+                episodes_done += 1
+            else:
+                episodes_failed += 1
 
     return {
         "novels_translated": novels_done,
         "episodes_translated": episodes_done,
+        "novels_failed": novels_failed,
+        "episodes_failed": episodes_failed,
     }
 
 
@@ -3373,6 +4219,90 @@ async def generate_title_candidate(
     source_text = text[:2000]
     title, tokens, model = await call_openai_title_candidate(source_text)
     return TitleCandidateOut(title=title, model=model, used_tokens=tokens)
+
+
+@app.post("/api/ai/episodes/assist_candidates", response_model=EpisodeAssistCandidatesOut)
+async def generate_episode_assist_candidates(
+    payload: EpisodeAssistCandidatesRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_current_user(request, db)
+    source_text = (payload.text or "").strip()
+    if not source_text:
+        raise HTTPException(400, "本文が空です。")
+
+    title = (payload.title or "").strip()
+    tags = [str(t or "").strip() for t in (payload.tags or []) if str(t or "").strip()][:20]
+    suggestions_count = max(2, min(6, int(payload.suggestions_count or 4)))
+    context_text = source_text[-2200:]
+    context_tail = context_text[-220:]
+    prompt = (
+        "あなたは日本語小説執筆アシスタントです。\n"
+        "与えられた本文の直後に続く『次の1文〜2文』の候補を複数作ってください。\n"
+        "既存本文の文体・時制・視点に合わせ、冗長な説明や注釈は不要です。\n"
+        "本文末尾をそのまま繰り返さず、いきなり同一フレーズで開始しないでください。\n"
+        "句読点は自然にし、「、。」や「。。」を含めないでください。\n"
+        "候補同士は展開を少し変えてください。\n"
+        "出力は必ずJSON 1個のみ。形式: "
+        '{"candidates":["候補1","候補2"]}\n'
+        f"候補数は必ず {suggestions_count} 件にしてください。\n"
+        f"タイトル: {title or '(なし)'}\n"
+        f"タグ: {', '.join(tags) if tags else '(なし)'}\n"
+        "本文（末尾重視）:\n"
+        f"{context_text}\n"
+    )
+
+    data: dict = {}
+    tokens: int | None = None
+    model_used: str | None = None
+    try:
+        data, tokens, model_used = await call_ai_json(
+            prompt,
+            model=payload.model or (os.getenv("OPENAI_MODEL_TEXT", "") or "").strip() or None,
+            provider=payload.provider or "openai",
+            system_instructions=(
+                "あなたは小説執筆補助AIです。"
+                "必ずJSONのみを返し、キーは candidates のみ。"
+                "候補は短めで、すぐ本文に挿入できる自然な日本語にしてください。"
+            ),
+            timeout_sec=90,
+        )
+    except Exception as e:
+        logger.warning("episode assist candidates failed err=%r", e)
+
+    raw_candidates = data.get("candidates") if isinstance(data, dict) else None
+    candidates: list[str] = []
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates:
+            line = str(item or "").strip()
+            if not line or line in candidates:
+                continue
+            line = line.replace("、。", "。")
+            line = re.sub(r"。{2,}", "。", line)
+            line = re.sub(r"、{2,}", "、", line)
+            line = re.sub(r"([!?！？]){2,}", r"\1", line)
+            # Trim overlap with already-written tail.
+            max_overlap = min(len(context_tail), len(line))
+            for n in range(max_overlap, 1, -1):
+                if context_tail[-n:] == line[:n]:
+                    line = line[n:]
+                    break
+            line = line.strip()
+            if not line:
+                continue
+            # Skip candidates that are effectively already present at the tail.
+            if line in context_tail:
+                continue
+            candidates.append(line[:220])
+            if len(candidates) >= suggestions_count:
+                break
+
+    # Avoid generic/non-predictive fallback lines; require AI-generated candidates.
+    if not candidates:
+        raise HTTPException(502, "AI候補の生成に失敗しました。しばらくして再試行してください。")
+
+    return EpisodeAssistCandidatesOut(candidates=candidates, model=model_used, used_tokens=tokens)
 
 
 @app.get("/api/support_plans", response_model=List[SupportPlanOut])
@@ -3657,7 +4587,7 @@ def get_ai_chat_access_status(
     paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
     allowed = _ai_chat_allowed_tokens(user)
     demo_bypass = _is_ai_chat_demo_bypass_user(user)
-    is_premium = FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))
+    is_premium = is_effective_premium_user(user)
     needs_upgrade = (not demo_bypass) and (not is_premium) and used >= allowed
     show_premium_prompt = used >= max(0, AI_CHAT_FREE_TOKENS)
     return AIChatAccessStatusResponse(
@@ -3715,6 +4645,58 @@ def create_ai_chat_addon_checkout(
         metadata=metadata,
         success_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=success",
         cancel_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=cancel",
+    )
+    return {"checkout_url": session.url}
+
+
+@app.post("/api/ai/novel/addon/checkout")
+@app.post("/api/ai/novels/addon/checkout")
+def create_ai_novel_addon_checkout(
+    payload: AINovelAddonCheckoutRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(500, "STRIPE_SECRET_KEY 未設定")
+    user = require_current_user(request, db)
+    if not is_effective_premium_user(user):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="AI小説の追加課金はプレミアム会員のみ利用できます。",
+        )
+
+    units = int(getattr(payload, "units", 1) or 1)
+    units = max(1, min(20, units))
+    unit_generations = max(1, AI_NOVEL_ADDON_UNIT_GENERATIONS)
+    unit_price_yen = max(1, AI_NOVEL_ADDON_PRICE_YEN)
+    amount_yen = units * unit_price_yen
+
+    metadata = {
+        "type": "ai_novel_addon",
+        "user_id": str(user.id),
+        "generation_units": str(units),
+        "unit_generations": str(unit_generations),
+        "unit_price_yen": str(unit_price_yen),
+    }
+
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "jpy",
+                    "product_data": {"name": f"AI小説 予備回数 +{units * unit_generations:,} 回"},
+                    "unit_amount": amount_yen,
+                },
+                "quantity": 1,
+            }
+        ],
+        client_reference_id=str(user.id),
+        customer=getattr(user, "stripe_customer_id", None),
+        customer_email=getattr(user, "email", None),
+        metadata=metadata,
+        success_url=f"{FRONTEND_ORIGIN}/ai-novel?addon=success",
+        cancel_url=f"{FRONTEND_ORIGIN}/ai-novel?addon=cancel",
     )
     return {"checkout_url": session.url}
 
@@ -3852,6 +4834,59 @@ async def stripe_webhook(
                 existing.status = "paid"
                 existing.paid_at = now
             user.ai_chat_paid_blocks = int(getattr(user, "ai_chat_paid_blocks", 0) or 0) + blocks
+            db.add(existing)
+            db.add(user)
+            db.commit()
+            return {"ok": True}
+
+        if meta_type == "ai_novel_addon":
+            session_id = _stripe_obj_get(data_object, "id")
+            if not session_id:
+                return {"ok": True, "skipped": True}
+            existing = (
+                db.query(models.AINovelAddonPurchase)
+                .filter(models.AINovelAddonPurchase.stripe_checkout_session_id == session_id)
+                .first()
+            )
+            if existing and existing.status == "paid":
+                return {"ok": True}
+
+            user_id = _meta_int("user_id")
+            if not user_id:
+                raw_uid = _stripe_obj_get(data_object, "client_reference_id")
+                try:
+                    user_id = int(raw_uid) if raw_uid is not None else None
+                except Exception:
+                    user_id = None
+            if not user_id:
+                print("[stripe] ai_novel_addon: user_id missing", metadata)
+                return {"ok": True, "skipped": True}
+
+            user = db.query(models.User).get(user_id)
+            if not user:
+                print("[stripe] ai_novel_addon: user not found", user_id)
+                return {"ok": True, "skipped": True}
+
+            units = _meta_int("generation_units") or 1
+            units = max(1, min(100, int(units)))
+            bonus_generations = units * max(1, AI_NOVEL_ADDON_UNIT_GENERATIONS)
+            amount_total = _stripe_obj_get(data_object, "amount_total") or units * max(1, AI_NOVEL_ADDON_PRICE_YEN)
+
+            if not existing:
+                existing = models.AINovelAddonPurchase(
+                    user_id=user.id,
+                    stripe_checkout_session_id=session_id,
+                    amount_yen=int(amount_total),
+                    generation_units=units,
+                    status="paid",
+                    paid_at=now,
+                )
+            else:
+                existing.amount_yen = int(amount_total)
+                existing.generation_units = units
+                existing.status = "paid"
+                existing.paid_at = now
+            user.ai_novel_paid_generations = int(getattr(user, "ai_novel_paid_generations", 0) or 0) + bonus_generations
             db.add(existing)
             db.add(user)
             db.commit()
@@ -4142,6 +5177,20 @@ async def stripe_webhook(
             purchase = (
                 db.query(models.AIChatAddonPurchase)
                 .filter(models.AIChatAddonPurchase.stripe_checkout_session_id == session_id)
+                .first()
+            )
+            if purchase and purchase.status == "pending":
+                purchase.status = "canceled"
+                db.add(purchase)
+                db.commit()
+            return {"ok": True}
+        if meta_type == "ai_novel_addon":
+            session_id = _stripe_obj_get(data_object, "id")
+            if not session_id:
+                return {"ok": True}
+            purchase = (
+                db.query(models.AINovelAddonPurchase)
+                .filter(models.AINovelAddonPurchase.stripe_checkout_session_id == session_id)
                 .first()
             )
             if purchase and purchase.status == "pending":
@@ -5153,6 +6202,48 @@ def _count_ai_usage_today(db: Session, user_id: int) -> int:
     return max(logs_count, jobs_count)
 
 
+def _ai_novel_paid_remaining(user: models.User | None) -> int:
+    return max(0, int(getattr(user, "ai_novel_paid_generations", 0) or 0))
+
+
+def _ai_novel_remaining_for_user(db: Session, user: models.User) -> tuple[int, int, int]:
+    count_today = _count_ai_usage_today(db, user.id)
+    base_remaining = max(0, AI_USER_DAILY_MAX - count_today)
+    paid_remaining = _ai_novel_paid_remaining(user)
+    total_remaining = base_remaining + paid_remaining
+    return total_remaining, base_remaining, paid_remaining
+
+
+def _reserve_ai_novel_generation_slot(db: Session, user: models.User) -> int:
+    total_remaining, _base_remaining, paid_remaining = _ai_novel_remaining_for_user(db, user)
+    if total_remaining <= 0:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"本日のAI小説生成回数の上限に達しました。"
+                f"追加課金で {AI_NOVEL_ADDON_UNIT_GENERATIONS} 回ごとに "
+                f"{AI_NOVEL_ADDON_PRICE_YEN} 円の予備回数を購入できます。"
+            ),
+        )
+
+    count_today = _count_ai_usage_today(db, user.id)
+    if count_today >= AI_USER_DAILY_MAX:
+        if paid_remaining <= 0:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"本日のAI小説生成回数の上限に達しました。"
+                    f"追加課金で {AI_NOVEL_ADDON_UNIT_GENERATIONS} 回ごとに "
+                    f"{AI_NOVEL_ADDON_PRICE_YEN} 円の予備回数を購入できます。"
+                ),
+            )
+        user.ai_novel_paid_generations = paid_remaining - 1
+        db.add(user)
+        db.commit()
+
+    return total_remaining
+
+
 def _is_ai_job_expired(job: models.AINovelJob, now: datetime | None = None) -> bool:
     if not job:
         return False
@@ -5405,8 +6496,10 @@ async def _run_ai_job(job_id: int) -> None:
                 db.close()
                 return
             if job.user_id:
-                user_remaining = max(0, AI_USER_DAILY_MAX - _count_ai_jobs_today(db, job.user_id))
-                resp.user_remaining = user_remaining
+                job_user = db.query(models.User).get(job.user_id)
+                if job_user:
+                    user_remaining, _base_remaining, _paid_remaining = _ai_novel_remaining_for_user(db, job_user)
+                    resp.user_remaining = user_remaining
 
                 parts = [req.title_hint, req.genre, req.characters, req.tone]
                 prompt_summary = " / ".join([p for p in parts if p])[:200] if any(parts) else None
@@ -5435,10 +6528,15 @@ async def _run_ai_job(job_id: int) -> None:
         elif job.job_type == "episode_continue":
             req = AINovelRequest(**(payload.get("req") or {}))
             episode_id = int(payload.get("episode_id") or 0)
+            site_key = normalize_site_key(payload.get("site_key"))
             if not job.user_id:
                 raise HTTPException(status_code=401, detail="認証が必要です。")
 
-            ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
+            ep = (
+                db.query(models.Episode)
+                .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+                .first()
+            )
             if not ep:
                 raise HTTPException(404, "エピソードが見つかりません")
 
@@ -5578,7 +6676,7 @@ async def generate_ai_novel(
     - 生成内容を ai_generate_logs テーブルに記録
     """
     user = get_optional_current_user(request, db)
-    is_premium = bool(user) and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False)))
+    is_premium = is_effective_premium_user(user)
 
     if not is_premium:
         guest_id = get_or_set_ai_guest_id(request, response)
@@ -5605,14 +6703,7 @@ async def generate_ai_novel(
     # --- premium flow ---
     assert user is not None
 
-    # ★ 1日あたりの利用回数制限
-    count_today = _count_ai_usage_today(db, user.id)
-    if count_today >= AI_USER_DAILY_MAX:
-        raise HTTPException(
-            status_code=429,
-            detail="本日のAI小説生成回数の上限に達しました。",
-        )
-    user_remaining = max(0, AI_USER_DAILY_MAX - count_today)
+    total_remaining_before = _reserve_ai_novel_generation_slot(db, user)
 
     # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
     provider = provider_from_request(req)
@@ -5643,7 +6734,7 @@ async def generate_ai_novel(
     db.add(log)
     db.commit()
 
-    resp.user_remaining = max(0, user_remaining - 1)
+    resp.user_remaining = max(0, total_remaining_before - 1)
     return resp
 
 @app.post("/api/ai/novels/generate_job", response_model=AINovelJobCreateResponse)
@@ -5654,7 +6745,7 @@ async def create_ai_novel_job(
     db: Session = Depends(get_db),
 ):
     user = get_optional_current_user(request, db)
-    is_premium = bool(user) and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False)))
+    is_premium = is_effective_premium_user(user)
 
     if not is_premium:
         guest_id = get_or_set_ai_guest_id(request, response)
@@ -5677,12 +6768,7 @@ async def create_ai_novel_job(
         return AINovelJobCreateResponse(job_id=job.id, status=job.status)
 
     assert user is not None
-    count_today = _count_ai_usage_today(db, user.id)
-    if count_today >= AI_USER_DAILY_MAX:
-        raise HTTPException(
-            status_code=429,
-            detail="本日のAI小説生成回数の上限に達しました。",
-        )
+    _reserve_ai_novel_generation_slot(db, user)
 
     job = models.AINovelJob(
         user_id=user.id,
@@ -5704,12 +6790,17 @@ async def create_ai_episode_continue_job(
     db: Session = Depends(get_db),
 ):
     user = require_premium_user(request, db)
+    _reserve_ai_novel_generation_slot(db, user)
     job = models.AINovelJob(
         user_id=user.id,
         job_type="episode_continue",
         status="pending",
         request_json=json.dumps(
-            {"episode_id": episode_id, "req": req.dict()},
+            {
+                "episode_id": episode_id,
+                "site_key": resolve_site_key(request),
+                "req": req.dict(),
+            },
             ensure_ascii=True,
         ),
     )
@@ -8186,7 +9277,10 @@ def get_public_ai_chat_character_detail(
     character, username = row
     messages = (
         db.query(models.AIChatMessage)
-        .filter(models.AIChatMessage.character_id == character.id)
+        .filter(
+            models.AIChatMessage.character_id == character.id,
+            models.AIChatMessage.is_deleted == False,
+        )
         .order_by(models.AIChatMessage.created_at.asc(), models.AIChatMessage.id.asc())
         .limit(200)
         .all()
@@ -8240,6 +9334,7 @@ def list_ai_chat_messages(
         .filter(
             models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
+            models.AIChatMessage.is_deleted == False,
         )
         .order_by(models.AIChatMessage.created_at.asc(), models.AIChatMessage.id.asc())
         .limit(200)
@@ -8283,20 +9378,26 @@ def delete_ai_chat_messages_from_point(
             models.AIChatMessage.id == message_id,
             models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
+            models.AIChatMessage.is_deleted == False,
         )
         .first()
     )
     if not target:
         raise HTTPException(status_code=404, detail="対象メッセージが見つかりません。")
 
+    now = datetime.utcnow()
     deleted = (
         db.query(models.AIChatMessage)
         .filter(
             models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
             models.AIChatMessage.id >= message_id,
+            models.AIChatMessage.is_deleted == False,
         )
-        .delete(synchronize_session=False)
+        .update(
+            {"is_deleted": True, "deleted_at": now},
+            synchronize_session=False,
+        )
     )
     db.commit()
     return AIChatMessageDeleteResponse(ok=True, deleted=int(deleted or 0))
@@ -8327,6 +9428,7 @@ def delete_ai_chat_message_image(
             models.AIChatMessage.id == message_id,
             models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
+            models.AIChatMessage.is_deleted == False,
         )
         .first()
     )
@@ -8343,7 +9445,9 @@ def delete_ai_chat_message_image(
 
     del images[image_index]
     if not images:
-        db.delete(target)
+        target.is_deleted = True
+        target.deleted_at = datetime.utcnow()
+        db.add(target)
         db.commit()
         return AIChatMessageImageDeleteResponse(
             ok=True,
@@ -8400,6 +9504,7 @@ def get_ai_chat_latest_prompt_preview(
             models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
             models.AIChatMessage.role == "user",
+            models.AIChatMessage.is_deleted == False,
         )
         .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
         .first()
@@ -8413,6 +9518,7 @@ def get_ai_chat_latest_prompt_preview(
             models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
             models.AIChatMessage.id <= latest_user_msg.id,
+            models.AIChatMessage.is_deleted == False,
         )
         .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
         .limit(20)
@@ -8684,13 +9790,18 @@ def get_ai_novel_remaining(
         user = None
 
     user_remaining = None
-    if user and (FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))):
-        count_today = _count_ai_usage_today(db, user.id)
-        user_remaining = max(0, AI_USER_DAILY_MAX - count_today)
+    user_base_remaining = None
+    user_paid_remaining = None
+    if is_effective_premium_user(user):
+        user_remaining, user_base_remaining, user_paid_remaining = _ai_novel_remaining_for_user(db, user)
 
     return {
         "guest_remaining": guest_remaining,
         "user_remaining": user_remaining,
+        "user_base_remaining": user_base_remaining,
+        "user_paid_remaining": user_paid_remaining,
+        "addon_unit_generations": max(1, AI_NOVEL_ADDON_UNIT_GENERATIONS),
+        "addon_unit_price_yen": max(1, AI_NOVEL_ADDON_PRICE_YEN),
     }
 
 @app.get("/api/ai/novels/draft", response_model=AINovelDraftResponse)
@@ -8953,8 +10064,13 @@ async def generate_ai_episode_continue(
     db: Session = Depends(get_db),
 ):
     user = require_premium_user(request, db)
+    site_key = resolve_site_key(request)
 
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
+    ep = (
+        db.query(models.Episode)
+        .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+        .first()
+    )
     if not ep:
         raise HTTPException(404, "エピソードが見つかりません")
 
@@ -9070,6 +10186,191 @@ def _build_episode_translation_prompt(
     )
 
 
+def _split_text_for_translation(text: str, max_chars: int = 1200) -> list[str]:
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    # Keep paragraphs when possible; fallback to fixed-size slices.
+    blocks = raw.split("\n\n")
+    parts: list[str] = []
+    cur = ""
+    for block in blocks:
+        candidate = block if not cur else (cur + "\n\n" + block)
+        if len(candidate) <= max_chars:
+            cur = candidate
+            continue
+        if cur:
+            parts.append(cur)
+            cur = ""
+        if len(block) <= max_chars:
+            cur = block
+            continue
+        start = 0
+        while start < len(block):
+            parts.append(block[start : start + max_chars])
+            start += max_chars
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def _translate_text_field(
+    *,
+    source_language: str,
+    target_language: str,
+    text_value: str,
+    field_name: str,
+) -> str:
+    prompt = (
+        f"Translate the following {field_name} from {source_language} to {target_language}.\n"
+        "Output JSON with key: text.\n"
+        f"Input JSON:\n{json.dumps({'text': text_value or ''}, ensure_ascii=True)}"
+    )
+    system_prompt = _translation_system_prompt(source_language, target_language)
+    data, _tokens, _model = _call_translation_ai_json(
+        prompt=prompt,
+        system_prompt=system_prompt,
+    )
+    return str(data.get("text") or "").strip()
+
+
+def _translate_episode_in_chunks(
+    *,
+    source_language: str,
+    target_language: str,
+    title: str,
+    body: str | None,
+    max_chars: int = 1200,
+) -> tuple[str, str]:
+    translated_title = _translate_text_field(
+        source_language=source_language,
+        target_language=target_language,
+        text_value=title or "",
+        field_name="episode title",
+    ) or (title or "")
+    source_body = body or ""
+    chunks = _split_text_for_translation(source_body, max_chars=max_chars)
+    if not chunks:
+        return translated_title, ""
+    translated_chunks: list[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        chunk_label = f"episode body chunk {idx}/{len(chunks)}"
+        translated = _translate_text_field(
+            source_language=source_language,
+            target_language=target_language,
+            text_value=chunk,
+            field_name=chunk_label,
+        )
+        translated_chunks.append(translated or chunk)
+    return translated_title, "\n\n".join(translated_chunks)
+
+
+def _translate_episode_with_chunk_fallback(
+    *,
+    source_language: str,
+    target_language: str,
+    title: str,
+    body: str | None,
+) -> tuple[str, str]:
+    raw_steps = (os.getenv("EPISODE_TRANSLATION_CHUNK_STEPS", "") or "").strip()
+    chunk_steps: list[int] = []
+    if raw_steps:
+        for part in raw_steps.split(","):
+            part = (part or "").strip()
+            if not part:
+                continue
+            try:
+                n = int(part)
+            except Exception:
+                continue
+            if 80 <= n <= 4000 and n not in chunk_steps:
+                chunk_steps.append(n)
+    if not chunk_steps:
+        # progressively finer split to avoid timeout/hanging for long bodies
+        chunk_steps = [1200, 800, 500, 300, 180, 120]
+
+    errors: list[str] = []
+    for max_chars in chunk_steps:
+        try:
+            return _translate_episode_in_chunks(
+                source_language=source_language,
+                target_language=target_language,
+                title=title,
+                body=body,
+                max_chars=max_chars,
+            )
+        except Exception as e:
+            errors.append(f"chunk={max_chars}:{e!r}")
+            logger.warning(
+                "episode chunk translation failed target=%s chunk=%s err=%r",
+                target_language,
+                max_chars,
+                e,
+            )
+            continue
+    raise RuntimeError("; ".join(errors) if errors else "chunk translation failed")
+
+
+def _translate_text_with_chunk_fallback(
+    *,
+    source_language: str,
+    target_language: str,
+    text_value: str,
+    field_name: str,
+    steps_env: str,
+    default_steps: tuple[int, ...] = (1200, 800, 500, 300, 180, 120),
+) -> str:
+    raw_steps = (os.getenv(steps_env, "") or "").strip()
+    chunk_steps: list[int] = []
+    if raw_steps:
+        for part in raw_steps.split(","):
+            part = (part or "").strip()
+            if not part:
+                continue
+            try:
+                n = int(part)
+            except Exception:
+                continue
+            if 80 <= n <= 4000 and n not in chunk_steps:
+                chunk_steps.append(n)
+    if not chunk_steps:
+        chunk_steps = list(default_steps)
+
+    src = text_value or ""
+    if not src:
+        return ""
+
+    errors: list[str] = []
+    for max_chars in chunk_steps:
+        try:
+            chunks = _split_text_for_translation(src, max_chars=max_chars)
+            if not chunks:
+                return ""
+            translated_chunks: list[str] = []
+            total = len(chunks)
+            for idx, chunk in enumerate(chunks, start=1):
+                translated = _translate_text_field(
+                    source_language=source_language,
+                    target_language=target_language,
+                    text_value=chunk,
+                    field_name=f"{field_name} chunk {idx}/{total}",
+                )
+                translated_chunks.append(translated or chunk)
+            return "\n\n".join(translated_chunks)
+        except Exception as e:
+            errors.append(f"chunk={max_chars}:{e!r}")
+            logger.warning(
+                "text chunk translation failed field=%s target=%s chunk=%s err=%r",
+                field_name,
+                target_language,
+                max_chars,
+                e,
+            )
+            continue
+
+    raise RuntimeError("; ".join(errors) if errors else "text chunk translation failed")
+
+
 def _translation_provider() -> str | None:
     if TRANSLATION_PROVIDER:
         return TRANSLATION_PROVIDER
@@ -9109,6 +10410,7 @@ def _call_translation_ai_json(
                     model=model,
                     provider=provider,
                     system_instructions=system_prompt,
+                    timeout_sec=TRANSLATION_AI_TIMEOUT_SECONDS,
                 )
             )
         except Exception as e:
@@ -9125,6 +10427,1335 @@ def _call_translation_ai_json(
     raise RuntimeError(f"all translation providers failed: {joined}")
 
 
+_UI_I18N_CACHE: dict[tuple[str, str], str] = {}
+_UI_I18N_PUBLISHED: dict[str, dict[str, str]] = {
+    "zh-cn": {},
+    "zh-tw": {},
+    "ko": {},
+}
+_UI_I18N_PUBLISHED_UPDATED_AT: str | None = None
+_UI_I18N_JOB_LOCK = threading.Lock()
+_UI_I18N_JOBS: dict[str, dict] = {}
+_UI_I18N_JOB_ORDER: list[str] = []
+_UI_I18N_JOB_MAX_KEEP = 30
+_UI_I18N_HANG_TIMEOUT_SECONDS = max(120, int(os.getenv("UI_I18N_HANG_TIMEOUT_SECONDS", "900") or 900))
+_UI_I18N_HANG_CHECK_INTERVAL_SECONDS = max(30, int(os.getenv("UI_I18N_HANG_CHECK_INTERVAL_SECONDS", "60") or 60))
+_UI_I18N_JOB_HEARTBEAT_SECONDS = max(10, int(os.getenv("UI_I18N_JOB_HEARTBEAT_SECONDS", "30") or 30))
+_ui_i18n_watchdog_started = False
+
+
+def _json_dumps_safe(value) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=True)
+    except Exception:
+        return "[]"
+
+
+def _json_loads_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def _sync_ui_i18n_job_to_db(job: dict) -> None:
+    db = SessionLocal()
+    try:
+        row = db.query(models.UII18nJob).filter(models.UII18nJob.job_key == str(job.get("job_id") or "")).first()
+        if not row:
+            return
+        row.status = str(job.get("status") or "pending")
+        row.target_langs_json = _json_dumps_safe(job.get("target_langs") or [])
+        row.batch_size = int(job.get("batch_size") or 10)
+        row.notify_username = str(job.get("notify_username") or "demo02")
+        row.source_item_count = int(job.get("source_item_count") or 0)
+        row.total_chunks = int(job.get("total_chunks") or 0)
+        row.processed_chunks = int(job.get("processed_chunks") or 0)
+        row.translated_count = int(job.get("translated_count") or 0)
+        row.failed_count = int(job.get("failed_count") or 0)
+        row.current_target_lang = str(job.get("current_target_lang")) if job.get("current_target_lang") else None
+        row.current_source_lang = str(job.get("current_source_lang")) if job.get("current_source_lang") else None
+        row.current_offset = int(job.get("current_offset") or 0)
+        row.current_chunk_size = int(job.get("current_chunk_size") or 0)
+        row.failed_items_json = _json_dumps_safe(job.get("failed_items") or [])
+        row.error = str(job.get("error") or "") or None
+        row.cancel_requested = bool(job.get("cancel_requested"))
+        row.hang_notified = bool(job.get("hang_notified"))
+        row.started_at = _parse_iso_datetime(job.get("started_at"))
+        row.finished_at = _parse_iso_datetime(job.get("finished_at"))
+        db.add(row)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("ui i18n db sync failed job_id=%s err=%r", job.get("job_id"), e)
+    finally:
+        db.close()
+
+
+def _persist_ui_i18n_dictionary_items(target_lang: str, items: dict[str, str]) -> None:
+    if not items:
+        return
+    db = SessionLocal()
+    try:
+        keys = [str(k) for k in items.keys() if str(k).strip()]
+        if not keys:
+            return
+        existing_rows = (
+            db.query(models.UII18nDictionary)
+            .filter(models.UII18nDictionary.target_lang == target_lang)
+            .filter(models.UII18nDictionary.source_text.in_(keys))
+            .all()
+        )
+        existing_map = {str(r.source_text): r for r in existing_rows}
+        for src, tr in items.items():
+            source_text = str(src or "").strip()
+            translated_text = str(tr or "").strip()
+            if not source_text or not translated_text:
+                continue
+            row = existing_map.get(source_text)
+            if row:
+                row.translated_text = translated_text
+                db.add(row)
+                continue
+            db.add(
+                models.UII18nDictionary(
+                    target_lang=target_lang,
+                    source_text=source_text[:500],
+                    translated_text=translated_text,
+                )
+            )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("ui i18n dictionary persist failed target=%s err=%r", target_lang, e)
+    finally:
+        db.close()
+
+
+def _load_ui_i18n_dictionary_source_set(target_lang: str) -> set[str]:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(models.UII18nDictionary.source_text)
+            .filter(models.UII18nDictionary.target_lang == target_lang)
+            .all()
+        )
+        out: set[str] = set()
+        for row in rows:
+            if not row:
+                continue
+            value = str(row[0] or "").strip()
+            if value:
+                out.add(value)
+        return out
+    except Exception as e:
+        logger.warning("ui i18n dictionary source load failed target=%s err=%r", target_lang, e)
+        return set()
+    finally:
+        db.close()
+
+
+def _create_ui_i18n_job_row(job: dict, source_items: list[tuple[str, str]]) -> None:
+    db = SessionLocal()
+    try:
+        row = models.UII18nJob(
+            job_key=str(job.get("job_id") or ""),
+            status=str(job.get("status") or "pending"),
+            target_langs_json=_json_dumps_safe(job.get("target_langs") or []),
+            source_items_json=_json_dumps_safe([{"source_lang": src, "text": txt} for src, txt in source_items]),
+            batch_size=int(job.get("batch_size") or 10),
+            notify_username=str(job.get("notify_username") or "demo02"),
+            source_item_count=int(job.get("source_item_count") or 0),
+            total_chunks=int(job.get("total_chunks") or 0),
+            processed_chunks=int(job.get("processed_chunks") or 0),
+            translated_count=int(job.get("translated_count") or 0),
+            failed_count=int(job.get("failed_count") or 0),
+            current_target_lang=str(job.get("current_target_lang")) if job.get("current_target_lang") else None,
+            current_source_lang=str(job.get("current_source_lang")) if job.get("current_source_lang") else None,
+            current_offset=int(job.get("current_offset") or 0),
+            current_chunk_size=int(job.get("current_chunk_size") or 0),
+            failed_items_json=_json_dumps_safe(job.get("failed_items") or []),
+            error=str(job.get("error") or "") or None,
+            cancel_requested=bool(job.get("cancel_requested")),
+            hang_notified=bool(job.get("hang_notified")),
+            started_at=_parse_iso_datetime(job.get("started_at")),
+            finished_at=_parse_iso_datetime(job.get("finished_at")),
+        )
+        db.add(row)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("ui i18n create row failed job_id=%s err=%r", job.get("job_id"), e)
+    finally:
+        db.close()
+
+
+def _load_ui_i18n_jobs_from_db(limit: int = 30) -> list[dict]:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(models.UII18nJob)
+            .order_by(models.UII18nJob.created_at.desc(), models.UII18nJob.id.desc())
+            .limit(max(1, min(200, int(limit))))
+            .all()
+        )
+        out: list[dict] = []
+        for row in rows:
+            out.append(
+                {
+                    "job_id": row.job_key,
+                    "status": row.status,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                    "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+                    "cancel_requested": bool(row.cancel_requested),
+                    "target_langs": _json_loads_list(row.target_langs_json),
+                    "batch_size": int(row.batch_size or 10),
+                    "notify_username": row.notify_username or "demo02",
+                    "source_item_count": int(row.source_item_count or 0),
+                    "total_chunks": int(row.total_chunks or 0),
+                    "processed_chunks": int(row.processed_chunks or 0),
+                    "translated_count": int(row.translated_count or 0),
+                    "failed_count": int(row.failed_count or 0),
+                    "current_target_lang": row.current_target_lang,
+                    "current_source_lang": row.current_source_lang,
+                    "current_offset": int(row.current_offset or 0),
+                    "current_chunk_size": int(row.current_chunk_size or 0),
+                    "failed_items": _json_loads_list(row.failed_items_json),
+                    "error": row.error,
+                    "started_at": row.started_at.isoformat() if row.started_at else None,
+                    "hang_notified": bool(row.hang_notified),
+                }
+            )
+        return out
+    except Exception as e:
+        logger.warning("ui i18n load jobs failed err=%r", e)
+        return []
+    finally:
+        db.close()
+
+
+def _translate_ui_texts(
+    *,
+    source_language: str,
+    target_language: str,
+    texts: list[str],
+    force: bool = False,
+) -> dict[str, str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in texts:
+        text_value = str(raw or "").strip()
+        if not text_value or text_value in seen:
+            continue
+        seen.add(text_value)
+        cleaned.append(text_value)
+    if not cleaned:
+        return {}
+
+    if force:
+        for src in cleaned:
+            _UI_I18N_CACHE.pop((target_language, src), None)
+
+    if force:
+        missing = cleaned[:]
+    else:
+        missing = [s for s in cleaned if (target_language, s) not in _UI_I18N_CACHE]
+    if missing:
+        prompt = (
+            f"Translate UI strings from {source_language} to {target_language}.\n"
+            "Keep placeholders like {{name}}, {{amount}}, {{status}}, symbols, and formatting as-is.\n"
+            "Return JSON object with key `items` as array of {source, translated}.\n"
+            f"Input JSON:\n{json.dumps({'items': missing}, ensure_ascii=True)}"
+        )
+        system_prompt = _translation_system_prompt(source_language, target_language)
+        try:
+            data, _tokens, _model = _call_translation_ai_json(
+                prompt=prompt,
+                system_prompt=system_prompt,
+            )
+            items = data.get("items") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    src = str(item.get("source") or "").strip()
+                    tr = str(item.get("translated") or "").strip()
+                    if src and tr:
+                        _UI_I18N_CACHE[(target_language, src)] = tr
+        except Exception as e:
+            logger.warning(
+                "ui i18n bulk translation failed source=%s target=%s err=%r",
+                source_language,
+                target_language,
+                e,
+            )
+
+        # Fallback per-item for missing entries.
+        for src in missing:
+            if not force and (target_language, src) in _UI_I18N_CACHE:
+                continue
+            try:
+                tr = _translate_text_field(
+                    source_language=source_language,
+                    target_language=target_language,
+                    text_value=src,
+                    field_name="ui text",
+                )
+            except Exception:
+                tr = ""
+            _UI_I18N_CACHE[(target_language, src)] = tr or src
+
+    out: dict[str, str] = {}
+    for src in cleaned:
+        out[src] = _UI_I18N_CACHE.get((target_language, src), src)
+    return out
+
+
+class I18nTranslateRequest(BaseModel):
+    texts: list[str]
+    target_lang: str
+    source_lang: str = "en"
+    force: bool = False
+
+
+@app.post("/api/i18n/translate")
+def i18n_translate(payload: I18nTranslateRequest):
+    target = normalize_language(payload.target_lang)
+    source = normalize_language(payload.source_lang)
+    if target not in ("zh-cn", "zh-tw", "ko", "en", "ja"):
+        raise HTTPException(400, "target_lang is not supported")
+    if source not in ("en", "ja", "zh-cn", "zh-tw", "ko"):
+        raise HTTPException(400, "source_lang is not supported")
+
+    raw_texts = payload.texts or []
+    if not isinstance(raw_texts, list):
+        raise HTTPException(400, "texts must be an array")
+    if len(raw_texts) > 200:
+        raise HTTPException(400, "texts must be <= 200")
+
+    clipped: list[str] = []
+    for raw in raw_texts:
+        text_value = str(raw or "")
+        if len(text_value) > 500:
+            text_value = text_value[:500]
+        clipped.append(text_value)
+
+    items = _translate_ui_texts(
+        source_language=source,
+        target_language=target,
+        texts=clipped,
+        force=bool(getattr(payload, "force", False)),
+    )
+    return {"target_lang": target, "source_lang": source, "items": items}
+
+
+class AdminUiI18nSourceItem(BaseModel):
+    source_lang: str = "ja"
+    text: str
+
+
+class AdminUiI18nJobStartRequest(BaseModel):
+    source_items: list[AdminUiI18nSourceItem] = Field(default_factory=list)
+    target_langs: list[str] = Field(default_factory=lambda: ["zh-cn", "zh-tw", "ko"])
+    batch_size: int = 10
+    notify_username: str = "demo02"
+    resume_from_job_id: str | None = None
+    only_untranslated: bool = False
+    include_same_as_source: bool = True
+    include_kana: bool = True
+    untranslated_limit: int = 500
+
+
+class AdminUiI18nRetranslateRemainingRequest(BaseModel):
+    target_langs: list[str] = Field(default_factory=lambda: ["zh-cn", "zh-tw", "ko"])
+    limit: int = 500
+    batch_size: int = 20
+    include_same_as_source: bool = True
+    include_kana: bool = True
+    dry_run: bool = False
+
+
+def _normalize_ui_i18n_source_items(raw_items: list) -> list[tuple[str, str]]:
+    dedup: set[tuple[str, str]] = set()
+    source_items: list[tuple[str, str]] = []
+    for item in raw_items or []:
+        if isinstance(item, AdminUiI18nSourceItem):
+            raw_source_lang = item.source_lang
+            raw_text = item.text
+        elif isinstance(item, dict):
+            raw_source_lang = item.get("source_lang")
+            raw_text = item.get("text")
+        else:
+            continue
+        try:
+            source_lang = normalize_language(str(raw_source_lang or "ja"))
+        except Exception:
+            continue
+        if source_lang not in ("ja", "en"):
+            continue
+        text_value = str(raw_text or "").strip()
+        if not text_value:
+            continue
+        if len(text_value) > 500:
+            text_value = text_value[:500]
+        key = (source_lang, text_value)
+        if key in dedup:
+            continue
+        dedup.add(key)
+        source_items.append(key)
+    return source_items
+
+
+def _load_ui_i18n_job_row(job_id: str) -> models.UII18nJob | None:
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(models.UII18nJob)
+            .filter(models.UII18nJob.job_key == str(job_id or "").strip())
+            .first()
+        )
+        return row
+    finally:
+        db.close()
+
+
+def _build_ui_i18n_resume_context(row: models.UII18nJob | None) -> dict | None:
+    if not row:
+        return None
+    target_lang = str(getattr(row, "current_target_lang", "") or "").strip()
+    source_lang = str(getattr(row, "current_source_lang", "") or "").strip()
+    offset = int(getattr(row, "current_offset", 0) or 0)
+    if target_lang not in ("zh-cn", "zh-tw", "ko"):
+        return None
+    if source_lang not in ("ja", "en"):
+        return None
+    if offset < 0:
+        return None
+    failed_items = _json_loads_list(getattr(row, "failed_items_json", None))
+    if not isinstance(failed_items, list):
+        failed_items = []
+    return {
+        "target_lang": target_lang,
+        "source_lang": source_lang,
+        "offset": offset,
+        "processed_chunks": max(0, int(getattr(row, "processed_chunks", 0) or 0)),
+        "translated_count": max(0, int(getattr(row, "translated_count", 0) or 0)),
+        "failed_items": failed_items[:500],
+    }
+
+
+def _collect_ui_i18n_untranslated_source_items(
+    db: Session,
+    *,
+    target_langs: list[str],
+    limit: int,
+    include_same_as_source: bool,
+    include_kana: bool,
+) -> list[tuple[str, str]]:
+    conditions = []
+    if include_same_as_source:
+        conditions.append(models.UII18nDictionary.translated_text == models.UII18nDictionary.source_text)
+    if include_kana:
+        conditions.append(models.UII18nDictionary.translated_text.op("REGEXP")(r"[ぁ-んァ-ヶー]"))
+    if not conditions:
+        return []
+    rows = (
+        db.query(models.UII18nDictionary.source_text)
+        .filter(models.UII18nDictionary.target_lang.in_(target_langs))
+        .filter(or_(*conditions))
+        .order_by(models.UII18nDictionary.updated_at.asc(), models.UII18nDictionary.id.asc())
+        .limit(max(1, min(10000, int(limit))))
+        .all()
+    )
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for row in rows:
+        source_text = str(row[0] or "").strip()
+        if not source_text or source_text in seen:
+            continue
+        seen.add(source_text)
+        out.append(("ja", source_text[:500]))
+    return out
+
+
+def _set_ui_i18n_job(job_id: str, **updates) -> None:
+    job_snapshot = None
+    with _UI_I18N_JOB_LOCK:
+        job = _UI_I18N_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job["updated_at"] = datetime.utcnow().isoformat()
+        job_snapshot = dict(job)
+    if job_snapshot:
+        _sync_ui_i18n_job_to_db(job_snapshot)
+
+
+def _ui_i18n_job_snapshot(job_id: str) -> dict | None:
+    with _UI_I18N_JOB_LOCK:
+        job = _UI_I18N_JOBS.get(job_id)
+        if not job:
+            job = None
+        else:
+            return dict(job)
+    rows = _load_ui_i18n_jobs_from_db(limit=200)
+    for row in rows:
+        if str(row.get("job_id") or "") == str(job_id):
+            with _UI_I18N_JOB_LOCK:
+                _UI_I18N_JOBS[str(job_id)] = dict(row)
+                if str(job_id) not in _UI_I18N_JOB_ORDER:
+                    _UI_I18N_JOB_ORDER.append(str(job_id))
+            return dict(row)
+    return None
+
+
+def _ui_i18n_list_jobs(limit: int = 20) -> list[dict]:
+    rows = _load_ui_i18n_jobs_from_db(limit=limit)
+    if not rows:
+        return []
+    with _UI_I18N_JOB_LOCK:
+        for row in rows:
+            job_id = str(row.get("job_id") or "")
+            if not job_id:
+                continue
+            _UI_I18N_JOBS[job_id] = dict(row)
+            if job_id not in _UI_I18N_JOB_ORDER:
+                _UI_I18N_JOB_ORDER.append(job_id)
+    return rows
+
+
+def _resolve_ui_i18n_notify_user_id(db: Session, preferred_username: str | None) -> int | None:
+    username = (preferred_username or "").strip() or "demo02"
+    user = get_user_by_username(db, username)
+    if user and getattr(user, "id", None):
+        return int(user.id)
+    fallback = (AI_CHAT_DEMO_BYPASS_USERNAME or "demo02").strip()
+    if fallback and fallback != username:
+        user = get_user_by_username(db, fallback)
+        if user and getattr(user, "id", None):
+            return int(user.id)
+    return None
+
+
+def _notify_ui_i18n_job_done(
+    *,
+    job_id: str,
+    succeeded: bool,
+    translated_count: int,
+    failed_count: int,
+    notify_username: str | None,
+) -> None:
+    db = SessionLocal()
+    try:
+        user_id = _resolve_ui_i18n_notify_user_id(db, notify_username)
+        if not user_id:
+            return
+        if succeeded:
+            title = "多言語化対応しました"
+            body = f"UI翻訳ジョブが完了しました（translated={translated_count}, failed={failed_count}）"
+            notif_type = "ui_i18n_done"
+        else:
+            title = "多言語化対応に失敗しました"
+            body = f"UI翻訳ジョブが失敗しました（translated={translated_count}, failed={failed_count}）"
+            notif_type = "ui_i18n_failed"
+        create_notification(
+            db,
+            user_id=user_id,
+            notif_type=notif_type,
+            title=title,
+            body=body,
+            link_url="/admin/i18n-jobs",
+        )
+        db.commit()
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("ui i18n notify failed job_id=%s err=%r", job_id, e)
+    finally:
+        db.close()
+
+
+def _notify_ui_i18n_job_hung(
+    *,
+    job_id: str,
+    notify_username: str | None,
+    timeout_seconds: int,
+) -> None:
+    db = SessionLocal()
+    try:
+        user_id = _resolve_ui_i18n_notify_user_id(db, notify_username)
+        if not user_id:
+            return
+        create_notification(
+            db,
+            user_id=user_id,
+            notif_type="ui_i18n_hung",
+            title="多言語化ジョブが停止しています",
+            body=f"UI翻訳ジョブ {job_id} が {timeout_seconds} 秒以上更新されていません。",
+            link_url="/admin/i18n-jobs",
+        )
+        db.commit()
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("ui i18n hung notify failed job_id=%s err=%r", job_id, e)
+    finally:
+        db.close()
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def _run_ui_i18n_job_heartbeat(job_id: str, stop_event: threading.Event) -> None:
+    # Keep updated_at fresh while an external translation request is in-flight.
+    while not stop_event.is_set():
+        snap = _ui_i18n_job_snapshot(job_id)
+        if not snap:
+            return
+        status = str(snap.get("status") or "")
+        if status not in ("pending", "running"):
+            return
+        _set_ui_i18n_job(job_id)
+        if stop_event.wait(_UI_I18N_JOB_HEARTBEAT_SECONDS):
+            return
+
+
+def _run_ui_i18n_watchdog_loop() -> None:
+    while True:
+        now = datetime.utcnow()
+        stuck_jobs: list[dict] = []
+        with _UI_I18N_JOB_LOCK:
+            for job_id in _UI_I18N_JOB_ORDER:
+                job = _UI_I18N_JOBS.get(job_id)
+                if not job:
+                    continue
+                if str(job.get("status") or "") != "running":
+                    continue
+                if bool(job.get("hang_notified")):
+                    continue
+                updated_at = _parse_iso_datetime(job.get("updated_at"))
+                if not updated_at:
+                    continue
+                stale_seconds = int((now - updated_at).total_seconds())
+                if stale_seconds < _UI_I18N_HANG_TIMEOUT_SECONDS:
+                    continue
+                job["status"] = "failed"
+                job["cancel_requested"] = True
+                job["hang_notified"] = True
+                job["error"] = f"hang detected: stale for {stale_seconds}s"
+                job["finished_at"] = now.isoformat()
+                job["updated_at"] = now.isoformat()
+                _sync_ui_i18n_job_to_db(dict(job))
+                stuck_jobs.append(
+                    {
+                        "job_id": job_id,
+                        "notify_username": job.get("notify_username"),
+                    }
+                )
+        for item in stuck_jobs:
+            _notify_ui_i18n_job_hung(
+                job_id=str(item["job_id"]),
+                notify_username=str(item.get("notify_username") or "demo02"),
+                timeout_seconds=_UI_I18N_HANG_TIMEOUT_SECONDS,
+            )
+        time.sleep(_UI_I18N_HANG_CHECK_INTERVAL_SECONDS)
+
+
+def _start_ui_i18n_watchdog_if_enabled() -> None:
+    global _ui_i18n_watchdog_started
+    if _ui_i18n_watchdog_started:
+        return
+    worker = threading.Thread(
+        target=_run_ui_i18n_watchdog_loop,
+        name="ui-i18n-watchdog",
+        daemon=True,
+    )
+    worker.start()
+    _ui_i18n_watchdog_started = True
+    logger.info(
+        "ui i18n watchdog started timeout=%ss interval=%ss",
+        _UI_I18N_HANG_TIMEOUT_SECONDS,
+        _UI_I18N_HANG_CHECK_INTERVAL_SECONDS,
+    )
+
+
+def _recover_ui_i18n_jobs_on_startup() -> None:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(models.UII18nJob)
+            .filter(models.UII18nJob.status.in_(["pending", "running"]))
+            .order_by(models.UII18nJob.created_at.asc(), models.UII18nJob.id.asc())
+            .all()
+        )
+    finally:
+        db.close()
+
+    for row in rows:
+        job_id = str(getattr(row, "job_key", "") or "").strip()
+        if not job_id:
+            continue
+        source_payload = _json_loads_list(getattr(row, "source_items_json", None))
+        source_items = _normalize_ui_i18n_source_items(source_payload)
+        if not source_items:
+            continue
+        target_langs: list[str] = []
+        for raw in _json_loads_list(getattr(row, "target_langs_json", None)):
+            try:
+                lang = normalize_language(str(raw))
+            except Exception:
+                continue
+            if lang in ("zh-cn", "zh-tw", "ko") and lang not in target_langs:
+                target_langs.append(lang)
+        if not target_langs:
+            target_langs = ["zh-cn", "zh-tw", "ko"]
+        resume_from = _build_ui_i18n_resume_context(row)
+        initial_processed_chunks = int(getattr(row, "processed_chunks", 0) or 0)
+        initial_translated_count = int(getattr(row, "translated_count", 0) or 0)
+        initial_failed_count = int(getattr(row, "failed_count", 0) or 0)
+        initial_failed_items = _json_loads_list(getattr(row, "failed_items_json", None))
+        if not isinstance(initial_failed_items, list):
+            initial_failed_items = []
+        if resume_from:
+            initial_processed_chunks = int(resume_from.get("processed_chunks") or 0)
+            initial_translated_count = int(resume_from.get("translated_count") or 0)
+            initial_failed_items = list(resume_from.get("failed_items") or [])
+            initial_failed_count = len(initial_failed_items)
+        job = {
+            "job_id": job_id,
+            "status": "pending",
+            "created_at": row.created_at.isoformat() if row.created_at else datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+            "cancel_requested": False,
+            "target_langs": target_langs,
+            "batch_size": int(getattr(row, "batch_size", 10) or 10),
+            "notify_username": str(getattr(row, "notify_username", "demo02") or "demo02"),
+            "source_item_count": int(getattr(row, "source_item_count", len(source_items)) or len(source_items)),
+            "total_chunks": 0,
+            "processed_chunks": max(0, initial_processed_chunks),
+            "translated_count": max(0, initial_translated_count),
+            "failed_count": max(0, initial_failed_count),
+            "current_target_lang": resume_from.get("target_lang") if resume_from else getattr(row, "current_target_lang", None),
+            "current_source_lang": resume_from.get("source_lang") if resume_from else getattr(row, "current_source_lang", None),
+            "current_offset": int(resume_from.get("offset") or 0) if resume_from else int(getattr(row, "current_offset", 0) or 0),
+            "current_chunk_size": int(getattr(row, "current_chunk_size", 0) or 0),
+            "failed_items": initial_failed_items[:500],
+            "error": None,
+            "hang_notified": False,
+            "started_at": None,
+        }
+        with _UI_I18N_JOB_LOCK:
+            _UI_I18N_JOBS[job_id] = dict(job)
+            if job_id not in _UI_I18N_JOB_ORDER:
+                _UI_I18N_JOB_ORDER.append(job_id)
+        _sync_ui_i18n_job_to_db(job)
+        worker = threading.Thread(
+            target=_run_ui_i18n_background_job,
+            kwargs={
+                "job_id": job_id,
+                "source_items": source_items,
+                "target_langs": target_langs,
+                "batch_size": int(job["batch_size"]),
+                "notify_username": str(job["notify_username"]),
+                "resume_from": resume_from,
+            },
+            name=f"ui-i18n-recover-{job_id}",
+            daemon=True,
+        )
+        worker.start()
+        logger.info("ui i18n recovered job started job_id=%s", job_id)
+
+
+def _run_ui_i18n_background_job(
+    *,
+    job_id: str,
+    source_items: list[tuple[str, str]],
+    target_langs: list[str],
+    batch_size: int,
+    notify_username: str,
+    resume_from: dict | None = None,
+    force_source_texts: list[str] | None = None,
+) -> None:
+    source_order = {"ja": 0, "en": 1}
+    resume_cursor = None
+    translated_count = 0
+    processed_chunks = 0
+    failed_items: list[dict] = []
+    if isinstance(resume_from, dict):
+        target_lang = str(resume_from.get("target_lang") or "").strip()
+        source_lang = str(resume_from.get("source_lang") or "").strip()
+        try:
+            offset = int(resume_from.get("offset") or 0)
+        except Exception:
+            offset = 0
+        if target_lang in ("zh-cn", "zh-tw", "ko") and source_lang in ("ja", "en") and offset >= 0:
+            resume_cursor = {
+                "target_lang": target_lang,
+                "source_lang": source_lang,
+                "offset": offset,
+            }
+            processed_chunks = max(0, int(resume_from.get("processed_chunks") or 0))
+            translated_count = max(0, int(resume_from.get("translated_count") or 0))
+            raw_failed_items = resume_from.get("failed_items") or []
+            if isinstance(raw_failed_items, list):
+                failed_items = raw_failed_items[:500]
+
+    created_at = datetime.utcnow().isoformat()
+    heartbeat_stop = threading.Event()
+    heartbeat_worker = threading.Thread(
+        target=_run_ui_i18n_job_heartbeat,
+        kwargs={"job_id": job_id, "stop_event": heartbeat_stop},
+        name=f"ui-i18n-heartbeat-{job_id}",
+        daemon=True,
+    )
+    heartbeat_worker.start()
+    _set_ui_i18n_job(
+        job_id,
+        status="running",
+        started_at=created_at,
+        current_target_lang=resume_cursor.get("target_lang") if resume_cursor else None,
+        current_source_lang=resume_cursor.get("source_lang") if resume_cursor else None,
+        current_offset=int(resume_cursor.get("offset") or 0) if resume_cursor else 0,
+        processed_chunks=processed_chunks,
+        translated_count=translated_count,
+        failed_count=len(failed_items),
+        failed_items=failed_items[:500],
+    )
+    total_chunks = 0
+    force_sources = {str(s or "").strip() for s in (force_source_texts or []) if str(s or "").strip()}
+    by_source: dict[str, list[str]] = {"ja": [], "en": []}
+    for src, txt in source_items:
+        by_source.setdefault(src, []).append(txt)
+    known_translated_by_target: dict[str, set[str]] = {}
+    for target_lang in target_langs:
+        known_translated_by_target[target_lang] = _load_ui_i18n_dictionary_source_set(target_lang)
+
+    remaining_chunks = 0
+    for target_lang in target_langs:
+        for source_lang in ("ja", "en"):
+            texts = by_source.get(source_lang, [])
+            if not texts:
+                continue
+            for offset in range(0, len(texts), max(1, batch_size)):
+                chunk = texts[offset : offset + max(1, batch_size)]
+                untranslated = [
+                    text_value
+                    for text_value in chunk
+                    if (
+                        text_value in force_sources
+                        or text_value not in known_translated_by_target.get(target_lang, set())
+                    )
+                ]
+                if untranslated:
+                    remaining_chunks += 1
+    total_chunks = max(processed_chunks, processed_chunks + remaining_chunks)
+    _set_ui_i18n_job(job_id, total_chunks=total_chunks)
+    if resume_cursor:
+        resume_target = str(resume_cursor.get("target_lang") or "")
+        resume_source = str(resume_cursor.get("source_lang") or "")
+        resume_offset = int(resume_cursor.get("offset") or 0)
+        resume_texts = by_source.get(resume_source, [])
+        if (
+            resume_target not in target_langs
+            or resume_source not in source_order
+            or not resume_texts
+            or resume_offset >= len(resume_texts)
+        ):
+            resume_cursor = None
+            _set_ui_i18n_job(
+                job_id,
+                current_target_lang=None,
+                current_source_lang=None,
+                current_offset=0,
+                current_chunk_size=0,
+            )
+
+    try:
+        try:
+            for target_lang in target_langs:
+                for source_lang in ("ja", "en"):
+                    texts = by_source.get(source_lang, [])
+                    if not texts:
+                        continue
+                    for offset in range(0, len(texts), max(1, batch_size)):
+                        if resume_cursor:
+                            resume_target_idx = target_langs.index(str(resume_cursor["target_lang"]))
+                            target_idx = target_langs.index(target_lang)
+                            resume_source_idx = source_order[str(resume_cursor["source_lang"])]
+                            source_idx = source_order[source_lang]
+                            resume_offset = int(resume_cursor["offset"])
+                            is_before_cursor = (
+                                target_idx < resume_target_idx
+                                or (
+                                    target_idx == resume_target_idx
+                                    and (
+                                        source_idx < resume_source_idx
+                                        or (source_idx == resume_source_idx and offset < resume_offset)
+                                    )
+                                )
+                            )
+                            if is_before_cursor:
+                                continue
+                            resume_cursor = None
+
+                        snap = _ui_i18n_job_snapshot(job_id) or {}
+                        if bool(snap.get("cancel_requested")):
+                            _set_ui_i18n_job(
+                                job_id,
+                                status="canceled",
+                                finished_at=datetime.utcnow().isoformat(),
+                                translated_count=translated_count,
+                                failed_count=len(failed_items),
+                            )
+                            _notify_ui_i18n_job_done(
+                                job_id=job_id,
+                                succeeded=False,
+                                translated_count=translated_count,
+                                failed_count=len(failed_items),
+                                notify_username=notify_username,
+                            )
+                            return
+
+                        chunk = texts[offset : offset + max(1, batch_size)]
+                        pending_chunk = [
+                            text_value
+                            for text_value in chunk
+                            if (
+                                text_value in force_sources
+                                or text_value not in known_translated_by_target.get(target_lang, set())
+                            )
+                        ]
+                        if not pending_chunk:
+                            continue
+                        _set_ui_i18n_job(
+                            job_id,
+                            current_target_lang=target_lang,
+                            current_source_lang=source_lang,
+                            current_offset=offset,
+                            current_chunk_size=len(pending_chunk),
+                        )
+                        out = _translate_ui_texts(
+                            source_language=source_lang,
+                            target_language=target_lang,
+                            texts=pending_chunk,
+                            force=True,
+                        )
+                        translated_count += len(out)
+                        missing = [t for t in pending_chunk if t not in out]
+                        if missing:
+                            for t in missing:
+                                failed_items.append(
+                                    {
+                                        "target_lang": target_lang,
+                                        "source_lang": source_lang,
+                                        "text": t,
+                                    }
+                                )
+                        with _UI_I18N_JOB_LOCK:
+                            target_map = _UI_I18N_PUBLISHED.get(target_lang, {})
+                            target_map.update(out)
+                            _UI_I18N_PUBLISHED[target_lang] = target_map
+                            global _UI_I18N_PUBLISHED_UPDATED_AT
+                            _UI_I18N_PUBLISHED_UPDATED_AT = datetime.utcnow().isoformat()
+                        _persist_ui_i18n_dictionary_items(target_lang, out)
+                        known_translated_by_target.setdefault(target_lang, set()).update(
+                            str(src or "").strip() for src in out.keys() if str(src or "").strip()
+                        )
+                        processed_chunks += 1
+                        _set_ui_i18n_job(
+                            job_id,
+                            processed_chunks=processed_chunks,
+                            translated_count=translated_count,
+                            failed_count=len(failed_items),
+                        )
+
+            snap = _ui_i18n_job_snapshot(job_id) or {}
+            if bool(snap.get("cancel_requested")):
+                _set_ui_i18n_job(
+                    job_id,
+                    status="canceled",
+                    finished_at=datetime.utcnow().isoformat(),
+                    translated_count=translated_count,
+                    failed_count=len(failed_items),
+                    failed_items=failed_items[:500],
+                )
+                _notify_ui_i18n_job_done(
+                    job_id=job_id,
+                    succeeded=False,
+                    translated_count=translated_count,
+                    failed_count=len(failed_items),
+                    notify_username=notify_username,
+                )
+                return
+            _set_ui_i18n_job(
+                job_id,
+                status="succeeded",
+                finished_at=datetime.utcnow().isoformat(),
+                translated_count=translated_count,
+                failed_count=len(failed_items),
+                failed_items=failed_items[:500],
+            )
+            _notify_ui_i18n_job_done(
+                job_id=job_id,
+                succeeded=True,
+                translated_count=translated_count,
+                failed_count=len(failed_items),
+                notify_username=notify_username,
+            )
+        except Exception as e:
+            _set_ui_i18n_job(
+                job_id,
+                status="failed",
+                finished_at=datetime.utcnow().isoformat(),
+                translated_count=translated_count,
+                failed_count=len(failed_items),
+                error=str(e),
+                failed_items=failed_items[:500],
+            )
+            logger.warning("ui i18n background job failed job_id=%s err=%r", job_id, e)
+            _notify_ui_i18n_job_done(
+                job_id=job_id,
+                succeeded=False,
+                translated_count=translated_count,
+                failed_count=len(failed_items),
+                notify_username=notify_username,
+            )
+    finally:
+        heartbeat_stop.set()
+
+
+@app.get("/api/i18n/dictionary/{target_lang}")
+def i18n_dictionary(target_lang: str):
+    lang = normalize_language(target_lang)
+    if lang not in ("zh-cn", "zh-tw", "ko"):
+        raise HTTPException(400, "target_lang is not supported")
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(models.UII18nDictionary)
+            .filter(models.UII18nDictionary.target_lang == lang)
+            .all()
+        )
+        items = {str(r.source_text): str(r.translated_text or "") for r in rows if r and r.source_text}
+        updated_row = (
+            db.query(models.UII18nDictionary.updated_at)
+            .filter(models.UII18nDictionary.target_lang == lang)
+            .order_by(models.UII18nDictionary.updated_at.desc())
+            .first()
+        )
+        updated_at = updated_row[0].isoformat() if updated_row and updated_row[0] else _UI_I18N_PUBLISHED_UPDATED_AT
+    finally:
+        db.close()
+    return {
+        "target_lang": lang,
+        "count": len(items),
+        "updated_at": updated_at,
+        "items": items,
+    }
+
+
+@app.post("/api/admin/i18n/jobs/start")
+def admin_start_i18n_job(
+    payload: AdminUiI18nJobStartRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    resume_from_job_id = str(payload.resume_from_job_id or "").strip()
+    resume_from = None
+    force_source_texts: list[str] | None = None
+    source_items: list[tuple[str, str]] = []
+    target_langs: list[str] = []
+    batch_size = max(1, min(50, int(payload.batch_size or 10)))
+    notify_username = (payload.notify_username or "demo02").strip() or "demo02"
+    for raw in payload.target_langs or []:
+        try:
+            lang = normalize_language(raw)
+        except Exception:
+            continue
+        if lang in ("zh-cn", "zh-tw", "ko") and lang not in target_langs:
+            target_langs.append(lang)
+
+    if resume_from_job_id:
+        row = _load_ui_i18n_job_row(resume_from_job_id)
+        if not row:
+            raise HTTPException(404, "resume source job not found")
+        status = str(getattr(row, "status", "") or "").strip()
+        if status not in ("failed", "canceled"):
+            raise HTTPException(400, "resume source job must be failed or canceled")
+        source_items = _normalize_ui_i18n_source_items(_json_loads_list(getattr(row, "source_items_json", None)))
+        if not source_items:
+            raise HTTPException(400, "resume source has no valid source_items")
+        for raw in _json_loads_list(getattr(row, "target_langs_json", None)):
+            try:
+                lang = normalize_language(str(raw))
+            except Exception:
+                continue
+            if lang in ("zh-cn", "zh-tw", "ko") and lang not in target_langs:
+                target_langs.append(lang)
+        if not target_langs:
+            target_langs = ["zh-cn", "zh-tw", "ko"]
+        batch_size = max(1, min(50, int(getattr(row, "batch_size", batch_size) or batch_size)))
+        resume_from = _build_ui_i18n_resume_context(row)
+    else:
+        if bool(payload.only_untranslated):
+            source_items = _collect_ui_i18n_untranslated_source_items(
+                db,
+                target_langs=target_langs or ["zh-cn", "zh-tw", "ko"],
+                limit=int(payload.untranslated_limit or 500),
+                include_same_as_source=bool(payload.include_same_as_source),
+                include_kana=bool(payload.include_kana),
+            )
+            if not source_items:
+                raise HTTPException(400, "未翻訳の残件が見つかりません")
+            force_source_texts = [text for _src, text in source_items if (text or "").strip()]
+            if not target_langs:
+                target_langs = ["zh-cn", "zh-tw", "ko"]
+        else:
+            raw_items = payload.source_items or []
+            if not raw_items:
+                raise HTTPException(400, "source_items is required")
+            source_items = _normalize_ui_i18n_source_items(raw_items)
+            if not source_items:
+                raise HTTPException(400, "valid source_items is required")
+
+        if not target_langs:
+            target_langs = ["zh-cn", "zh-tw", "ko"]
+
+    if len(source_items) > 10000:
+        raise HTTPException(400, "source_items must be <= 10000")
+
+    job_id = secrets.token_hex(8)
+    now = datetime.utcnow().isoformat()
+    initial_processed = int(resume_from.get("processed_chunks") or 0) if isinstance(resume_from, dict) else 0
+    initial_translated = int(resume_from.get("translated_count") or 0) if isinstance(resume_from, dict) else 0
+    initial_failed_items = list(resume_from.get("failed_items") or [])[:500] if isinstance(resume_from, dict) else []
+    job = {
+        "job_id": job_id,
+        "status": "pending",
+        "created_at": now,
+        "updated_at": now,
+        "finished_at": None,
+        "cancel_requested": False,
+        "target_langs": target_langs,
+        "batch_size": batch_size,
+        "notify_username": notify_username,
+        "source_item_count": len(source_items),
+        "total_chunks": 0,
+        "processed_chunks": max(0, initial_processed),
+        "translated_count": max(0, initial_translated),
+        "failed_count": len(initial_failed_items),
+        "current_target_lang": str(resume_from.get("target_lang")) if isinstance(resume_from, dict) else None,
+        "current_source_lang": str(resume_from.get("source_lang")) if isinstance(resume_from, dict) else None,
+        "current_offset": int(resume_from.get("offset") or 0) if isinstance(resume_from, dict) else 0,
+        "current_chunk_size": 0,
+        "failed_items": initial_failed_items,
+        "error": None,
+        "hang_notified": False,
+    }
+    with _UI_I18N_JOB_LOCK:
+        _UI_I18N_JOBS[job_id] = job
+        _UI_I18N_JOB_ORDER.append(job_id)
+        if len(_UI_I18N_JOB_ORDER) > _UI_I18N_JOB_MAX_KEEP:
+            old = _UI_I18N_JOB_ORDER.pop(0)
+            _UI_I18N_JOBS.pop(old, None)
+    _create_ui_i18n_job_row(job, source_items)
+    worker = threading.Thread(
+        target=_run_ui_i18n_background_job,
+        kwargs={
+            "job_id": job_id,
+            "source_items": source_items,
+            "target_langs": target_langs,
+            "batch_size": batch_size,
+            "notify_username": notify_username,
+            "resume_from": resume_from,
+            "force_source_texts": force_source_texts,
+        },
+        name=f"ui-i18n-job-{job_id}",
+        daemon=True,
+    )
+    worker.start()
+    return {"job_id": job_id, "status": "pending"}
+
+
+@app.get("/api/admin/i18n/jobs")
+def admin_list_i18n_jobs(
+    request: Request,
+    limit: int = 20,
+):
+    require_admin(request)
+    return _ui_i18n_list_jobs(limit=limit)
+
+
+@app.get("/api/admin/i18n/jobs/{job_id}")
+def admin_i18n_job_status(
+    job_id: str,
+    request: Request,
+):
+    require_admin(request)
+    snap = _ui_i18n_job_snapshot(job_id)
+    if not snap:
+        raise HTTPException(404, "job not found")
+    return snap
+
+
+@app.post("/api/admin/i18n/jobs/{job_id}/cancel")
+def admin_cancel_i18n_job(
+    job_id: str,
+    request: Request,
+):
+    require_admin(request)
+    snap = _ui_i18n_job_snapshot(job_id)
+    if not snap:
+        raise HTTPException(404, "job not found")
+    if snap.get("status") in ("succeeded", "failed", "canceled"):
+        return {"ok": True, "already_finished": True}
+    _set_ui_i18n_job(job_id, cancel_requested=True)
+    return {"ok": True}
+
+
+@app.post("/api/admin/i18n/retranslate_remaining")
+def admin_retranslate_remaining_i18n(
+    payload: AdminUiI18nRetranslateRemainingRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    target_langs: list[str] = []
+    for raw in payload.target_langs or []:
+        lang = normalize_language(str(raw))
+        if lang in ("zh-cn", "zh-tw", "ko") and lang not in target_langs:
+            target_langs.append(lang)
+    if not target_langs:
+        target_langs = ["zh-cn", "zh-tw", "ko"]
+
+    include_same = bool(payload.include_same_as_source)
+    include_kana = bool(payload.include_kana)
+    if not include_same and not include_kana:
+        raise HTTPException(400, "include_same_as_source か include_kana のどちらかを有効にしてください")
+
+    limit = max(1, min(5000, int(payload.limit or 500)))
+    batch_size = max(1, min(100, int(payload.batch_size or 20)))
+    kana_pattern = r"[ぁ-んァ-ヶー]"
+
+    conditions = []
+    if include_same:
+        conditions.append(models.UII18nDictionary.translated_text == models.UII18nDictionary.source_text)
+    if include_kana:
+        conditions.append(models.UII18nDictionary.translated_text.op("REGEXP")(kana_pattern))
+
+    rows = (
+        db.query(models.UII18nDictionary)
+        .filter(models.UII18nDictionary.target_lang.in_(target_langs))
+        .filter(or_(*conditions))
+        .order_by(models.UII18nDictionary.updated_at.asc(), models.UII18nDictionary.id.asc())
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return {
+            "ok": True,
+            "target_langs": target_langs,
+            "matched": 0,
+            "processed": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "failed": 0,
+            "dry_run": bool(payload.dry_run),
+        }
+
+    grouped: dict[str, list[str]] = {}
+    before_map: dict[tuple[str, str], str] = {}
+    for row in rows:
+        lang = str(row.target_lang or "").strip()
+        src = str(row.source_text or "").strip()
+        tr = str(row.translated_text or "").strip()
+        if not lang or not src:
+            continue
+        grouped.setdefault(lang, []).append(src)
+        before_map[(lang, src)] = tr
+
+    if bool(payload.dry_run):
+        per_lang_counts = {lang: len(texts) for lang, texts in grouped.items()}
+        samples = []
+        for row in rows[:20]:
+            samples.append(
+                {
+                    "target_lang": row.target_lang,
+                    "source_text": row.source_text,
+                    "translated_text": row.translated_text,
+                }
+            )
+        return {
+            "ok": True,
+            "target_langs": target_langs,
+            "matched": len(rows),
+            "per_lang": per_lang_counts,
+            "dry_run": True,
+            "samples": samples,
+        }
+
+    processed = 0
+    updated = 0
+    unchanged = 0
+    failed = 0
+
+    for lang in target_langs:
+        texts = grouped.get(lang, [])
+        if not texts:
+            continue
+        for start in range(0, len(texts), batch_size):
+            chunk = texts[start : start + batch_size]
+            try:
+                out = _translate_ui_texts(
+                    source_language="ja",
+                    target_language=lang,
+                    texts=chunk,
+                    force=True,
+                )
+            except Exception as e:
+                failed += len(chunk)
+                logger.warning("i18n retranslate batch failed target=%s err=%r", lang, e)
+                continue
+            _persist_ui_i18n_dictionary_items(lang, out)
+            for src in chunk:
+                processed += 1
+                before = before_map.get((lang, src), "")
+                after = str(out.get(src) or "").strip()
+                if not after:
+                    failed += 1
+                elif after != before:
+                    updated += 1
+                else:
+                    unchanged += 1
+
+    return {
+        "ok": True,
+        "target_langs": target_langs,
+        "matched": len(rows),
+        "processed": processed,
+        "updated": updated,
+        "unchanged": unchanged,
+        "failed": failed,
+        "dry_run": False,
+    }
+
+
 def upsert_novel_translation(
     db: Session,
     *,
@@ -9132,52 +11763,98 @@ def upsert_novel_translation(
     source_language: str,
     tag_names: list[str],
 ) -> None:
-    target_language = other_language(source_language)
-    prompt = _build_novel_translation_prompt(
-        source_language,
-        target_language,
-        novel.title,
-        novel.description,
-        tag_names,
-    )
     provider = _translation_provider()
-    system_prompt = _translation_system_prompt(source_language, target_language)
-    try:
-        data, _tokens, _model = _call_translation_ai_json(
-            prompt=prompt,
-            system_prompt=system_prompt,
-        )
-    except Exception as e:
-        logger.warning("translation failed novel_id=%s provider=%s err=%r", novel.id, provider, e)
-        if AUTO_TRANSLATION_REQUIRED:
-            raise
-        return
+    targets = translation_target_languages(source_language)
+    for target_language in targets:
+        try:
+            prompt = _build_novel_translation_prompt(
+                source_language,
+                target_language,
+                novel.title,
+                novel.description,
+                tag_names,
+            )
+            system_prompt = _translation_system_prompt(source_language, target_language)
+            data, _tokens, _model = _call_translation_ai_json(
+                prompt=prompt,
+                system_prompt=system_prompt,
+            )
+            title = str(data.get("title") or "").strip() or novel.title
+            description = str(data.get("description") or "").strip() or novel.description
+            tags = normalize_translated_tags(data.get("tags"))
+        except Exception as e:
+            logger.warning(
+                "translation full-pass failed novel_id=%s target=%s provider=%s err=%r; trying field fallback",
+                novel.id,
+                target_language,
+                provider,
+                e,
+            )
+            try:
+                title = _translate_text_field(
+                    source_language=source_language,
+                    target_language=target_language,
+                    text_value=novel.title or "",
+                    field_name="novel title",
+                ) or novel.title
+                description = _translate_text_with_chunk_fallback(
+                    source_language=source_language,
+                    target_language=target_language,
+                    text_value=novel.description or "",
+                    field_name="novel description",
+                    steps_env="NOVEL_TRANSLATION_CHUNK_STEPS",
+                ) or novel.description
+                tags = []
+                for raw_tag in tag_names:
+                    tag_text = (raw_tag or "").strip()
+                    if not tag_text:
+                        continue
+                    tr_tag = _translate_text_field(
+                        source_language=source_language,
+                        target_language=target_language,
+                        text_value=tag_text,
+                        field_name="novel tag",
+                    )
+                    tags.append((tr_tag or tag_text).strip())
+                tags = _normalize_tag_names(tags)
+            except Exception as e2:
+                logger.warning(
+                    "translation failed novel_id=%s target=%s provider=%s err=%r",
+                    novel.id,
+                    target_language,
+                    provider,
+                    e2,
+                )
+                if AUTO_TRANSLATION_REQUIRED:
+                    raise
+                continue
 
-    title = str(data.get("title") or "").strip() or novel.title
-    description = str(data.get("description") or "").strip() or novel.description
-    tags = normalize_translated_tags(data.get("tags"))
-
-    translation = (
-        db.query(models.NovelTranslation)
-        .filter(
-            models.NovelTranslation.novel_id == novel.id,
-            models.NovelTranslation.language == target_language,
+        translation = (
+            db.query(models.NovelTranslation)
+            .filter(
+                models.NovelTranslation.novel_id == novel.id,
+                models.NovelTranslation.language == target_language,
+            )
+            .first()
         )
-        .first()
+        if not translation:
+            translation = models.NovelTranslation(
+                novel_id=novel.id,
+                language=target_language,
+                title=title,
+                description=description,
+                tag_names=serialize_tag_names(tags),
+            )
+            db.add(translation)
+        else:
+            translation.title = title
+            translation.description = description
+            translation.tag_names = serialize_tag_names(tags)
+    _notify_multilingual_ready_for_novel(
+        db,
+        novel=novel,
+        source_language=source_language,
     )
-    if not translation:
-        translation = models.NovelTranslation(
-            novel_id=novel.id,
-            language=target_language,
-            title=title,
-            description=description,
-            tag_names=serialize_tag_names(tags),
-        )
-        db.add(translation)
-    else:
-        translation.title = title
-        translation.description = description
-        translation.tag_names = serialize_tag_names(tags)
 
 
 def upsert_episode_translation(
@@ -9185,49 +11862,104 @@ def upsert_episode_translation(
     *,
     episode: models.Episode,
     source_language: str,
+    force_title: bool = False,
+    force_body: bool = False,
+    force_tags: bool = False,
 ) -> None:
-    target_language = other_language(source_language)
-    prompt = _build_episode_translation_prompt(
-        source_language,
-        target_language,
-        episode.title,
-        episode.body,
-    )
     provider = _translation_provider()
-    system_prompt = _translation_system_prompt(source_language, target_language)
-    try:
-        data, _tokens, _model = _call_translation_ai_json(
-            prompt=prompt,
-            system_prompt=system_prompt,
+    targets = translation_target_languages(source_language)
+    source_title = (episode.title or "").strip()
+    source_body = episode.body or ""
+    source_tags = _normalize_tag_names(get_episode_tag_names(db, episode.id))
+    for target_language in targets:
+        translation = (
+            db.query(models.EpisodeTranslation)
+            .filter(
+                models.EpisodeTranslation.episode_id == episode.id,
+                models.EpisodeTranslation.language == target_language,
+            )
+            .first()
         )
-    except Exception as e:
-        logger.warning("translation failed episode_id=%s provider=%s err=%r", episode.id, provider, e)
-        if AUTO_TRANSLATION_REQUIRED:
-            raise
-        return
-
-    title = str(data.get("title") or "").strip() or episode.title
-    body = str(data.get("body") or "").strip() or episode.body
-
-    translation = (
-        db.query(models.EpisodeTranslation)
-        .filter(
-            models.EpisodeTranslation.episode_id == episode.id,
-            models.EpisodeTranslation.language == target_language,
+        existing_title = (getattr(translation, "title", "") or "").strip() if translation else ""
+        existing_body = getattr(translation, "body", None) if translation else None
+        existing_tags = (
+            _normalize_tag_names(deserialize_tag_names(getattr(translation, "tag_names", None)))
+            if translation
+            else []
         )
-        .first()
+        need_title = (force_title and bool(source_title)) or not existing_title
+        need_body = (force_body and bool(source_body.strip())) or (
+            bool(source_body.strip()) and not (existing_body or "").strip()
+        )
+        need_tags = (force_tags and bool(source_tags)) or (
+            bool(source_tags) and not existing_tags
+        )
+        if not need_title and not need_body and not need_tags:
+            continue
+
+        title = existing_title or source_title
+        body = existing_body if existing_body is not None else source_body
+        tags = existing_tags
+        try:
+            if need_title:
+                title = _translate_text_field(
+                    source_language=source_language,
+                    target_language=target_language,
+                    text_value=source_title,
+                    field_name="episode title",
+                ) or source_title
+            if need_body:
+                body = _translate_text_with_chunk_fallback(
+                    source_language=source_language,
+                    target_language=target_language,
+                    text_value=source_body,
+                    field_name="episode body",
+                    steps_env="EPISODE_TRANSLATION_CHUNK_STEPS",
+                ) or source_body
+            if need_tags:
+                tags = []
+                for raw_tag in source_tags:
+                    tag_text = (raw_tag or "").strip()
+                    if not tag_text:
+                        continue
+                    tr_tag = _translate_text_field(
+                        source_language=source_language,
+                        target_language=target_language,
+                        text_value=tag_text,
+                        field_name="episode tag",
+                    )
+                    tags.append((tr_tag or tag_text).strip())
+                tags = _normalize_tag_names(tags)
+        except Exception as e:
+            logger.warning(
+                "translation failed episode_id=%s target=%s provider=%s err=%r",
+                episode.id,
+                target_language,
+                provider,
+                e,
+            )
+            if AUTO_TRANSLATION_REQUIRED:
+                raise
+            continue
+
+        if not translation:
+            translation = models.EpisodeTranslation(
+                episode_id=episode.id,
+                language=target_language,
+                title=title,
+                body=body,
+                tag_names=serialize_tag_names(tags),
+            )
+            db.add(translation)
+        else:
+            translation.title = title
+            translation.body = body
+            translation.tag_names = serialize_tag_names(tags)
+    _notify_multilingual_ready_for_episode(
+        db,
+        episode=episode,
+        source_language=source_language,
     )
-    if not translation:
-        translation = models.EpisodeTranslation(
-            episode_id=episode.id,
-            language=target_language,
-            title=title,
-            body=body,
-        )
-        db.add(translation)
-    else:
-        translation.title = title
-        translation.body = body
 
 
 def get_novel_tag_names(db: Session, novel_id: int) -> list[str]:
@@ -9241,11 +11973,23 @@ def get_novel_tag_names(db: Session, novel_id: int) -> list[str]:
     return [row[0] for row in rows]
 
 
+def get_episode_tag_names(db: Session, episode_id: int) -> list[str]:
+    rows = (
+        db.query(models.Tag.name)
+        .join(models.EpisodeTag, models.Tag.id == models.EpisodeTag.tag_id)
+        .filter(models.EpisodeTag.episode_id == episode_id)
+        .order_by(models.Tag.name.asc())
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
 @app.post("/api/novels/")
 @app.post("/api/novels")
 def create_novel(
     payload: schemas.NovelCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
@@ -9255,6 +11999,7 @@ def create_novel(
     """
     # ★ ログイン必須 → author_id に使う
     user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
     language = normalize_language(getattr(payload, "language", None))
 
     novel = models.Novel(
@@ -9267,6 +12012,7 @@ def create_novel(
         like_count=0,
         is_public=getattr(payload, "is_public", True),
         language=language,
+        site_key=site_key,
     )
     db.add(novel)
     db.commit()
@@ -9290,14 +12036,21 @@ def create_novel(
         nt = models.NovelTag(novel_id=novel.id, tag_id=tag.id)
         db.add(nt)
 
-    upsert_novel_translation(
-        db,
-        novel=novel,
-        source_language=language,
-        tag_names=normalized_tag_names,
-    )
     db.commit()
     db.refresh(novel)
+
+    if AUTO_TRANSLATION_REQUIRED:
+        upsert_novel_translation(
+            db,
+            novel=novel,
+            source_language=language,
+            tag_names=normalized_tag_names,
+        )
+        db.commit()
+        db.refresh(novel)
+    else:
+        background_tasks.add_task(_background_upsert_novel_translation, novel.id)
+
     if bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
     return novel
@@ -9309,7 +12062,8 @@ def list_novels(
     mine: bool = False,
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.Novel)
+    site_key = resolve_site_key(request)
+    q = db.query(models.Novel).filter(models.Novel.site_key == site_key)
 
     if mine:
         user = require_current_user(request, db)
@@ -9359,11 +12113,19 @@ def update_novel(
     novel_id: int,
     payload: schemas.NovelUpdate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+    novel = (
+        db.query(models.Novel)
+        .filter(
+            models.Novel.id == novel_id,
+            models.Novel.site_key == resolve_site_key(request),
+        )
+        .first()
+    )
     db.add(novel)
     db.refresh(novel)
     if not novel:
@@ -9466,17 +12228,20 @@ def update_novel(
         needs_translation = True
 
     if needs_translation:
-        tag_names_for_translation = (
-            updated_tag_names
-            if updated_tag_names is not None
-            else get_novel_tag_names(db, novel.id)
-        )
-        upsert_novel_translation(
-            db,
-            novel=novel,
-            source_language=normalize_language(getattr(novel, "language", None)),
-            tag_names=tag_names_for_translation,
-        )
+        if AUTO_TRANSLATION_REQUIRED:
+            tag_names_for_translation = (
+                updated_tag_names
+                if updated_tag_names is not None
+                else get_novel_tag_names(db, novel.id)
+            )
+            upsert_novel_translation(
+                db,
+                novel=novel,
+                source_language=normalize_language(getattr(novel, "language", None)),
+                tag_names=tag_names_for_translation,
+            )
+        else:
+            background_tasks.add_task(_background_upsert_novel_translation, novel.id)
     db.commit()
     db.refresh(novel)
     if (not was_public) and bool(getattr(novel, "is_public", True)):
@@ -9492,7 +12257,12 @@ def delete_novel(
 ):
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).filter(models.Novel.id == novel_id).first()
+    site_key = resolve_site_key(request)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
     db.add(novel)
     db.refresh(novel)
     db.add(novel)
@@ -9574,14 +12344,18 @@ def delete_novel(
     # Episodes 削除
     db.execute(text("DELETE FROM episodes WHERE novel_id = :nid"), {"nid": novel_id})
     # Novel 削除
-    db.execute(text("DELETE FROM novels WHERE id = :nid"), {"nid": novel_id})
+    db.execute(
+        text("DELETE FROM novels WHERE id = :nid AND site_key = :site_key"),
+        {"nid": novel_id, "site_key": site_key},
+    )
     db.commit()
     return {"ok": True}
 
 
 # =========================================
 @app.get("/api/novels/{novel_id}/comments")
-def get_comments(novel_id: int, db: Session = Depends(get_db)):
+def get_comments(novel_id: int, request: Request, db: Session = Depends(get_db)):
+    _ = get_novel_in_site_or_404(db, request, novel_id)
     comments = (
         db.query(models.NovelComment)
         .filter(models.NovelComment.novel_id == novel_id)
@@ -9596,9 +12370,7 @@ def post_comment(novel_id: int, payload: dict = Body(...), request: Request = No
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(400, "コメントが空です")
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, novel_id)
     c = models.NovelComment(novel_id=novel_id, user_id=user.id, body=body)
     db.add(c)
     if novel.author_id != user.id:
@@ -9628,7 +12400,8 @@ def post_comment(novel_id: int, payload: dict = Body(...), request: Request = No
 
 # =========================================
 @app.get("/api/episodes/{episode_id}/comments")
-def get_episode_comments(episode_id: int, db: Session = Depends(get_db)):
+def get_episode_comments(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    _ = get_episode_in_site_or_404(db, request, episode_id)
     comments = (
         db.query(models.EpisodeComment)
         .filter(models.EpisodeComment.episode_id == episode_id)
@@ -9658,12 +12431,10 @@ def post_episode_comment(
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(400, "コメントが空です")
-    episode = db.query(models.Episode).get(episode_id)
-    if not episode:
-        raise HTTPException(404, "エピソードが存在しません")
+    episode = get_episode_in_site_or_404(db, request, episode_id)
     comment = models.EpisodeComment(episode_id=episode_id, user_id=user.id, body=body)
     db.add(comment)
-    novel = db.query(models.Novel).get(episode.novel_id) if episode.novel_id else None
+    novel = get_novel_in_site_or_404(db, request, episode.novel_id) if episode.novel_id else None
     if novel and novel.author_id != user.id:
         title = "エピソードにコメントが届きました"
         snippet = _truncate_text(body, 120)
@@ -9704,6 +12475,7 @@ def get_novel_detail(
     except Exception:
         user = None
 
+    site_key = resolve_site_key(request)
     # 小説本体＋著者＋タグ
     novel = (
         db.query(models.Novel)
@@ -9711,7 +12483,7 @@ def get_novel_detail(
             selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
             selectinload(models.Novel.author),
         )
-        .filter(models.Novel.id == novel_id)
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
         .first()
     )
     if not novel:
@@ -9769,9 +12541,7 @@ def get_novel_detail(
             is not None
         )
 
-    is_premium_user = FORCE_ALL_PREMIUM or (
-        bool(getattr(user, "is_premium", False)) if user else False
-    )
+    is_premium_user = is_effective_premium_user(user)
     is_free_time = is_free_reading_time()
     can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
 
@@ -9780,7 +12550,7 @@ def get_novel_detail(
         .options(
             selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag)
         )
-        .filter(models.Episode.novel_id == novel_id)
+        .filter(models.Episode.novel_id == novel_id, models.Episode.site_key == site_key)
     )
     if user and novel.author_id == user.id:
         episodes = episode_q.order_by(models.Episode.episode_number).all()
@@ -9838,8 +12608,17 @@ def get_novel_detail(
 def get_novel_translation(
     novel_id: int,
     lang: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    novel = get_novel_in_site_or_404(db, request, novel_id)
+    if is_novel_draft(novel):
+        try:
+            user = require_current_user(request, db)
+        except Exception:
+            user = None
+        if not user or novel.author_id != user.id:
+            raise HTTPException(404, "小説が存在しません")
     language = normalize_language(lang)
     translation = (
         db.query(models.NovelTranslation)
@@ -9865,14 +12644,34 @@ def get_novel_translation(
 # =========================================
 # 公開: 小説一覧（トップ用）タグ付き
 # =========================================
+def _expand_public_search_aliases(term: str) -> list[str]:
+    raw = (term or "").strip()
+    if not raw:
+        return []
+    lower = raw.lower()
+    if lower in {"レクシー", "れくしー", "レクシス", "れくしす", "lexis"}:
+        return ["レクシー", "れくしー", "レクシス", "れくしす", "Lexis", "lexis"]
+    return [raw]
+
+
 @app.get("/api/public/novels")
 def list_public_novels(
     request: Request,
+    background_tasks: BackgroundTasks,
     q: str | None = None,
     exclude: str | None = None,
     tag: str | None = None,
+    lang: str | None = None,
     db: Session = Depends(get_db),
 ):
+    site_key = resolve_site_key(request)
+    target_language = None
+    raw_lang = (lang or "").strip()
+    if raw_lang:
+        try:
+            target_language = normalize_language(raw_lang)
+        except Exception:
+            target_language = None
     # --- ユーザー取得（ログインしていない場合は None） ---
     try:
         user = require_current_user(request, db)
@@ -9891,7 +12690,7 @@ def list_public_novels(
         )
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
     )
-    query = query.filter(models.Novel.is_public == True)
+    query = query.filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
 
     # --- 公開ステータス (Draft/Public) ---
     # status 列がある前提で、公開作品だけ一覧に出す
@@ -9960,17 +12759,21 @@ def list_public_novels(
                 terms = terms[1:]
 
             for term in terms:
-                like = f"%{term}%"
-                query = query.filter(
-                    or_(
-                        models.Novel.title.ilike(like),
-                        models.Novel.description.ilike(like),
-                        models.User.username.ilike(like),
-                        episode_match_exists(like),
-                        novel_tag_match_exists(like),
-                        episode_tag_match_exists(like),
+                alias_conditions = []
+                for candidate in _expand_public_search_aliases(term):
+                    like = f"%{candidate}%"
+                    alias_conditions.append(
+                        or_(
+                            models.Novel.title.ilike(like),
+                            models.Novel.description.ilike(like),
+                            models.User.username.ilike(like),
+                            episode_match_exists(like),
+                            novel_tag_match_exists(like),
+                            episode_tag_match_exists(like),
+                        )
                     )
-                )
+                if alias_conditions:
+                    query = query.filter(or_(*alias_conditions))
 
     if exclude:
         raw = exclude.strip()
@@ -9982,17 +12785,21 @@ def list_public_novels(
                     if username_term:
                         query = query.filter(~models.User.username.ilike(f"%{username_term}%"))
                     continue
-                like = f"%{term}%"
-                query = query.filter(
-                    ~or_(
-                        models.Novel.title.ilike(like),
-                        models.Novel.description.ilike(like),
-                        models.User.username.ilike(like),
-                        episode_match_exists(like),
-                        novel_tag_match_exists(like),
-                        episode_tag_match_exists(like),
+                alias_conditions = []
+                for candidate in _expand_public_search_aliases(term):
+                    like = f"%{candidate}%"
+                    alias_conditions.append(
+                        or_(
+                            models.Novel.title.ilike(like),
+                            models.Novel.description.ilike(like),
+                            models.User.username.ilike(like),
+                            episode_match_exists(like),
+                            novel_tag_match_exists(like),
+                            episode_tag_match_exists(like),
+                        )
                     )
-                )
+                if alias_conditions:
+                    query = query.filter(~or_(*alias_conditions))
 
     # --- タグフィルタ ---
     if tag:
@@ -10037,6 +12844,7 @@ def list_public_novels(
                 models.Episode.id,
             )
             .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
             .filter(models.Episode.cover_image_url.isnot(None))
             .filter(models.Episode.status == "public")
             .filter(models.Episode.is_public == True)
@@ -10065,6 +12873,12 @@ def list_public_novels(
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+    translated_cards = _resolve_public_novel_card_translations(
+        db,
+        novels=novels,
+        target_language=target_language,
+        background_tasks=background_tasks,
+    )
 
     liked_ids = set()
     favorited_ids = set()
@@ -10090,12 +12904,13 @@ def list_public_novels(
 
     result = []
     for novel in novels:
-        tag_names = [nt.tag.name for nt in novel.novel_tags]
+        translated = translated_cards.get(int(novel.id), {})
+        tag_names = translated.get("tag_names") or [nt.tag.name for nt in novel.novel_tags]
         result.append(
             {
                 "id": novel.id,
-                "title": novel.title,
-                "description": novel.description,
+                "title": translated.get("title", novel.title),
+                "description": translated.get("description", novel.description),
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": novel.author.username if novel.author else None,
@@ -10116,9 +12931,19 @@ def list_public_novels(
 @app.get("/api/public/novels/recommended")
 def list_recommended_public_novels(
     request: Request,
+    background_tasks: BackgroundTasks,
     limit: int = Query(12, ge=1, le=50),
+    lang: str | None = None,
     db: Session = Depends(get_db),
 ):
+    site_key = resolve_site_key(request)
+    target_language = None
+    raw_lang = (lang or "").strip()
+    if raw_lang:
+        try:
+            target_language = normalize_language(raw_lang)
+        except Exception:
+            target_language = None
     user = require_current_user(request, db)
     favorite_tag_weights = get_user_favorite_tag_weights(db, user.id)
     if not favorite_tag_weights:
@@ -10138,6 +12963,7 @@ def list_recommended_public_novels(
             selectinload(models.Novel.author),
         )
         .filter(models.Novel.is_public == True)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.author_id != user.id)
         .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
     )
@@ -10183,6 +13009,7 @@ def list_recommended_public_novels(
                 models.Episode.id,
             )
             .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
             .filter(models.Episode.cover_image_url.isnot(None))
             .filter(models.Episode.status == "public")
             .filter(models.Episode.is_public == True)
@@ -10228,16 +13055,22 @@ def list_recommended_public_novels(
         )
         .all()
     } if novel_ids else set()
+    translated_cards = _resolve_public_novel_card_translations(
+        db,
+        novels=novels,
+        target_language=target_language,
+        background_tasks=background_tasks,
+    )
 
     return [
         {
             "id": novel.id,
-            "title": novel.title,
-            "description": novel.description,
+            "title": translated_cards.get(int(novel.id), {}).get("title", novel.title),
+            "description": translated_cards.get(int(novel.id), {}).get("description", novel.description),
             "created_at": novel.created_at,
             "author_id": novel.author_id,
             "author_username": novel.author.username if novel.author else None,
-            "tag_names": [
+            "tag_names": translated_cards.get(int(novel.id), {}).get("tag_names") or [
                 nt.tag.name
                 for nt in (getattr(novel, "novel_tags", []) or [])
                 if getattr(nt, "tag", None) is not None
@@ -10259,13 +13092,23 @@ def list_recommended_public_novels(
 @app.get("/api/public/novels/ranking")
 def list_public_novel_rankings(
     request: Request,
+    background_tasks: BackgroundTasks,
     sort: str = Query("likes"),
     limit: int = Query(10, ge=1, le=50),
     q: str | None = None,
     exclude: str | None = None,
     tag: str | None = None,
+    lang: str | None = None,
     db: Session = Depends(get_db),
 ):
+    site_key = resolve_site_key(request)
+    target_language = None
+    raw_lang = (lang or "").strip()
+    if raw_lang:
+        try:
+            target_language = normalize_language(raw_lang)
+        except Exception:
+            target_language = None
     if sort not in ("likes", "favorites", "views"):
         raise HTTPException(400, "sort は likes / favorites / views のみ指定できます")
     user = None
@@ -10276,7 +13119,7 @@ def list_public_novel_rankings(
             user = None
     else:
         user = require_current_user(request, db)
-        if not bool(getattr(user, "is_premium", False)):
+        if not is_effective_premium_user(user):
             raise HTTPException(403, "ランキングはプレミアム会員限定です")
 
     user_age = None
@@ -10290,7 +13133,7 @@ def list_public_novel_rankings(
             selectinload(models.Novel.author),
         )
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
-        .filter(models.Novel.is_public == True)
+        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
     )
 
     def episode_match_exists(like: str):
@@ -10349,17 +13192,21 @@ def list_public_novel_rankings(
                 terms = terms[1:]
 
             for term in terms:
-                like = f"%{term}%"
-                query = query.filter(
-                    or_(
-                        models.Novel.title.ilike(like),
-                        models.Novel.description.ilike(like),
-                        models.User.username.ilike(like),
-                        episode_match_exists(like),
-                        novel_tag_match_exists(like),
-                        episode_tag_match_exists(like),
+                alias_conditions = []
+                for candidate in _expand_public_search_aliases(term):
+                    like = f"%{candidate}%"
+                    alias_conditions.append(
+                        or_(
+                            models.Novel.title.ilike(like),
+                            models.Novel.description.ilike(like),
+                            models.User.username.ilike(like),
+                            episode_match_exists(like),
+                            novel_tag_match_exists(like),
+                            episode_tag_match_exists(like),
+                        )
                     )
-                )
+                if alias_conditions:
+                    query = query.filter(or_(*alias_conditions))
 
     if exclude:
         raw = exclude.strip()
@@ -10371,17 +13218,21 @@ def list_public_novel_rankings(
                     if username_term:
                         query = query.filter(~models.User.username.ilike(f"%{username_term}%"))
                     continue
-                like = f"%{term}%"
-                query = query.filter(
-                    ~or_(
-                        models.Novel.title.ilike(like),
-                        models.Novel.description.ilike(like),
-                        models.User.username.ilike(like),
-                        episode_match_exists(like),
-                        novel_tag_match_exists(like),
-                        episode_tag_match_exists(like),
+                alias_conditions = []
+                for candidate in _expand_public_search_aliases(term):
+                    like = f"%{candidate}%"
+                    alias_conditions.append(
+                        or_(
+                            models.Novel.title.ilike(like),
+                            models.Novel.description.ilike(like),
+                            models.User.username.ilike(like),
+                            episode_match_exists(like),
+                            novel_tag_match_exists(like),
+                            episode_tag_match_exists(like),
+                        )
                     )
-                )
+                if alias_conditions:
+                    query = query.filter(~or_(*alias_conditions))
 
     if tag:
         raw = tag.strip()
@@ -10447,6 +13298,7 @@ def list_public_novel_rankings(
                 models.Episode.id,
             )
             .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
             .filter(models.Episode.cover_image_url.isnot(None))
             .filter(models.Episode.status == "public")
             .filter(models.Episode.is_public == True)
@@ -10475,6 +13327,12 @@ def list_public_novel_rankings(
         )
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+    translated_cards = _resolve_public_novel_card_translations(
+        db,
+        novels=novels,
+        target_language=target_language,
+        background_tasks=background_tasks,
+    )
 
     liked_ids = set()
     favorited_ids = set()
@@ -10500,12 +13358,13 @@ def list_public_novel_rankings(
 
     result = []
     for idx, novel in enumerate(novels, start=1):
+        translated = translated_cards.get(int(novel.id), {})
         result.append(
             {
                 "rank": idx,
                 "id": novel.id,
-                "title": novel.title,
-                "description": novel.description,
+                "title": translated.get("title", novel.title),
+                "description": translated.get("description", novel.description),
                 "created_at": novel.created_at,
                 "author_id": novel.author_id,
                 "author_username": novel.author.username if novel.author else None,
@@ -10517,9 +13376,12 @@ def list_public_novel_rankings(
                 "is_favorited": novel.id in favorited_ids,
                 "cover_image_url": cover_map.get(novel.id),
                 "tags": [
-                    {"id": nt.tag.id, "name": nt.tag.name}
-                    for nt in (getattr(novel, "novel_tags", []) or [])
-                    if getattr(nt, "tag", None) is not None
+                    {"name": name}
+                    for name in (translated.get("tag_names") or [
+                        nt.tag.name
+                        for nt in (getattr(novel, "novel_tags", []) or [])
+                        if getattr(nt, "tag", None) is not None
+                    ])
                 ],
             }
         )
@@ -10542,7 +13404,7 @@ def read_public_user(username: str, db: Session = Depends(get_db)):
     return {
         "id": user.id,
         "username": user.username,
-        "is_premium": bool(getattr(user, "is_premium", False)),
+        "is_premium": is_effective_premium_user(user),
     }
 
 
@@ -10556,6 +13418,7 @@ def list_public_user_novels(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    site_key = resolve_site_key(request)
     uname = (username or "").strip()
     if not uname:
         raise HTTPException(404, "ユーザーが存在しません")
@@ -10576,6 +13439,7 @@ def list_public_user_novels(
     q = (
         db.query(models.Novel)
         .filter(models.Novel.author_id == author.id)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.is_public == True)
         .options(
             selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
@@ -10606,6 +13470,7 @@ def list_public_user_novels(
                 models.Episode.id,
             )
             .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
             .filter(models.Episode.cover_image_url.isnot(None))
             .filter(models.Episode.status == "public")
             .filter(models.Episode.is_public == True)
@@ -10659,6 +13524,7 @@ def list_public_user_favorites(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    site_key = resolve_site_key(request)
     uname = (username or "").strip()
     if not uname:
         raise HTTPException(404, "ユーザーが存在しません")
@@ -10680,6 +13546,7 @@ def list_public_user_favorites(
         db.query(models.Novel)
         .join(models.NovelFavorite, models.Novel.id == models.NovelFavorite.novel_id)
         .filter(models.NovelFavorite.user_id == user.id)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.is_public == True)
         .options(
             selectinload(models.Novel.author),
@@ -10712,6 +13579,7 @@ def list_public_user_favorites(
                 models.Episode.id,
             )
             .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
             .filter(models.Episode.cover_image_url.isnot(None))
             .filter(models.Episode.status == "public")
             .filter(models.Episode.is_public == True)
@@ -11004,25 +13872,30 @@ def is_episode_draft(ep: models.Episode) -> bool:
     return not bool(getattr(ep, "is_public", True))
 
 
+def is_novel_draft(novel: models.Novel) -> bool:
+    status_value = getattr(novel, "status", "public") or "public"
+    if status_value == "draft":
+        return True
+    return not bool(getattr(novel, "is_public", True))
+
+
 @app.post("/api/novels/{novel_id}/episodes")
 def create_episode(
     novel_id: int,
     payload: schemas.EpisodeCreate,
+    background_tasks: BackgroundTasks,
     request: Request,
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(novel_id)
+    site_key = resolve_site_key(request)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
     if not novel:
         raise HTTPException(404, "小説が存在しません")
-        db.commit()  # cleanup old broken code
-        db.add(novel)
-        db.commit()
-        db.refresh(novel)
-    db.commit()  # cleanup old broken code
-    db.add(novel)
-    db.commit()
-    db.refresh(novel)
     if novel.author_id != user.id:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
@@ -11050,10 +13923,10 @@ def create_episode(
         status=status_value,
         is_public=is_public,
         language=language,
+        site_key=site_key,
     )
     db.add(ep)
-    db.commit()
-    db.refresh(ep)
+    db.flush()  # assign ep.id
 
     # ★ エピソードタグ保存
     # ★ 押絵保存
@@ -11074,34 +13947,42 @@ def create_episode(
         db.add(epil)
 
 
-    for tag_name in payload.tag_names:
-        tag_name = tag_name.strip()
-        if not tag_name:
-            continue
-        tag = db.query(models.Tag).filter(models.Tag.name == tag_name).first()
-        if not tag:
-            tag = models.Tag(name=tag_name)
-            db.add(tag)
-            db.commit()
-            db.refresh(tag)
+    tags_by_name = _get_or_create_tags(db, list(getattr(payload, "tag_names", None) or []))
+    for tag in tags_by_name.values():
+        db.add(models.EpisodeTag(episode_id=ep.id, tag_id=tag.id))
 
-        et = models.EpisodeTag(episode_id=ep.id, tag_id=tag.id)
-        db.add(et)
-
-    upsert_episode_translation(
-        db,
-        episode=ep,
-        source_language=language,
+    # Translation/notifications are potentially slow (AI + fan-out). Defer to background
+    # so episode save returns quickly. If AUTO_TRANSLATION_REQUIRED is enabled, keep sync.
+    has_translatable_content = bool(
+        (ep.title or "").strip()
+        or (ep.body or "").strip()
+        or list(getattr(payload, "tag_names", None) or [])
     )
+    needs_translation = has_translatable_content and not is_episode_draft(ep)
     db.commit()
     db.refresh(ep)
+    if needs_translation:
+        if AUTO_TRANSLATION_REQUIRED:
+            upsert_episode_translation(db, episode=ep, source_language=language)
+            novel_for_translation = db.query(models.Novel).filter(models.Novel.id == ep.novel_id).first()
+            if novel_for_translation:
+                upsert_novel_translation(
+                    db,
+                    novel=novel_for_translation,
+                    source_language=normalize_language(getattr(novel_for_translation, "language", None)),
+                    tag_names=get_novel_tag_names(db, novel_for_translation.id),
+                )
+            db.commit()
+        else:
+            background_tasks.add_task(_background_upsert_episode_and_novel_translation, ep.id)
     if is_public:
-        notify_favorited_users_episode_published(db, novel=novel, episode=ep)
+        background_tasks.add_task(_background_notify_episode_published, novel_id, ep.id, site_key)
     return ep
 
 @app.put("/api/episodes/{episode_id}")
 def update_episode(
     episode_id: int,
+    background_tasks: BackgroundTasks,
     request: Request,
     payload: dict = Body(...),
     db: Session = Depends(get_db),
@@ -11110,9 +13991,7 @@ def update_episode(
     user = require_current_user(request, db)
 
     # 対象エピソード取得
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
+    ep = get_episode_in_site_or_404(db, request, episode_id)
     was_public = not is_episode_draft(ep)
 
     has_non_tag_change = False
@@ -11144,7 +14023,7 @@ def update_episode(
     tag_only_update = payload.get("tag_names") is not None and not has_non_tag_change
 
     # 自分の小説かチェック
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
     is_author = novel.author_id == user.id
@@ -11191,32 +14070,43 @@ def update_episode(
             models.EpisodeTag.episode_id == episode_id
         ).delete()
 
-        # 送り直された tag_names を登録し直す
-        for tag_name in tag_names:
-            name = (tag_name or "").strip()
-            if not name:
-                continue
+        tags_by_name = _get_or_create_tags(db, list(tag_names or []))
+        for tag in tags_by_name.values():
+            db.add(models.EpisodeTag(episode_id=ep.id, tag_id=tag.id))
+        needs_translation = True
 
-            tag = db.query(models.Tag).filter(models.Tag.name == name).first()
-            if not tag:
-                tag = models.Tag(name=name)
-                db.add(tag)
-                db.commit()
-                db.refresh(tag)
+    # If a draft becomes public, ensure translation is generated even if content didn't change.
+    publishing_now = was_public is False and not is_episode_draft(ep)
+    if publishing_now:
+        needs_translation = True
 
-            et = models.EpisodeTag(episode_id=ep.id, tag_id=tag.id)
-            db.add(et)
-
-    if needs_translation:
-        upsert_episode_translation(
-            db,
-            episode=ep,
-            source_language=normalize_language(getattr(ep, "language", None)),
-        )
     db.commit()
     db.refresh(ep)
-    if not was_public and not is_episode_draft(ep):
-        notify_favorited_users_episode_published(db, novel=novel, episode=ep)
+    has_translatable_content = bool(
+        (ep.title or "").strip()
+        or (ep.body or "").strip()
+        or get_episode_tag_names(db, ep.id)
+    )
+    if needs_translation and not is_episode_draft(ep) and has_translatable_content:
+        if AUTO_TRANSLATION_REQUIRED:
+            upsert_episode_translation(
+                db,
+                episode=ep,
+                source_language=normalize_language(getattr(ep, "language", None)),
+            )
+            novel_for_translation = db.query(models.Novel).filter(models.Novel.id == ep.novel_id).first()
+            if novel_for_translation:
+                upsert_novel_translation(
+                    db,
+                    novel=novel_for_translation,
+                    source_language=normalize_language(getattr(novel_for_translation, "language", None)),
+                    tag_names=get_novel_tag_names(db, novel_for_translation.id),
+                )
+            db.commit()
+        else:
+            background_tasks.add_task(_background_upsert_episode_and_novel_translation, ep.id)
+    if publishing_now:
+        background_tasks.add_task(_background_notify_episode_published, novel.id, ep.id, ep.site_key)
     return ep
 
 @app.delete("/api/episodes/{episode_id}")
@@ -11226,16 +14116,22 @@ def delete_episode(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
 
     ep = (
         db.query(models.Episode)
         .options(selectinload(models.Episode.illusts))
-        .get(episode_id)
+        .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+        .first()
     )
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
 
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == ep.novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
     if not novel or novel.author_id != user.id:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
@@ -11285,7 +14181,12 @@ def list_episodes(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    novel = db.query(models.Novel).get(novel_id)
+    site_key = resolve_site_key(request)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
     if not novel:
         raise HTTPException(404, "小説が存在しません")
 
@@ -11294,15 +14195,13 @@ def list_episodes(
     except Exception:
         user = None
 
-    is_premium_user = FORCE_ALL_PREMIUM or (
-        bool(getattr(user, "is_premium", False)) if user else False
-    )
+    is_premium_user = is_effective_premium_user(user)
     is_free_time = is_free_reading_time()
     can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
 
     base_q = (
         db.query(models.Episode)
-        .filter(models.Episode.novel_id == novel_id)
+        .filter(models.Episode.novel_id == novel_id, models.Episode.site_key == site_key)
     )
 
     if user and novel.author_id == user.id:
@@ -11335,15 +14234,13 @@ async def generate_novel_summary_candidates(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, novel_id)
     if novel.author_id != user.id:
         raise HTTPException(403, "説明文の生成権限がありません")
 
     first_episode = (
         db.query(models.Episode)
-        .filter(models.Episode.novel_id == novel_id)
+        .filter(models.Episode.novel_id == novel_id, models.Episode.site_key == resolve_site_key(request))
         .order_by(
             models.Episode.episode_number.is_(None),
             models.Episode.episode_number,
@@ -11370,15 +14267,13 @@ async def generate_novel_tag_candidates(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, novel_id)
     if novel.author_id != user.id:
         raise HTTPException(403, "タグ生成権限がありません")
 
     first_episode = (
         db.query(models.Episode)
-        .filter(models.Episode.novel_id == novel_id)
+        .filter(models.Episode.novel_id == novel_id, models.Episode.site_key == resolve_site_key(request))
         .order_by(
             models.Episode.episode_number.is_(None),
             models.Episode.episode_number,
@@ -11404,10 +14299,8 @@ async def generate_novel_tag_candidates(
 @app.delete("/api/episodes/{episode_id}/cover-image")
 def delete_episode_cover_image(episode_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if not novel or novel.author_id != user.id:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
@@ -11439,10 +14332,8 @@ async def upload_episode_cover_image(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if not novel or novel.author_id != user.id:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
@@ -11538,10 +14429,8 @@ async def upload_episode_illust(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if not novel or novel.author_id != user.id:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
@@ -11654,10 +14543,8 @@ def delete_episode_illust(episode_id: int, illust_id: int, request: Request, db:
     ill = db.query(models.EpisodeIllust).filter(models.EpisodeIllust.id==illust_id, models.EpisodeIllust.episode_id==episode_id).first()
     if not ill:
         raise HTTPException(404, "押絵が存在しません")
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if not novel or novel.author_id != user.id:
         logger.warning(
             "FORBIDDEN reason=%s path=%s user_id=%s novel_id=%s episode_id=%s",
@@ -11688,6 +14575,7 @@ def get_episode_for_edit(
     episode_id: int, request: Request, db: Session = Depends(get_db)
 ):
     user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
 
     ep = (
         db.query(models.Episode)
@@ -11695,12 +14583,17 @@ def get_episode_for_edit(
             selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag),
             selectinload(models.Episode.illusts),
         )
-        .get(episode_id)
+        .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+        .first()
     )
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
 
-    novel = db.query(models.Novel).get(ep.novel_id)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == ep.novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
     if not novel:
         raise HTTPException(404, "小説が存在しません")
     is_author = novel.author_id == user.id
@@ -11727,7 +14620,7 @@ def get_episode_for_edit(
         is not None
     )
 
-    is_premium = FORCE_ALL_PREMIUM or bool(getattr(user, "is_premium", False))
+    is_premium = is_effective_premium_user(user)
 
     return {
         "id": ep.id,
@@ -11762,13 +14655,15 @@ def get_episode_for_edit(
 
 @app.get("/api/episodes/{episode_id}", response_model=None)
 def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    site_key = resolve_site_key(request)
     ep = (
         db.query(models.Episode)
         .options(
             selectinload(models.Episode.episode_tags).selectinload(models.EpisodeTag.tag),
             selectinload(models.Episode.illusts),
         )
-        .get(episode_id)
+        .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+        .first()
     )
     if not ep:
         raise HTTPException(404, "エピソードが存在しません")
@@ -11782,8 +14677,11 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         db.query(models.Novel)
         .options(selectinload(models.Novel.author))
         .options(selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag))
-        .get(ep.novel_id)
+        .filter(models.Novel.id == ep.novel_id, models.Novel.site_key == site_key)
+        .first()
     )
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
 
     # 下書きエピソードは作者だけ
     if is_episode_draft(ep):
@@ -11823,9 +14721,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
             is not None
         )
 
-    is_premium_user = FORCE_ALL_PREMIUM or (
-        bool(getattr(user, "is_premium", False)) if user else False
-    )
+    is_premium_user = is_effective_premium_user(user)
     is_free_time = is_free_reading_time()
     can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
 
@@ -11837,12 +14733,12 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
     if current_number is not None:
         next_q = (
             db.query(models.Episode)
-            .filter(models.Episode.novel_id == ep.novel_id)
+            .filter(models.Episode.novel_id == ep.novel_id, models.Episode.site_key == site_key)
             .filter(models.Episode.episode_number > current_number)
         )
         prev_q = (
             db.query(models.Episode)
-            .filter(models.Episode.novel_id == ep.novel_id)
+            .filter(models.Episode.novel_id == ep.novel_id, models.Episode.site_key == site_key)
             .filter(models.Episode.episode_number < current_number)
         )
         if not (user and novel and novel.author_id == user.id):
@@ -11930,8 +14826,18 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
 def get_episode_translation(
     episode_id: int,
     lang: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    if is_episode_draft(ep):
+        novel = get_novel_in_site_or_404(db, request, ep.novel_id)
+        try:
+            user = require_current_user(request, db)
+        except Exception:
+            user = None
+        if not user or novel.author_id != user.id:
+            raise HTTPException(404, "エピソードが存在しません")
     language = normalize_language(lang)
     translation = (
         db.query(models.EpisodeTranslation)
@@ -11948,6 +14854,7 @@ def get_episode_translation(
         "language": language,
         "title": translation.title,
         "body": translation.body,
+        "tags": deserialize_tag_names(getattr(translation, "tag_names", None)),
         "created_at": translation.created_at,
         "updated_at": translation.updated_at,
     }
@@ -11955,15 +14862,11 @@ def get_episode_translation(
 
 @app.get("/share/episodes/{episode_id}", response_class=HTMLResponse)
 def share_episode_page(episode_id: int, request: Request, db: Session = Depends(get_db)):
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
+    ep = get_episode_in_site_or_404(db, request, episode_id)
     if is_episode_draft(ep):
         raise HTTPException(404, "エピソードが存在しません")
 
-    novel = db.query(models.Novel).get(ep.novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
 
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("host") or request.url.netloc
@@ -12051,7 +14954,7 @@ def share_episode_page(episode_id: int, request: Request, db: Session = Depends(
     <link rel="canonical" href="{safe_episode_url}" />
 
     <meta property="og:type" content="article" />
-    <meta property="og:site_name" content="小説投稿サイト" />
+    <meta property="og:site_name" content="小説投稿サイトLexis（レクシー/レクシス）" />
     <meta property="og:title" content="{safe_title}" />
     <meta property="og:description" content="{safe_desc}" />
     <meta property="og:url" content="{safe_share_url}" />
@@ -12076,13 +14979,11 @@ def share_episode_page(episode_id: int, request: Request, db: Session = Depends(
 
 
 @app.get("/share/episodes/{episode_id}/og-image.png")
-def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
+def share_episode_og_image(episode_id: int, request: Request, db: Session = Depends(get_db)):
     if not PIL_AVAILABLE:
         raise HTTPException(501, "OG画像生成が未設定です")
 
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
+    ep = get_episode_in_site_or_404(db, request, episode_id)
     if is_episode_draft(ep):
         raise HTTPException(404, "エピソードが存在しません")
     if not ep.cover_image_url:
@@ -12131,25 +15032,86 @@ def share_episode_og_image(episode_id: int, db: Session = Depends(get_db)):
     )
 
 
-def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
+def _classify_indexing_page_type(path: str) -> str:
+    normalized = (path or "").strip()
+    if normalized in ("", "/"):
+        return "home"
+    if normalized == "/ai_chat":
+        return "ai_chat"
+    if normalized == "/ai_chat/public":
+        return "ai_chat_public"
+    if normalized.startswith("/episodes/"):
+        return "episode"
+    if normalized.startswith("/novels/"):
+        return "novel"
+    if normalized.startswith("/tags/"):
+        return "tag"
+    return "other"
+
+
+def _indexing_importance_weight(page_type: str) -> float:
+    if page_type == "episode":
+        return 1.00
+    if page_type == "novel":
+        return 0.85
+    if page_type == "tag":
+        return 0.60
+    if page_type in ("home", "ai_chat", "ai_chat_public"):
+        return 0.50
+    return 0.40
+
+
+def _calc_indexing_priority_score(
+    *,
+    page_type: str,
+    view_count: int,
+    lastmod: Optional[datetime],
+) -> float:
+    safe_views = max(0, int(view_count or 0))
+    importance_score = _indexing_importance_weight(page_type) * 55.0
+    views_score = min(30.0, math.log10(safe_views + 1) * 10.0)
+    recency_score = 0.0
+    if isinstance(lastmod, datetime):
+        # DB 設定によって naive/aware が混在するため、安全に日数差を計算する
+        ref_now = datetime.now(lastmod.tzinfo) if lastmod.tzinfo else datetime.utcnow()
+        days = max(0, (ref_now - lastmod).days)
+        if days <= 3:
+            recency_score = 15.0
+        elif days <= 14:
+            recency_score = 10.0
+        elif days <= 30:
+            recency_score = 6.0
+        elif days <= 90:
+            recency_score = 3.0
+    return round(importance_score + views_score + recency_score, 2)
+
+
+def build_public_page_url_items(db: Session) -> list[dict]:
     base = FRONTEND_ORIGIN.rstrip("/")
-    urls: list[tuple[str, Optional[datetime]]] = [
-        (f"{base}/", None),
-        (f"{base}/ai_chat", None),
-        (f"{base}/ai_chat/public", None),
+    items: list[dict] = [
+        {"url": f"{base}/", "lastmod": None, "view_count": 0, "page_type": "home"},
+        {"url": f"{base}/ai_chat", "lastmod": None, "view_count": 0, "page_type": "ai_chat"},
+        {"url": f"{base}/ai_chat/public", "lastmod": None, "view_count": 0, "page_type": "ai_chat_public"},
     ]
 
     novels = (
-        db.query(models.Novel.id, models.Novel.created_at)
+        db.query(models.Novel.id, models.Novel.created_at, models.Novel.view_count)
         .filter(models.Novel.is_public == True)
         .order_by(models.Novel.id.asc())
         .all()
     )
-    for novel_id, created_at in novels:
-        urls.append((f"{base}/novels/{novel_id}", created_at))
+    for novel_id, created_at, view_count in novels:
+        items.append(
+            {
+                "url": f"{base}/novels/{novel_id}",
+                "lastmod": created_at,
+                "view_count": int(view_count or 0),
+                "page_type": "novel",
+            }
+        )
 
     episodes = (
-        db.query(models.Episode.id, models.Episode.created_at)
+        db.query(models.Episode.id, models.Episode.created_at, models.Episode.view_count)
         .join(models.Novel, models.Episode.novel_id == models.Novel.id)
         .filter(models.Episode.status == "public")
         .filter(models.Episode.is_public == True)
@@ -12157,8 +15119,15 @@ def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
         .order_by(models.Episode.id.asc())
         .all()
     )
-    for episode_id, created_at in episodes:
-        urls.append((f"{base}/episodes/{episode_id}", created_at))
+    for episode_id, created_at, view_count in episodes:
+        items.append(
+            {
+                "url": f"{base}/episodes/{episode_id}",
+                "lastmod": created_at,
+                "view_count": int(view_count or 0),
+                "page_type": "episode",
+            }
+        )
 
     tag_names = set()
     novel_tag_rows = (
@@ -12187,7 +15156,114 @@ def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
         if name:
             tag_names.add(name)
     for name in sorted(tag_names):
-        urls.append((f"{base}/tags/{quote(name)}", None))
+        items.append(
+            {
+                "url": f"{base}/tags/{quote(name)}",
+                "lastmod": None,
+                "view_count": 0,
+                "page_type": "tag",
+            }
+        )
+    return items
+
+
+def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
+    urls: list[tuple[str, Optional[datetime]]] = []
+    for item in build_public_page_url_items(db):
+        urls.append((item["url"], item.get("lastmod")))
+    return urls
+
+
+def build_public_page_url_items_for_site(db: Session, *, base: str, site_key: str) -> list[dict]:
+    base = (base or "").rstrip("/")
+    site_key = normalize_site_key(site_key)
+    items: list[dict] = [
+        {"url": f"{base}/", "lastmod": None, "view_count": 0, "page_type": "home"},
+        {"url": f"{base}/ai_chat", "lastmod": None, "view_count": 0, "page_type": "ai_chat"},
+        {"url": f"{base}/ai_chat/public", "lastmod": None, "view_count": 0, "page_type": "ai_chat_public"},
+    ]
+
+    novels = (
+        db.query(models.Novel.id, models.Novel.created_at, models.Novel.view_count)
+        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
+        .order_by(models.Novel.id.asc())
+        .all()
+    )
+    for novel_id, created_at, view_count in novels:
+        items.append(
+            {
+                "url": f"{base}/novels/{novel_id}",
+                "lastmod": created_at,
+                "view_count": int(view_count or 0),
+                "page_type": "novel",
+            }
+        )
+
+    episodes = (
+        db.query(models.Episode.id, models.Episode.created_at, models.Episode.view_count)
+        .join(models.Novel, models.Episode.novel_id == models.Novel.id)
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True)
+        .filter(models.Episode.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.Novel.site_key == site_key)
+        .order_by(models.Episode.id.asc())
+        .all()
+    )
+    for episode_id, created_at, view_count in episodes:
+        items.append(
+            {
+                "url": f"{base}/episodes/{episode_id}",
+                "lastmod": created_at,
+                "view_count": int(view_count or 0),
+                "page_type": "episode",
+            }
+        )
+
+    tag_names = set()
+    novel_tag_rows = (
+        db.query(models.Tag.name)
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
+        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
+        .distinct()
+        .all()
+    )
+    episode_tag_rows = (
+        db.query(models.Tag.name)
+        .join(models.EpisodeTag, models.EpisodeTag.tag_id == models.Tag.id)
+        .join(models.Episode, models.Episode.id == models.EpisodeTag.episode_id)
+        .join(models.Novel, models.Novel.id == models.Episode.novel_id)
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True, models.Episode.site_key == site_key)
+        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
+        .distinct()
+        .all()
+    )
+    for (name,) in novel_tag_rows:
+        if name:
+            tag_names.add(name)
+    for (name,) in episode_tag_rows:
+        if name:
+            tag_names.add(name)
+    for name in sorted(tag_names):
+        items.append(
+            {
+                "url": f"{base}/tags/{quote(name)}",
+                "lastmod": None,
+                "view_count": 0,
+                "page_type": "tag",
+            }
+        )
+    return items
+
+
+def build_public_page_urls_for_site(
+    db: Session, *, base: str, site_key: str
+) -> list[tuple[str, Optional[datetime]]]:
+    urls: list[tuple[str, Optional[datetime]]] = []
+    for item in build_public_page_url_items_for_site(db, base=base, site_key=site_key):
+        urls.append((item["url"], item.get("lastmod")))
     return urls
 
 
@@ -12197,12 +15273,16 @@ def _is_frontend_origin_url(url: str) -> bool:
         return False
     try:
         parsed_target = urlparse(target)
-        parsed_base = urlparse(FRONTEND_ORIGIN.rstrip("/"))
     except Exception:
         return False
+    if parsed_target.scheme not in ("http", "https"):
+        return False
+    target_host = (parsed_target.hostname or "").strip().lower()
+    if not target_host:
+        return False
+    allowed_hosts = _allowed_frontend_hosts()
     return (
-        parsed_target.scheme == parsed_base.scheme
-        and parsed_target.netloc == parsed_base.netloc
+        target_host in allowed_hosts
         and (parsed_target.path or "").startswith("/")
     )
 
@@ -12434,26 +15514,45 @@ def _publish_google_indexing_url(url: str, access_token: str) -> tuple[bool, int
 def admin_indexing_urls(
     request: Request,
     limit: int = Query(1000, ge=1, le=5000),
+    inspect: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     require_admin(request)
-    all_urls = [url for url, _ in build_public_page_urls(db)]
-    urls = all_urls[:limit]
-    items = [AdminIndexingUrlItem(url=url) for url in urls]
+    all_page_items = _build_indexing_target_items(db, request)
+    selected_page_items = all_page_items[:limit]
+    all_urls = [item["url"] for item in all_page_items]
+    urls = [item["url"] for item in selected_page_items]
+    items = [
+        AdminIndexingUrlItem(
+            url=item["url"],
+            page_type=item.get("page_type"),
+            view_count=int(item.get("view_count") or 0),
+            importance=round(_indexing_importance_weight(item.get("page_type") or "other"), 2),
+            score=_calc_indexing_priority_score(
+                page_type=item.get("page_type") or "other",
+                view_count=int(item.get("view_count") or 0),
+                lastmod=item.get("lastmod"),
+            ),
+        )
+        for item in selected_page_items
+    ]
     inspection_error: str | None = None
     indexed_count = 0
     unindexed_count = 0
     unknown_count = len(items)
 
-    if urls:
+    if urls and inspect:
         try:
             access_token = _build_google_search_console_access_token()
-            site_url = GOOGLE_SEARCH_CONSOLE_SITE_URL.strip() or FRONTEND_ORIGIN.rstrip("/")
+            site_url = GOOGLE_SEARCH_CONSOLE_SITE_URL.strip() or _request_origin(
+                request, fallback=FRONTEND_ORIGIN.rstrip("/")
+            )
             checked_items: list[AdminIndexingUrlItem] = []
             indexed_count = 0
             unindexed_count = 0
             unknown_count = 0
-            for url in urls:
+            for page_item in selected_page_items:
+                url = page_item["url"]
                 indexed, verdict, item_error = _inspect_google_indexed_status(url, access_token, site_url)
                 if indexed is True:
                     indexed_count += 1
@@ -12461,12 +15560,22 @@ def admin_indexing_urls(
                     unindexed_count += 1
                 else:
                     unknown_count += 1
+                page_type = page_item.get("page_type") or _classify_indexing_page_type(urlparse(url).path or "")
+                view_count = int(page_item.get("view_count") or 0)
                 checked_items.append(
                     AdminIndexingUrlItem(
                         url=url,
                         indexed=indexed,
                         inspection_verdict=verdict,
                         inspection_error=item_error,
+                        page_type=page_type,
+                        view_count=view_count,
+                        importance=round(_indexing_importance_weight(page_type), 2),
+                        score=_calc_indexing_priority_score(
+                            page_type=page_type,
+                            view_count=view_count,
+                            lastmod=page_item.get("lastmod"),
+                        ),
                     )
                 )
             items = checked_items
@@ -12494,7 +15603,16 @@ def admin_indexing_submit(
 ):
     require_admin(request)
     if payload.all_pages or not payload.urls:
-        target_urls = [url for url, _ in build_public_page_urls(db)]
+        scored_items = _build_indexing_target_items(db, request)
+        scored_items.sort(
+            key=lambda item: _calc_indexing_priority_score(
+                page_type=item.get("page_type") or "other",
+                view_count=int(item.get("view_count") or 0),
+                lastmod=item.get("lastmod"),
+            ),
+            reverse=True,
+        )
+        target_urls = [item["url"] for item in scored_items]
     else:
         # 順序維持で重複除去
         seen = set()
@@ -12543,25 +15661,217 @@ def admin_indexing_submit(
     )
 
 
-@app.get("/sitemap.xml")
-def sitemap_xml(db: Session = Depends(get_db)):
-    urls = build_public_page_urls(db)
+def _sitemap_family_domain(host: str) -> str | None:
+    host = (host or "").strip().lower()
+    if not host:
+        return None
+    host = host.split(":")[0]
+    if host in ("shosetsu-toukou-site.org", "www.shosetsu-toukou-site.org"):
+        return "shosetsu-toukou-site.org"
+    if host in ("lexis-novel-site.org", "www.lexis-novel-site.org"):
+        return "lexis-novel-site.org"
+    return None
 
-    items = []
+
+def _site_host_no_port_from_request(request: Request | None) -> str:
+    if request is None:
+        return ""
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or (request.url.hostname or "")
+    )
+    return (host or "").strip().lower().split(":")[0]
+
+
+def _allowed_frontend_hosts() -> set[str]:
+    hosts: set[str] = set()
+    try:
+        parsed = urlparse(FRONTEND_ORIGIN.rstrip("/"))
+        if parsed.hostname:
+            hosts.add(parsed.hostname.strip().lower())
+    except Exception:
+        pass
+
+    for raw_host in SITE_HOST_MAP.keys():
+        host = (raw_host or "").strip().lower().split(":")[0]
+        if host:
+            hosts.add(host)
+
+    for family in ("shosetsu-toukou-site.org", "lexis-novel-site.org"):
+        hosts.add(family)
+        hosts.add(f"www.{family}")
+        hosts.add(f"renai.{family}")
+        hosts.add(f"rekishi.{family}")
+    return hosts
+
+
+def _build_indexing_target_items(db: Session, request: Request) -> list[dict]:
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    parsed_base = urlparse(base_origin)
+    scheme = parsed_base.scheme or "https"
+    host = _site_host_no_port_from_request(request)
+    family = _sitemap_family_domain(host)
+
+    if family and host in (family, f"www.{family}"):
+        parts = [
+            build_public_page_url_items_for_site(
+                db, base=f"{scheme}://{family}", site_key="main"
+            ),
+            build_public_page_url_items_for_site(
+                db, base=f"{scheme}://renai.{family}", site_key="romance"
+            ),
+            build_public_page_url_items_for_site(
+                db, base=f"{scheme}://rekishi.{family}", site_key="history"
+            ),
+        ]
+        merged: dict[str, dict] = {}
+        for rows in parts:
+            for item in rows:
+                url = item.get("url")
+                if not url:
+                    continue
+                prev = merged.get(url)
+                if prev is None:
+                    merged[url] = item
+                    continue
+                prev_lastmod = prev.get("lastmod")
+                cur_lastmod = item.get("lastmod")
+                if isinstance(cur_lastmod, datetime) and (
+                    not isinstance(prev_lastmod, datetime) or cur_lastmod > prev_lastmod
+                ):
+                    prev["lastmod"] = cur_lastmod
+                prev["view_count"] = max(
+                    int(prev.get("view_count") or 0),
+                    int(item.get("view_count") or 0),
+                )
+        return list(merged.values())
+
+    site_key = resolve_site_key(request)
+    return build_public_page_url_items_for_site(db, base=base_origin, site_key=site_key)
+
+
+def _sitemap_urlset_xml(urls: list[tuple[str, Optional[datetime]]]) -> str:
+    items: list[str] = []
     for loc, lastmod in urls:
         safe_loc = html.escape(loc, quote=True)
         lastmod_tag = ""
         if isinstance(lastmod, datetime):
             lastmod_tag = f"<lastmod>{lastmod.date().isoformat()}</lastmod>"
         items.append(f"<url><loc>{safe_loc}</loc>{lastmod_tag}</url>")
-
-    xml = (
+    return (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
         + "".join(items)
         + "</urlset>"
     )
-    return Response(content=xml, media_type="application/xml")
+
+
+def _sitemap_index_xml(sitemaps: list[str]) -> str:
+    items = []
+    for loc in sitemaps:
+        safe_loc = html.escape(loc, quote=True)
+        items.append(f"<sitemap><loc>{safe_loc}</loc></sitemap>")
+    return (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
+        + "".join(items)
+        + "</sitemapindex>"
+    )
+
+
+def _sitemap_merge_urls(
+    *parts: list[tuple[str, Optional[datetime]]],
+) -> list[tuple[str, Optional[datetime]]]:
+    # De-dup by URL, keep newest lastmod when duplicates occur.
+    merged: dict[str, Optional[datetime]] = {}
+    for urls in parts:
+        for loc, lastmod in urls:
+            if not loc:
+                continue
+            prev = merged.get(loc)
+            if prev is None:
+                merged[loc] = lastmod
+            elif isinstance(lastmod, datetime) and (not isinstance(prev, datetime) or lastmod > prev):
+                merged[loc] = lastmod
+    return list(merged.items())
+
+
+@app.get("/sitemap-main.xml")
+def sitemap_main_xml(request: Request, db: Session = Depends(get_db)):
+    base = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    urls = build_public_page_urls_for_site(db, base=base, site_key="main")
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/sitemap-index.xml")
+def sitemap_index_xml(request: Request, db: Session = Depends(get_db)):
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or (request.url.hostname or "")
+    )
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    parsed_base = urlparse(base_origin)
+    scheme = parsed_base.scheme or "https"
+
+    family = _sitemap_family_domain(host)
+    if not family:
+        site_key = resolve_site_key(request)
+        urls = build_public_page_urls_for_site(db, base=base_origin, site_key=site_key)
+        return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+    sitemaps = [
+        f"{scheme}://{family}/sitemap-main.xml",
+        f"{scheme}://renai.{family}/sitemap.xml",
+        f"{scheme}://rekishi.{family}/sitemap.xml",
+    ]
+    return Response(content=_sitemap_index_xml(sitemaps), media_type="application/xml")
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml(request: Request, db: Session = Depends(get_db)):
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or (request.url.hostname or "")
+    )
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    parsed_base = urlparse(base_origin)
+    scheme = parsed_base.scheme or "https"
+
+    family = _sitemap_family_domain(host)
+    if family:
+        # Apex sitemap includes subdomain URLs too (useful for Domain property in Search Console).
+        base_main = f"{scheme}://{family}"
+        base_romance = f"{scheme}://renai.{family}"
+        base_history = f"{scheme}://rekishi.{family}"
+        urls_main = build_public_page_urls_for_site(db, base=base_main, site_key="main")
+        urls_romance = build_public_page_urls_for_site(db, base=base_romance, site_key="romance")
+        urls_history = build_public_page_urls_for_site(db, base=base_history, site_key="history")
+        merged = _sitemap_merge_urls(urls_main, urls_romance, urls_history)
+        return Response(content=_sitemap_urlset_xml(merged), media_type="application/xml")
+
+    site_key = resolve_site_key(request)
+    urls = build_public_page_urls_for_site(db, base=base_origin, site_key=site_key)
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/robots.txt")
+def robots_txt(request: Request):
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    parsed_base = urlparse(base_origin)
+    scheme = parsed_base.scheme or "https"
+    host = _site_host_no_port_from_request(request)
+    family = _sitemap_family_domain(host)
+
+    lines = ["User-agent: *", "Allow: /"]
+    if family and host in (family, f"www.{family}"):
+        lines.append(f"Sitemap: {scheme}://{family}/sitemap.xml")
+        lines.append(f"Sitemap: {scheme}://{family}/sitemap-index.xml")
+    else:
+        lines.append(f"Sitemap: {base_origin.rstrip('/')}/sitemap.xml")
+    return Response(content="\n".join(lines) + "\n", media_type="text/plain; charset=utf-8")
 
 
 class LoginVerify(BaseModel):
@@ -12579,7 +15889,7 @@ def send_2fa_email(to_email: str, code: str):
         print(f"[2FA] SMTP設定が不足しているためログにのみ出力: code={code}, to={to_email}")
         return
 
-    subject = "小説投稿サイト ログイン認証コード"
+    subject = "小説投稿サイトLexis ログイン認証コード"
     body = f"ログイン用認証コードは {code} です。\n10分以内に入力してください。"
 
     msg = MIMEText(body, "plain", "utf-8")
@@ -12660,9 +15970,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     """
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, novel_id)
 
     existing = (
         db.query(models.NovelLike)
@@ -12737,9 +16045,7 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
     """
     user = require_current_user(request, db)
 
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, novel_id)
 
     existing = (
         db.query(models.NovelLike)
@@ -12784,10 +16090,8 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
     """
     user = require_current_user(request, db)
 
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if is_episode_draft(ep) and (not novel or novel.author_id != user.id):
         raise HTTPException(404, "エピソードが存在しません")
 
@@ -12867,10 +16171,8 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
     """
     user = require_current_user(request, db)
 
-    ep = db.query(models.Episode).get(episode_id)
-    if not ep:
-        raise HTTPException(404, "エピソードが存在しません")
-    novel = db.query(models.Novel).get(ep.novel_id)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if is_episode_draft(ep) and (not novel or novel.author_id != user.id):
         raise HTTPException(404, "エピソードが存在しません")
 
@@ -12910,11 +16212,13 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
 @app.get("/api/me/favorites")
 def list_my_favorites(request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
 
     favorites = (
         db.query(models.Novel)
         .join(models.NovelFavorite, models.Novel.id == models.NovelFavorite.novel_id)
         .filter(models.NovelFavorite.user_id == user.id)
+        .filter(models.Novel.site_key == site_key)
         .options(
             selectinload(models.Novel.author),
             selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
@@ -12935,6 +16239,7 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
                 models.Episode.id,
             )
             .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
             .filter(models.Episode.cover_image_url.isnot(None))
             .filter(models.Episode.status == "public")
             .filter(models.Episode.is_public == True)
@@ -12987,6 +16292,7 @@ def list_my_novel_analytics(
     month: Optional[str] = Query(None),
 ):
     user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
     if month:
         try:
             start_day = datetime.strptime(month, "%Y-%m").date()
@@ -12999,7 +16305,7 @@ def list_my_novel_analytics(
     next_month = (start_day.replace(day=28) + timedelta(days=4)).replace(day=1)
     novels = (
         db.query(models.Novel.id, models.Novel.title)
-        .filter(models.Novel.author_id == user.id)
+        .filter(models.Novel.author_id == user.id, models.Novel.site_key == site_key)
         .order_by(models.Novel.created_at.desc())
         .all()
     )
@@ -13108,9 +16414,14 @@ def read_my_novel_analytics(
     month: Optional[str] = Query(None),
 ):
     user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
     novel = (
         db.query(models.Novel.id, models.Novel.title)
-        .filter(models.Novel.id == novel_id, models.Novel.author_id == user.id)
+        .filter(
+            models.Novel.id == novel_id,
+            models.Novel.author_id == user.id,
+            models.Novel.site_key == site_key,
+        )
         .first()
     )
     if not novel:
@@ -13189,7 +16500,7 @@ def read_profile(request: Request, db: Session = Depends(get_db)):
         "username": user.username,
         "email": user.email,
         "birth_date": str(user.birth_date) if user.birth_date else None,
-        "is_premium": bool(user.is_premium),
+        "is_premium": is_effective_premium_user(user),
         "email_notifications_enabled": bool(
             getattr(user, "email_notifications_enabled", True)
         ),
@@ -13241,7 +16552,7 @@ def update_profile(
         "username": user.username,
         "email": user.email,
         "birth_date": str(user.birth_date) if user.birth_date else None,
-        "is_premium": bool(user.is_premium),
+        "is_premium": is_effective_premium_user(user),
         "email_notifications_enabled": bool(
             getattr(user, "email_notifications_enabled", True)
         ),
@@ -13540,9 +16851,7 @@ def delete_notification(
 @app.post("/api/novels/{novel_id}/favorite")
 def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(novel_id)
-    if not novel:
-        raise HTTPException(404, "小説が存在しません")
+    novel = get_novel_in_site_or_404(db, request, novel_id)
     exists = db.query(models.NovelFavorite).filter(
         models.NovelFavorite.novel_id == novel_id,
         models.NovelFavorite.user_id == user.id).first()
@@ -13582,7 +16891,7 @@ def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db
 @app.delete("/api/novels/{novel_id}/favorite")
 def unfavorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_current_user(request, db)
-    novel = db.query(models.Novel).get(novel_id)
+    _ = get_novel_in_site_or_404(db, request, novel_id)
     fav = db.query(models.NovelFavorite).filter(
         models.NovelFavorite.novel_id == novel_id,
         models.NovelFavorite.user_id == user.id).first()
@@ -13605,6 +16914,7 @@ def delete_comment(
     """
     user = require_current_user(request, db)
 
+    _ = get_novel_in_site_or_404(db, request, novel_id)
     comment = (
         db.query(models.NovelComment)
         .filter(
@@ -13616,7 +16926,7 @@ def delete_comment(
     if not comment:
         raise HTTPException(404, "コメントが存在しません")
 
-    novel = db.query(models.Novel).get(novel_id)
+    novel = get_novel_in_site_or_404(db, request, novel_id)
 
     # コメント本人 or 小説の作者 のどちらかだけ許可
     if not (
@@ -13651,6 +16961,7 @@ def delete_episode_comment(
     """
     user = require_current_user(request, db)
 
+    ep = get_episode_in_site_or_404(db, request, episode_id)
     comment = (
         db.query(models.EpisodeComment)
         .filter(
@@ -13662,8 +16973,7 @@ def delete_episode_comment(
     if not comment:
         raise HTTPException(404, "コメントが存在しません")
 
-    episode = db.query(models.Episode).get(episode_id)
-    novel = db.query(models.Novel).get(episode.novel_id) if episode else None
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
 
     if not (
         (comment.user_id is not None and comment.user_id == user.id)

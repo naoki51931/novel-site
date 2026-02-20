@@ -221,8 +221,8 @@ export default function Notifications() {
                             marginRight: 6,
                             padding: "2px 6px",
                             borderRadius: 999,
-                            backgroundColor: "#f0b400",
-                            color: "#fff",
+                            backgroundColor: "var(--accent)",
+                            color: "var(--on-accent)",
                             fontSize: 11,
                           }}
                         >

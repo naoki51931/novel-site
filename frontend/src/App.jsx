@@ -29,6 +29,7 @@ import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
 import AdminUsers from "./pages/AdminUsers";
 import AdminAiJobs from "./pages/AdminAiJobs";
+import AdminI18nJobs from "./pages/AdminI18nJobs";
 import SupportReturn from "./pages/SupportReturn";
 import SupportPlans from "./pages/SupportPlans";
 import StripePriceIdManual from "./pages/StripePriceIdManual";
@@ -37,6 +38,7 @@ import AuthorLanding from "./pages/AuthorLanding";
 import PremiumLP from "./pages/PremiumLP";
 import Contact from "./pages/Contact";
 import TagPage from "./pages/TagPage";
+import AllSites from "./pages/AllSites";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
@@ -44,6 +46,85 @@ import { useI18n } from "./lib/i18n";
 
 const ANDROID_NOTIFIED_KEY_PREFIX = "android_notified_notification_ids_v1_";
 const ANDROID_NOTIFIED_MAX_IDS = 300;
+const LANGUAGE_ORDER = ["ja", "en", "zh-cn", "zh-tw", "ko"];
+const LANGUAGE_BUTTON_LABEL = {
+  ja: "JP",
+  en: "EN",
+  "zh-cn": "简",
+  "zh-tw": "繁",
+  ko: "KO",
+};
+const NEXT_LANGUAGE_NAME = {
+  ja: { ja: "English", en: "English" },
+  en: { ja: "简体中文", en: "Simplified Chinese" },
+  "zh-cn": { ja: "繁體中文", en: "Traditional Chinese" },
+  "zh-tw": { ja: "한국어", en: "Korean" },
+  ko: { ja: "日本語", en: "Japanese" },
+};
+const NEXT_LANGUAGE_NAME_LOCALIZED = {
+  ja: { ja: "英語", en: "English", "zh-cn": "英语", "zh-tw": "英語", ko: "영어" },
+  en: { ja: "簡体字中国語", en: "Simplified Chinese", "zh-cn": "简体中文", "zh-tw": "簡體中文", ko: "중국어(간체)" },
+  "zh-cn": { ja: "繁体字中国語", en: "Traditional Chinese", "zh-cn": "繁体中文", "zh-tw": "繁體中文", ko: "중국어(번체)" },
+  "zh-tw": { ja: "韓国語", en: "Korean", "zh-cn": "韩语", "zh-tw": "韓語", ko: "한국어" },
+  ko: { ja: "日本語", en: "Japanese", "zh-cn": "日语", "zh-tw": "日語", ko: "일본어" },
+};
+const HEADER_I18N = {
+  home: { ja: "トップ", en: "Home", "zh-cn": "首页", "zh-tw": "首頁", ko: "홈" },
+  siteSwitch: {
+    ja: "ジャンル切替",
+    en: "Switch Genre",
+    "zh-cn": "切换分类",
+    "zh-tw": "切換分類",
+    ko: "장르 전환",
+  },
+  forAuthors: { ja: "作者向け", en: "For Authors", "zh-cn": "作者入口", "zh-tw": "作者入口", ko: "작가용" },
+  postNovel: {
+    ja: "新規小説投稿",
+    en: "Post New Novel",
+    "zh-cn": "发布新小说",
+    "zh-tw": "發佈新小說",
+    ko: "새 소설 등록",
+  },
+  aiChat: { ja: "AIチャット", en: "AI Chat", "zh-cn": "AI聊天", "zh-tw": "AI聊天", ko: "AI 채팅" },
+  premium: { ja: "プレミアム", en: "Premium", "zh-cn": "高级会员", "zh-tw": "高級會員", ko: "프리미엄" },
+  myPage: { ja: "マイページ", en: "My Page", "zh-cn": "我的主页", "zh-tw": "我的主頁", ko: "마이페이지" },
+  login: { ja: "ログイン", en: "Login", "zh-cn": "登录", "zh-tw": "登入", ko: "로그인" },
+  register: { ja: "新規登録", en: "Register", "zh-cn": "注册", "zh-tw": "註冊", ko: "회원가입" },
+  switchLang: {
+    ja: "言語を切り替える",
+    en: "Switch language",
+    "zh-cn": "切换语言",
+    "zh-tw": "切換語言",
+    ko: "언어 전환",
+  },
+  loggedIn: { ja: "ログイン中", en: "Logged in", "zh-cn": "已登录", "zh-tw": "已登入", ko: "로그인됨" },
+  user: { ja: "ユーザー", en: "User", "zh-cn": "用户", "zh-tw": "使用者", ko: "사용자" },
+  notLoggedIn: {
+    ja: "未ログイン",
+    en: "Not logged in",
+    "zh-cn": "未登录",
+    "zh-tw": "未登入",
+    ko: "로그인 안 됨",
+  },
+  notifications: {
+    ja: "通知センター",
+    en: "Notifications",
+    "zh-cn": "通知中心",
+    "zh-tw": "通知中心",
+    ko: "알림 센터",
+  },
+  openMenu: { ja: "メニューを開く", en: "Open menu", "zh-cn": "打开菜单", "zh-tw": "開啟選單", ko: "메뉴 열기" },
+  support: { ja: "支援", en: "Support", "zh-cn": "赞助", "zh-tw": "贊助", ko: "후원" },
+  monthlySupport: {
+    ja: "月額支援",
+    en: "Monthly Support",
+    "zh-cn": "月度赞助",
+    "zh-tw": "月度贊助",
+    ko: "월간 후원",
+  },
+  contact: { ja: "お問い合わせ", en: "Contact", "zh-cn": "联系我们", "zh-tw": "聯絡我們", ko: "문의하기" },
+  admin: { ja: "管理画面", en: "Admin", "zh-cn": "管理后台", "zh-tw": "管理後台", ko: "관리자" },
+};
 
 function notifyAndroidSiteNotification(item) {
   try {
@@ -103,9 +184,46 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t, lang, setLang } = useI18n();
+  const siteKey =
+    typeof document !== "undefined"
+      ? (document.documentElement.dataset.siteKey || "main")
+      : "main";
+  const siteTitleJaByKey = {
+    romance: "恋愛小説Lexis（レクシー/レクシス）",
+    history: "歴史小説Lexis（レクシー/レクシス）",
+    main: "小説投稿サイトLexis（レクシー/レクシス）",
+  };
+  const siteTitleEnByKey = {
+    romance: "Romance Lexis",
+    history: "History Lexis",
+    main: "Lexis",
+  };
+  const siteTitleJa = siteTitleJaByKey[siteKey] || siteTitleJaByKey.main;
+  const siteTitleEn = siteTitleEnByKey[siteKey] || siteTitleEnByKey.main;
+  const siteTitleZhCnByKey = {
+    romance: "恋爱小说Lexis",
+    history: "历史小说Lexis",
+    main: "Lexis小说投稿站",
+  };
+  const siteTitleZhTwByKey = {
+    romance: "戀愛小說Lexis",
+    history: "歷史小說Lexis",
+    main: "Lexis小說投稿站",
+  };
+  const siteTitleKoByKey = {
+    romance: "로맨스 소설 Lexis",
+    history: "역사 소설 Lexis",
+    main: "Lexis 소설 투고 사이트",
+  };
+  const siteTitleZhCn = siteTitleZhCnByKey[siteKey] || siteTitleZhCnByKey.main;
+  const siteTitleZhTw = siteTitleZhTwByKey[siteKey] || siteTitleZhTwByKey.main;
+  const siteTitleKo = siteTitleKoByKey[siteKey] || siteTitleKoByKey.main;
   const isAuthorsPage = location.pathname === "/authors";
+  const isAllPage = location.pathname === "/all";
   const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
   const LOGIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+  const currentLangIndex = Math.max(0, LANGUAGE_ORDER.indexOf(lang));
+  const nextLang = LANGUAGE_ORDER[(currentLangIndex + 1) % LANGUAGE_ORDER.length];
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -138,6 +256,7 @@ export default function App() {
       return (
         path === "/" ||
         path === "/authors" ||
+        path === "/all" ||
         path.startsWith("/ai-novel") ||
         path.startsWith("/ai_chat") ||
         path.startsWith("/tags/") ||
@@ -328,63 +447,70 @@ export default function App() {
       <header className={`site-header ${menuOpen ? "menu-open" : ""}`}>
         <div className="site-header-left">
           <h1 className="site-title">
-            {t({ ja: "小説投稿サイト", en: "Novel Submission Site" })}
+            {t({ ja: siteTitleJa, en: siteTitleEn, "zh-cn": siteTitleZhCn, "zh-tw": siteTitleZhTw, ko: siteTitleKo })}
           </h1>
         </div>
 
         {/* ナビゲーション */}
         <nav className={`nav-links ${menuOpen ? "nav-open" : ""}`}>
           <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
-            {t({ ja: "トップ", en: "Home" })}
+            {t(HEADER_I18N.home)}
+          </Link>
+          <Link
+            to="/all"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t(HEADER_I18N.siteSwitch)}
           </Link>
           <Link
             to="/authors"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "作者向け", en: "For Authors" })}
+            {t(HEADER_I18N.forAuthors)}
           </Link>
           <Link
             to="/novels/new"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "新規小説投稿", en: "Post New Novel" })}
+            {t(HEADER_I18N.postNovel)}
           </Link>
           <Link
             to="/ai_chat"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "AIチャット", en: "AI Chat" })}
+            {t(HEADER_I18N.aiChat)}
           </Link>
           <Link
             to="/premium"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "プレミアム", en: "Premium" })}
+            {t(HEADER_I18N.premium)}
           </Link>
           <Link
             to="/mypage"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "マイページ", en: "My Page" })}
+            {t(HEADER_I18N.myPage)}
           </Link>
           <Link
             to="/login"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "ログイン", en: "Login" })}
+            {t(HEADER_I18N.login)}
           </Link>
           <Link
             to="/register"
             className="nav-link nav-link-accent"
             onClick={() => setMenuOpen(false)}
           >
-            {t({ ja: "新規登録", en: "Register" })}
+            {t(HEADER_I18N.register)}
           </Link>
         </nav>
 
@@ -392,20 +518,22 @@ export default function App() {
           <button
             type="button"
             className="lang-toggle btn btn-border"
-            onClick={() => setLang(lang === "ja" ? "en" : "ja")}
-            aria-label={t({ ja: "言語を切り替える", en: "Switch language" })}
-            title={
-              lang === "ja"
-                ? t({ ja: "Englishへ切り替え", en: "Switch to English" })
-                : t({ ja: "日本語へ切り替え", en: "Switch to Japanese" })
-            }
+            onClick={() => setLang(nextLang)}
+            aria-label={t(HEADER_I18N.switchLang)}
+            title={t({
+              ja: `${NEXT_LANGUAGE_NAME[lang]?.ja || "English"}へ切り替え`,
+              en: `Switch to ${NEXT_LANGUAGE_NAME[lang]?.en || "English"}`,
+              "zh-cn": `切换到${NEXT_LANGUAGE_NAME_LOCALIZED[lang]?.["zh-cn"] || "English"}`,
+              "zh-tw": `切換到${NEXT_LANGUAGE_NAME_LOCALIZED[lang]?.["zh-tw"] || "English"}`,
+              ko: `${NEXT_LANGUAGE_NAME_LOCALIZED[lang]?.ko || "English"}로 전환`,
+            })}
           >
-            {lang === "ja" ? "EN" : "JP"}
+            {LANGUAGE_BUTTON_LABEL[lang] || "JP"}
           </button>
           <div className="login-status">
             {hasToken ? (
               <span>
-                {t({ ja: "ログイン中", en: "Logged in" })}:{" "}
+                {t(HEADER_I18N.loggedIn)}:{" "}
                 {username ? (
                   <Link
                     className="user-link"
@@ -414,18 +542,18 @@ export default function App() {
                     {username}
                   </Link>
                 ) : (
-                  t({ ja: "ユーザー", en: "User" })
+                  t(HEADER_I18N.user)
                 )}
               </span>
             ) : (
-              <span>{t({ ja: "未ログイン", en: "Not logged in" })}</span>
+              <span>{t(HEADER_I18N.notLoggedIn)}</span>
             )}
           </div>
           <Link
             to="/notifications"
             className="nav-bell"
-            aria-label={t({ ja: "通知センター", en: "Notifications" })}
-            title={t({ ja: "通知センター", en: "Notifications" })}
+            aria-label={t(HEADER_I18N.notifications)}
+            title={t(HEADER_I18N.notifications)}
             onClick={() => setMenuOpen(false)}
           >
             <FontAwesomeIcon icon={faBell} />
@@ -440,7 +568,7 @@ export default function App() {
             type="button"
             className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""}`}
             onClick={() => setMenuOpen((v) => !v)}
-            aria-label={t({ ja: "メニューを開く", en: "Open menu" })}
+            aria-label={t(HEADER_I18N.openMenu)}
           >
             <span />
             <span />
@@ -450,7 +578,7 @@ export default function App() {
       </header>
 
       {/* 検索バーはヘッダーの下に固定 */}
-      {!isAuthorsPage && (
+      {!isAuthorsPage && !isAllPage && (
         <SearchBar
           query={query}
           excludeQuery={excludeQuery}
@@ -476,6 +604,7 @@ export default function App() {
         <Routes>
           <Route path="/mypage/settings" element={<AccountSettings />} />
           <Route path="/" element={<Home query={query} excludeQuery={excludeQuery} />} />
+          <Route path="/all" element={<AllSites />} />
           <Route path="/tags/:slug" element={<TagPage />} />
           <Route path="/authors" element={<AuthorLanding />} />
           <Route path="/login" element={<Login />} />
@@ -495,6 +624,7 @@ export default function App() {
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/admin/ai-jobs" element={<AdminAiJobs />} />
+          <Route path="/admin/i18n-jobs" element={<AdminI18nJobs />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />
@@ -519,7 +649,7 @@ export default function App() {
             element={
               <SupportReturn
                 mode="success"
-                label={t({ ja: "支援", en: "Support" })}
+                label={t(HEADER_I18N.support)}
               />
             }
           />
@@ -528,7 +658,7 @@ export default function App() {
             element={
               <SupportReturn
                 mode="cancel"
-                label={t({ ja: "支援", en: "Support" })}
+                label={t(HEADER_I18N.support)}
               />
             }
           />
@@ -537,7 +667,7 @@ export default function App() {
             element={
               <SupportReturn
                 mode="success"
-                label={t({ ja: "月額支援", en: "Monthly Support" })}
+                label={t(HEADER_I18N.monthlySupport)}
               />
             }
           />
@@ -546,7 +676,7 @@ export default function App() {
             element={
               <SupportReturn
                 mode="cancel"
-                label={t({ ja: "月額支援", en: "Monthly Support" })}
+                label={t(HEADER_I18N.monthlySupport)}
               />
             }
           />
@@ -566,10 +696,10 @@ export default function App() {
           }}
         >
           <Link className="btn btn-border" to="/contact">
-            {t({ ja: "お問い合わせ", en: "Contact" })}
+            {t(HEADER_I18N.contact)}
           </Link>
           <Link className="btn btn-border" to="/admin">
-            {t({ ja: "管理画面", en: "Admin" })}
+            {t(HEADER_I18N.admin)}
           </Link>
         </footer>
       )}

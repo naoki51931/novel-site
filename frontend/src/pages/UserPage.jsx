@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 
 export default function UserPage() {
   const { username: usernameParam } = useParams();
@@ -157,8 +158,8 @@ export default function UserPage() {
               display: "inline-block",
               padding: "2px 8px",
               borderRadius: "999px",
-              backgroundColor: "#f0b400",
-              color: "#fff",
+              backgroundColor: "var(--accent)",
+              color: "var(--on-accent)",
               fontSize: 12,
             }}
           >

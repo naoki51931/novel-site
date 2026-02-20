@@ -1,0 +1,28 @@
+{
+  "generated_at": "2026-02-16T06:08:55.551Z",
+  "api_base": "http://127.0.0.1",
+  "total_files": 55,
+  "total_ui_entries": 1112,
+  "ja_source_count": 1107,
+  "en_only_source_count": 5,
+  "by_lang": {
+    "zh-cn": {
+      "translated_count": 1112,
+      "backcheck_target_count": 1107,
+      "flagged_count": 0,
+      "flagged_examples": []
+    },
+    "zh-tw": {
+      "translated_count": 1112,
+      "backcheck_target_count": 1107,
+      "flagged_count": 0,
+      "flagged_examples": []
+    },
+    "ko": {
+      "translated_count": 1112,
+      "backcheck_target_count": 1107,
+      "flagged_count": 0,
+      "flagged_examples": []
+    }
+  }
+}

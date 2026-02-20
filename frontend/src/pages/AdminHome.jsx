@@ -59,7 +59,7 @@ export default function AdminHome() {
       setIndexingLoading(true);
       setIndexingError("");
       setIndexingInspectionError("");
-      const data = await apiFetch("/api/admin/indexing/urls?limit=2000", {
+      const data = await apiFetch("/api/admin/indexing/urls?limit=2000&inspect=0", {
         credentials: "include",
       });
       const items = Array.isArray(data?.items)
@@ -97,7 +97,11 @@ export default function AdminHome() {
         ? [...indexingUrlItems]
             .sort((a, b) => {
               const rank = (v) => (v === false ? 0 : v === null || typeof v === "undefined" ? 1 : 2);
-              return rank(a?.indexed) - rank(b?.indexed);
+              const rankDiff = rank(a?.indexed) - rank(b?.indexed);
+              if (rankDiff !== 0) return rankDiff;
+              const scoreA = Number(a?.score) || 0;
+              const scoreB = Number(b?.score) || 0;
+              return scoreB - scoreA;
             })
             .map((item) => item?.url)
             .filter(Boolean)
@@ -185,8 +189,8 @@ export default function AdminHome() {
         </h3>
         <p style={{ color: "var(--muted-text)", marginTop: 0 }}>
           {t({
-            ja: "公開ページURLを取得し、Search Console でインデックス状態を確認後、未登録ページを優先して Google Indexing API に送信します。",
-            en: "Load public URLs, check index status via Search Console, then submit unindexed pages first to Google Indexing API.",
+            ja: "公開ページURLを取得し、スコア（重要度・閲覧数・新しさ）が高い順に Google Indexing API に送信します。必要に応じてSearch Console確認付きAPIを別途実行できます。",
+            en: "Load public URLs, then submit to Google Indexing API by priority score (importance, views, recency). You can run Search Console inspection separately when needed.",
           })}
         </p>
         {indexingError && <div style={{ color: "red", marginBottom: 8 }}>{indexingError}</div>}
@@ -250,6 +254,16 @@ export default function AdminHome() {
                       ? t({ ja: "(登録済み)", en: "(Indexed)" })
                       : t({ ja: "(不明)", en: "(Unknown)" })}
                 </span>
+                <span style={{ color: "var(--muted-text)", marginLeft: 6 }}>
+                  {t(
+                    { ja: "score={{score}} view={{view}} type={{type}}", en: "score={{score}} view={{view}} type={{type}}" },
+                    {
+                      score: Number(item?.score || 0).toFixed(2),
+                      view: Number(item?.view_count || 0),
+                      type: String(item?.page_type || "-"),
+                    }
+                  )}
+                </span>
               </div>
             ))}
             {indexingUrlItems.length > 50 && (
@@ -298,6 +312,9 @@ export default function AdminHome() {
       </Link>
       <Link className="btn btn-border" to="/admin/ai-jobs" style={{ marginLeft: 8 }}>
         {t({ ja: "AIジョブ管理へ", en: "Go to AI Jobs" })}
+      </Link>
+      <Link className="btn btn-border" to="/admin/i18n-jobs" style={{ marginLeft: 8 }}>
+        {t({ ja: "UI多言語化ジョブへ", en: "Go to UI I18N Jobs" })}
       </Link>
       <button
         type="button"

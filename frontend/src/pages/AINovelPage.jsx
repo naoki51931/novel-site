@@ -19,6 +19,7 @@ const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
+const DEFAULT_AI_NOVEL_MODEL = "gpt-5-mini";
 
 function savePendingAiPost(data) {
   try {
@@ -337,7 +338,7 @@ export default function AINovelPage() {
   const [characters, setCharacters] = useState("");
   const [tone, setTone] = useState("");
   const [length, setLength] = useState("medium");
-  const [model, setModel] = useState("gpt-4.1-mini");
+  const [model, setModel] = useState(DEFAULT_AI_NOVEL_MODEL);
   const [isR18, setIsR18] = useState(false);
   const [retryMode, setRetryMode] = useState(false);
   const [retryMax, setRetryMax] = useState(2);
@@ -370,6 +371,10 @@ export default function AINovelPage() {
   const [autoFillPreview, setAutoFillPreview] = useState(null);
   const [guestRemaining, setGuestRemaining] = useState(null);
   const [userRemaining, setUserRemaining] = useState(null);
+  const [userPaidRemaining, setUserPaidRemaining] = useState(0);
+  const [addonUnitGenerations, setAddonUnitGenerations] = useState(80);
+  const [addonUnitPriceYen, setAddonUnitPriceYen] = useState(1000);
+  const [addonCheckoutLoading, setAddonCheckoutLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [continuationBody, setContinuationBody] = useState("");
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
@@ -446,6 +451,17 @@ export default function AINovelPage() {
           setUserRemaining(data.user_remaining);
         } else {
           setUserRemaining(null);
+        }
+        if (typeof data?.user_paid_remaining === "number") {
+          setUserPaidRemaining(Math.max(0, Number(data.user_paid_remaining || 0)));
+        } else {
+          setUserPaidRemaining(0);
+        }
+        if (typeof data?.addon_unit_generations === "number") {
+          setAddonUnitGenerations(Math.max(1, Number(data.addon_unit_generations || 0)));
+        }
+        if (typeof data?.addon_unit_price_yen === "number") {
+          setAddonUnitPriceYen(Math.max(1, Number(data.addon_unit_price_yen || 0)));
         }
       } catch (e) {
         console.error("failed to load ai remaining", e);
@@ -958,7 +974,7 @@ export default function AINovelPage() {
     setCharacters("");
     setTone("");
     setLength("medium");
-    setModel("gpt-4.1-mini");
+    setModel(DEFAULT_AI_NOVEL_MODEL);
     setIsR18(false);
     setRetryMode(false);
     setRetryMax(2);
@@ -1191,6 +1207,42 @@ export default function AINovelPage() {
         pending.generated_title || pending.title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
       body: pending.body,
     });
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const addon = (params.get("addon") || "").trim();
+    if (!addon) return;
+    if (addon === "success") {
+      setQuotaError(
+        t({
+          ja: "追加課金が完了しました。予備回数を反映しています...",
+          en: "Add-on payment completed. Refreshing your backup generations...",
+        })
+      );
+      const token = getAuthToken();
+      fetch("/api/ai/novels/remaining", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+        .then((res) => res.json().catch(() => ({})))
+        .then((data) => {
+          if (typeof data?.user_remaining === "number") setUserRemaining(data.user_remaining);
+          if (typeof data?.user_paid_remaining === "number")
+            setUserPaidRemaining(Math.max(0, Number(data.user_paid_remaining || 0)));
+          if (typeof data?.addon_unit_generations === "number")
+            setAddonUnitGenerations(Math.max(1, Number(data.addon_unit_generations || 0)));
+          if (typeof data?.addon_unit_price_yen === "number")
+            setAddonUnitPriceYen(Math.max(1, Number(data.addon_unit_price_yen || 0)));
+        })
+        .catch(() => {});
+    } else if (addon === "cancel") {
+      setQuotaError(
+        t({
+          ja: "追加課金はキャンセルされました。",
+          en: "Add-on payment was canceled.",
+        })
+      );
+    }
   }, []);
 
   // ★ URL の ?episode_id=xxx を拾って「続きモード」にする
@@ -1501,6 +1553,61 @@ export default function AINovelPage() {
     ].join("\n");
   };
 
+  const handleStartNovelAddonCheckout = async () => {
+    const token = getAuthToken();
+    if (!token) {
+      setError(
+        t({
+          ja: "ログインが必要です。ログイン画面へ移動します。",
+          en: "Login required. Redirecting to the login page.",
+        })
+      );
+      setTimeout(() => navigate("/login"), 800);
+      return;
+    }
+
+    try {
+      setAddonCheckoutLoading(true);
+      setError("");
+      setPremiumError("");
+      const res = await fetchWithTimeout(
+        "/api/ai/novels/addon/checkout",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ units: 1 }),
+        },
+        15000
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              t({ ja: "追加課金Checkoutの作成に失敗しました。", en: "Failed to start add-on checkout." })
+          )
+        );
+      }
+      const url = String(data?.checkout_url || "").trim();
+      if (!url) {
+        throw new Error(
+          t({ ja: "決済URLが取得できませんでした。", en: "Could not get checkout URL." })
+        );
+      }
+      window.location.href = url;
+    } catch (e) {
+      setError(
+        e?.message ||
+          t({ ja: "追加課金Checkoutの開始中にエラーが発生しました。", en: "Failed to start add-on checkout." })
+      );
+    } finally {
+      setAddonCheckoutLoading(false);
+    }
+  };
+
   const handleGenerate = async (e) => {
     e.preventDefault();
     await ensureWebPushSubscription(getAuthToken(), setPushDebugInfo);
@@ -1585,7 +1692,7 @@ export default function AINovelPage() {
             characters: characters || null,
             tone: tone || null,
             length: length || "medium",
-            model: model || "gpt-4.1-mini",
+            model: model || DEFAULT_AI_NOVEL_MODEL,
             r18: isR18,
             prompt,
             retry_mode: retryMode,
@@ -1715,7 +1822,7 @@ export default function AINovelPage() {
             characters: params.characters || null,
             tone: params.tone || null,
             length: null,
-            model: params.model || "gpt-4.1-mini",
+            model: params.model || DEFAULT_AI_NOVEL_MODEL,
             r18: params.isR18,
             prompt,
             retry_mode: params.retryMode,
@@ -1874,7 +1981,7 @@ export default function AINovelPage() {
           characters: params.characters || null,
           tone: params.tone || null,
           length: String(maxChars),
-          model: params.model || "gpt-4.1-mini",
+          model: params.model || DEFAULT_AI_NOVEL_MODEL,
           r18: params.isR18,
           prompt,
         }),
@@ -2460,9 +2567,37 @@ export default function AINovelPage() {
             fontSize: "0.9rem",
           }}
         >
-          {t(
-            { ja: "ユーザーの AI生成 残り回数: {{count}}", en: "User AI generations left: {{count}}" },
-            { count: userRemaining }
+          <div>
+            {t(
+              { ja: "ユーザーの AI生成 残り回数: {{count}}", en: "User AI generations left: {{count}}" },
+              { count: userRemaining }
+            )}
+          </div>
+          <div style={{ marginTop: "0.25rem", color: "var(--muted-text)" }}>
+            {t(
+              { ja: "予備回数（追加課金分）: {{count}}", en: "Backup generations (paid add-on): {{count}}" },
+              { count: userPaidRemaining }
+            )}
+          </div>
+          {userRemaining <= 0 && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={handleStartNovelAddonCheckout}
+                disabled={addonCheckoutLoading}
+              >
+                {addonCheckoutLoading
+                  ? t({ ja: "Checkout準備中...", en: "Preparing checkout..." })
+                  : t(
+                      {
+                        ja: "{{price}}円で予備{{count}}回を追加",
+                        en: "Add {{count}} backup generations for ¥{{price}}",
+                      },
+                      { price: Number(addonUnitPriceYen || 0), count: Number(addonUnitGenerations || 0) }
+                    )}
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -2870,6 +3005,9 @@ export default function AINovelPage() {
             }}
             style={{ width: "100%", padding: "0.5rem" }}
           >
+            <option value="gpt-5.2">{t({ ja: "GPT-5.2（最高品質）", en: "GPT-5.2 (highest quality)" })}</option>
+            <option value="gpt-5">{t({ ja: "GPT-5（高品質）", en: "GPT-5 (high quality)" })}</option>
+            <option value="gpt-5-mini">{t({ ja: "GPT-5 Mini（推奨・高速）", en: "GPT-5 Mini (recommended, fast)" })}</option>
             <option value="gpt-4.1-mini">{t({ ja: "GPT-4.1 Mini（高速・低コスト）", en: "GPT-4.1 Mini (fast, low cost)" })}</option>
             <option value="gpt-4.1">{t({ ja: "GPT-4.1（高品質）", en: "GPT-4.1 (high quality)" })}</option>
             <option value="gpt-4.1-preview">{t({ ja: "GPT-4.1 Preview（長文向け）", en: "GPT-4.1 Preview (long-form)" })}</option>
@@ -2877,8 +3015,16 @@ export default function AINovelPage() {
             <option value="gpt-4o">GPT-4o</option>
             <option value="openai/chatgpt-4o-latest">{t({ ja: "ChatGPT（OpenRouter / chatgpt-4o-latest）", en: "ChatGPT (OpenRouter / chatgpt-4o-latest)" })}</option>
             <option value="z-ai/glm-4.6">{t({ ja: "GLM 4.6（OpenRouter / z-ai/glm-4.6）", en: "GLM 4.6 (OpenRouter / z-ai/glm-4.6)" })}</option>
+            <option value="google/gemini-3-pro-preview">{t({ ja: "Gemini 3 Pro Preview（OpenRouter）", en: "Gemini 3 Pro Preview (OpenRouter)" })}</option>
+            <option value="google/gemini-3-flash-preview">{t({ ja: "Gemini 3 Flash Preview（OpenRouter）", en: "Gemini 3 Flash Preview (OpenRouter)" })}</option>
+            <option value="google/gemini-2.5-pro">{t({ ja: "Gemini 2.5 Pro（OpenRouter）", en: "Gemini 2.5 Pro (OpenRouter)" })}</option>
+            <option value="google/gemini-2.5-flash">{t({ ja: "Gemini 2.5 Flash（OpenRouter）", en: "Gemini 2.5 Flash (OpenRouter)" })}</option>
+            <option value="google/gemini-2.5-flash-lite">{t({ ja: "Gemini 2.5 Flash Lite（OpenRouter）", en: "Gemini 2.5 Flash Lite (OpenRouter)" })}</option>
             <option value="moonshotai/kimi-k2">{t({ ja: "Kimi（OpenRouter / kimi-k2）", en: "Kimi (OpenRouter / kimi-k2)" })}</option>
+            <option value="moonshotai/kimi-k2-thinking">{t({ ja: "Kimi K2 Thinking（OpenRouter）", en: "Kimi K2 Thinking (OpenRouter)" })}</option>
+            <option value="moonshotai/kimi-k2-thinking-turbo">{t({ ja: "Kimi K2 Thinking Turbo（OpenRouter）", en: "Kimi K2 Thinking Turbo (OpenRouter)" })}</option>
             <option value="deepseek/deepseek-chat">{t({ ja: "DeepSeek（OpenRouter / deepseek-chat）", en: "DeepSeek (OpenRouter / deepseek-chat)" })}</option>
+            <option value="deepseek/deepseek-reasoner">{t({ ja: "DeepSeek Reasoner（OpenRouter）", en: "DeepSeek Reasoner (OpenRouter)" })}</option>
             <option value="deepseek:deepseek-chat">{t({ ja: "DeepSeek（公式 / deepseek-chat）", en: "DeepSeek (official / deepseek-chat)" })}</option>
             <option value="deepseek:deepseek-reasoner">{t({ ja: "DeepSeek（公式 / deepseek-reasoner）", en: "DeepSeek (official / deepseek-reasoner)" })}</option>
             <option value="google/gemini-2.0-flash-001">{t({ ja: "Gemini（OpenRouter / gemini-2.0-flash）", en: "Gemini (OpenRouter / gemini-2.0-flash)" })}</option>
@@ -2995,7 +3141,27 @@ export default function AINovelPage() {
             color: "#8a6d3b",
           }}
         >
-          {quotaError}
+          <div>{quotaError}</div>
+          {hasAuthToken && typeof userRemaining === "number" && (
+            <div style={{ marginTop: "0.6rem" }}>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={handleStartNovelAddonCheckout}
+                disabled={addonCheckoutLoading}
+              >
+                {addonCheckoutLoading
+                  ? t({ ja: "Checkout準備中...", en: "Preparing checkout..." })
+                  : t(
+                      {
+                        ja: "{{price}}円で予備{{count}}回を追加",
+                        en: "Add {{count}} backup generations for ¥{{price}}",
+                      },
+                      { price: Number(addonUnitPriceYen || 0), count: Number(addonUnitGenerations || 0) }
+                    )}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -3294,15 +3460,14 @@ export default function AINovelPage() {
                 </div>
               </div>
             )}
-            {(!isContinueMode || isEditMode) && (
-              <div
-                style={{
-                  padding: "0.75rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--border)",
-                  backgroundColor: "var(--ai-result-surface)",
-                }}
-              >
+            <div
+              style={{
+                padding: "0.75rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                backgroundColor: "var(--ai-result-surface)",
+              }}
+            >
                 <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
                   {t({ ja: "続きを作成する", en: "Generate continuation" })}
                 </div>
@@ -3347,8 +3512,7 @@ export default function AINovelPage() {
                     {t({ ja: "続き作成をやり直す", en: "Redo continuation" })}
                   </button>
                 )}
-              </div>
-            )}
+            </div>
             <div
               style={{
                 padding: "0.75rem",

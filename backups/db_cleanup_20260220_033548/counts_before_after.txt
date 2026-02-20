@@ -1,0 +1,12 @@
+timestamp=20260220_033548
+database=novel_db
+[before_counts]
+ai_novel_jobs	152
+episode_translations	120
+[after_counts]
+ai_novel_jobs	0
+episode_translations	0
+[files]
+-rw-rw-r-- 1 ubuntu ubuntu  17M Feb 20 03:35 ai_novel_jobs_backup.txt
+-rw-rw-r-- 1 ubuntu ubuntu  165 Feb 20 03:35 counts_before_after.txt
+-rw-rw-r-- 1 ubuntu ubuntu 2.3M Feb 20 03:35 episode_translations_backup.txt

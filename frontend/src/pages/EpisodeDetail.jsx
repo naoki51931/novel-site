@@ -4,12 +4,14 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 const FREE_READING_SCHEDULE = {
   ja: "無料開放時間: 平日17:00-19:00 / 土日祝14:00-19:00（JST）",
   en: "Free reading hours: Weekdays 17:00-19:00 / Weekends & holidays 14:00-19:00 (JST)",
 };
+const TRANSLATABLE_LANGS = new Set(["en", "zh-cn", "zh-tw", "ko"]);
 
 export default function EpisodeDetail() {
   const { id } = useParams(); // episode_id
@@ -174,9 +176,8 @@ export default function EpisodeDetail() {
         setError("");
 
         const token = localStorage.getItem("token");
-        const res = await fetch(API_BASE + "/api/episodes/" + id, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
+        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch(API_BASE + "/api/episodes/" + id, { headers: authHeaders });
         if (!res.ok) {
           throw new Error(
             t(
@@ -186,7 +187,39 @@ export default function EpisodeDetail() {
           );
         }
 
-        const data = await res.json();
+        let data = await res.json();
+
+        // For non-Japanese UI, try translated title/body (and novel meta) when available.
+        if (TRANSLATABLE_LANGS.has(lang) && data?.id) {
+          const fetchJson = async (path) => {
+            const r = await fetch(`${API_BASE}${path}`, { headers: authHeaders });
+            if (!r.ok) return null;
+            return await r.json().catch(() => null);
+          };
+
+          const [epTr, novelTr] = await Promise.all([
+            fetchJson(`/api/episodes/${data.id}/translations/${encodeURIComponent(lang)}`),
+            data?.novel_id
+              ? fetchJson(`/api/novels/${data.novel_id}/translations/${encodeURIComponent(lang)}`)
+              : Promise.resolve(null),
+          ]);
+
+          if (epTr?.title) data = { ...data, title: epTr.title };
+          if (typeof epTr?.body === "string") data = { ...data, body: epTr.body };
+          if (Array.isArray(epTr?.tags)) {
+            data = { ...data, tags: epTr.tags.map((name) => ({ name })) };
+          }
+
+          if (novelTr) {
+            data = {
+              ...data,
+              novel_title: novelTr.title || data.novel_title,
+              novel_description: novelTr.description ?? data.novel_description,
+              novel_tags: Array.isArray(novelTr.tags) ? novelTr.tags.map((name) => ({ name })) : data.novel_tags,
+            };
+          }
+        }
+
         setEpisode(data);
         const needsConfirm = !!data.age_confirmation_required;
         setAgeConfirmRequired(needsConfirm);
@@ -222,7 +255,7 @@ export default function EpisodeDetail() {
     fetch(`${API_BASE}/api/episodes/${id}/comments`)
       .then((res) => res.json())
       .then((data) => setComments(Array.isArray(data) ? data : []));
-  }, [id]);
+  }, [id, lang]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");

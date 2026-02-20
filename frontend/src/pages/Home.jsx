@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import { useI18n } from "../lib/i18n";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 
 export default function Home({
   query = "",
@@ -28,6 +29,7 @@ export default function Home({
   const [recommendedNovels, setRecommendedNovels] = useState([]);
   const [recommendedLoading, setRecommendedLoading] = useState(false);
   const [recommendedError, setRecommendedError] = useState("");
+  const [quickEpisodeCreating, setQuickEpisodeCreating] = useState(false);
 
   useEffect(() => {
     const fetchNovels = async () => {
@@ -48,6 +50,7 @@ export default function Home({
         if (effectiveQuery) apiParams.set("q", effectiveQuery);
         if (effectiveExclude) apiParams.set("exclude", effectiveExclude);
         if (effectiveTag) apiParams.set("tag", effectiveTag);
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) apiParams.set("lang", lang);
         const qs = apiParams.toString();
         if (qs) url += `?${qs}`;
 
@@ -83,7 +86,7 @@ export default function Home({
     };
 
     fetchNovels();
-  }, [query, excludeQuery, tag, location.search]); // ← 検索語 or URL が変わるたびに再取得
+  }, [query, excludeQuery, tag, location.search, lang]); // ← 検索語 or URL が変わるたびに再取得
 
   useEffect(() => {
     if (!showRanking) {
@@ -121,6 +124,7 @@ export default function Home({
         if (effectiveQuery) apiParams.set("q", effectiveQuery);
         if (effectiveExclude) apiParams.set("exclude", effectiveExclude);
         if (effectiveTag) apiParams.set("tag", effectiveTag);
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) apiParams.set("lang", lang);
         const qs = apiParams.toString();
         let url = `${API_BASE}/api/public/novels/ranking`;
         if (qs) url += `?${qs}`;
@@ -156,6 +160,7 @@ export default function Home({
     excludeQuery,
     tag,
     showRanking,
+    lang,
   ]);
 
   useEffect(() => {
@@ -219,7 +224,10 @@ export default function Home({
       try {
         setRecommendedLoading(true);
         setRecommendedError("");
-        const res = await fetch(`${API_BASE}/api/public/novels/recommended?limit=8`, {
+        const recParams = new URLSearchParams();
+        recParams.set("limit", "8");
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) recParams.set("lang", lang);
+        const res = await fetch(`${API_BASE}/api/public/novels/recommended?${recParams.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         });
@@ -247,7 +255,7 @@ export default function Home({
     };
 
     fetchRecommended();
-  }, [location.search, query, excludeQuery, tag, t]);
+  }, [location.search, query, excludeQuery, tag, t, lang]);
 
   const formatDateTime = (isoString) => {
     if (!isoString) return "";
@@ -380,6 +388,52 @@ export default function Home({
     }
   };
 
+  const handleQuickEpisodePost = async () => {
+    const token = requireToken();
+    if (!token || quickEpisodeCreating) return;
+
+    try {
+      setQuickEpisodeCreating(true);
+      const stamp = new Date().toLocaleString("ja-JP", {
+        timeZone: "Asia/Tokyo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const payload = {
+        title: t({ ja: `新規エピソード用 ${stamp}`, en: `Novel for New Episode ${stamp}` }),
+        description: t({ ja: "トップページのエピソード投稿ボタンから自動作成", en: "Auto-created from top episode post button" }),
+        is_public: false,
+      };
+      const res = await fetch(`${API_BASE}/api/novels`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.id) {
+        throw new Error(
+          data.detail ||
+            t({ ja: "小説の自動作成に失敗しました。", en: "Failed to auto-create a novel." })
+        );
+      }
+      navigate(`/novels/${data.id}/episodes/new`);
+    } catch (err) {
+      console.error(err);
+      alert(
+        err.message ||
+          t({ ja: "エピソード投稿の準備に失敗しました。", en: "Failed to prepare episode posting." })
+      );
+    } finally {
+      setQuickEpisodeCreating(false);
+    }
+  };
+
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
@@ -387,6 +441,32 @@ export default function Home({
       {error && (
         <p style={{ color: "red", marginTop: 8, marginBottom: 8 }}>{error}</p>
       )}
+
+      <section className="home-post-cta">
+        <Link className="home-post-cta-btn home-post-cta-primary" to="/novels/new">
+          <span className="home-post-cta-title">
+            {t({ ja: "新規小説を作成", en: "Create New Novel" })}
+          </span>
+          <span className="home-post-cta-sub">
+            {t({ ja: "0から新しい作品を書く", en: "Start a brand-new story" })}
+          </span>
+        </Link>
+        <button
+          type="button"
+          className="home-post-cta-btn home-post-cta-secondary"
+          onClick={handleQuickEpisodePost}
+          disabled={quickEpisodeCreating}
+        >
+          <span className="home-post-cta-title">
+            {quickEpisodeCreating
+              ? t({ ja: "小説を作成中...", en: "Creating novel..." })
+              : t({ ja: "エピソードを投稿", en: "Post Episode" })}
+          </span>
+          <span className="home-post-cta-sub">
+            {t({ ja: "小説を自動作成して投稿画面へ進む", en: "Auto-create a novel and open episode editor" })}
+          </span>
+        </button>
+      </section>
 
       {showRanking && (
         <section style={{ marginBottom: 24 }}>

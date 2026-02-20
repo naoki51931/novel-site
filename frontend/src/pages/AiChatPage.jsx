@@ -12,6 +12,7 @@ const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"]
 const PREVIEW_BUBBLE_COUNT = 3;
 const APPEARANCE_SECTION_HEADER = "【見た目設定】";
 const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
+const DEFAULT_AI_CHAT_MODEL = "gpt-5-mini";
 const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
   "優しい",
   "かわいい",
@@ -69,12 +70,24 @@ const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
 ]);
 
 const AI_MODELS = [
+  { value: "gpt-5.2", labelJa: "GPT-5.2（OpenAI）", labelEn: "GPT-5.2 (OpenAI)" },
+  { value: "gpt-5", labelJa: "GPT-5（OpenAI）", labelEn: "GPT-5 (OpenAI)" },
+  { value: "gpt-5-mini", labelJa: "GPT-5 mini（OpenAI）", labelEn: "GPT-5 mini (OpenAI)" },
   { value: "gpt-4.1-mini", labelJa: "GPT-4.1 mini（OpenAI）", labelEn: "GPT-4.1 mini (OpenAI)" },
   { value: "openai/chatgpt-4o-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
+  { value: "google/gemini-3-pro-preview", labelJa: "Gemini 3 Pro Preview（OpenRouter）", labelEn: "Gemini 3 Pro Preview (OpenRouter)" },
+  { value: "google/gemini-3-flash-preview", labelJa: "Gemini 3 Flash Preview（OpenRouter）", labelEn: "Gemini 3 Flash Preview (OpenRouter)" },
+  { value: "google/gemini-2.5-pro", labelJa: "Gemini 2.5 Pro（OpenRouter）", labelEn: "Gemini 2.5 Pro (OpenRouter)" },
+  { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
+  { value: "google/gemini-2.5-flash-lite", labelJa: "Gemini 2.5 Flash Lite（OpenRouter）", labelEn: "Gemini 2.5 Flash Lite (OpenRouter)" },
   { value: "z-ai/glm-4.6", labelJa: "GLM 4.6（OpenRouter）", labelEn: "GLM 4.6 (OpenRouter)" },
   { value: "moonshotai/kimi-k2", labelJa: "Kimi（OpenRouter）", labelEn: "Kimi (OpenRouter)" },
+  { value: "moonshotai/kimi-k2-thinking", labelJa: "Kimi K2 Thinking（OpenRouter）", labelEn: "Kimi K2 Thinking (OpenRouter)" },
+  { value: "moonshotai/kimi-k2-thinking-turbo", labelJa: "Kimi K2 Thinking Turbo（OpenRouter）", labelEn: "Kimi K2 Thinking Turbo (OpenRouter)" },
   { value: "deepseek/deepseek-chat", labelJa: "DeepSeek（OpenRouter）", labelEn: "DeepSeek (OpenRouter)" },
+  { value: "deepseek/deepseek-reasoner", labelJa: "DeepSeek Reasoner（OpenRouter）", labelEn: "DeepSeek Reasoner (OpenRouter)" },
   { value: "deepseek:deepseek-chat", labelJa: "DeepSeek（公式）", labelEn: "DeepSeek (official)" },
+  { value: "deepseek:deepseek-reasoner", labelJa: "DeepSeek Reasoner（公式）", labelEn: "DeepSeek Reasoner (official)" },
 ];
 
 function modelProvider(model) {
@@ -314,7 +327,7 @@ export default function AiChatPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
-  const [model, setModel] = useState("gpt-4.1-mini");
+  const [model, setModel] = useState(DEFAULT_AI_CHAT_MODEL);
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem(AI_CHAT_CHARACTER_NAME_KEY) || "";
@@ -2420,6 +2433,64 @@ export default function AiChatPage() {
     submitChat(text);
   };
 
+  const applyServerChatMessages = (raw) => {
+    const list = Array.isArray(raw) ? raw : [];
+    setMessages(
+      list.map((m) => {
+        const parsedImage = parseGeneratedImageMessageContent(String(m?.content || ""));
+        return {
+          id: m?.id != null ? Number(m.id) : null,
+          role: m?.role === "assistant" ? "assistant" : "user",
+          mode: m?.mode === "do" ? "do" : "say",
+          is_auto_dialogue: !!m?.is_auto_dialogue,
+          content: parsedImage
+            ? t({ ja: "画像を生成しました。", en: "Generated an image." })
+            : String(m?.content || ""),
+          speaker_name: String(characterName || ""),
+          ...(parsedImage
+            ? {
+                is_generated_image: true,
+                generated_images: parsedImage.images,
+              }
+            : {}),
+        };
+      })
+    );
+
+    const lastUser = [...list].reverse().find((m) => (m?.role || "") === "user");
+    if (lastUser) {
+      const text = String(lastUser.content || "");
+      const lastMode = lastUser?.mode === "do" ? "do" : "say";
+      setLastRequest({ text, mode: lastMode });
+      setResendDraft(text);
+      setResendMode(lastMode);
+    } else {
+      setLastRequest(null);
+      setResendDraft("");
+    }
+
+    return list;
+  };
+
+  const fetchServerChatMessages = async () => {
+    const token = getStoredAuthToken();
+    if (!token || !writableSelectedCharacterId) return [];
+    const res = await fetch(
+      `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    const data = await res.json().catch(() => []);
+    if (!res.ok) {
+      throw new Error(
+        data?.detail ||
+          t({ ja: "チャット履歴の取得に失敗しました。", en: "Failed to load chat history." })
+      );
+    }
+    return applyServerChatMessages(data);
+  };
+
   const removeGeneratedImageAt = (messageIndex, imageIndex) => {
     const run = async () => {
       if (messageIndex < 0 || imageIndex < 0) return;
@@ -2484,9 +2555,17 @@ export default function AiChatPage() {
 
       const token = getStoredAuthToken();
 
-      if (writableSelectedCharacterId && token && target?.id != null) {
+      let messageId = target?.id ?? null;
+      if (writableSelectedCharacterId && token && messageId == null) {
+        // Sync once so we can get a real message id; otherwise deletion won't persist.
+        const serverList = await fetchServerChatMessages();
+        const idx = Math.min(Math.max(selectedMessageIndex, 0), Math.max(0, serverList.length - 1));
+        messageId = serverList[idx]?.id != null ? Number(serverList[idx].id) : null;
+      }
+
+      if (writableSelectedCharacterId && token && messageId != null) {
         const res = await fetch(
-          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/${encodeURIComponent(target.id)}`,
+          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/${encodeURIComponent(messageId)}`,
           {
             method: "DELETE",
             headers: { Authorization: `Bearer ${token}` },
@@ -2499,9 +2578,11 @@ export default function AiChatPage() {
               t({ ja: "メッセージ削除に失敗しました。", en: "Failed to delete messages." })
           );
         }
+        await fetchServerChatMessages();
+      } else if (writableSelectedCharacterId && token && messageId == null) {
+        throw new Error(t({ ja: "履歴の同期に失敗しました。少し待ってから再度お試しください。", en: "Failed to sync history. Please try again." }));
       }
 
-      setMessages((prev) => prev.slice(0, selectedMessageIndex));
       setSelectedMessageIndex(null);
     };
     run().catch((e) => {
@@ -2596,52 +2677,7 @@ export default function AiChatPage() {
     (async () => {
       try {
         setMessagesLoading(true);
-        const res = await fetch(
-          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          }
-        );
-        const data = await res.json().catch(() => []);
-        if (!res.ok) {
-          throw new Error(
-            data?.detail ||
-              t({ ja: "チャット履歴の取得に失敗しました。", en: "Failed to load chat history." })
-          );
-        }
-        const list = Array.isArray(data) ? data : [];
-        setMessages(
-          list.map((m) => {
-            const parsedImage = parseGeneratedImageMessageContent(String(m?.content || ""));
-            return {
-              id: m?.id != null ? Number(m.id) : null,
-              role: m?.role === "assistant" ? "assistant" : "user",
-              mode: m?.mode === "do" ? "do" : "say",
-              is_auto_dialogue: !!m?.is_auto_dialogue,
-              content: parsedImage
-                ? t({ ja: "画像を生成しました。", en: "Generated an image." })
-                : String(m?.content || ""),
-              speaker_name: String(characterName || ""),
-              ...(parsedImage
-                ? {
-                    is_generated_image: true,
-                    generated_images: parsedImage.images,
-                  }
-                : {}),
-            };
-          })
-        );
-        const lastUser = [...list].reverse().find((m) => (m?.role || "") === "user");
-        if (lastUser) {
-          const text = String(lastUser.content || "");
-          const lastMode = lastUser?.mode === "do" ? "do" : "say";
-          setLastRequest({ text, mode: lastMode });
-          setResendDraft(text);
-          setResendMode(lastMode);
-        } else {
-          setLastRequest(null);
-          setResendDraft("");
-        }
+        await fetchServerChatMessages();
       } catch (e) {
         setError(
           e?.message ||
@@ -3354,18 +3390,28 @@ export default function AiChatPage() {
         </label>
       </div>
 
-      <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 10, minHeight: 260, marginBottom: 10 }}>
-        {messagesLoading && (
-          <p style={{ color: "#666" }}>
-            {t({ ja: "履歴を読み込み中...", en: "Loading history..." })}
-          </p>
-        )}
-        {messages.length === 0 && (
-          <p style={{ color: "#777" }}>
-            {t({ ja: "メッセージを送ると会話が始まります。", en: "Send a message to start chatting." })}
-          </p>
-        )}
-        {messages.map((m, idx) => (
+	      <div
+	        style={{
+	          border: "1px solid var(--border)",
+	          background: "var(--surface)",
+	          color: "var(--text)",
+	          borderRadius: 8,
+	          padding: 10,
+	          minHeight: 260,
+	          marginBottom: 10,
+	        }}
+	      >
+	        {messagesLoading && (
+	          <p style={{ color: "var(--muted-text)" }}>
+	            {t({ ja: "履歴を読み込み中...", en: "Loading history..." })}
+	          </p>
+	        )}
+	        {messages.length === 0 && (
+	          <p style={{ color: "var(--muted-text)" }}>
+	            {t({ ja: "メッセージを送ると会話が始まります。", en: "Send a message to start chatting." })}
+	          </p>
+	        )}
+	        {messages.map((m, idx) => (
           <div
             key={`${m.role}-${idx}`}
             style={{
@@ -3377,23 +3423,23 @@ export default function AiChatPage() {
             }}
             onClick={() => setSelectedMessageIndex((prev) => (prev === idx ? null : idx))}
           >
-            {m.mode === "do" ? (
-              <div
-                style={{
-                  background: "#fff2dc",
-                  border: "1px solid #f1c27a",
-                  color: "#6f4a1f",
-                  borderRadius: 8,
-                  padding: "8px 10px",
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.6,
-                }}
-              >
-                <div style={{ fontSize: "0.78rem", color: "#7b5a31", marginBottom: 4, fontWeight: 700 }}>
-                  {(m.role === "user"
-                    ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
-                    : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" })) ) +
-                    " / do"}
+	            {m.mode === "do" ? (
+	              <div
+	                style={{
+	                  background: "#fff2dc",
+	                  border: "1px solid #f1c27a",
+	                  color: "#4b3214",
+	                  borderRadius: 8,
+	                  padding: "8px 10px",
+	                  whiteSpace: "pre-wrap",
+	                  lineHeight: 1.6,
+	                }}
+	              >
+	                <div style={{ fontSize: "0.78rem", color: "#3f2c14", marginBottom: 4, fontWeight: 700 }}>
+	                  {(m.role === "user"
+	                    ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
+	                    : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" })) ) +
+	                    " / do"}
                   {m.is_auto_dialogue
                     ? ` ${t({ ja: "[自動会話]", en: "[Auto]" })}`
                     : ""}
@@ -3407,22 +3453,23 @@ export default function AiChatPage() {
                   justifyContent: m.role === "user" ? "flex-end" : "flex-start",
                 }}
               >
-                <div
-                  style={{
-                    maxWidth: "82%",
-                    background: m.role === "user" ? "#dff2ff" : "#f6f7fb",
-                    border: "1px solid #cfd4e2",
-                    borderRadius: 14,
-                    padding: "8px 12px",
-                    whiteSpace: "pre-wrap",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  <div style={{ fontSize: "0.78rem", color: "#5f6675", marginBottom: 4 }}>
-                    {m.role === "user"
-                      ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
-                      : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" }))}{" "}
-                    / say
+	                <div
+	                  style={{
+	                    maxWidth: "82%",
+	                    background: m.role === "user" ? "#dff2ff" : "#f6f7fb",
+	                    border: "1px solid #cfd4e2",
+	                    borderRadius: 14,
+	                    padding: "8px 12px",
+	                    whiteSpace: "pre-wrap",
+	                    lineHeight: 1.5,
+	                    color: "#111",
+	                  }}
+	                >
+	                  <div style={{ fontSize: "0.78rem", color: "#334155", marginBottom: 4 }}>
+	                    {m.role === "user"
+	                      ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
+	                      : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" }))}{" "}
+	                    / say
                     {m.is_auto_dialogue
                       ? ` ${t({ ja: "[自動会話]", en: "[Auto]" })}`
                       : ""}
@@ -3471,7 +3518,7 @@ export default function AiChatPage() {
                                 target="_blank"
                                 rel="noreferrer"
                                 onClick={(e) => e.stopPropagation()}
-                                style={{ fontSize: "0.78rem", color: "#3b5ccc", textDecoration: "underline" }}
+                                style={{ fontSize: "0.78rem", color: "var(--accent)", textDecoration: "underline" }}
                               >
                                 {t({ ja: "画像を開く", en: "Open image" })}
                               </a>
@@ -3570,7 +3617,7 @@ export default function AiChatPage() {
             href="https://gazou.shosetsu-toukou-site.org/"
             target="_blank"
             rel="noreferrer"
-            style={{ color: "#3b5ccc", textDecoration: "underline" }}
+            style={{ color: "var(--accent)", textDecoration: "underline" }}
           >
             https://gazou.shosetsu-toukou-site.org/
           </a>
@@ -3828,10 +3875,10 @@ export default function AiChatPage() {
           })}
         </span>
       </label>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          className={r18Mode ? "btn btn-border" : "btn"}
+	      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+	        <button
+	          type="button"
+	          className={r18Mode ? "btn btn-border" : "btn"}
           onClick={toggleR18Mode}
           disabled={loading}
           aria-pressed={r18Mode}
@@ -3841,23 +3888,23 @@ export default function AiChatPage() {
             borderColor: r18Mode ? "#c53f3f" : undefined,
             color: r18Mode ? "#8a1f1f" : undefined,
           }}
-        >
-          {r18Mode ? "R18: ON" : "R18: OFF"}
-        </button>
-        <span style={{ fontSize: "0.85rem", color: "#666" }}>
-          {t({
-            ja: "ON時は年齢確認済みとして扱います。",
-            en: "When ON, age confirmation is considered accepted.",
-          })}
-        </span>
-      </div>
-      {autoDialogue && (
-        <div style={{ marginTop: 4, fontSize: "0.85rem", color: autoContinuing ? "#235a93" : "#666" }}>
-          {autoContinuing
-            ? t({ ja: "キャラ会話を自動生成中...", en: "Generating auto character dialogue..." })
-            : t({ ja: "自動会話が有効です。停止したい場合は「停止」または「止める」を送信してください。", en: "Auto dialogue is active. Send \"stop\" to halt." })}
-        </div>
-      )}
+	        >
+	          {r18Mode ? "R18: ON" : "R18: OFF"}
+	        </button>
+	        <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
+	          {t({
+	            ja: "ON時は年齢確認済みとして扱います。",
+	            en: "When ON, age confirmation is considered accepted.",
+	          })}
+	        </span>
+	      </div>
+	      {autoDialogue && (
+	        <div style={{ marginTop: 4, fontSize: "0.85rem", color: autoContinuing ? "#235a93" : "var(--muted-text)" }}>
+	          {autoContinuing
+	            ? t({ ja: "キャラ会話を自動生成中...", en: "Generating auto character dialogue..." })
+	            : t({ ja: "自動会話が有効です。停止したい場合は「停止」または「止める」を送信してください。", en: "Auto dialogue is active. Send \"stop\" to halt." })}
+	        </div>
+	      )}
 
       <div
         style={{

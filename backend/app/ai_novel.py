@@ -333,6 +333,7 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
 
 
 def _parse_json_payload(raw: str) -> dict:
+    import ast
     import json
     import re
 
@@ -366,6 +367,14 @@ def _parse_json_payload(raw: str) -> dict:
                         return d2
                 except Exception:
                     pass
+        except Exception:
+            pass
+        # Fallback for pseudo-JSON like Python dict strings using single quotes.
+        try:
+            lit = ast.literal_eval(s)
+            d = _extract_dict(lit)
+            if d is not None:
+                return d
         except Exception:
             pass
         return None
@@ -427,12 +436,37 @@ async def call_ai_json(
     model: str | None = None,
     provider: str | None = None,
     system_instructions: str | None = None,
+    timeout_sec: float | None = None,
 ) -> tuple[dict, int | None, str | None]:
     if not prompt:
         raise HTTPException(status_code=400, detail="プロンプトが空です。")
 
     provider = (provider or "").strip().lower() or provider_from_model(model)
     system_instructions = system_instructions or "JSON 1個のみを返してください。"
+    try:
+        max_output_tokens = int(os.getenv("AI_JSON_MAX_OUTPUT_TOKENS", "8192"))
+    except Exception:
+        max_output_tokens = 8192
+    max_output_tokens = max(512, min(16384, max_output_tokens))
+    effective_timeout: float | None = None
+    if timeout_sec is not None:
+        try:
+            parsed_timeout = float(timeout_sec)
+            if parsed_timeout > 0:
+                effective_timeout = max(5.0, min(900.0, parsed_timeout))
+        except Exception:
+            effective_timeout = None
+
+    async def _await_api_call(awaitable):
+        if effective_timeout is None:
+            return await awaitable
+        try:
+            return await asyncio.wait_for(awaitable, timeout=effective_timeout)
+        except asyncio.TimeoutError as e:
+            raise HTTPException(
+                status_code=504,
+                detail=f"AI 翻訳 API 呼び出しがタイムアウトしました（{int(effective_timeout)}秒）。",
+            ) from e
 
     if provider == "deepseek":
         if deepseek_client is None:
@@ -443,15 +477,19 @@ async def call_ai_json(
         if not effective_model:
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
         try:
-            resp = await asyncio.to_thread(
-                deepseek_client.chat.completions.create,
-                model=effective_model,
-                messages=[
-                    {"role": "system", "content": system_instructions},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=2048,
+            resp = await _await_api_call(
+                asyncio.to_thread(
+                    deepseek_client.chat.completions.create,
+                    model=effective_model,
+                    messages=[
+                        {"role": "system", "content": system_instructions},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=max_output_tokens,
+                )
             )
+        except HTTPException:
+            raise
         except Exception as e:
             print("[ERROR] DeepSeek API 呼び出し失敗:", repr(e))
             raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
@@ -468,15 +506,19 @@ async def call_ai_json(
         if not effective_model:
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
         try:
-            resp = await asyncio.to_thread(
-                openrouter_client.chat.completions.create,
-                model=effective_model,
-                messages=[
-                    {"role": "system", "content": system_instructions},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=2048,
+            resp = await _await_api_call(
+                asyncio.to_thread(
+                    openrouter_client.chat.completions.create,
+                    model=effective_model,
+                    messages=[
+                        {"role": "system", "content": system_instructions},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=max_output_tokens,
+                )
             )
+        except HTTPException:
+            raise
         except Exception as e:
             print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
             raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
@@ -491,22 +533,31 @@ async def call_ai_json(
             raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
         effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
         try:
-            resp = await asyncio.to_thread(
-                client.responses.create,
-                model=effective_model,
-                instructions=system_instructions,
-                input=prompt,
-                max_output_tokens=2048,
+            # Use Chat Completions with response_format to guarantee valid JSON.
+            resp = await _await_api_call(
+                asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=effective_model,
+                    messages=[
+                        {"role": "system", "content": system_instructions},
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0,
+                    max_tokens=max_output_tokens,
+                )
             )
+        except HTTPException:
+            raise
         except Exception as e:
-            print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
+            print("[ERROR] OpenAI Chat API 呼び出し失敗:", repr(e))
             raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
 
         raw = ""
         try:
-            raw = resp.output[0].content[0].text
+            raw = resp.choices[0].message.content or ""
         except Exception:
-            raw = getattr(resp, "output_text", "") or ""
+            raw = ""
 
     if not raw:
         raise HTTPException(status_code=500, detail="AI からの応答が空でした。")

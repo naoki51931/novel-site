@@ -3,8 +3,9 @@ import { useNavigate, Link } from "react-router-dom";
 import { trackEvent } from "../lib/analytics";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
+import { getApiBase } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_BACKEND_ORIGIN || "https://shosetsu-toukou-site.org";
+const API_BASE = getApiBase();
 const DRAFT_KEY = "draft_new_novel";
 
 export default function NewNovel() {
