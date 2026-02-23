@@ -358,11 +358,18 @@ function getStoredAuthToken() {
   return jwtLike || candidates[0];
 }
 
+function isDemo02UserLocal() {
+  if (typeof window === "undefined") return false;
+  return String(localStorage.getItem("username") || "").trim().toLowerCase() === "demo02";
+}
+
 export default function AiChatPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
-  const [model, setModel] = useState(DEFAULT_AI_CHAT_MODEL);
+  const [model, setModel] = useState(() =>
+    isDemo02UserLocal() ? "moonshotai/kimi-k2" : DEFAULT_AI_CHAT_MODEL
+  );
   const [recommendedModelsOnly, setRecommendedModelsOnly] = useState(false);
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -380,10 +387,10 @@ export default function AiChatPage() {
   const [mode, setMode] = useState("say");
   const [autoDialogue, setAutoDialogue] = useState(false);
   const [longReply, setLongReply] = useState(false);
-  const [shortReply, setShortReply] = useState(false);
+  const [shortReply, setShortReply] = useState(() => isDemo02UserLocal());
   const [dailyTalkMode, setDailyTalkMode] = useState(false);
-  const [iq80CrudeMode, setIq80CrudeMode] = useState(false);
-  const [r18Mode, setR18Mode] = useState(false);
+  const [iq80CrudeMode, setIq80CrudeMode] = useState(() => isDemo02UserLocal());
+  const [r18Mode, setR18Mode] = useState(() => isDemo02UserLocal());
   const [fanficMode, setFanficMode] = useState(false);
   const [augmentLoading, setAugmentLoading] = useState(false);
   const [augmentNotes, setAugmentNotes] = useState("");
@@ -1193,6 +1200,10 @@ export default function AiChatPage() {
   };
 
   const duplicateCastCharacter = (castKey) => {
+    const duplicatedKey = `cast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const isDemo02User =
+      typeof window !== "undefined"
+      && String(localStorage.getItem("username") || "").trim().toLowerCase() === "demo02";
     setCastCharacters((prev) => {
       const original = prev.find((c) => c.key === castKey);
       if (!original) return prev;
@@ -1202,14 +1213,21 @@ export default function AiChatPage() {
       );
       const duplicate = {
         ...original,
-        key: `cast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        key: duplicatedKey,
         saved_id: "",
         name: nextName,
+        relationship: isDemo02User ? "自分同士" : String(original.relationship || ""),
       };
       return [...prev, duplicate];
     });
+    setRandomSpeakerKeys((prev) => (prev.includes(duplicatedKey) ? prev : [...prev, duplicatedKey]));
+    setAutoRandomSpeakerKeys((prev) => (prev.includes(duplicatedKey) ? prev : [...prev, duplicatedKey]));
   };
   const duplicateMainCharacter = () => {
+    const duplicatedKey = `cast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const isDemo02User =
+      typeof window !== "undefined"
+      && String(localStorage.getItem("username") || "").trim().toLowerCase() === "demo02";
     setCastCharacters((prev) => {
       const nextName = buildDuplicatedCastName(
         characterName,
@@ -1217,14 +1235,18 @@ export default function AiChatPage() {
       );
       const duplicate = {
         ...createCastCharacter(),
+        key: duplicatedKey,
         name: nextName,
         personality: String(personality || ""),
         appearance: String(appearance || ""),
+        relationship: isDemo02User ? "自分同士" : "",
         fanfic_mode: !!fanficMode,
         speech_gender: normalizeSpeechGender(mainSpeechGender),
       };
       return [...prev, duplicate];
     });
+    setRandomSpeakerKeys((prev) => (prev.includes(duplicatedKey) ? prev : [...prev, duplicatedKey]));
+    setAutoRandomSpeakerKeys((prev) => (prev.includes(duplicatedKey) ? prev : [...prev, duplicatedKey]));
   };
 
   const toggleRandomSpeakerKey = (key, checked) => {
@@ -2277,7 +2299,7 @@ export default function AiChatPage() {
           message: text,
           mode: modeAtSend,
           r18: r18Mode,
-          character_id: writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
+          character_id: selectedCharacterId ? Number(selectedCharacterId) : null,
           character_name: characterNameAtSend ?? characterName,
           personality: personalityAtSend ?? personality,
           long_reply: longReply,
@@ -2384,7 +2406,7 @@ export default function AiChatPage() {
         headers,
         body: JSON.stringify({
           r18: r18Mode,
-          character_id: writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
+          character_id: selectedCharacterId ? Number(selectedCharacterId) : null,
           character_name: assistantName,
           personality: `${assistantPersonality}${buildParticipantsContext(assistantKey)}${buildRoleplayConstraint(assistantName)}${buildSpeechGenderConstraint(assistantName, assistantSpeechGender)}`,
           long_reply: longReply,
@@ -2833,7 +2855,7 @@ export default function AiChatPage() {
           headers,
           signal: controller.signal,
           body: JSON.stringify({
-            character_id: token && writableSelectedCharacterId ? Number(writableSelectedCharacterId) : null,
+            character_id: token && selectedCharacterId ? Number(selectedCharacterId) : null,
             r18: r18Mode,
             character_name: speakerName || characterName,
             personality: `${speakerPersonality}${buildParticipantsContext(userSpeakerKey)}${buildRoleplayConstraint(speakerName || characterName)}${buildSpeechGenderConstraint(speakerName || characterName, speakerSpeechGender)}`,
@@ -2933,14 +2955,29 @@ export default function AiChatPage() {
             {t({ ja: "AIチャット利用量", en: "AI chat usage" })}: {Number(chatAccess.used_tokens || 0).toLocaleString()} / {Number(chatAccess.allowed_tokens || 0).toLocaleString()} tokens
           </div>
           {chatAccess.show_premium_prompt && (
-            <div style={{ fontSize: "0.9rem", color: "#5b4a1f", marginBottom: chatAccess.needs_upgrade ? 8 : 0 }}>
+            <div style={{ fontSize: "0.9rem", color: "#5b4a1f", marginBottom: 8 }}>
               {t({
-                ja: `無料枠到達以降はプレミアム登録、または${Number(chatAccess.block_tokens || 0).toLocaleString()}トークンごと${Number(chatAccess.block_price_yen || 0).toLocaleString()}円の追加課金で継続できます。`,
-                en: `After the free quota, continue with premium or ¥${Number(chatAccess.block_price_yen || 0).toLocaleString()} per extra ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens.`,
+                ja: `無料枠到達以降は、まずプレミアム登録が必要です。プレミアム登録後は追加で${Number(chatAccess.block_tokens || 0).toLocaleString()}トークンの利用枠が付与されます。`,
+                en: `After the free quota, premium registration is required first. After premium, an additional ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens will be granted.`,
               })}
             </div>
           )}
-          {chatAccess.needs_upgrade && !chatAccess.demo_bypass && (
+          {chatAccess.show_premium_prompt && !chatAccess.demo_bypass && (
+            <div style={{ marginBottom: 8 }}>
+              <Link to="/premium" className="btn btn-border">
+                {t({ ja: "プレミアム登録へ", en: "Go Premium" })}
+              </Link>
+            </div>
+          )}
+          {chatAccess.show_addon_prompt && !chatAccess.demo_bypass && (
+            <div style={{ fontSize: "0.9rem", color: "#5b4a1f", marginBottom: 8 }}>
+              {t({
+                ja: `プレミアム付与分を使い切ったため、${Number(chatAccess.block_tokens || 0).toLocaleString()}トークンごと${Number(chatAccess.block_price_yen || 0).toLocaleString()}円の追加課金で継続できます。`,
+                en: `Premium-included tokens are exhausted. Continue with add-on payment: ¥${Number(chatAccess.block_price_yen || 0).toLocaleString()} per ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens.`,
+              })}
+            </div>
+          )}
+          {chatAccess.show_addon_prompt && !chatAccess.demo_bypass && (
             <button
               type="button"
               className="btn btn-border"

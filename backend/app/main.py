@@ -140,7 +140,18 @@ _janome_tokenizer = Tokenizer() if JANOME_AVAILABLE else None
 # =========================================
 # DB 初期化
 # =========================================
-Base.metadata.create_all(bind=engine)
+def ensure_all_tables_exist() -> None:
+    """
+    SQLAlchemy models に定義されている不足テーブルを作成する。
+    既存テーブルは変更しない（create_all の標準動作）。
+    """
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print("[db] ensure_all_tables_exist failed:", repr(e))
+
+
+ensure_all_tables_exist()
 
 def get_novel_char_counts(db: Session, novel_ids: list[int], public_only: bool = False) -> dict[int, int]:
     if not novel_ids:
@@ -808,9 +819,11 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    ensure_all_tables_exist()
     os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
     os.makedirs(AI_CHAT_CHARACTER_IMAGE_DIR, exist_ok=True)
     _start_daily_translation_bot_if_enabled()
+    _start_monthly_stripe_premium_sync_if_enabled()
     _start_ui_i18n_watchdog_if_enabled()
     _recover_ui_i18n_jobs_on_startup()
     if AI_CHAT_MEMORY_ENABLED:
@@ -919,6 +932,11 @@ DAILY_TRANSLATION_BOT_SITE_KEY = (os.getenv("DAILY_TRANSLATION_BOT_SITE_KEY", ""
 AI_CHAT_FREE_TOKENS = int(os.getenv("AI_CHAT_FREE_TOKENS", "2000000"))
 AI_CHAT_BLOCK_TOKENS = int(os.getenv("AI_CHAT_BLOCK_TOKENS", "2000000"))
 AI_CHAT_BLOCK_PRICE_YEN = int(os.getenv("AI_CHAT_BLOCK_PRICE_YEN", "1000"))
+AI_CHAT_PREMIUM_INCLUDED_BLOCKS = max(0, int(os.getenv("AI_CHAT_PREMIUM_INCLUDED_BLOCKS", "1") or 1))
+MONTHLY_STRIPE_PREMIUM_SYNC_ENABLED = (os.getenv("MONTHLY_STRIPE_PREMIUM_SYNC_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+MONTHLY_STRIPE_PREMIUM_SYNC_INTERVAL_SECONDS = max(3600, int(os.getenv("MONTHLY_STRIPE_PREMIUM_SYNC_INTERVAL_SECONDS", "86400") or 86400))
+MONTHLY_STRIPE_PREMIUM_SYNC_DAY = max(1, min(28, int(os.getenv("MONTHLY_STRIPE_PREMIUM_SYNC_DAY", "1") or 1)))
+MONTHLY_STRIPE_PREMIUM_SYNC_HOUR_UTC = max(0, min(23, int(os.getenv("MONTHLY_STRIPE_PREMIUM_SYNC_HOUR_UTC", "3") or 3)))
 AI_CHAT_DEMO_BYPASS_USERNAME = os.getenv("AI_CHAT_DEMO_BYPASS_USERNAME", "demo02").strip()
 AI_CHAT_IMAGE_API_BASE_URL = os.getenv("AI_CHAT_IMAGE_API_BASE_URL", "").strip().rstrip("/")
 AI_CHAT_IMAGE_API_KEY = os.getenv("AI_CHAT_IMAGE_API_KEY", "").strip()
@@ -1340,6 +1358,112 @@ def _start_daily_translation_bot_if_enabled() -> None:
         DAILY_TRANSLATION_BOT_INTERVAL_SECONDS,
         DAILY_TRANSLATION_BOT_MAX_NOVELS,
         DAILY_TRANSLATION_BOT_MAX_EPISODES,
+    )
+
+
+def _run_monthly_stripe_premium_sync_once() -> dict[str, int]:
+    stats = {
+        "checked_users": 0,
+        "premium_applied_users": 0,
+        "errors": 0,
+    }
+    if not STRIPE_SECRET_KEY:
+        return stats
+    db = SessionLocal()
+    try:
+        users = (
+            db.query(models.User)
+            .filter(models.User.email.isnot(None))
+            .filter(func.length(func.trim(models.User.email)) > 0)
+            .all()
+        )
+        now = datetime.utcnow()
+        for user in users:
+            if not user:
+                continue
+            if _is_ai_chat_demo_bypass_user(user):
+                continue
+            if _is_force_premium_username(getattr(user, "username", None)):
+                continue
+            if bool(getattr(user, "is_premium", False)):
+                continue
+            email = str(getattr(user, "email", "") or "").strip().lower()
+            if not email:
+                continue
+            stats["checked_users"] += 1
+            try:
+                customer_id, sub_id = _find_active_monthly_subscription_by_email(email)
+            except Exception as e:
+                stats["errors"] += 1
+                logger.warning("monthly stripe premium sync failed user=%s email=%s err=%r", user.id, email, e)
+                continue
+            if not customer_id or not sub_id:
+                continue
+            user.is_premium = True
+            user.premium_checked_at = now
+            user.stripe_customer_id = customer_id
+            user.stripe_subscription_id = sub_id
+            db.add(user)
+            try:
+                db.commit()
+                stats["premium_applied_users"] += 1
+            except Exception as e:
+                db.rollback()
+                stats["errors"] += 1
+                logger.warning("monthly stripe premium apply failed user=%s email=%s err=%r", user.id, email, e)
+    finally:
+        db.close()
+    return stats
+
+
+def _monthly_stripe_premium_sync_loop() -> None:
+    global _monthly_stripe_premium_sync_last_run_key
+    while True:
+        started = time.time()
+        now_utc = datetime.utcnow()
+        current_key = f"{now_utc.year:04d}-{now_utc.month:02d}"
+        should_run_this_month = (
+            now_utc.day >= MONTHLY_STRIPE_PREMIUM_SYNC_DAY
+            and now_utc.hour >= MONTHLY_STRIPE_PREMIUM_SYNC_HOUR_UTC
+        )
+        if should_run_this_month and _monthly_stripe_premium_sync_last_run_key != current_key:
+            if _monthly_stripe_premium_sync_lock.acquire(blocking=False):
+                try:
+                    stats = _run_monthly_stripe_premium_sync_once()
+                    _monthly_stripe_premium_sync_last_run_key = current_key
+                    logger.info(
+                        "monthly stripe premium sync done checked=%s applied=%s errors=%s",
+                        stats["checked_users"],
+                        stats["premium_applied_users"],
+                        stats["errors"],
+                    )
+                except Exception as e:
+                    logger.warning("monthly stripe premium sync crashed err=%r", e)
+                finally:
+                    _monthly_stripe_premium_sync_lock.release()
+        elapsed = max(0, int(time.time() - started))
+        sleep_seconds = max(300, MONTHLY_STRIPE_PREMIUM_SYNC_INTERVAL_SECONDS - elapsed)
+        time.sleep(sleep_seconds)
+
+
+def _start_monthly_stripe_premium_sync_if_enabled() -> None:
+    global _monthly_stripe_premium_sync_started
+    if not MONTHLY_STRIPE_PREMIUM_SYNC_ENABLED:
+        return
+    if _monthly_stripe_premium_sync_started:
+        return
+    worker = threading.Thread(
+        target=_monthly_stripe_premium_sync_loop,
+        name="monthly-stripe-premium-sync",
+        daemon=True,
+    )
+    worker.start()
+    _monthly_stripe_premium_sync_started = True
+    logger.info(
+        "monthly stripe premium sync started interval=%ss day=%s hour_utc=%s",
+        MONTHLY_STRIPE_PREMIUM_SYNC_INTERVAL_SECONDS,
+        MONTHLY_STRIPE_PREMIUM_SYNC_DAY,
+        MONTHLY_STRIPE_PREMIUM_SYNC_HOUR_UTC,
     )
 
 
@@ -2005,6 +2129,9 @@ admin_pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 _daily_translation_bot_started = False
 _daily_translation_bot_lock = threading.Lock()
+_monthly_stripe_premium_sync_started = False
+_monthly_stripe_premium_sync_lock = threading.Lock()
+_monthly_stripe_premium_sync_last_run_key: str | None = None
 _feed_novel_translation_enqueue_lock = threading.Lock()
 _feed_novel_translation_enqueue_at: dict[tuple[int, str], float] = {}
 
@@ -2215,6 +2342,49 @@ def _stripe_obj_get(obj, key: str, default=None):
 def _stripe_subscription_is_active(subscription) -> bool:
     status = _stripe_obj_get(subscription, "status")
     return status in ("active", "trialing")
+
+
+def _stripe_subscription_is_monthly(subscription) -> bool:
+    items = _stripe_obj_get(subscription, "items", {}) or {}
+    data = _stripe_obj_get(items, "data", []) or []
+    for item in data:
+        price = _stripe_obj_get(item, "price", {}) or {}
+        recurring = _stripe_obj_get(price, "recurring", {}) or {}
+        interval = str(_stripe_obj_get(recurring, "interval", "") or "").strip().lower()
+        try:
+            interval_count = int(_stripe_obj_get(recurring, "interval_count", 1) or 1)
+        except Exception:
+            interval_count = 1
+        if interval == "month" and interval_count == 1:
+            return True
+    return False
+
+
+def _find_active_monthly_subscription_by_email(
+    email: str,
+) -> tuple[str | None, str | None]:
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email:
+        return None, None
+    customers = stripe.Customer.list(email=normalized_email, limit=10)
+    customer_rows = _stripe_obj_get(customers, "data", []) or []
+    for customer in customer_rows:
+        customer_email = str(_stripe_obj_get(customer, "email", "") or "").strip().lower()
+        if customer_email and customer_email != normalized_email:
+            continue
+        customer_id = str(_stripe_obj_get(customer, "id", "") or "").strip() or None
+        if not customer_id:
+            continue
+        subs = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
+        sub_rows = _stripe_obj_get(subs, "data", []) or []
+        for sub in sub_rows:
+            if not _stripe_subscription_is_active(sub):
+                continue
+            if not _stripe_subscription_is_monthly(sub):
+                continue
+            sub_id = str(_stripe_obj_get(sub, "id", "") or "").strip() or None
+            return customer_id, sub_id
+    return None, None
 
 
 def verify_premium_with_stripe(user: models.User) -> tuple[bool, str | None, str | None]:
@@ -2667,30 +2837,63 @@ def _find_editable_ai_chat_character(
     return None
 
 
+def _find_accessible_ai_chat_character(
+    *,
+    db: Session,
+    viewer: models.User | None,
+    character_id: int,
+) -> models.AIChatCharacter | None:
+    item = (
+        db.query(models.AIChatCharacter)
+        .filter(models.AIChatCharacter.id == character_id)
+        .first()
+    )
+    if not item:
+        return None
+    can_edit = _can_edit_ai_chat_character(
+        viewer=viewer,
+        owner_user_id=getattr(item, "user_id", None),
+        owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
+        db=db,
+    )
+    if can_edit or bool(getattr(item, "is_public", False)):
+        return item
+    return None
+
+
 def _ai_chat_allowed_tokens(user: models.User) -> int:
+    premium_included_blocks = AI_CHAT_PREMIUM_INCLUDED_BLOCKS if is_effective_premium_user(user) else 0
     paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
-    return max(0, AI_CHAT_FREE_TOKENS) + paid_blocks * max(1, AI_CHAT_BLOCK_TOKENS)
+    total_blocks = premium_included_blocks + paid_blocks
+    return max(0, AI_CHAT_FREE_TOKENS) + total_blocks * max(1, AI_CHAT_BLOCK_TOKENS)
 
 
 def _ensure_ai_chat_access(user: models.User) -> None:
     if _is_ai_chat_demo_bypass_user(user):
         return
-    if is_effective_premium_user(user):
-        return
 
+    is_premium = is_effective_premium_user(user)
     used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
     allowed = _ai_chat_allowed_tokens(user)
     if used < allowed:
         return
 
-    over = max(0, used - max(0, AI_CHAT_FREE_TOKENS))
-    consumed_paid_blocks = over // max(1, AI_CHAT_BLOCK_TOKENS)
-    next_required_block = consumed_paid_blocks + 1
-    detail = (
-        f"AIチャットの無料枠（{max(0, AI_CHAT_FREE_TOKENS):,}トークン）に達しました。"
-        f"プレミアム登録、または追加課金（{AI_CHAT_BLOCK_TOKENS:,}トークンごとに{AI_CHAT_BLOCK_PRICE_YEN:,}円）で継続できます。"
-        f"次回解放に必要な追加ブロック: {next_required_block}"
-    )
+    if not is_premium:
+        detail = (
+            f"AIチャットの無料枠（{max(0, AI_CHAT_FREE_TOKENS):,}トークン）に達しました。"
+            "継続するにはプレミアム登録が必要です。"
+            f"プレミアム登録後は追加で{AI_CHAT_BLOCK_TOKENS:,}トークンの利用枠が付与されます。"
+        )
+    else:
+        premium_base = max(0, AI_CHAT_FREE_TOKENS) + max(0, AI_CHAT_PREMIUM_INCLUDED_BLOCKS) * max(1, AI_CHAT_BLOCK_TOKENS)
+        over = max(0, used - premium_base)
+        consumed_paid_blocks = over // max(1, AI_CHAT_BLOCK_TOKENS)
+        next_required_block = consumed_paid_blocks + 1
+        detail = (
+            f"プレミアム分を含む利用枠（{allowed:,}トークン）に達しました。"
+            f"追加課金（{AI_CHAT_BLOCK_TOKENS:,}トークンごとに{AI_CHAT_BLOCK_PRICE_YEN:,}円）で継続できます。"
+            f"次回解放に必要な追加ブロック: {next_required_block}"
+        )
     raise HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         detail=detail,
@@ -2892,6 +3095,8 @@ class AIChatAccessStatusResponse(BaseModel):
     allowed_tokens: int
     needs_upgrade: bool
     show_premium_prompt: bool
+    show_addon_prompt: bool
+    premium_included_blocks: int
 
 
 class PayoutProfileUpdateRequest(BaseModel):
@@ -2953,6 +3158,22 @@ class AdminLoginRequest(BaseModel):
 class AdminContactRequest(BaseModel):
     subject: str
     body: str
+
+
+class AdminStripePremiumSyncByEmailRequest(BaseModel):
+    email: EmailStr
+
+
+class AdminStripePremiumSyncByEmailResponse(BaseModel):
+    email: str
+    user_id: int
+    username: str
+    found_monthly_subscription: bool
+    premium_applied: bool
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None
+    stripe_subscription_status: str | None = None
+    is_premium: bool
 
 
 class PublicContactRequest(BaseModel):
@@ -4672,8 +4893,9 @@ def get_ai_chat_access_status(
     allowed = _ai_chat_allowed_tokens(user)
     demo_bypass = _is_ai_chat_demo_bypass_user(user)
     is_premium = is_effective_premium_user(user)
-    needs_upgrade = (not demo_bypass) and (not is_premium) and used >= allowed
-    show_premium_prompt = used >= max(0, AI_CHAT_FREE_TOKENS)
+    needs_upgrade = (not demo_bypass) and used >= allowed
+    show_premium_prompt = (not is_premium) and used >= max(0, AI_CHAT_FREE_TOKENS)
+    show_addon_prompt = is_premium and used >= allowed
     return AIChatAccessStatusResponse(
         is_premium=is_premium,
         demo_bypass=demo_bypass,
@@ -4685,6 +4907,8 @@ def get_ai_chat_access_status(
         allowed_tokens=allowed,
         needs_upgrade=needs_upgrade,
         show_premium_prompt=show_premium_prompt,
+        show_addon_prompt=show_addon_prompt,
+        premium_included_blocks=max(0, AI_CHAT_PREMIUM_INCLUDED_BLOCKS),
     )
 
 
@@ -4699,6 +4923,11 @@ def create_ai_chat_addon_checkout(
     user = require_current_user(request, db)
     if _is_ai_chat_demo_bypass_user(user):
         raise HTTPException(400, "demoユーザーは追加課金なしで利用できます。")
+    if not is_effective_premium_user(user):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="AIチャットの追加課金はプレミアム登録後に利用できます。",
+        )
 
     blocks = int(getattr(payload, "blocks", 1) or 1)
     blocks = max(1, min(20, blocks))
@@ -4727,8 +4956,8 @@ def create_ai_chat_addon_checkout(
         ],
         client_reference_id=str(user.id),
         metadata=metadata,
-        success_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=success",
-        cancel_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=cancel",
+        success_url=f"{FRONTEND_ORIGIN}/ai_chat?addon=success",
+        cancel_url=f"{FRONTEND_ORIGIN}/ai_chat?addon=cancel",
     )
     return {"checkout_url": session.url}
 
@@ -6949,6 +7178,7 @@ def _build_ai_chat_system_instructions(
         "あなたはキャラクターロールプレイAIです。"
         "必ずJSON 1個のみを返してください。"
         "JSONキーは say と do のみを使ってください。"
+        "プロンプト中に長期メモリがある場合は、それを会話履歴より優先して厳守してください。"
         "ユーザーの同一入力が過去履歴にある場合でも、前回返答の焼き直しを避けて別分岐で続けてください。"
         "入力された性格設定は最優先で厳守し、勝手に改変・薄化・上書きしないでください。"
         "関係性メモに恋人・夫婦・相思相愛などの親密関係がある場合、"
@@ -7586,6 +7816,8 @@ def _build_ai_chat_prompt(
         f"キャラクター名: {char_label}\n"
         f"性格設定: {personality_text}\n"
         "※性格設定は絶対条件です。矛盾する言動をしないこと。\n"
+        "※長期メモリが与えられている場合、長期メモリは会話履歴より優先して解釈し、返答に必ず反映すること。\n"
+        "※性格設定と長期メモリが矛盾する場合は、長期メモリを優先しつつ、不自然にならないよう整合的に表現すること。\n"
         f"ユーザーが求める出力モード: {mode}\n"
         f"短め返信: {'有効' if short_reply else '無効'}\n\n"
         "出力スタイル:\n"
@@ -7642,7 +7874,8 @@ def _build_auto_dialogue_prompt(
         "話題固定ルール:\n"
         "- 主題アンカーを会話の中心に据え、少なくとも10ターンは話題転換しないこと。\n"
         "- 連想で別テーマへ飛ばず、同じ題材を深掘りして会話を続けること。\n"
-        "- 各ターンで直前発話に応答し、つながりの弱い独立発言を避けること。\n\n"
+        "- 各ターンで直前発話に応答し、つながりの弱い独立発言を避けること。\n"
+        "- 長期メモリがある場合、会話履歴より長期メモリを優先して会話内容を決めること。\n\n"
         f"{safety_rules}\n\n"
         f"{language_style_rules}\n"
         f"{layered_section}"
@@ -7689,6 +7922,7 @@ def _build_ai_chat_next_line_suggest_prompt(
         f"{safety_rules}\n"
         f"{language_style_rules}\n"
         f"{layered_section}"
+        "長期メモリがある場合は、会話履歴より長期メモリを優先して候補を作ること。\n"
         "会話履歴:\n"
         f"{history_text}\n\n"
         f"ユーザーの現在入力中メモ: {(input_hint or 'なし')[:1200]}\n\n"
@@ -8044,7 +8278,7 @@ async def ai_chat_next_user_lines(
         _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
-        character = _find_editable_ai_chat_character(
+        character = _find_accessible_ai_chat_character(
             db=db,
             viewer=user,
             character_id=int(req.character_id),
@@ -8669,7 +8903,7 @@ async def ai_chat(
         _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
-        character = _find_editable_ai_chat_character(
+        character = _find_accessible_ai_chat_character(
             db=db,
             viewer=user,
             character_id=int(req.character_id),
@@ -8822,7 +9056,18 @@ async def ai_chat(
                 )
             )
 
-    if character is not None and user is not None:
+    can_persist_character_chat = bool(
+        character is not None
+        and user is not None
+        and _can_edit_ai_chat_character(
+            viewer=user,
+            owner_user_id=getattr(character, "user_id", None),
+            owner_username=str(getattr(getattr(character, "user", None), "username", "") or "").strip() or None,
+            db=db,
+        )
+    )
+    user_msg: models.AIChatMessage | None = None
+    if can_persist_character_chat:
         user_msg = models.AIChatMessage(
             user_id=user.id,
             character_id=character.id,
@@ -8879,7 +9124,7 @@ async def ai_chat(
             mem_scope, mem_scope_id = resolve_memory_scope(
                 int(character.id) if character is not None else None
             )
-            source_message_id = int(user_msg.id) if (character is not None and user is not None and user_msg.id) else None
+            source_message_id = int(user_msg.id) if (user_msg is not None and user_msg.id) else None
             await sync_long_term_memory_from_turn(
                 db,
                 user_id=int(viewer.id),
@@ -8921,7 +9166,7 @@ async def ai_chat_auto_continue(
         _ensure_ai_chat_access(viewer)
     if req.character_id is not None:
         user = require_current_user(request, db)
-        character = _find_editable_ai_chat_character(
+        character = _find_accessible_ai_chat_character(
             db=db,
             viewer=user,
             character_id=int(req.character_id),
@@ -9029,7 +9274,17 @@ async def ai_chat_auto_continue(
     if not reply:
         raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
 
-    if character is not None and user is not None:
+    can_persist_character_chat = bool(
+        character is not None
+        and user is not None
+        and _can_edit_ai_chat_character(
+            viewer=user,
+            owner_user_id=getattr(character, "user_id", None),
+            owner_username=str(getattr(getattr(character, "user", None), "username", "") or "").strip() or None,
+            db=db,
+        )
+    )
+    if can_persist_character_chat:
         msg = models.AIChatMessage(
             user_id=user.id,
             character_id=character.id,
