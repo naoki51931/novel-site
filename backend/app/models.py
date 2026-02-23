@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date, UniqueConstraint, Float, Index
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -696,6 +696,46 @@ class AIChatMessage(Base):
 
     user = relationship("User")
     character = relationship("AIChatCharacter", back_populates="messages")
+
+
+class AIMemoryItem(Base):
+    __tablename__ = "ai_memory_items"
+    __table_args__ = (
+        Index("idx_user_scope_active", "user_id", "scope", "scope_id", "is_active"),
+        Index("idx_user_key", "user_id", "upsert_key"),
+        Index("idx_expires", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    scope = Column(
+        Enum("global", "novel", "episode", "character", name="ai_memory_scope"),
+        nullable=False,
+        server_default="global",
+    )
+    scope_id = Column(Integer, nullable=True, index=True)
+    category = Column(
+        Enum(
+            "profile",
+            "preference",
+            "boundary",
+            "event",
+            "relationship",
+            "other",
+            name="ai_memory_category",
+        ),
+        nullable=False,
+    )
+    importance = Column(Float, nullable=False, server_default="0.5")
+    text = Column(String(1024), nullable=False)
+    upsert_key = Column(String(128), nullable=False)
+    expires_at = Column(DateTime, nullable=True)
+    source_message_id = Column(Integer, nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, server_default="1", index=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
+
+    user = relationship("User")
 
 
 # =========================

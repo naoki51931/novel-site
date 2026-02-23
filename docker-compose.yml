@@ -40,6 +40,10 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       STRIPE_PRICE_ID: ${STRIPE_PRICE_ID}
+      STRIPE_USE_TEST: ${STRIPE_USE_TEST:-0}
+      STRIPE_TEST_SECRET_KEY: ${STRIPE_TEST_SECRET_KEY}
+      STRIPE_TEST_WEBHOOK_SECRET: ${STRIPE_TEST_WEBHOOK_SECRET}
+      STRIPE_TEST_PRICE_ID: ${STRIPE_TEST_PRICE_ID}
       PLATFORM_FEE_RATE: ${PLATFORM_FEE_RATE}
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       ADMIN_USERNAME: ${ADMIN_USERNAME}
@@ -105,6 +109,12 @@ services:
       AI_CHAT_IMAGE_OOM_RETRY_SCALE: ${AI_CHAT_IMAGE_OOM_RETRY_SCALE}
       AI_CHAT_IMAGE_OOM_RETRY_STEPS: ${AI_CHAT_IMAGE_OOM_RETRY_STEPS}
       AI_CHAT_IMAGE_INIT_STRENGTH: ${AI_CHAT_IMAGE_INIT_STRENGTH}
+      AI_CHAT_MEMORY_ENABLED: ${AI_CHAT_MEMORY_ENABLED:-1}
+      AI_CHAT_MEMORY_TOPK: ${AI_CHAT_MEMORY_TOPK:-12}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ai_memory}
+      QDRANT_TIMEOUT_SEC: ${QDRANT_TIMEOUT_SEC:-10}
 
     volumes:
       - ./static:/app/static
@@ -112,6 +122,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
   nginx:
     image: nginx:1.27-alpine
@@ -140,5 +152,15 @@ services:
       - ./nginx/ssl/www:/var/www/certbot
     entrypoint: /bin/sh -c "sleep infinity"
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: novel-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
 volumes:
   db-data:
+  qdrant-data:

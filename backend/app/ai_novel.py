@@ -543,8 +543,8 @@ async def call_ai_json(
                         {"role": "user", "content": prompt},
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0,
-                    max_tokens=max_output_tokens,
+                    # GPT-5系では chat.completions の出力上限は max_completion_tokens が必要。
+                    max_completion_tokens=max_output_tokens,
                 )
             )
         except HTTPException:

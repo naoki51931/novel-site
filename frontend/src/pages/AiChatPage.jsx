@@ -13,6 +13,12 @@ const PREVIEW_BUBBLE_COUNT = 3;
 const APPEARANCE_SECTION_HEADER = "【見た目設定】";
 const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
 const DEFAULT_AI_CHAT_MODEL = "gpt-5-mini";
+const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 768px)";
+const RECOMMENDED_MODEL_VALUES = new Set([
+  "moonshotai/kimi-k2",
+  "google/gemini-3-pro-preview",
+  "google/gemini-3-flash-preview",
+]);
 const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
   "優しい",
   "かわいい",
@@ -83,7 +89,6 @@ const AI_MODELS = [
   { value: "z-ai/glm-4.6", labelJa: "GLM 4.6（OpenRouter）", labelEn: "GLM 4.6 (OpenRouter)" },
   { value: "moonshotai/kimi-k2", labelJa: "Kimi（OpenRouter）", labelEn: "Kimi (OpenRouter)" },
   { value: "moonshotai/kimi-k2-thinking", labelJa: "Kimi K2 Thinking（OpenRouter）", labelEn: "Kimi K2 Thinking (OpenRouter)" },
-  { value: "moonshotai/kimi-k2-thinking-turbo", labelJa: "Kimi K2 Thinking Turbo（OpenRouter）", labelEn: "Kimi K2 Thinking Turbo (OpenRouter)" },
   { value: "deepseek/deepseek-chat", labelJa: "DeepSeek（OpenRouter）", labelEn: "DeepSeek (OpenRouter)" },
   { value: "deepseek/deepseek-reasoner", labelJa: "DeepSeek Reasoner（OpenRouter）", labelEn: "DeepSeek Reasoner (OpenRouter)" },
   { value: "deepseek:deepseek-chat", labelJa: "DeepSeek（公式）", labelEn: "DeepSeek (official)" },
@@ -131,6 +136,36 @@ function parseGeneratedImageMessageContent(rawContent) {
 
 function compactText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeChatFetchErrorMessage(error, fallbackMessage, t) {
+  const msg = String(error?.message || "").trim();
+  if (!msg) return fallbackMessage;
+  const lowered = msg.toLowerCase();
+  if (error?.name === "AbortError" || lowered === "failed to fetch") {
+    return t({
+      ja: "通信が不安定なためリクエストに失敗しました。時間をおいて再試行してください。",
+      en: "Request failed due to unstable network. Please retry in a moment.",
+    });
+  }
+  return msg;
+}
+
+function isNetworkFetchError(error) {
+  if (!error) return false;
+  if (error?.name === "AbortError") return false;
+  const msg = String(error?.message || "").trim().toLowerCase();
+  return msg === "failed to fetch";
+}
+
+async function fetchWithSingleRetry(url, options, retryDelayMs = 350) {
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    if (!isNetworkFetchError(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    return fetch(url, options);
+  }
 }
 
 function sanitizeImagePromptSourceText(text) {
@@ -328,6 +363,7 @@ export default function AiChatPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [model, setModel] = useState(DEFAULT_AI_CHAT_MODEL);
+  const [recommendedModelsOnly, setRecommendedModelsOnly] = useState(false);
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem(AI_CHAT_CHARACTER_NAME_KEY) || "";
@@ -401,8 +437,37 @@ export default function AiChatPage() {
       return [];
     }
   });
+  const [isMobileViewport, setIsMobileViewport] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia(MOBILE_VIEWPORT_MEDIA_QUERY).matches;
+  });
   const fanficCacheRef = useRef(new Map());
   const lastImportedPublicCharacterKeyRef = useRef("");
+  const visibleAiModels = useMemo(
+    () => (recommendedModelsOnly ? AI_MODELS.filter((m) => RECOMMENDED_MODEL_VALUES.has(m.value)) : AI_MODELS),
+    [recommendedModelsOnly]
+  );
+  const activeModel = useMemo(() => {
+    if (visibleAiModels.some((m) => m.value === model)) return model;
+    return visibleAiModels[0]?.value || DEFAULT_AI_CHAT_MODEL;
+  }, [visibleAiModels, model]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia(MOBILE_VIEWPORT_MEDIA_QUERY);
+    const onChange = (event) => setIsMobileViewport(event.matches);
+    setIsMobileViewport(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!visibleAiModels.length) return;
+    const modelExists = visibleAiModels.some((m) => m.value === model);
+    if (!modelExists) {
+      setModel(visibleAiModels[0].value);
+    }
+  }, [visibleAiModels, model]);
 
   const normalizeAiNovelResponse = (data) => {
     if (!data || typeof data !== "object") return data;
@@ -1388,8 +1453,8 @@ export default function AiChatPage() {
           character_name: normalizedName,
           personality: normalizedPersonality,
           anime_title: normalizedAnimeTitle || null,
-          model,
-          provider: modelProvider(model),
+          model: activeModel,
+          provider: modelProvider(activeModel),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1494,8 +1559,8 @@ export default function AiChatPage() {
         headers,
         body: JSON.stringify({
           character_name: name,
-          model,
-          provider: modelProvider(model),
+          model: activeModel,
+          provider: modelProvider(activeModel),
           limit: 8,
         }),
       });
@@ -2204,8 +2269,9 @@ export default function AiChatPage() {
       if (token) {
         headers.Authorization = `Bearer ${token}`;
       }
-      const res = await fetch("/api/ai/chat", {
+      const res = await fetchWithSingleRetry("/api/ai/chat", {
         method: "POST",
+        cache: "no-store",
         headers,
         body: JSON.stringify({
           message: text,
@@ -2218,8 +2284,8 @@ export default function AiChatPage() {
           short_reply: shortReply,
           language_style: languageStyle,
           auto_dialogue: autoDialogue,
-          model,
-          provider: modelProvider(model),
+          model: activeModel,
+          provider: modelProvider(activeModel),
           history: explicitHistory,
         }),
       });
@@ -2284,8 +2350,11 @@ export default function AiChatPage() {
         setResendMode(modeAtSend === "do" ? "do" : "say");
       }
       setError(
-        e?.message ||
-          t({ ja: "AIチャット中にエラーが発生しました。", en: "AI chat error occurred." })
+        normalizeChatFetchErrorMessage(
+          e,
+          t({ ja: "AIチャット中にエラーが発生しました。", en: "AI chat error occurred." }),
+          t
+        )
       );
     } finally {
       setLoading(false);
@@ -2309,8 +2378,9 @@ export default function AiChatPage() {
       if (token) {
         headers.Authorization = `Bearer ${token}`;
       }
-      const res = await fetch("/api/ai/chat/auto_continue", {
+      const res = await fetchWithSingleRetry("/api/ai/chat/auto_continue", {
         method: "POST",
+        cache: "no-store",
         headers,
         body: JSON.stringify({
           r18: r18Mode,
@@ -2320,8 +2390,8 @@ export default function AiChatPage() {
           long_reply: longReply,
           short_reply: shortReply,
           language_style: languageStyle,
-          model,
-          provider: modelProvider(model),
+          model: activeModel,
+          provider: modelProvider(activeModel),
           history: explicitHistory,
         }),
       });
@@ -2341,8 +2411,11 @@ export default function AiChatPage() {
       return true;
     } catch (e) {
       setError(
-        e?.message ||
-          t({ ja: "自動会話中にエラーが発生しました。", en: "An error occurred during auto dialogue." })
+        normalizeChatFetchErrorMessage(
+          e,
+          t({ ja: "自動会話中にエラーが発生しました。", en: "An error occurred during auto dialogue." }),
+          t
+        )
       );
       return false;
     } finally {
@@ -2768,8 +2841,8 @@ export default function AiChatPage() {
             input_hint: input,
             suggestions_count: PREVIEW_BUBBLE_COUNT,
             language_style: languageStyle,
-            model,
-            provider: modelProvider(model),
+            model: activeModel,
+            provider: modelProvider(activeModel),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -2801,7 +2874,7 @@ export default function AiChatPage() {
     input,
     languageStyle,
     messages.length,
-    model,
+    activeModel,
     personality,
     r18Mode,
     selectedCharacterId,
@@ -3062,13 +3135,27 @@ export default function AiChatPage() {
 
         <label>
           {t({ ja: "チャットAI", en: "Chat AI" })}
-          <select value={model} onChange={(e) => setModel(e.target.value)} style={{ width: "100%", marginTop: 4 }}>
-            {AI_MODELS.map((m) => (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: "0.92rem" }}>
+            <input
+              type="checkbox"
+              checked={recommendedModelsOnly}
+              onChange={(e) => setRecommendedModelsOnly(e.target.checked)}
+            />
+            <span>{t({ ja: "おすすめのみ（Kimi / Gemini 3）", en: "Recommended only (Kimi / Gemini 3)" })}</span>
+          </div>
+          <select value={activeModel} onChange={(e) => setModel(e.target.value)} style={{ width: "100%", marginTop: 6 }}>
+            {visibleAiModels.map((m) => (
               <option key={m.value} value={m.value}>
                 {t({ ja: m.labelJa, en: m.labelEn })}
               </option>
             ))}
           </select>
+          <div style={{ marginTop: 6, fontSize: "0.86rem", color: "#5f6675" }}>
+            {t({
+              ja: "性格設定の読み込みを含むAI処理は、ここで選択したモデルを使用します。",
+              en: "AI actions including personality loading use the model selected here.",
+            })}
+          </div>
         </label>
 
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 8 }}>
@@ -3193,7 +3280,7 @@ export default function AiChatPage() {
               <textarea
                 value={cast.personality}
                 onChange={(e) => updateCastCharacter(cast.key, { personality: e.target.value })}
-                rows={2}
+                rows={isMobileViewport ? 4 : 2}
                 placeholder={t({ ja: "サブキャラの性格設定", en: "Sub character personality" })}
                 style={{ width: "100%", marginTop: 6 }}
               />
@@ -3303,7 +3390,7 @@ export default function AiChatPage() {
             placeholder={t(
               { ja: "例: 冷静で丁寧。時々毒舌。", en: "e.g. Calm and polite, sometimes sharp-tongued." }
             )}
-            rows={3}
+            rows={isMobileViewport ? 4 : 3}
             style={{ width: "100%", marginTop: 4 }}
           />
           <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
@@ -3694,6 +3781,26 @@ export default function AiChatPage() {
               {latestPromptPreview.system_instructions}
             </pre>
           </details>
+          {latestPromptPreview.long_term_memories_text ? (
+            <details>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                {t({ ja: "長期メモリ", en: "Long-term memories" })}
+              </summary>
+              <pre style={{ whiteSpace: "pre-wrap", marginTop: 6, background: "#f3f5f9", borderRadius: 6, padding: 8 }}>
+                {latestPromptPreview.long_term_memories_text}
+              </pre>
+            </details>
+          ) : null}
+          {latestPromptPreview.summary_text ? (
+            <details>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                {t({ ja: "会話要約", en: "Conversation summary" })}
+              </summary>
+              <pre style={{ whiteSpace: "pre-wrap", marginTop: 6, background: "#f3f5f9", borderRadius: 6, padding: 8 }}>
+                {latestPromptPreview.summary_text}
+              </pre>
+            </details>
+          ) : null}
           <details>
             <summary style={{ cursor: "pointer", fontWeight: 600 }}>
               {t({ ja: "履歴（最大20件）", en: "History (up to 20)" })}

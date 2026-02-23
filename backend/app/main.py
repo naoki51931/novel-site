@@ -105,6 +105,27 @@ from .ai_novel import (
     provider_from_model,
     provider_from_request,
 )
+from .ai.chat_engine import (
+    build_layered_context_block,
+    build_summary_text,
+    format_long_term_memories,
+)
+from .ai.memory_service import (
+    resolve_scope as resolve_memory_scope,
+    retrieve_memories,
+    sync_long_term_memory_from_turn,
+)
+from .ai.memory_api import (
+    list_memories_api,
+    deactivate_memory_api,
+    delete_memory_api,
+)
+from .ai.memory_schemas import (
+    MemoryListResponse,
+    MemoryDeactivateResponse,
+    MemoryDeleteResponse,
+)
+from .ai.qdrant_client import ensure_collection as ensure_qdrant_collection
 
 try:
     from PIL import Image, ImageOps  # type: ignore
@@ -792,6 +813,11 @@ def on_startup() -> None:
     _start_daily_translation_bot_if_enabled()
     _start_ui_i18n_watchdog_if_enabled()
     _recover_ui_i18n_jobs_on_startup()
+    if AI_CHAT_MEMORY_ENABLED:
+        try:
+            ensure_qdrant_collection()
+        except Exception as e:
+            logger.warning("qdrant collection ensure failed: %r", e)
 
 # =========================================
 # JWT / Stripe 設定
@@ -810,9 +836,19 @@ FORCE_PREMIUM_USERNAMES = {
 PREMIUM_REVALIDATE_DAYS = int(os.getenv("PREMIUM_REVALIDATE_DAYS", "30"))
 AGE_RESTRICTION_DISABLED = os.getenv("AGE_RESTRICTION_DISABLED", "0") == "1"
 
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+def _env_flag(name: str, default: str = "0") -> bool:
+    return (os.getenv(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+STRIPE_USE_TEST = _env_flag("STRIPE_USE_TEST", "0")
+if STRIPE_USE_TEST:
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_TEST_SECRET_KEY", "") or os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_TEST_WEBHOOK_SECRET", "") or os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_PRICE_ID = os.getenv("STRIPE_TEST_PRICE_ID", "") or os.getenv("STRIPE_PRICE_ID", "")
+else:
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 PLATFORM_FEE_RATE = float(os.getenv("PLATFORM_FEE_RATE", "0.2"))
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
@@ -859,6 +895,11 @@ try:
 except Exception:
     TRANSLATION_AI_TIMEOUT_SECONDS = 120.0
 TRANSLATION_AI_TIMEOUT_SECONDS = max(15.0, min(900.0, TRANSLATION_AI_TIMEOUT_SECONDS))
+try:
+    AI_CHAT_TEXT_TIMEOUT_SECONDS = float(os.getenv("AI_CHAT_TEXT_TIMEOUT_SECONDS", "600") or 600)
+except Exception:
+    AI_CHAT_TEXT_TIMEOUT_SECONDS = 600.0
+AI_CHAT_TEXT_TIMEOUT_SECONDS = max(15.0, min(900.0, AI_CHAT_TEXT_TIMEOUT_SECONDS))
 AUTO_TRANSLATION_REQUIRED = os.getenv("AUTO_TRANSLATION_REQUIRED", "0") == "1"
 DAILY_TRANSLATION_BOT_ENABLED = os.getenv("DAILY_TRANSLATION_BOT_ENABLED", "1") == "1"
 DAILY_TRANSLATION_BOT_INTERVAL_SECONDS = max(
@@ -893,8 +934,48 @@ AI_CHAT_IMAGE_OOM_RETRY_ENABLED = os.getenv("AI_CHAT_IMAGE_OOM_RETRY_ENABLED", "
 AI_CHAT_IMAGE_OOM_RETRY_SCALE = float(os.getenv("AI_CHAT_IMAGE_OOM_RETRY_SCALE", "0.78"))
 AI_CHAT_IMAGE_OOM_RETRY_STEPS = max(8, min(80, int(os.getenv("AI_CHAT_IMAGE_OOM_RETRY_STEPS", "28"))))
 AI_CHAT_IMAGE_INIT_STRENGTH = max(0.1, min(0.95, float(os.getenv("AI_CHAT_IMAGE_INIT_STRENGTH", "0.75"))))
+AI_CHAT_MEMORY_ENABLED = (os.getenv("AI_CHAT_MEMORY_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+AI_CHAT_MEMORY_TOPK = max(1, min(20, int(os.getenv("AI_CHAT_MEMORY_TOPK", "12") or 12)))
 
 stripe.api_key = STRIPE_SECRET_KEY
+
+
+def _stripe_checkout_customer_kwargs(user) -> dict:
+    customer_id = getattr(user, "stripe_customer_id", None) if user else None
+    if customer_id:
+        return {"customer": customer_id}
+    customer_email = getattr(user, "email", None) if user else None
+    if customer_email:
+        return {"customer_email": customer_email}
+    return {}
+
+
+def _create_checkout_session_with_customer_fallback(db: Session, user, **checkout_kwargs):
+    try:
+        return stripe.checkout.Session.create(
+            **checkout_kwargs,
+            **_stripe_checkout_customer_kwargs(user),
+        )
+    except stripe.error.InvalidRequestError as e:
+        # customer ID can become invalid when test/live keys are switched.
+        message = str(e)
+        if "No such customer" not in message:
+            raise
+        if not user or not getattr(user, "stripe_customer_id", None):
+            raise
+
+        try:
+            user.stripe_customer_id = None
+            db.add(user)
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        fallback_kwargs = dict(checkout_kwargs)
+        customer_email = getattr(user, "email", None)
+        if customer_email:
+            fallback_kwargs["customer_email"] = customer_email
+        return stripe.checkout.Session.create(**fallback_kwargs)
 
 
 def normalize_site_key(value: str | None) -> str:
@@ -3325,6 +3406,7 @@ async def oauth_start(
     provider: str,
     redirect: str | None = None,
     client: str | None = Query(None),
+    direct: int | None = Query(0),
     request: Request = None,
 ):
     provider = provider.lower()
@@ -3397,6 +3479,8 @@ async def oauth_start(
     else:
         raise HTTPException(404, "provider が不正です")
 
+    if int(direct or 0) == 1:
+        return RedirectResponse(auth_url)
     return {"auth_url": auth_url}
 
 
@@ -3668,7 +3752,9 @@ def supports_checkout(
     if req.episode_id:
         metadata["episode_id"] = str(req.episode_id)
 
-    session = stripe.checkout.Session.create(
+    session = _create_checkout_session_with_customer_fallback(
+        db,
+        supporter,
         mode="payment",
         line_items=[
             {
@@ -3681,8 +3767,6 @@ def supports_checkout(
             }
         ],
         client_reference_id=str(supporter_id) if supporter_id else None,
-        customer=getattr(supporter, "stripe_customer_id", None) if supporter else None,
-        customer_email=getattr(supporter, "email", None) if supporter else None,
         metadata=metadata,
         success_url=f"{FRONTEND_ORIGIN}/support/success",
         cancel_url=f"{FRONTEND_ORIGIN}/support/cancel",
@@ -4562,12 +4646,12 @@ def memberships_checkout(
         "plan_id": str(req.plan_id),
     }
 
-    session = stripe.checkout.Session.create(
+    session = _create_checkout_session_with_customer_fallback(
+        db,
+        supporter,
         mode="subscription",
         line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
         client_reference_id=str(supporter.id),
-        customer=getattr(supporter, "stripe_customer_id", None),
-        customer_email=getattr(supporter, "email", None),
         metadata=metadata,
         subscription_data={"metadata": metadata},
         success_url=f"{FRONTEND_ORIGIN}/membership/success",
@@ -4627,7 +4711,9 @@ def create_ai_chat_addon_checkout(
         "block_tokens": str(max(1, AI_CHAT_BLOCK_TOKENS)),
     }
 
-    session = stripe.checkout.Session.create(
+    session = _create_checkout_session_with_customer_fallback(
+        db,
+        user,
         mode="payment",
         line_items=[
             {
@@ -4640,8 +4726,6 @@ def create_ai_chat_addon_checkout(
             }
         ],
         client_reference_id=str(user.id),
-        customer=getattr(user, "stripe_customer_id", None),
-        customer_email=getattr(user, "email", None),
         metadata=metadata,
         success_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=success",
         cancel_url=f"{FRONTEND_ORIGIN}/ai-chat?addon=cancel",
@@ -4679,7 +4763,9 @@ def create_ai_novel_addon_checkout(
         "unit_price_yen": str(unit_price_yen),
     }
 
-    session = stripe.checkout.Session.create(
+    session = _create_checkout_session_with_customer_fallback(
+        db,
+        user,
         mode="payment",
         line_items=[
             {
@@ -4692,8 +4778,6 @@ def create_ai_novel_addon_checkout(
             }
         ],
         client_reference_id=str(user.id),
-        customer=getattr(user, "stripe_customer_id", None),
-        customer_email=getattr(user, "email", None),
         metadata=metadata,
         success_url=f"{FRONTEND_ORIGIN}/ai-novel?addon=success",
         cancel_url=f"{FRONTEND_ORIGIN}/ai-novel?addon=cancel",
@@ -4715,12 +4799,12 @@ def stripe_checkout(request: Request, db: Session = Depends(get_db)):
     client_ref = str(user.id)
     metadata = {"type": "premium", "user_id": client_ref}
 
-    session = stripe.checkout.Session.create(
+    session = _create_checkout_session_with_customer_fallback(
+        db,
+        user,
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
         client_reference_id=client_ref,
-        customer=getattr(user, "stripe_customer_id", None),
-        customer_email=getattr(user, "email", None),
         metadata=metadata,
         subscription_data={"metadata": metadata},
         success_url=f"{FRONTEND_ORIGIN}/stripe/success",
@@ -6100,6 +6184,8 @@ class AIChatPromptPreviewResponse(BaseModel):
     character_name: str
     personality: str
     language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
+    summary_text: str | None = None
+    long_term_memories_text: str | None = None
 
 
 class AIChatImageGenerateRequest(BaseModel):
@@ -7257,6 +7343,16 @@ def _long_reply_min_chars(mode: Literal["say", "do"], *, auto_dialogue: bool = F
     return 220 if mode == "say" else 280
 
 
+def _normalize_ai_chat_model_alias(model: str | None) -> str | None:
+    normalized = (model or "").strip()
+    if not normalized:
+        return None
+    alias_map = {
+        "moonshotai/kimi-k2-thinking-turbo": "moonshotai/kimi-k2-thinking",
+    }
+    return alias_map.get(normalized, normalized)
+
+
 def _resolve_ai_chat_provider(provider: str | None, model: str | None) -> str:
     explicit = (provider or "").strip().lower()
     if explicit:
@@ -7285,10 +7381,11 @@ async def _call_ai_chat_json_with_fallback(
     system_instructions: str | None = None,
 ) -> tuple[dict, int | None, str | None]:
     errors: list[str] = []
-    primary_provider = _resolve_ai_chat_provider(provider, model)
-    primary_model = (model or "").strip() or None
+    normalized_model = _normalize_ai_chat_model_alias(model)
+    primary_provider = _resolve_ai_chat_provider(provider, normalized_model)
+    primary_model = normalized_model
 
-    for candidate in _ai_chat_provider_candidates(provider, model):
+    for candidate in _ai_chat_provider_candidates(provider, normalized_model):
         candidate_model = primary_model if candidate == primary_provider else None
         try:
             return await call_ai_json(
@@ -7296,6 +7393,7 @@ async def _call_ai_chat_json_with_fallback(
                 model=candidate_model,
                 provider=candidate,
                 system_instructions=system_instructions,
+                timeout_sec=AI_CHAT_TEXT_TIMEOUT_SECONDS,
             )
         except HTTPException as e:
             status_code = int(getattr(e, "status_code", 500) or 500)
@@ -7440,6 +7538,22 @@ def _build_ai_chat_history_text(
     return "\n".join(history_lines) if history_lines else "(履歴なし)"
 
 
+def _build_ai_chat_history_lines(
+    history: list[AIChatHistoryItem],
+    character_name: str,
+) -> list[str]:
+    lines: list[str] = []
+    for item in (history or [])[-20:]:
+        role = item.role if item.role in {"user", "assistant"} else "user"
+        role_label = "ユーザー" if role == "user" else (character_name or "キャラクター")
+        item_mode = item.mode if item.mode in {"say", "do"} else "say"
+        content = (item.content or "").strip()
+        if not content:
+            continue
+        lines.append(f"{role_label} [{item_mode}]: {content[:1200]}")
+    return lines
+
+
 def _build_ai_chat_prompt(
     *,
     character_name: str,
@@ -7451,6 +7565,8 @@ def _build_ai_chat_prompt(
     message: str,
     branching_instruction: str = "",
     language_style_rules: str = "",
+    summary_text: str | None = None,
+    long_term_memories_text: str | None = None,
     r18: bool = False,
 ) -> str:
     style_guide = _build_ai_chat_style_guide(long_reply=long_reply, short_reply=short_reply)
@@ -7459,6 +7575,11 @@ def _build_ai_chat_prompt(
     safety_rules = _build_ai_chat_content_safety_rules(r18=r18)
     char_label = character_name or "無名のキャラクター"
     personality_text = personality or "未設定"
+    layered_context = build_layered_context_block(
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
+    )
+    layered_section = f"{layered_context}\n\n" if layered_context else ""
     return (
         "あなたはロールプレイ用の会話AIです。\n"
         "必ずキャラクター設定を守り、会話を自然につなげてください。\n\n"
@@ -7473,6 +7594,7 @@ def _build_ai_chat_prompt(
         f"{multi_character_rules}\n\n"
         f"{safety_rules}\n\n"
         f"{language_style_rules}\n"
+        f"{layered_section}"
         "会話履歴:\n"
         f"{history_text}\n\n"
         f"{branching_instruction}\n"
@@ -7493,6 +7615,8 @@ def _build_auto_dialogue_prompt(
     long_reply: bool,
     short_reply: bool = False,
     language_style_rules: str = "",
+    summary_text: str | None = None,
+    long_term_memories_text: str | None = None,
     r18: bool = False,
 ) -> str:
     char_label = character_name or "無名のキャラクター"
@@ -7504,6 +7628,11 @@ def _build_auto_dialogue_prompt(
         else ("10〜14往復で会話してください。" if long_reply else "8〜12往復で会話してください。")
     )
     safety_rules = _build_ai_chat_content_safety_rules(r18=r18)
+    layered_context = build_layered_context_block(
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
+    )
+    layered_section = f"{layered_context}\n\n" if layered_context else ""
     return (
         "あなたはロールプレイ用の会話AIです。\n"
         "登場キャラクター同士が会話を続けます。\n\n"
@@ -7516,6 +7645,7 @@ def _build_auto_dialogue_prompt(
         "- 各ターンで直前発話に応答し、つながりの弱い独立発言を避けること。\n\n"
         f"{safety_rules}\n\n"
         f"{language_style_rules}\n"
+        f"{layered_section}"
         "会話履歴:\n"
         f"{history_text}\n\n"
         "最新のユーザー指示:\n"
@@ -7539,11 +7669,18 @@ def _build_ai_chat_next_line_suggest_prompt(
     input_hint: str,
     suggestions_count: int,
     language_style_rules: str = "",
+    summary_text: str | None = None,
+    long_term_memories_text: str | None = None,
     r18: bool = False,
 ) -> str:
     char_label = character_name or "無名のキャラクター"
     personality_text = personality or "未設定"
     safety_rules = _build_ai_chat_content_safety_rules(r18=r18)
+    layered_context = build_layered_context_block(
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
+    )
+    layered_section = f"{layered_context}\n\n" if layered_context else ""
     return (
         "あなたは会話台詞の提案AIです。\n"
         "次に「ユーザー側のキャラクター」が言いそうなセリフ候補を作ってください。\n\n"
@@ -7551,6 +7688,7 @@ def _build_ai_chat_next_line_suggest_prompt(
         f"性格設定: {personality_text}\n\n"
         f"{safety_rules}\n"
         f"{language_style_rules}\n"
+        f"{layered_section}"
         "会話履歴:\n"
         f"{history_text}\n\n"
         f"ユーザーの現在入力中メモ: {(input_hint or 'なし')[:1200]}\n\n"
@@ -7839,6 +7977,60 @@ async def _score_ai_chat_image_quality(url: str) -> tuple[float | None, dict]:
         return None, {"reason": "quality_check_error"}
 
 
+@app.get("/api/ai/memory/items", response_model=MemoryListResponse)
+def list_ai_memory_items(
+    request: Request,
+    scope: Literal["global", "novel", "episode", "character"] = "global",
+    scope_id: int | None = None,
+    include_inactive: bool = False,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    return list_memories_api(
+        db,
+        user_id=int(user.id),
+        scope=scope,
+        scope_id=scope_id,
+        include_inactive=include_inactive,
+        limit=limit,
+    )
+
+
+@app.patch("/api/ai/memory/items/{memory_id}/deactivate", response_model=MemoryDeactivateResponse)
+def deactivate_ai_memory_item(
+    memory_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    result = deactivate_memory_api(
+        db,
+        user_id=int(user.id),
+        memory_id=int(memory_id),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="メモリが見つかりません。")
+    return result
+
+
+@app.delete("/api/ai/memory/items/{memory_id}", response_model=MemoryDeleteResponse)
+def delete_ai_memory_item(
+    memory_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    result = delete_memory_api(
+        db,
+        user_id=int(user.id),
+        memory_id=int(memory_id),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="メモリが見つかりません。")
+    return result
+
+
 @app.post("/api/ai/chat/next_user_lines", response_model=AIChatNextLineSuggestResponse)
 async def ai_chat_next_user_lines(
     req: AIChatNextLineSuggestRequest,
@@ -7871,6 +8063,28 @@ async def ai_chat_next_user_lines(
             personality = str(character.personality or "").strip()[:4000]
     history_text = _build_ai_chat_history_text(req.history or [], character_name)
     input_hint = (req.input_hint or "").strip()[:1200]
+    summary_text = build_summary_text(req.history or [], recent_limit=20, max_chars=1200)
+    long_term_memories_text: str | None = None
+    if AI_CHAT_MEMORY_ENABLED and viewer is not None:
+        try:
+            mem_scope, mem_scope_id = resolve_memory_scope(
+                int(character.id) if character is not None else None
+            )
+            query_for_memory = input_hint or history_text or character_name
+            long_term_memories = retrieve_memories(
+                db,
+                user_id=int(viewer.id),
+                scope=mem_scope,
+                scope_id=mem_scope_id,
+                query_text=query_for_memory,
+                topk=AI_CHAT_MEMORY_TOPK,
+            )
+            long_term_memories_text = format_long_term_memories(
+                long_term_memories,
+                max_items=AI_CHAT_MEMORY_TOPK,
+            )
+        except Exception as e:
+            logger.warning("next_line memory retrieval failed user=%s err=%r", getattr(viewer, "id", None), e)
     language_style_rules = _build_language_style_rules(getattr(req, "language_style", "normal"))
     r18 = bool(getattr(req, "r18", False))
 
@@ -7881,6 +8095,8 @@ async def ai_chat_next_user_lines(
         input_hint=input_hint,
         suggestions_count=count,
         language_style_rules=language_style_rules,
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
         r18=r18,
     )
     data: dict = {}
@@ -8479,6 +8695,27 @@ async def ai_chat(
     language_style_rules = _build_language_style_rules(language_style)
 
     history_text = _build_ai_chat_history_text(req.history or [], character_name)
+    summary_text = build_summary_text(req.history or [], recent_limit=20, max_chars=1200)
+    long_term_memories_text: str | None = None
+    if AI_CHAT_MEMORY_ENABLED and viewer is not None:
+        try:
+            mem_scope, mem_scope_id = resolve_memory_scope(
+                int(character.id) if character is not None else None
+            )
+            long_term_memories = retrieve_memories(
+                db,
+                user_id=int(viewer.id),
+                scope=mem_scope,
+                scope_id=mem_scope_id,
+                query_text=message,
+                topk=AI_CHAT_MEMORY_TOPK,
+            )
+            long_term_memories_text = format_long_term_memories(
+                long_term_memories,
+                max_items=AI_CHAT_MEMORY_TOPK,
+            )
+        except Exception as e:
+            logger.warning("memory retrieval failed user=%s err=%r", getattr(viewer, "id", None), e)
     branching_instruction = _build_ai_chat_branching_instruction(req.history or [], message)
     prompt = _build_ai_chat_prompt(
         character_name=character_name,
@@ -8490,6 +8727,8 @@ async def ai_chat(
         message=message,
         branching_instruction=branching_instruction,
         language_style_rules=language_style_rules,
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
         r18=r18,
     )
 
@@ -8541,6 +8780,8 @@ async def ai_chat(
             long_reply=long_reply,
             short_reply=short_reply,
             language_style_rules=language_style_rules,
+            summary_text=summary_text,
+            long_term_memories_text=long_term_memories_text,
             r18=r18,
         )
         auto_data, auto_tokens, _ = await _call_ai_chat_json_with_fallback(
@@ -8633,6 +8874,26 @@ async def ai_chat(
             )
             db.add(extra_msg)
         db.commit()
+    if AI_CHAT_MEMORY_ENABLED and viewer is not None:
+        try:
+            mem_scope, mem_scope_id = resolve_memory_scope(
+                int(character.id) if character is not None else None
+            )
+            source_message_id = int(user_msg.id) if (character is not None and user is not None and user_msg.id) else None
+            await sync_long_term_memory_from_turn(
+                db,
+                user_id=int(viewer.id),
+                scope=mem_scope,
+                scope_id=mem_scope_id,
+                history_lines=_build_ai_chat_history_lines(req.history or [], character_name),
+                user_message=message,
+                assistant_reply=reply,
+                model=req.model,
+                provider=req.provider,
+                source_message_id=source_message_id,
+            )
+        except Exception as e:
+            logger.warning("memory sync failed user=%s err=%r", getattr(viewer, "id", None), e)
 
     _record_ai_chat_tokens(db, viewer, total_tokens_used)
 
@@ -8686,6 +8947,28 @@ async def ai_chat_auto_continue(
 
     history = req.history or []
     history_text = _build_ai_chat_history_text(history, character_name)
+    summary_text = build_summary_text(history, recent_limit=20, max_chars=1200)
+    long_term_memories_text: str | None = None
+    if AI_CHAT_MEMORY_ENABLED and viewer is not None:
+        try:
+            mem_scope, mem_scope_id = resolve_memory_scope(
+                int(character.id) if character is not None else None
+            )
+            query_for_memory = history_text or character_name
+            long_term_memories = retrieve_memories(
+                db,
+                user_id=int(viewer.id),
+                scope=mem_scope,
+                scope_id=mem_scope_id,
+                query_text=query_for_memory,
+                topk=AI_CHAT_MEMORY_TOPK,
+            )
+            long_term_memories_text = format_long_term_memories(
+                long_term_memories,
+                max_items=AI_CHAT_MEMORY_TOPK,
+            )
+        except Exception as e:
+            logger.warning("auto_continue memory retrieval failed user=%s err=%r", getattr(viewer, "id", None), e)
     latest_reply = ""
     latest_user_instruction = ""
     for item in reversed(history):
@@ -8708,6 +8991,8 @@ async def ai_chat_auto_continue(
         long_reply=long_reply,
         short_reply=short_reply,
         language_style_rules=language_style_rules,
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
         r18=r18,
     )
     data, tokens, model_used = await _call_ai_chat_json_with_fallback(
@@ -9521,20 +9806,21 @@ def get_ai_chat_latest_prompt_preview(
             models.AIChatMessage.is_deleted == False,
         )
         .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
-        .limit(20)
+        .limit(120)
         .all()
     )
     history_rows.reverse()
 
-    history_items: list[AIChatHistoryItem] = []
+    history_items_all: list[AIChatHistoryItem] = []
     for row in history_rows:
-        history_items.append(
+        history_items_all.append(
             AIChatHistoryItem(
                 role="assistant" if row.role == "assistant" else "user",
                 mode="do" if row.mode == "do" else "say",
                 content=str(row.content or ""),
             )
         )
+    history_items = history_items_all[-20:]
 
     character_name = str(
         latest_user_msg.character_name_snapshot or character.name or ""
@@ -9548,6 +9834,31 @@ def get_ai_chat_latest_prompt_preview(
     mode: Literal["say", "do"] = "do" if latest_user_msg.mode == "do" else "say"
     message = str(latest_user_msg.content or "")
     history_text = _build_ai_chat_history_text(history_items, character_name)
+    summary_text = build_summary_text(history_items_all, recent_limit=20, max_chars=1200)
+    long_term_memories_text: str | None = None
+    if AI_CHAT_MEMORY_ENABLED:
+        try:
+            mem_scope, mem_scope_id = resolve_memory_scope(int(character_id))
+            query_for_memory = message or history_text or character_name
+            long_term_memories = retrieve_memories(
+                db,
+                user_id=int(user.id),
+                scope=mem_scope,
+                scope_id=mem_scope_id,
+                query_text=query_for_memory,
+                topk=AI_CHAT_MEMORY_TOPK,
+            )
+            long_term_memories_text = format_long_term_memories(
+                long_term_memories,
+                max_items=AI_CHAT_MEMORY_TOPK,
+            )
+        except Exception as e:
+            logger.warning(
+                "latest_prompt_preview memory retrieval failed user=%s character=%s err=%r",
+                getattr(user, "id", None),
+                character_id,
+                e,
+            )
     language_style_rules = _build_language_style_rules(language_style)
     prompt = _build_ai_chat_prompt(
         character_name=character_name,
@@ -9558,6 +9869,8 @@ def get_ai_chat_latest_prompt_preview(
         history_text=history_text,
         message=message,
         language_style_rules=language_style_rules,
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
         r18=r18,
     )
 
@@ -9571,6 +9884,8 @@ def get_ai_chat_latest_prompt_preview(
         character_name=character_name or "無名のキャラクター",
         personality=personality or "未設定",
         language_style=language_style,
+        summary_text=summary_text,
+        long_term_memories_text=long_term_memories_text,
     )
 
 @app.get("/api/ai/jobs/me", response_model=list[AIJobListItem])

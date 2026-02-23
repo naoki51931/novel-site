@@ -378,16 +378,8 @@ export default function Login() {
         !!window.AndroidFormBridge &&
         typeof window.AndroidFormBridge.registerMobilePush === "function";
       const oauthClient = isAppClient ? "app" : "web";
-      const res = await fetch(
-        `${API_BASE}/api/auth/oauth/${provider}/start?client=${encodeURIComponent(oauthClient)}`
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.auth_url) {
-        throw new Error(
-          data.detail || t({ ja: "OAuth の開始に失敗しました。", en: "Failed to start OAuth." })
-        );
-      }
-      window.location.href = data.auth_url;
+      window.location.href = `${API_BASE}/api/auth/oauth/${provider}/start?client=${encodeURIComponent(oauthClient)}&direct=1`;
+      return;
     } catch (err) {
       console.error(err);
       setError(
