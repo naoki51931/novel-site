@@ -8,9 +8,13 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..ai_novel import call_ai_json
-from .memory_schemas import MemoryExtractionItem, MemoryExtractionResponse
 from .embeddings import embed_text
-from .qdrant_client import qdrant_delete, qdrant_search, qdrant_upsert
+from .weaviate_client import (
+    deactivate_memory as weaviate_deactivate_memory,
+    delete_memory as weaviate_delete_memory,
+    search_memory_ids,
+    upsert_memory,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -142,10 +146,9 @@ def upsert_memory_item(
         "category": normalized_category,
         "importance": float(item.importance or 0.5),
         "upsert_key": normalized_key,
-        "expires_at": item.expires_at.isoformat() if item.expires_at else None,
         "is_active": True,
     }
-    qdrant_upsert(point_id=int(item.id), vector=vec, payload=payload)
+    upsert_memory(memory_id=int(item.id), vector=vec, payload=payload)
     return int(item.id)
 
 
@@ -162,23 +165,13 @@ def retrieve_memories(
     if not target_text:
         return []
     qvec = embed_text(target_text)
-    qfilter: dict[str, Any] = {
-        "must": [
-            {"key": "user_id", "match": {"value": int(user_id)}},
-            {"key": "scope", "match": {"value": _normalize_scope(scope)}},
-            {"key": "is_active", "match": {"value": True}},
-        ]
-    }
-    if scope_id is not None:
-        qfilter["must"].append({"key": "scope_id", "match": {"value": int(scope_id)}})
-
-    hits = qdrant_search(qvec, limit=max(int(topk) * 2, 4), qdrant_filter=qfilter)
-    ids: list[int] = []
-    for hit in hits:
-        try:
-            ids.append(int(hit.get("id")))
-        except Exception:
-            continue
+    ids = search_memory_ids(
+        qvec,
+        user_id=int(user_id),
+        scope=_normalize_scope(scope),
+        scope_id=(int(scope_id) if scope_id is not None else None),
+        limit=max(int(topk) * 2, 4),
+    )
     if not ids:
         return []
 
@@ -203,8 +196,26 @@ def retrieve_memories(
     rows = q.all()
     now = datetime.utcnow()
     rows = [r for r in rows if r.is_active and (r.expires_at is None or r.expires_at > now)]
-    rows.sort(key=lambda r: (float(r.importance or 0), r.updated_at or datetime.min), reverse=True)
-    return rows[: max(1, int(topk))]
+
+    filtered: list[models.AIMemoryItem] = []
+    for row in rows:
+        importance = float(row.importance or 0.0)
+        category = str(row.category or "other")
+        min_threshold = 0.45 if category in {"boundary", "profile"} else 0.55
+        if importance >= min_threshold:
+            filtered.append(row)
+
+    def _rank(item: models.AIMemoryItem) -> tuple[int, float, datetime]:
+        category = str(item.category or "other")
+        category_priority = 1 if category in {"boundary", "profile"} else 0
+        return (
+            category_priority,
+            float(item.importance or 0),
+            item.updated_at or datetime.min,
+        )
+
+    filtered.sort(key=_rank, reverse=True)
+    return filtered[: max(1, int(topk))]
 
 
 async def extract_memory_items_from_turn(
@@ -249,36 +260,36 @@ async def extract_memory_items_from_turn(
         return []
     if len(raw_items) > 20:
         raw_items = raw_items[:20]
-    # Strict schema validation by pydantic model.
-    validated_items: list[MemoryExtractionItem] = []
-    for raw in raw_items:
-        try:
-            validated_items.append(MemoryExtractionItem.model_validate(raw))
-        except Exception as e:
-            logger.warning("memory extraction item schema invalid: %r item=%r", e, raw)
-    if not validated_items:
-        return []
-    try:
-        MemoryExtractionResponse(items=validated_items)
-    except Exception as e:
-        logger.warning("memory extraction response schema invalid: %r", e)
-        return []
-
     out: list[dict[str, Any]] = []
-    for item in validated_items[:12]:
-        category = _normalize_category(item.category)
-        text_value = str(item.text or "").strip()
+    for raw in raw_items[:20]:
+        if not isinstance(raw, dict):
+            continue
+        category_raw = str(raw.get("category") or "").strip().lower()
+        if ":" in category_raw:
+            category_raw = category_raw.split(":", 1)[0]
+        category = _normalize_category(category_raw)
+        text_value = str(raw.get("text") or "").strip()
         if not text_value:
             continue
+        importance = _normalize_importance(raw.get("importance"))
+        expires_in_days: int | None = None
+        try:
+            expires_candidate = raw.get("expires_in_days")
+            if expires_candidate in {0, 7, 30, 365, None}:
+                expires_in_days = expires_candidate
+        except Exception:
+            expires_in_days = None
         out.append(
             {
                 "category": category,
-                "importance": _normalize_importance(item.importance),
+                "importance": importance,
                 "text": text_value[:1024],
-                "expires_in_days": item.expires_in_days,
-                "upsert_key": _normalize_upsert_key(category, item.upsert_key, text_value),
+                "expires_in_days": expires_in_days,
+                "upsert_key": _normalize_upsert_key(category, raw.get("upsert_key"), text_value),
             }
         )
+        if len(out) >= 12:
+            break
     return out
 
 
@@ -377,9 +388,9 @@ def deactivate_memory_item(
     item.is_active = False
     db.flush()
     try:
-        qdrant_delete([int(item.id)])
+        weaviate_deactivate_memory(int(item.id))
     except Exception as e:
-        logger.warning("qdrant delete on deactivate failed id=%s err=%r", item.id, e)
+        logger.warning("weaviate deactivate failed id=%s err=%r", item.id, e)
     db.commit()
     return item
 
@@ -403,8 +414,8 @@ def delete_memory_item(
     db.delete(item)
     db.flush()
     try:
-        qdrant_delete([int(memory_id)])
+        weaviate_delete_memory(int(memory_id))
     except Exception as e:
-        logger.warning("qdrant delete on hard-delete failed id=%s err=%r", memory_id, e)
+        logger.warning("weaviate delete on hard-delete failed id=%s err=%r", memory_id, e)
     db.commit()
     return True

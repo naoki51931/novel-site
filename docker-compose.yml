@@ -113,9 +113,8 @@ services:
       AI_CHAT_MEMORY_TOPK: ${AI_CHAT_MEMORY_TOPK:-12}
       MONTHLY_STRIPE_PREMIUM_SYNC_DAY: ${MONTHLY_STRIPE_PREMIUM_SYNC_DAY:-5}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ai_memory}
-      QDRANT_TIMEOUT_SEC: ${QDRANT_TIMEOUT_SEC:-10}
+      WEAVIATE_URL: ${WEAVIATE_URL:-http://weaviate:8080}
+      WEAVIATE_TIMEOUT_SEC: ${WEAVIATE_TIMEOUT_SEC:-10}
 
     volumes:
       - ./static:/app/static
@@ -123,7 +122,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      qdrant:
+      weaviate:
         condition: service_started
 
   nginx:
@@ -153,15 +152,22 @@ services:
       - ./nginx/ssl/www:/var/www/certbot
     entrypoint: /bin/sh -c "sleep infinity"
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: novel-qdrant
+  weaviate:
+    image: semitechnologies/weaviate:1.24.8
+    container_name: novel-weaviate
     restart: unless-stopped
     ports:
-      - "6333:6333"
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: "20"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_MODULES: ""
+      CLUSTER_HOSTNAME: "node1"
     volumes:
-      - qdrant-data:/qdrant/storage
+      - weaviate_data:/var/lib/weaviate
 
 volumes:
   db-data:
-  qdrant-data:
+  weaviate_data:

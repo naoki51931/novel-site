@@ -664,6 +664,7 @@ class AIChatCharacter(Base):
     personality = Column(Text, nullable=True)
     image_url = Column(String(512), nullable=True)
     speech_gender = Column(String(16), nullable=False, server_default="auto")
+    is_r18 = Column(Boolean, nullable=False, server_default="0", index=True)
     is_public = Column(Boolean, nullable=False, server_default="0", index=True)
     published_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)

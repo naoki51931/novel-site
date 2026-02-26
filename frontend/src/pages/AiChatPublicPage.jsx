@@ -32,6 +32,14 @@ export default function AiChatPublicPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const getAuthHeaders = () => {
+    try {
+      const token = localStorage.getItem("token") || localStorage.getItem("access_token");
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    } catch {
+      return {};
+    }
+  };
 
   const buildUrlSearch = (query) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -56,7 +64,9 @@ export default function AiChatPublicPage() {
       const params = new URLSearchParams();
       if (normalizedQuery) params.set("q", normalizedQuery);
       params.set("limit", "50");
-      const res = await fetch(`/api/ai/chat/public/characters?${params.toString()}`);
+      const res = await fetch(`/api/ai/chat/public/characters?${params.toString()}`, {
+        headers: getAuthHeaders(),
+      });
       const data = await res.json().catch(() => []);
       if (!res.ok) {
         throw new Error(
@@ -80,7 +90,9 @@ export default function AiChatPublicPage() {
     setDetailLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/ai/chat/public/characters/${encodeURIComponent(id)}`);
+      const res = await fetch(`/api/ai/chat/public/characters/${encodeURIComponent(id)}`, {
+        headers: getAuthHeaders(),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(

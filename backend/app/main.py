@@ -14,6 +14,7 @@ from urllib.parse import urlencode, quote, parse_qs, urlparse, urljoin
 import json
 import html
 import io
+import unicodedata
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Optional, List, Callable, Awaitable, Literal
@@ -125,7 +126,7 @@ from .ai.memory_schemas import (
     MemoryDeactivateResponse,
     MemoryDeleteResponse,
 )
-from .ai.qdrant_client import ensure_collection as ensure_qdrant_collection
+from .ai.weaviate_client import ensure_schema as ensure_weaviate_schema
 
 try:
     from PIL import Image, ImageOps  # type: ignore
@@ -481,6 +482,8 @@ def ensure_ai_chat_tables():
                 alters.append("ADD COLUMN speech_gender VARCHAR(16) NOT NULL DEFAULT 'auto'")
             if "image_url" not in existing:
                 alters.append("ADD COLUMN image_url VARCHAR(512) NULL")
+            if "is_r18" not in existing:
+                alters.append("ADD COLUMN is_r18 TINYINT(1) NOT NULL DEFAULT 0")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE ai_chat_characters {clause}"))
@@ -516,6 +519,41 @@ def ensure_ai_chat_tables():
 
 
 ensure_ai_chat_tables()
+
+def ensure_ai_memory_items_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'ai_memory_items'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
+            alters: list[str] = []
+            if "source_message_id" not in existing:
+                alters.append("ADD COLUMN source_message_id INT NULL")
+            if "upsert_key" not in existing:
+                alters.append("ADD COLUMN upsert_key VARCHAR(128) NOT NULL DEFAULT ''")
+            if "importance" not in existing:
+                alters.append("ADD COLUMN importance FLOAT NOT NULL DEFAULT 0.5")
+            if "expires_at" not in existing:
+                alters.append("ADD COLUMN expires_at DATETIME NULL")
+            if "is_active" not in existing:
+                alters.append("ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE ai_memory_items {clause}"))
+    except Exception as e:
+        print("[db] ensure_ai_memory_items_table_columns failed:", repr(e))
+
+
+ensure_ai_memory_items_table_columns()
 
 def ensure_tag_indexes():
     try:
@@ -828,9 +866,9 @@ def on_startup() -> None:
     _recover_ui_i18n_jobs_on_startup()
     if AI_CHAT_MEMORY_ENABLED:
         try:
-            ensure_qdrant_collection()
+            ensure_weaviate_schema()
         except Exception as e:
-            logger.warning("qdrant collection ensure failed: %r", e)
+            logger.warning("weaviate schema ensure failed: %r", e)
 
 # =========================================
 # JWT / Stripe 設定
@@ -2047,6 +2085,59 @@ def can_user_access_novel_age_limit(user: models.User | None, age_limit: str | N
     if normalized == "r18":
         return age >= 18
     return True
+
+
+_PUBLIC_CHAT_R18_HINT_KEYWORDS = (
+    "18禁",
+    "成人向け",
+    "エロ",
+    "性的",
+    "sex",
+    "sexual",
+    "nsfw",
+    "hentai",
+    "淫",
+    "喘ぎ",
+    "快感",
+    "キス",
+    "裸",
+    "乳首",
+    "陰茎",
+    "膣",
+    "挿入",
+    "中出し",
+    "絶頂",
+    "フェラ",
+    "自慰",
+)
+
+
+def _contains_public_chat_r18_hint(text: str | None) -> bool:
+    normalized = unicodedata.normalize("NFKC", str(text or "")).lower().strip()
+    if not normalized:
+        return False
+    if "r18" in normalized:
+        return True
+    for keyword in _PUBLIC_CHAT_R18_HINT_KEYWORDS:
+        if keyword in normalized:
+            return True
+    return False
+
+
+def _is_public_chat_r18(
+    character: models.AIChatCharacter,
+    messages: list[models.AIChatMessage] | None = None,
+) -> bool:
+    if bool(getattr(character, "is_r18", False)):
+        return True
+    if _contains_public_chat_r18_hint(getattr(character, "name", None)):
+        return True
+    if _contains_public_chat_r18_hint(getattr(character, "personality", None)):
+        return True
+    for msg in messages or []:
+        if _contains_public_chat_r18_hint(getattr(msg, "content", None)):
+            return True
+    return False
 
 
 def get_user_favorite_tag_weights(db: Session, user_id: int) -> dict[str, int]:
@@ -6417,6 +6508,35 @@ class AIChatPromptPreviewResponse(BaseModel):
     long_term_memories_text: str | None = None
 
 
+class AIChatMemoryBackfillRequest(BaseModel):
+    character_id: int | None = None
+    max_turns_per_scope: int = Field(default=60, ge=1, le=300)
+    dry_run: bool = False
+    model: str | None = None
+    provider: str | None = None
+
+
+class AIChatMemoryBackfillScopeResult(BaseModel):
+    scope: Literal["character"] = "character"
+    scope_id: int
+    scanned_messages: int
+    candidate_turns: int
+    processed_turns: int
+    saved_items: int
+    failed_turns: int
+
+
+class AIChatMemoryBackfillResponse(BaseModel):
+    ok: bool = True
+    dry_run: bool
+    scopes: list[AIChatMemoryBackfillScopeResult] = Field(default_factory=list)
+    total_scanned_messages: int = 0
+    total_candidate_turns: int = 0
+    total_processed_turns: int = 0
+    total_saved_items: int = 0
+    total_failed_turns: int = 0
+
+
 class AIChatImageGenerateRequest(BaseModel):
     prompt: str
     negative_prompt: str | None = None
@@ -7784,6 +7904,68 @@ def _build_ai_chat_history_lines(
     return lines
 
 
+def _collect_ai_chat_backfill_turns(
+    *,
+    messages: list[models.AIChatMessage],
+    character_name: str,
+    max_turns: int,
+) -> tuple[list[dict], int]:
+    normalized: list[dict] = []
+    for msg in messages:
+        content = str(getattr(msg, "content", "") or "").strip()
+        if not content:
+            continue
+        if _parse_ai_chat_image_message(content) is not None:
+            continue
+        normalized.append(
+            {
+                "id": int(getattr(msg, "id", 0) or 0),
+                "role": "assistant" if str(getattr(msg, "role", "user")) == "assistant" else "user",
+                "mode": "do" if str(getattr(msg, "mode", "say")) == "do" else "say",
+                "content": content[:4000],
+                "is_auto_dialogue": bool(getattr(msg, "is_auto_dialogue", False)),
+            }
+        )
+
+    turns: list[dict] = []
+    total = len(normalized)
+    for i, item in enumerate(normalized):
+        if item["role"] != "user":
+            continue
+
+        assistant_candidates: list[dict] = []
+        j = i + 1
+        while j < total and normalized[j]["role"] != "user":
+            if normalized[j]["role"] == "assistant":
+                assistant_candidates.append(normalized[j])
+            j += 1
+        if not assistant_candidates:
+            continue
+
+        assistant_item = next((a for a in assistant_candidates if not a["is_auto_dialogue"]), assistant_candidates[0])
+        history_items: list[AIChatHistoryItem] = []
+        for prev in normalized[max(0, i - 20):i]:
+            history_items.append(
+                AIChatHistoryItem(
+                    role="assistant" if prev["role"] == "assistant" else "user",
+                    mode="do" if prev["mode"] == "do" else "say",
+                    content=str(prev["content"]),
+                )
+            )
+        turns.append(
+            {
+                "source_message_id": int(item["id"]),
+                "history_lines": _build_ai_chat_history_lines(history_items, character_name),
+                "user_message": str(item["content"]),
+                "assistant_reply": str(assistant_item["content"]),
+            }
+        )
+
+    if len(turns) > max_turns:
+        turns = turns[-max_turns:]
+    return turns, len(normalized)
+
+
 def _build_ai_chat_prompt(
     *,
     character_name: str,
@@ -8262,6 +8444,107 @@ def delete_ai_memory_item(
     )
     if result is None:
         raise HTTPException(status_code=404, detail="メモリが見つかりません。")
+    return result
+
+
+@app.post("/api/ai/memory/backfill", response_model=AIChatMemoryBackfillResponse)
+async def backfill_ai_memory_from_logs(
+    payload: AIChatMemoryBackfillRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not AI_CHAT_MEMORY_ENABLED:
+        raise HTTPException(status_code=400, detail="AIメモリ機能が無効です。")
+
+    user = require_current_user(request, db)
+    _ensure_ai_chat_access(user)
+
+    targets: list[models.AIChatCharacter] = []
+    if payload.character_id is not None:
+        character = _find_editable_ai_chat_character(
+            db=db,
+            viewer=user,
+            character_id=int(payload.character_id),
+        )
+        if character is None:
+            raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+        targets = [character]
+    else:
+        targets = (
+            db.query(models.AIChatCharacter)
+            .filter(models.AIChatCharacter.user_id == int(user.id))
+            .order_by(models.AIChatCharacter.id.asc())
+            .all()
+        )
+
+    result = AIChatMemoryBackfillResponse(dry_run=bool(payload.dry_run))
+    if not targets:
+        return result
+
+    max_turns = int(payload.max_turns_per_scope)
+    for character in targets:
+        rows = (
+            db.query(models.AIChatMessage)
+            .filter(
+                models.AIChatMessage.user_id == int(user.id),
+                models.AIChatMessage.character_id == int(character.id),
+                models.AIChatMessage.is_deleted == False,
+            )
+            .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
+            .limit(5000)
+            .all()
+        )
+        rows.reverse()
+        turns, scanned_count = _collect_ai_chat_backfill_turns(
+            messages=rows,
+            character_name=str(character.name or "").strip()[:80],
+            max_turns=max_turns,
+        )
+        scope_saved = 0
+        scope_processed = 0
+        scope_failed = 0
+        if not payload.dry_run:
+            for turn in turns:
+                try:
+                    saved = await sync_long_term_memory_from_turn(
+                        db,
+                        user_id=int(user.id),
+                        scope="character",
+                        scope_id=int(character.id),
+                        history_lines=list(turn["history_lines"]),
+                        user_message=str(turn["user_message"]),
+                        assistant_reply=str(turn["assistant_reply"]),
+                        model=payload.model,
+                        provider=payload.provider,
+                        source_message_id=int(turn["source_message_id"]),
+                    )
+                    scope_saved += int(saved or 0)
+                    scope_processed += 1
+                except Exception as e:
+                    scope_failed += 1
+                    logger.warning(
+                        "memory backfill turn failed user=%s character=%s msg=%s err=%r",
+                        int(user.id),
+                        int(character.id),
+                        int(turn["source_message_id"]),
+                        e,
+                    )
+
+        scope_result = AIChatMemoryBackfillScopeResult(
+            scope_id=int(character.id),
+            scanned_messages=int(scanned_count),
+            candidate_turns=int(len(turns)),
+            processed_turns=int(scope_processed),
+            saved_items=int(scope_saved),
+            failed_turns=int(scope_failed),
+        )
+        result.scopes.append(scope_result)
+        result.total_scanned_messages += int(scanned_count)
+        result.total_candidate_turns += int(len(turns))
+        result.total_processed_turns += int(scope_processed)
+        result.total_saved_items += int(scope_saved)
+        result.total_failed_turns += int(scope_failed)
+
     return result
 
 
@@ -9068,6 +9351,12 @@ async def ai_chat(
     )
     user_msg: models.AIChatMessage | None = None
     if can_persist_character_chat:
+        mark_r18 = bool(
+            r18
+            or _contains_public_chat_r18_hint(personality)
+            or _contains_public_chat_r18_hint(message)
+            or _contains_public_chat_r18_hint(reply)
+        )
         user_msg = models.AIChatMessage(
             user_id=user.id,
             character_id=character.id,
@@ -9106,6 +9395,8 @@ async def ai_chat(
             )
             db.add(ai_say_msg)
         for extra in extra_messages:
+            if _contains_public_chat_r18_hint(extra.content):
+                mark_r18 = True
             extra_msg = models.AIChatMessage(
                 user_id=user.id,
                 character_id=character.id,
@@ -9118,6 +9409,9 @@ async def ai_chat(
                 content=str(extra.content or "")[:4000],
             )
             db.add(extra_msg)
+        if mark_r18:
+            character.is_r18 = True
+            db.add(character)
         db.commit()
     if AI_CHAT_MEMORY_ENABLED and viewer is not None:
         try:
@@ -9285,6 +9579,11 @@ async def ai_chat_auto_continue(
         )
     )
     if can_persist_character_chat:
+        mark_r18 = bool(
+            r18
+            or _contains_public_chat_r18_hint(personality)
+            or _contains_public_chat_r18_hint(reply)
+        )
         msg = models.AIChatMessage(
             user_id=user.id,
             character_id=character.id,
@@ -9297,6 +9596,9 @@ async def ai_chat_auto_continue(
             content=reply[:4000],
         )
         db.add(msg)
+        if mark_r18:
+            character.is_r18 = True
+            db.add(character)
         db.commit()
 
     _record_ai_chat_tokens(db, viewer, tokens)
@@ -9504,6 +9806,7 @@ def create_ai_chat_character(
     name = name[:80]
     personality = (payload.personality or "").strip()[:4000] or None
     speech_gender = normalize_speech_gender(getattr(payload, "speech_gender", None))
+    is_r18 = bool(_contains_public_chat_r18_hint(name) or _contains_public_chat_r18_hint(personality))
 
     exists = (
         db.query(models.AIChatCharacter)
@@ -9515,6 +9818,7 @@ def create_ai_chat_character(
     )
     if exists:
         exists.personality = personality
+        exists.is_r18 = bool(getattr(exists, "is_r18", False) or is_r18)
         if getattr(payload, "speech_gender", None) is not None:
             exists.speech_gender = speech_gender
         db.add(exists)
@@ -9539,6 +9843,7 @@ def create_ai_chat_character(
         name=name,
         personality=personality,
         speech_gender=speech_gender,
+        is_r18=is_r18,
     )
     db.add(item)
     db.commit()
@@ -9583,6 +9888,8 @@ def update_ai_chat_character(
         item.personality = (payload.personality or "").strip()[:4000] or None
     if payload.speech_gender is not None:
         item.speech_gender = normalize_speech_gender(payload.speech_gender)
+    if _contains_public_chat_r18_hint(item.name) or _contains_public_chat_r18_hint(item.personality):
+        item.is_r18 = True
 
     db.add(item)
     db.commit()
@@ -9704,6 +10011,18 @@ def publish_ai_chat_character(
     if not item:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
 
+    messages_for_scan = (
+        db.query(models.AIChatMessage)
+        .filter(
+            models.AIChatMessage.character_id == item.id,
+            models.AIChatMessage.is_deleted == False,
+        )
+        .order_by(models.AIChatMessage.id.desc())
+        .limit(400)
+        .all()
+    )
+    item.is_r18 = _is_public_chat_r18(item, messages=messages_for_scan)
+
     item.is_public = bool(payload.is_public)
     item.published_at = datetime.utcnow() if item.is_public else None
     db.add(item)
@@ -9752,11 +10071,14 @@ def delete_ai_chat_character(
 
 @app.get("/api/ai/chat/public/characters", response_model=list[AIChatPublicCharacterListItem])
 def list_public_ai_chat_characters(
+    request: Request,
     q: str = Query(default=""),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    viewer = get_optional_current_user(request, db)
+    can_view_r18 = can_user_access_novel_age_limit(viewer, "r18")
     keyword = (q or "").strip()
     query = (
         db.query(models.AIChatCharacter, models.User.username)
@@ -9782,16 +10104,20 @@ def list_public_ai_chat_characters(
         .limit(limit)
         .all()
     )
-    return [
-        AIChatPublicCharacterListItem(
-            id=int(item.id),
-            name=str(item.name or ""),
-            personality=_trim_public_character_intro(item.personality),
-            author_username=str(username or "") if username else None,
-            published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+    output: list[AIChatPublicCharacterListItem] = []
+    for item, username in rows:
+        if _is_public_chat_r18(item) and not can_view_r18:
+            continue
+        output.append(
+            AIChatPublicCharacterListItem(
+                id=int(item.id),
+                name=str(item.name or ""),
+                personality=_trim_public_character_intro(item.personality),
+                author_username=str(username or "") if username else None,
+                published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+            )
         )
-        for item, username in rows
-    ]
+    return output
 
 
 @app.get(
@@ -9800,8 +10126,11 @@ def list_public_ai_chat_characters(
 )
 def get_public_ai_chat_character_detail(
     character_id: int,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    viewer = get_optional_current_user(request, db)
+    can_view_r18 = can_user_access_novel_age_limit(viewer, "r18")
     row = (
         db.query(models.AIChatCharacter, models.User.username)
         .join(models.User, models.User.id == models.AIChatCharacter.user_id)
@@ -9825,6 +10154,13 @@ def get_public_ai_chat_character_detail(
         .limit(200)
         .all()
     )
+    is_r18 = _is_public_chat_r18(character, messages=messages)
+    if is_r18 and not can_view_r18:
+        raise HTTPException(status_code=403, detail="この公開チャットは18歳以上のみ閲覧できます。")
+    if is_r18 and not bool(getattr(character, "is_r18", False)):
+        character.is_r18 = True
+        db.add(character)
+        db.commit()
     return AIChatPublicCharacterDetailResponse(
         id=int(character.id),
         name=str(character.name or ""),
