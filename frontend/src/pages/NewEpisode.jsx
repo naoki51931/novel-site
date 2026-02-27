@@ -6,6 +6,8 @@ import { getApiBase } from "../lib/apiBase";
 
 const API_BASE = getApiBase();
 const EP_DRAFT_KEY_PREFIX = "draft_new_episode"; // 作品ごとの下書き用プレフィックス
+const GUIDE_CREATED_NOVEL_ID_KEY = "onboarding_created_novel_id_v1";
+const GUIDE_ONBOARDING_DONE_KEY = "onboarding_episode_created_v1";
 const ILLUST_TAG_PREFIX = "illust:";
 const ILLUST_TAG_RE = /^illust:(\d{8})$/;
 const ILLUST_TAG_BRACKET_RE = /^\[\[illust:(\d{8})\]\]$/;
@@ -538,6 +540,23 @@ export default function NewEpisode() {
           })
         );
         localStorage.removeItem(draftKey);
+        localStorage.removeItem(GUIDE_CREATED_NOVEL_ID_KEY);
+        try {
+          const username = localStorage.getItem("username");
+          if (username) {
+            const raw = localStorage.getItem(GUIDE_ONBOARDING_DONE_KEY);
+            const parsed = JSON.parse(raw || "[]");
+            const doneUsers = Array.isArray(parsed) ? parsed : [];
+            if (!doneUsers.includes(username)) {
+              doneUsers.push(username);
+              localStorage.setItem(GUIDE_ONBOARDING_DONE_KEY, JSON.stringify(doneUsers));
+            }
+          } else {
+            localStorage.setItem(GUIDE_ONBOARDING_DONE_KEY, "1");
+          }
+        } catch {
+          localStorage.setItem(GUIDE_ONBOARDING_DONE_KEY, "1");
+        }
         navigate(`/novels/${id}`);
         return;
       }
@@ -554,6 +573,23 @@ export default function NewEpisode() {
 
       // 成功したらこの小説の下書きを消して小説詳細へ戻る
       localStorage.removeItem(draftKey);
+      localStorage.removeItem(GUIDE_CREATED_NOVEL_ID_KEY);
+      try {
+        const username = localStorage.getItem("username");
+        if (username) {
+          const raw = localStorage.getItem(GUIDE_ONBOARDING_DONE_KEY);
+          const parsed = JSON.parse(raw || "[]");
+          const doneUsers = Array.isArray(parsed) ? parsed : [];
+          if (!doneUsers.includes(username)) {
+            doneUsers.push(username);
+            localStorage.setItem(GUIDE_ONBOARDING_DONE_KEY, JSON.stringify(doneUsers));
+          }
+        } else {
+          localStorage.setItem(GUIDE_ONBOARDING_DONE_KEY, "1");
+        }
+      } catch {
+        localStorage.setItem(GUIDE_ONBOARDING_DONE_KEY, "1");
+      }
       navigate(`/novels/${id}`);
     } catch (err) {
       console.error("❌ NewEpisode error:", err);

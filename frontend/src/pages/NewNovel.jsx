@@ -4,9 +4,17 @@ import { trackEvent } from "../lib/analytics";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
 import { getApiBase } from "../lib/apiBase";
+import {
+  dismissGuideBubble,
+  getDismissedGuideBubbles,
+  isOnboardingGuideEligible,
+} from "../lib/onboardingGuide";
 
 const API_BASE = getApiBase();
 const DRAFT_KEY = "draft_new_novel";
+const GUIDE_REGISTER_VISITED_KEY = "onboarding_register_visited_v1";
+const GUIDE_CREATED_NOVEL_ID_KEY = "onboarding_created_novel_id_v1";
+const GUIDE_NOVEL_CREATED_USERS_KEY = "onboarding_novel_created_users_v1";
 
 export default function NewNovel() {
   const navigate = useNavigate();
@@ -25,8 +33,26 @@ export default function NewNovel() {
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
   const [tagSuggestError, setTagSuggestError] = useState("");
   const [tagSuggestLoading, setTagSuggestLoading] = useState(false);
+  const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
+  const [expandedBubble, setExpandedBubble] = useState("");
 
   const countChars = (value) => (value || "").length;
+  const isLoggedIn = typeof window !== "undefined" && Boolean(localStorage.getItem("token"));
+  const canShowGuides = isOnboardingGuideEligible();
+  const isBubbleVisible = (key) => !dismissedBubbles.has(String(key));
+  const handleDismissBubble = (e, key) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    dismissGuideBubble(key);
+    setDismissedBubbles(getDismissedGuideBubbles());
+    setExpandedBubble((prev) => (prev === key ? "" : prev));
+  };
+  const hasRegistered =
+    isLoggedIn ||
+    (typeof window !== "undefined" && localStorage.getItem(GUIDE_REGISTER_VISITED_KEY) === "1");
+  const activeGuideStep = isLoggedIn ? "create" : hasRegistered ? "login" : "register";
 
   // 🔹 AI小説生成ページへ移動
   const handleOpenAINovel = () => {
@@ -191,8 +217,24 @@ export default function NewNovel() {
         throw new Error(data.detail || t({ ja: "小説の作成に失敗しました", en: "Failed to create novel." }));
       }
 
+      try {
+        const username = localStorage.getItem("username");
+        if (username) {
+          const raw = localStorage.getItem(GUIDE_NOVEL_CREATED_USERS_KEY);
+          const parsed = JSON.parse(raw || "[]");
+          const users = Array.isArray(parsed) ? parsed : [];
+          if (!users.includes(username)) {
+            users.push(username);
+            localStorage.setItem(GUIDE_NOVEL_CREATED_USERS_KEY, JSON.stringify(users));
+          }
+        }
+      } catch {
+        // ignore
+      }
+
       if (data.id) {
         localStorage.removeItem(DRAFT_KEY);
+        localStorage.setItem(GUIDE_CREATED_NOVEL_ID_KEY, String(data.id));
         trackEvent("novel_created", {
           novel_id: data.id,
           creative_type: creativeType,
@@ -228,16 +270,138 @@ export default function NewNovel() {
       <div style={{ marginTop: 6, marginBottom: 12, fontSize: 14 }}>
         <Link
           to="/register"
-          className="btn btn-border"
+          className={`btn btn-border ${isLoggedIn ? "" : "novel-register-cta"}`}
           style={{ display: "inline-block", fontSize: 18, padding: "14px 22px", fontWeight: 700 }}
         >
           {t({
-            ja: "まずは、小説を作る前に会員登録！！",
-            en: "First, create an account before posting your novel!!",
+            ja: isLoggedIn ? "会員登録済みです。投稿準備を進めましょう" : "まずは会員登録してください",
+            en: isLoggedIn ? "Registration complete. Continue posting setup." : "Please register first",
           })}
         </Link>
       </div>
       <h2>{t({ ja: "新しい小説を作成", en: "Create New Novel" })}</h2>
+
+      {canShowGuides && (
+      <section className="novel-post-guide" aria-label={t({ ja: "投稿ガイド", en: "Posting guide" })}>
+        <div
+          className={`novel-post-guide-bubble ${
+            hasRegistered ? "is-done" : activeGuideStep === "register" ? "is-current" : ""
+          } ${expandedBubble === "newnovel_step1" ? "is-expanded" : ""}`.trim()}
+          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step1" ? "" : "newnovel_step1"))}
+        >
+          {isBubbleVisible("newnovel_step1") && (
+            <div className="novel-post-guide-actions">
+              <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step1")}>
+                {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+              </button>
+              <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step1")}>×</button>
+            </div>
+          )}
+          {!isBubbleVisible("newnovel_step1") ? null : (
+            <>
+          <strong>{t({ ja: "STEP 1", en: "STEP 1" })}</strong>
+          <span>
+            {hasRegistered
+              ? t({
+                  ja: "会員登録は完了しています。",
+                  en: "Registration is complete.",
+                })
+              : t({
+                  ja: "まずは、会員登録をしてください。",
+                  en: "First, please create an account.",
+                })}
+          </span>
+            </>
+          )}
+        </div>
+        <div
+          className={`novel-post-guide-bubble ${
+            isLoggedIn ? "is-done" : activeGuideStep === "login" ? "is-current" : ""
+          } ${expandedBubble === "newnovel_step2" ? "is-expanded" : ""}`.trim()}
+          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step2" ? "" : "newnovel_step2"))}
+        >
+          {isBubbleVisible("newnovel_step2") && (
+            <div className="novel-post-guide-actions">
+              <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step2")}>
+                {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+              </button>
+              <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step2")}>×</button>
+            </div>
+          )}
+          {!isBubbleVisible("newnovel_step2") ? null : (
+            <>
+          <strong>{t({ ja: "STEP 2", en: "STEP 2" })}</strong>
+          <span>
+            {isLoggedIn
+              ? t({
+                  ja: "ログインは完了しています。",
+                  en: "Login is complete.",
+                })
+              : t({
+                  ja: "次は、ログインしてください。",
+                  en: "Next, please log in.",
+                })}
+          </span>
+            </>
+          )}
+        </div>
+        <div
+          className={`novel-post-guide-bubble ${
+            activeGuideStep === "create" ? "is-ready" : ""
+          } ${expandedBubble === "newnovel_step3" ? "is-expanded" : ""}`.trim()}
+          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step3" ? "" : "newnovel_step3"))}
+        >
+          {isBubbleVisible("newnovel_step3") && (
+            <div className="novel-post-guide-actions">
+              <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step3")}>
+                {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+              </button>
+              <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step3")}>×</button>
+            </div>
+          )}
+          {!isBubbleVisible("newnovel_step3") ? null : (
+            <>
+          <strong>{t({ ja: "STEP 3", en: "STEP 3" })}</strong>
+          <span>
+            {isLoggedIn
+              ? t({
+                  ja: "最後に、小説を作成してください。",
+                  en: "Finally, create your novel.",
+                })
+              : t({
+                  ja: "ログイン後に小説を作成してください。",
+                  en: "Create your novel after logging in.",
+                })}
+          </span>
+            </>
+          )}
+        </div>
+        <div
+          className={`novel-post-guide-bubble is-optional ${expandedBubble === "newnovel_step4" ? "is-expanded" : ""}`.trim()}
+          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step4" ? "" : "newnovel_step4"))}
+        >
+          {isBubbleVisible("newnovel_step4") && (
+            <div className="novel-post-guide-actions">
+              <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step4")}>
+                {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+              </button>
+              <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step4")}>×</button>
+            </div>
+          )}
+          {!isBubbleVisible("newnovel_step4") ? null : (
+            <>
+          <strong>{t({ ja: "STEP 4", en: "STEP 4" })}</strong>
+          <span>
+            {t({
+              ja: "小説作成の次は、エピソードを作成してください。",
+              en: "After creating the novel, create an episode.",
+            })}
+          </span>
+            </>
+          )}
+        </div>
+      </section>
+      )}
 
       {/* 🔹 AI小説生成ページへのショートカットボタン */}
       <div style={{ marginBottom: 16 }}>

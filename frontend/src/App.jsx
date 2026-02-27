@@ -43,9 +43,19 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
 import { useI18n } from "./lib/i18n";
+import {
+  dismissGuideBubble,
+  getDismissedGuideBubbles,
+  isOnboardingGuideEligible,
+  markGoogleAdsTraffic,
+} from "./lib/onboardingGuide";
 
 const ANDROID_NOTIFIED_KEY_PREFIX = "android_notified_notification_ids_v1_";
 const ANDROID_NOTIFIED_MAX_IDS = 300;
+const GUIDE_REGISTER_VISITED_KEY = "onboarding_register_visited_v1";
+const GUIDE_ONBOARDING_DONE_KEY = "onboarding_episode_created_v1";
+const GUIDE_LOGGED_IN_USERS_KEY = "onboarding_logged_in_users_v1";
+const GUIDE_NOVEL_CREATED_USERS_KEY = "onboarding_novel_created_users_v1";
 const LANGUAGE_ORDER = ["ja", "en", "zh-cn", "zh-tw", "ko"];
 const LANGUAGE_BUTTON_LABEL = {
   ja: "JP",
@@ -181,6 +191,16 @@ export default function App() {
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [registerVisited, setRegisterVisited] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem(GUIDE_REGISTER_VISITED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
+  const [expandedBubble, setExpandedBubble] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
   const { t, lang, setLang } = useI18n();
@@ -220,6 +240,76 @@ export default function App() {
   const siteTitleKo = siteTitleKoByKey[siteKey] || siteTitleKoByKey.main;
   const isAuthorsPage = location.pathname === "/authors";
   const isAllPage = location.pathname === "/all";
+  const username =
+    typeof window !== "undefined" ? localStorage.getItem("username") : null;
+  const hasToken =
+    typeof window !== "undefined"
+      ? !!(localStorage.getItem("token") || localStorage.getItem("access_token"))
+      : false;
+  const canShowGuides = isOnboardingGuideEligible();
+  const onboardingDoneForUser = (() => {
+    if (typeof window === "undefined" || !hasToken || !username) return false;
+    try {
+      const raw = localStorage.getItem(GUIDE_ONBOARDING_DONE_KEY);
+      if (!raw) return false;
+      const list = JSON.parse(raw);
+      return Array.isArray(list) && list.includes(username);
+    } catch {
+      return false;
+    }
+  })();
+  const novelCreatedForUser = (() => {
+    if (typeof window === "undefined" || !hasToken || !username) return false;
+    try {
+      const raw = localStorage.getItem(GUIDE_NOVEL_CREATED_USERS_KEY);
+      if (!raw) return false;
+      const list = JSON.parse(raw);
+      return Array.isArray(list) && list.includes(username);
+    } catch {
+      return false;
+    }
+  })();
+  const activeGuideStep = !canShowGuides
+    ? "none"
+    : onboardingDoneForUser
+      ? "none"
+      : novelCreatedForUser
+        ? "none"
+      : hasToken
+        ? "post"
+        : registerVisited
+          ? "login"
+          : "register";
+  const isBubbleVisible = (key) => !dismissedBubbles.has(String(key));
+  const handleDismissBubble = (e, key) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dismissGuideBubble(key);
+    setDismissedBubbles(getDismissedGuideBubbles());
+    setExpandedBubble((prev) => (prev === key ? "" : prev));
+  };
+  const handleExpandBubble = (e, key) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpandedBubble((prev) => (prev === key ? "" : key));
+  };
+  const loginGuideText = hasToken
+    ? t({
+        ja: "ログイン済みです",
+        en: "Already logged in",
+      })
+    : t({
+        ja: "まずはログイン",
+        en: "Login first",
+      });
+  const registerGuideText = t({
+    ja: "会員登録はこちら",
+    en: "Register here",
+  });
+  const postGuideText = t({
+    ja: "小説作成はこちら",
+    en: "Create novel here",
+  });
   const POST_LOGIN_REDIRECT_KEY = "post_login_redirect_v1";
   const LOGIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
   const currentLangIndex = Math.max(0, LANGUAGE_ORDER.indexOf(lang));
@@ -234,6 +324,38 @@ export default function App() {
       setExcludeQuery(params.get("exclude") ?? "");
     }
   }, [location.search]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    markGoogleAdsTraffic(location.search);
+  }, [location.search]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (location.pathname !== "/register") return;
+    setRegisterVisited(true);
+    try {
+      localStorage.setItem(GUIDE_REGISTER_VISITED_KEY, "1");
+    } catch {
+      // ignore
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!hasToken || !username) return;
+    try {
+      const raw = localStorage.getItem(GUIDE_LOGGED_IN_USERS_KEY);
+      const parsed = JSON.parse(raw || "[]");
+      const current = Array.isArray(parsed) ? parsed : [];
+      if (!current.includes(username)) {
+        current.push(username);
+        localStorage.setItem(GUIDE_LOGGED_IN_USERS_KEY, JSON.stringify(current));
+      }
+    } catch {
+      localStorage.setItem(GUIDE_LOGGED_IN_USERS_KEY, JSON.stringify([username]));
+    }
+  }, [hasToken, username]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -316,13 +438,6 @@ export default function App() {
     const timer = setInterval(checkLoginStatus, LOGIN_CHECK_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [location.pathname, location.search, location.hash, navigate]);
-
-  const username =
-    typeof window !== "undefined" ? localStorage.getItem("username") : null;
-  const hasToken =
-    typeof window !== "undefined"
-      ? !!(localStorage.getItem("token") || localStorage.getItem("access_token"))
-      : false;
 
   useEffect(() => {
     const token =
@@ -472,9 +587,29 @@ export default function App() {
           </Link>
           <Link
             to="/novels/new"
-            className="nav-link"
+            className={`nav-link ${activeGuideStep === "post" ? "nav-link-with-guide onboarding-guide-anchor" : ""}`.trim()}
             onClick={() => setMenuOpen(false)}
           >
+            {activeGuideStep === "post" && isBubbleVisible("app_post") && (
+              <span
+                className={`onboarding-guide-pop onboarding-guide-pop-below ${expandedBubble === "app_post" ? "is-expanded" : ""}`.trim()}
+                role="note"
+                onClick={(e) => handleExpandBubble(e, "app_post")}
+              >
+                <span className="onboarding-guide-message">{postGuideText}</span>
+                <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "app_post")}>
+                  {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+                </span>
+                <span
+                  className="onboarding-guide-close"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleDismissBubble(e, "app_post")}
+                >
+                  ×
+                </span>
+              </span>
+            )}
             {t(HEADER_I18N.postNovel)}
           </Link>
           <Link
@@ -500,16 +635,56 @@ export default function App() {
           </Link>
           <Link
             to="/login"
-            className="nav-link"
+            className={`nav-link ${activeGuideStep === "login" ? "nav-link-with-guide onboarding-guide-anchor" : ""}`.trim()}
             onClick={() => setMenuOpen(false)}
           >
+            {activeGuideStep === "login" && isBubbleVisible("app_login") && (
+              <span
+                className={`onboarding-guide-pop ${expandedBubble === "app_login" ? "is-expanded" : ""}`.trim()}
+                role="note"
+                onClick={(e) => handleExpandBubble(e, "app_login")}
+              >
+                <span className="onboarding-guide-message">{loginGuideText}</span>
+                <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "app_login")}>
+                  {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+                </span>
+                <span
+                  className="onboarding-guide-close"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleDismissBubble(e, "app_login")}
+                >
+                  ×
+                </span>
+              </span>
+            )}
             {t(HEADER_I18N.login)}
           </Link>
           <Link
             to="/register"
-            className="nav-link nav-link-accent"
+            className={`nav-link nav-link-accent ${activeGuideStep === "register" ? "nav-link-with-guide onboarding-guide-anchor" : ""}`.trim()}
             onClick={() => setMenuOpen(false)}
           >
+            {activeGuideStep === "register" && isBubbleVisible("app_register") && (
+              <span
+                className={`onboarding-guide-pop ${expandedBubble === "app_register" ? "is-expanded" : ""}`.trim()}
+                role="note"
+                onClick={(e) => handleExpandBubble(e, "app_register")}
+              >
+                <span className="onboarding-guide-message">{registerGuideText}</span>
+                <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "app_register")}>
+                  {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+                </span>
+                <span
+                  className="onboarding-guide-close"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleDismissBubble(e, "app_register")}
+                >
+                  ×
+                </span>
+              </span>
+            )}
             {t(HEADER_I18N.register)}
           </Link>
         </nav>
@@ -566,10 +741,30 @@ export default function App() {
           {/* スマホ用ハンバーガー */}
           <button
             type="button"
-            className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""}`}
+            className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""} ${activeGuideStep !== "none" ? "onboarding-guide-anchor onboarding-guide-anchor-right" : ""}`.trim()}
             onClick={() => setMenuOpen((v) => !v)}
             aria-label={t(HEADER_I18N.openMenu)}
           >
+            {activeGuideStep !== "none" && isBubbleVisible("app_menu") && (
+              <span
+                className={`onboarding-guide-pop onboarding-guide-pop-right ${expandedBubble === "app_menu" ? "is-expanded" : ""}`.trim()}
+                role="note"
+                onClick={(e) => handleExpandBubble(e, "app_menu")}
+              >
+                <span className="onboarding-guide-message">{t({ ja: "ここをタップ", en: "Tap here" })}</span>
+                <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "app_menu")}>
+                  {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+                </span>
+                <span
+                  className="onboarding-guide-close"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleDismissBubble(e, "app_menu")}
+                >
+                  ×
+                </span>
+              </span>
+            )}
             <span />
             <span />
             <span />

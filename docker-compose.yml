@@ -34,6 +34,7 @@ services:
       DB_USER: ${MYSQL_USER}
       DB_PASS: ${MYSQL_PASSWORD}
       DB_NAME: ${MYSQL_DATABASE}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
 
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
 
@@ -122,8 +123,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
       weaviate:
         condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    container_name: novel-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
 
   nginx:
     image: nginx:1.27-alpine
@@ -171,3 +182,4 @@ services:
 volumes:
   db-data:
   weaviate_data:
+  redis_data:

@@ -17,11 +17,15 @@ import io
 import unicodedata
 from datetime import date, datetime, timedelta
 from functools import lru_cache
-from typing import Optional, List, Callable, Awaitable, Literal
+from typing import Optional, List, Callable, Awaitable, Literal, Any
 
 import jwt
 import stripe
 import httpx
+try:
+    import redis  # type: ignore
+except Exception:
+    redis = None  # type: ignore
 try:
     from janome.tokenizer import Tokenizer  # type: ignore
 except Exception:
@@ -205,6 +209,351 @@ def apply_novel_daily_metric(
             "favorite_delta": favorite_delta,
         },
     )
+
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+REDIS_CACHE_ENABLED = (os.getenv("REDIS_CACHE_ENABLED", "1") or "1").strip() == "1"
+REDIS_METRICS_FLUSH_ENABLED = (os.getenv("REDIS_METRICS_FLUSH_ENABLED", "1") or "1").strip() == "1"
+REDIS_METRICS_FLUSH_INTERVAL_SEC = max(
+    5, int(os.getenv("REDIS_METRICS_FLUSH_INTERVAL_SEC", "60") or "60")
+)
+REDIS_USER_CACHE_TTL_SEC = max(60, int(os.getenv("REDIS_USER_CACHE_TTL_SEC", "600") or "600"))
+REDIS_PUBLIC_LIST_CACHE_TTL_SEC = max(
+    10, int(os.getenv("REDIS_PUBLIC_LIST_CACHE_TTL_SEC", "60") or "60")
+)
+REDIS_RANKING_CACHE_TTL_SEC = max(
+    10, int(os.getenv("REDIS_RANKING_CACHE_TTL_SEC", "30") or "30")
+)
+REDIS_PUBLIC_USER_CACHE_TTL_SEC = max(
+    60, int(os.getenv("REDIS_PUBLIC_USER_CACHE_TTL_SEC", "600") or "600")
+)
+
+_redis_client = None
+_redis_metrics_flusher_started = False
+_redis_metrics_flusher_lock = threading.Lock()
+
+
+def _redis_logger() -> logging.Logger:
+    return logging.getLogger("uvicorn.error")
+
+
+def get_redis_client():
+    global _redis_client
+    if not REDIS_CACHE_ENABLED or redis is None:
+        return None
+    if _redis_client is not None:
+        return _redis_client
+    try:
+        _redis_client = redis.Redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+        _redis_client.ping()
+        return _redis_client
+    except Exception as e:
+        _redis_logger().warning("redis init failed: %r", e)
+        _redis_client = None
+        return None
+
+
+def _json_default(value: Any):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def redis_json_get(key: str):
+    client = get_redis_client()
+    if not client:
+        return None
+    try:
+        raw = client.get(key)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def redis_json_set(key: str, value: Any, ttl_sec: int) -> None:
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        client.setex(
+            key,
+            int(max(1, ttl_sec)),
+            json.dumps(value, ensure_ascii=False, default=_json_default),
+        )
+    except Exception:
+        return
+
+
+def redis_delete(*keys: str) -> None:
+    client = get_redis_client()
+    if not client:
+        return
+    target = [k for k in keys if k]
+    if not target:
+        return
+    try:
+        client.delete(*target)
+    except Exception:
+        return
+
+
+def redis_delete_pattern(pattern: str, batch_size: int = 200) -> None:
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        buf: list[str] = []
+        for key in client.scan_iter(match=pattern, count=batch_size):
+            buf.append(str(key))
+            if len(buf) >= batch_size:
+                client.delete(*buf)
+                buf = []
+        if buf:
+            client.delete(*buf)
+    except Exception:
+        return
+
+
+def _cache_key_user(user_id: int) -> str:
+    return f"user:{int(user_id)}"
+
+
+def _cache_key_user_by_name(username: str) -> str:
+    return f"user_by_name:{(username or '').strip().lower()}"
+
+
+def _cache_key_user_profile(user_id: int) -> str:
+    return f"user_profile:{int(user_id)}"
+
+
+def _build_user_cache_payload(user: models.User) -> dict[str, Any]:
+    return {
+        "id": int(user.id),
+        "username": str(user.username or ""),
+        "email": user.email,
+        "birth_date": user.birth_date.isoformat() if user.birth_date else None,
+        "is_premium": bool(is_effective_premium_user(user)),
+        "email_notifications_enabled": bool(
+            getattr(user, "email_notifications_enabled", True)
+        ),
+    }
+
+
+def cache_user_payload(user: models.User) -> dict[str, Any]:
+    payload = _build_user_cache_payload(user)
+    redis_json_set(_cache_key_user(int(user.id)), payload, REDIS_USER_CACHE_TTL_SEC)
+    redis_json_set(_cache_key_user_profile(int(user.id)), payload, REDIS_USER_CACHE_TTL_SEC)
+    uname = str(getattr(user, "username", "") or "").strip()
+    if uname:
+        redis_json_set(
+            _cache_key_user_by_name(uname),
+            {"id": int(user.id), "username": uname},
+            REDIS_USER_CACHE_TTL_SEC,
+        )
+    return payload
+
+
+def invalidate_public_list_caches() -> None:
+    redis_delete_pattern("cache:public:novels:*")
+    redis_delete_pattern("cache:public:ranking:*")
+    redis_delete_pattern("cache:public:user_profile:*")
+    redis_delete_pattern("cache:public:user_novels:*")
+    redis_delete_pattern("cache:public:user_favorites:*")
+
+
+def invalidate_user_cache(
+    user_id: int | None = None,
+    username: str | None = None,
+    old_username: str | None = None,
+) -> None:
+    keys: list[str] = []
+    if user_id:
+        keys.extend([_cache_key_user(int(user_id)), _cache_key_user_profile(int(user_id))])
+    if username:
+        keys.append(_cache_key_user_by_name(username))
+    if old_username:
+        keys.append(_cache_key_user_by_name(old_username))
+    redis_delete(*keys)
+    invalidate_public_list_caches()
+
+
+def build_public_cache_key(namespace: str, payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+    return f"cache:public:{namespace}:{digest}"
+
+
+def enqueue_counter_delta(key: str, delta: int = 1) -> None:
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        if delta == 1:
+            client.incr(key)
+        else:
+            client.incrby(key, int(delta))
+    except Exception:
+        return
+
+
+def enqueue_novel_view(novel_id: int) -> None:
+    enqueue_counter_delta(f"counter:novel:view:{int(novel_id)}", 1)
+
+
+def enqueue_episode_view(episode_id: int) -> None:
+    enqueue_counter_delta(f"counter:episode:view:{int(episode_id)}", 1)
+
+
+def enqueue_novel_like_delta(novel_id: int, delta: int) -> None:
+    if delta == 0:
+        return
+    enqueue_counter_delta(f"counter:novel:like:{int(novel_id)}", delta)
+
+
+def enqueue_episode_like_delta(episode_id: int, delta: int) -> None:
+    if delta == 0:
+        return
+    enqueue_counter_delta(f"counter:episode:like:{int(episode_id)}", delta)
+
+
+def _drain_counter_map(prefix: str) -> dict[int, int]:
+    client = get_redis_client()
+    if not client:
+        return {}
+    acc: dict[int, int] = {}
+    pattern = f"counter:{prefix}:*"
+    for key in client.scan_iter(match=pattern, count=200):
+        raw = None
+        try:
+            raw = client.execute_command("GETDEL", key)
+        except Exception:
+            try:
+                raw = client.get(key)
+                if raw is not None:
+                    client.delete(key)
+            except Exception:
+                raw = None
+        if raw is None:
+            continue
+        try:
+            delta = int(raw)
+            target_id = int(str(key).rsplit(":", 1)[-1])
+        except Exception:
+            continue
+        if delta == 0:
+            continue
+        acc[target_id] = int(acc.get(target_id, 0)) + delta
+    return acc
+
+
+def flush_redis_counters_once() -> dict[str, int]:
+    if not get_redis_client():
+        return {"novel_views": 0, "novel_likes": 0, "episode_views": 0, "episode_likes": 0}
+
+    novel_views = _drain_counter_map("novel:view")
+    novel_likes = _drain_counter_map("novel:like")
+    episode_views = _drain_counter_map("episode:view")
+    episode_likes = _drain_counter_map("episode:like")
+    if not novel_views and not novel_likes and not episode_views and not episode_likes:
+        return {"novel_views": 0, "novel_likes": 0, "episode_views": 0, "episode_likes": 0}
+
+    db = SessionLocal()
+    try:
+        for novel_id, delta in novel_views.items():
+            db.execute(
+                text(
+                    "UPDATE novels "
+                    "SET view_count = GREATEST(0, COALESCE(view_count, 0) + :delta), updated_at = NOW() "
+                    "WHERE id = :novel_id"
+                ),
+                {"novel_id": novel_id, "delta": int(delta)},
+            )
+            apply_novel_daily_metric(db, novel_id, view_delta=int(delta))
+        for novel_id, delta in novel_likes.items():
+            db.execute(
+                text(
+                    "UPDATE novels "
+                    "SET like_count = GREATEST(0, COALESCE(like_count, 0) + :delta), updated_at = NOW() "
+                    "WHERE id = :novel_id"
+                ),
+                {"novel_id": novel_id, "delta": int(delta)},
+            )
+            apply_novel_daily_metric(db, novel_id, like_delta=int(delta))
+        for episode_id, delta in episode_views.items():
+            db.execute(
+                text(
+                    "UPDATE episodes "
+                    "SET view_count = GREATEST(0, COALESCE(view_count, 0) + :delta), updated_at = NOW() "
+                    "WHERE id = :episode_id"
+                ),
+                {"episode_id": episode_id, "delta": int(delta)},
+            )
+        for episode_id, delta in episode_likes.items():
+            db.execute(
+                text(
+                    "UPDATE episodes "
+                    "SET like_count = GREATEST(0, COALESCE(like_count, 0) + :delta), updated_at = NOW() "
+                    "WHERE id = :episode_id"
+                ),
+                {"episode_id": episode_id, "delta": int(delta)},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        for novel_id, delta in novel_views.items():
+            enqueue_counter_delta(f"counter:novel:view:{novel_id}", int(delta))
+        for novel_id, delta in novel_likes.items():
+            enqueue_novel_like_delta(novel_id, int(delta))
+        for episode_id, delta in episode_views.items():
+            enqueue_counter_delta(f"counter:episode:view:{episode_id}", int(delta))
+        for episode_id, delta in episode_likes.items():
+            enqueue_episode_like_delta(episode_id, int(delta))
+        raise
+    finally:
+        db.close()
+
+    return {
+        "novel_views": len(novel_views),
+        "novel_likes": len(novel_likes),
+        "episode_views": len(episode_views),
+        "episode_likes": len(episode_likes),
+    }
+
+
+def _redis_metrics_flush_loop() -> None:
+    while True:
+        try:
+            flush_redis_counters_once()
+        except Exception as e:
+            _redis_logger().warning("redis metrics flush failed: %r", e)
+        time.sleep(REDIS_METRICS_FLUSH_INTERVAL_SEC)
+
+
+def _start_redis_metrics_flusher_if_enabled() -> None:
+    global _redis_metrics_flusher_started
+    if not REDIS_METRICS_FLUSH_ENABLED:
+        return
+    if not get_redis_client():
+        return
+    if _redis_metrics_flusher_started:
+        return
+    with _redis_metrics_flusher_lock:
+        if _redis_metrics_flusher_started:
+            return
+        th = threading.Thread(
+            target=_redis_metrics_flush_loop,
+            name="redis-metrics-flush",
+            daemon=True,
+        )
+        th.start()
+        _redis_metrics_flusher_started = True
 
 def ensure_users_table_columns():
     """
@@ -860,6 +1209,8 @@ def on_startup() -> None:
     ensure_all_tables_exist()
     os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
     os.makedirs(AI_CHAT_CHARACTER_IMAGE_DIR, exist_ok=True)
+    get_redis_client()
+    _start_redis_metrics_flusher_if_enabled()
     _start_daily_translation_bot_if_enabled()
     _start_monthly_stripe_premium_sync_if_enabled()
     _start_ui_i18n_watchdog_if_enabled()
@@ -2503,6 +2854,44 @@ def verify_premium_with_stripe(user: models.User) -> tuple[bool, str | None, str
     return False, None, None
 
 
+def cancel_stripe_subscription_for_admin_delete(subscription_id: str | None) -> bool:
+    """
+    管理者によるユーザー削除時に Stripe サブスクを解約する。
+    - 可能なら即時解約（delete）
+    - 失敗時は期間満了で解約（cancel_at_period_end）を試みる
+    """
+    sid = str(subscription_id or "").strip()
+    if not sid:
+        return False
+    if not STRIPE_SECRET_KEY:
+        print(f"[stripe] admin delete: STRIPE_SECRET_KEY missing, skip cancel sid={sid}")
+        return False
+
+    try:
+        sub = stripe.Subscription.retrieve(sid)
+        status = str(_stripe_obj_get(sub, "status") or "").strip().lower()
+        if status == "canceled":
+            print(f"[stripe] admin delete: already canceled sid={sid}")
+            return True
+    except Exception as e:
+        print(f"[stripe] admin delete: retrieve failed sid={sid} err={e!r}")
+
+    try:
+        stripe.Subscription.delete(sid)
+        print(f"[stripe] admin delete: canceled immediately sid={sid}")
+        return True
+    except Exception as e:
+        print(f"[stripe] admin delete: immediate cancel failed sid={sid} err={e!r}")
+
+    try:
+        stripe.Subscription.modify(sid, cancel_at_period_end=True)
+        print(f"[stripe] admin delete: set cancel_at_period_end sid={sid}")
+        return True
+    except Exception as e:
+        print(f"[stripe] admin delete: cancel_at_period_end failed sid={sid} err={e!r}")
+        return False
+
+
 def _is_force_premium_username(username: str | None) -> bool:
     uname = str(username or "").strip().lower()
     return bool(uname) and uname in FORCE_PREMIUM_USERNAMES
@@ -2559,6 +2948,8 @@ def revalidate_premium_on_login(user: models.User, db: Session) -> None:
     user.is_premium = bool(active)
     db.add(user)
     db.commit()
+    invalidate_user_cache(user_id=user.id, username=user.username)
+    cache_user_payload(user)
 
 
 def create_admin_token(username: str) -> str:
@@ -2790,7 +3181,24 @@ def set_episode_number(ep: models.Episode, val: int):
 
 
 def get_user_by_username(db: Session, username: str):
-    return db.query(models.User).filter(models.User.username == username).first()
+    uname = (username or "").strip()
+    if not uname:
+        return None
+    cached = redis_json_get(_cache_key_user_by_name(uname))
+    if isinstance(cached, dict):
+        try:
+            cached_id = int(cached.get("id") or 0)
+        except Exception:
+            cached_id = 0
+        if cached_id > 0:
+            user = db.query(models.User).get(cached_id)
+            if user:
+                cache_user_payload(user)
+                return user
+    user = db.query(models.User).filter(models.User.username == uname).first()
+    if user:
+        cache_user_payload(user)
+    return user
 
 
 def normalize_dm_pair(user_id: int, target_id: int) -> tuple[int, int]:
@@ -2815,6 +3223,21 @@ def require_current_user(request: Request, db: Session) -> models.User:
     if not user:
         raise HTTPException(401, "ユーザーが存在しません")
     return user
+
+
+def _read_token_user_id(request: Request) -> int:
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise HTTPException(401, "認証が必要です")
+    token = auth.split()[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        uid = int(payload.get("sub"))
+    except Exception:
+        raise HTTPException(401, "トークンが不正です")
+    if uid <= 0:
+        raise HTTPException(401, "トークンが不正です")
+    return uid
 
 def get_current_user(
     request: Request,
@@ -3421,6 +3844,7 @@ def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    cache_user_payload(user)
 
     token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token)
@@ -3433,6 +3857,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
 
     revalidate_premium_on_login(user, db)
+    cache_user_payload(user)
     token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token)
 
@@ -4319,6 +4744,30 @@ def admin_delete_user(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(404, "ユーザーが存在しません")
+    deleted_username = str(user.username or "")
+
+    # Stripe の継続課金は先に解約を試みる（失敗しても削除処理は継続）。
+    subscription_ids: set[str] = set()
+    user_sub_id = str(getattr(user, "stripe_subscription_id", "") or "").strip()
+    if user_sub_id:
+        subscription_ids.add(user_sub_id)
+    membership_sub_ids = (
+        db.query(models.Membership.stripe_subscription_id)
+        .filter(
+            or_(
+                models.Membership.supporter_user_id == user_id,
+                models.Membership.author_user_id == user_id,
+            )
+        )
+        .all()
+    )
+    for (sid,) in membership_sub_ids:
+        normalized = str(sid or "").strip()
+        if normalized:
+            subscription_ids.add(normalized)
+
+    for sid in sorted(subscription_ids):
+        cancel_stripe_subscription_for_admin_delete(sid)
 
     db.execute(
         text("DELETE FROM notifications WHERE user_id = :uid OR actor_user_id = :uid"),
@@ -4450,7 +4899,7 @@ def admin_delete_user(
     db.execute(text("DELETE FROM mobile_push_tokens WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
     db.commit()
-    return AdminUserDeleteOut(ok=True, user_id=user_id, username=user.username)
+    return AdminUserDeleteOut(ok=True, user_id=user_id, username=deleted_username)
 
 
 @app.post("/api/admin/translations/backfill")
@@ -5658,6 +6107,8 @@ async def stripe_webhook(
         user.premium_checked_at = datetime.utcnow()
         db.add(user)
         db.commit()
+        invalidate_user_cache(user_id=user.id, username=user.username)
+        cache_user_payload(user)
         print(f"[stripe] checkout.session.completed: user_id={user.id} → is_premium=True")
 
     elif event_type in (
@@ -5674,6 +6125,8 @@ async def stripe_webhook(
         user.premium_checked_at = datetime.utcnow()
         db.add(user)
         db.commit()
+        invalidate_user_cache(user_id=user.id, username=user.username)
+        cache_user_payload(user)
         print(f"[stripe] {event_type}: user_id={user.id} → is_premium=False")
     else:
         print(f"[stripe] unhandled event type: {event_type}")
@@ -12959,6 +13412,7 @@ def create_novel(
 
     if bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
+    invalidate_public_list_caches()
     return novel
 
 
@@ -13152,6 +13606,7 @@ def update_novel(
     db.refresh(novel)
     if (not was_public) and bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
+    invalidate_public_list_caches()
     return novel
 
 
@@ -13255,6 +13710,7 @@ def delete_novel(
         {"nid": novel_id, "site_key": site_key},
     )
     db.commit()
+    invalidate_public_list_caches()
     return {"ok": True}
 
 
@@ -13400,11 +13856,9 @@ def get_novel_detail(
         if not user or novel.author_id != user.id:
             raise HTTPException(404, "小説が存在しません")
 
-    # 閲覧数カウント
+    # 閲覧数は Redis に集計し、DB 反映はバッチで実施
     novel.view_count = (novel.view_count or 0) + 1
-    apply_novel_daily_metric(db, novel.id, view_delta=1)
-    db.commit()
-    db.refresh(novel)
+    enqueue_novel_view(novel.id)
 
     # --- 年齢制限チェック（R15/R18） ---
     if not AGE_RESTRICTION_DISABLED and novel.age_limit in ("r15", "r18"):
@@ -13588,6 +14042,22 @@ def list_public_novels(
     user_age = None
     if user and user.birth_date:
         user_age = calc_age(user.birth_date)
+    cache_key = build_public_cache_key(
+        "novels",
+        {
+            "site_key": site_key,
+            "q": (q or "").strip(),
+            "exclude": (exclude or "").strip(),
+            "tag": (tag or "").strip(),
+            "lang": target_language or "",
+            "user_id": int(user.id) if user else 0,
+            "user_age": user_age if user_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
 
     query = (
         db.query(models.Novel)
@@ -13778,7 +14248,6 @@ def list_public_novels(
         )
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
-    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     translated_cards = _resolve_public_novel_card_translations(
         db,
         novels=novels,
@@ -13831,6 +14300,7 @@ def list_public_novels(
                 "cover_image_url": cover_map.get(novel.id),
             }
         )
+    redis_json_set(cache_key, result, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
     return result
 
 
@@ -14031,6 +14501,25 @@ def list_public_novel_rankings(
     user_age = None
     if user and user.birth_date:
         user_age = calc_age(user.birth_date)
+    cache_key = build_public_cache_key(
+        "ranking",
+        {
+            "site_key": site_key,
+            "sort": sort,
+            "limit": int(limit),
+            "q": (q or "").strip(),
+            "exclude": (exclude or "").strip(),
+            "tag": (tag or "").strip(),
+            "lang": target_language or "",
+            "user_id": int(user.id) if user else 0,
+            "user_age": user_age if user_age is not None else -1,
+            "force_all_premium": int(FORCE_ALL_PREMIUM),
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
 
     query = (
         db.query(models.Novel)
@@ -14291,6 +14780,7 @@ def list_public_novel_rankings(
                 ],
             }
         )
+    redis_json_set(cache_key, result, REDIS_RANKING_CACHE_TTL_SEC)
     return result
 
 
@@ -14302,16 +14792,22 @@ def read_public_user(username: str, db: Session = Depends(get_db)):
     uname = (username or "").strip()
     if not uname:
         raise HTTPException(404, "ユーザーが存在しません")
+    cache_key = build_public_cache_key("user_profile", {"username": uname.lower()})
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, dict):
+        return cached
 
     user = get_user_by_username(db, uname)
     if not user:
         raise HTTPException(404, "ユーザーが存在しません")
 
-    return {
+    payload = {
         "id": user.id,
         "username": user.username,
         "is_premium": is_effective_premium_user(user),
     }
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_USER_CACHE_TTL_SEC)
+    return payload
 
 
 # =========================================
@@ -14341,6 +14837,18 @@ def list_public_user_novels(
     viewer_age = None
     if viewer and getattr(viewer, "birth_date", None):
         viewer_age = calc_age(viewer.birth_date)
+    cache_key = build_public_cache_key(
+        "user_novels",
+        {
+            "site_key": site_key,
+            "username": uname.lower(),
+            "viewer_age": viewer_age if viewer_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
 
     q = (
         db.query(models.Novel)
@@ -14392,7 +14900,7 @@ def list_public_user_novels(
             if novel_id not in cover_map and cover_url:
                 cover_map[novel_id] = cover_url
 
-    return [
+    payload = [
         {
             "id": novel.id,
             "title": novel.title,
@@ -14418,6 +14926,8 @@ def list_public_user_novels(
         }
         for novel in novels
     ]
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload
 
 
 # =========================================
@@ -14447,6 +14957,18 @@ def list_public_user_favorites(
     viewer_age = None
     if viewer and getattr(viewer, "birth_date", None):
         viewer_age = calc_age(viewer.birth_date)
+    cache_key = build_public_cache_key(
+        "user_favorites",
+        {
+            "site_key": site_key,
+            "username": uname.lower(),
+            "viewer_age": viewer_age if viewer_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
 
     q = (
         db.query(models.Novel)
@@ -14501,7 +15023,7 @@ def list_public_user_favorites(
             if novel_id not in cover_map and cover_url:
                 cover_map[novel_id] = cover_url
 
-    return [
+    payload = [
         {
             "id": n.id,
             "title": n.title,
@@ -14527,6 +15049,8 @@ def list_public_user_favorites(
         }
         for n in favorites
     ]
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload
 
 
 # =========================================
@@ -15594,10 +16118,9 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         if not user or (novel and novel.author_id != user.id):
             raise HTTPException(404, "エピソードが存在しません")
 
-    # 閲覧数を誰でもカウント
+    # 閲覧数は Redis に集計し、DB 反映はバッチで実施
     ep.view_count = (ep.view_count or 0) + 1
-    db.add(ep)
-    db.commit()
+    enqueue_episode_view(ep.id)
 
     # 年齢チェック
     if not AGE_RESTRICTION_DISABLED and novel.age_limit in ("r15", "r18"):
@@ -16862,6 +17385,7 @@ def login_verify(payload: LoginVerify, db: Session = Depends(get_db)):
     db.commit()
 
     revalidate_premium_on_login(user, db)
+    cache_user_payload(user)
     access_token = create_access_token({"sub": str(user.id)})
     return Token(access_token=access_token)
 
@@ -16888,18 +17412,21 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     )
     if existing:
         # 既にいいね済みなら何もしない（冪等）
+        like_count = (
+            db.query(models.NovelLike)
+            .filter(models.NovelLike.novel_id == novel.id)
+            .count()
+        )
         return {
             "ok": True,
             "liked": True,
-            "like_count": novel.like_count or 0,
+            "like_count": like_count,
         }
 
     like = models.NovelLike(novel_id=novel_id, user_id=user.id)
     db.add(like)
 
-    novel.like_count = (novel.like_count or 0) + 1
-    db.add(novel)
-    apply_novel_daily_metric(db, novel.id, like_delta=1)
+    enqueue_novel_like_delta(novel.id, 1)
 
     if novel.author_id != user.id:
         title = "小説にいいねが付きました"
@@ -16915,7 +17442,12 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
         )
 
     db.commit()
-    db.refresh(novel)
+    invalidate_public_list_caches()
+    like_count = (
+        db.query(models.NovelLike)
+        .filter(models.NovelLike.novel_id == novel.id)
+        .count()
+    )
     if novel.author_id != user.id:
         try:
             send_web_push_to_user(
@@ -16939,7 +17471,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     return {
         "ok": True,
         "liked": True,
-        "like_count": novel.like_count,
+        "like_count": like_count,
     }
 
 
@@ -16963,27 +17495,31 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
     )
     if not existing:
         # もともといいねしていなければ何もしない（冪等）
+        like_count = (
+            db.query(models.NovelLike)
+            .filter(models.NovelLike.novel_id == novel.id)
+            .count()
+        )
         return {
             "ok": True,
             "liked": False,
-            "like_count": novel.like_count or 0,
+            "like_count": like_count,
         }
 
     db.delete(existing)
-
-    if novel.like_count is None:
-        novel.like_count = 0
-    else:
-        novel.like_count = max(0, novel.like_count - 1)
-
-    db.add(novel)
+    enqueue_novel_like_delta(novel.id, -1)
     db.commit()
-    db.refresh(novel)
+    invalidate_public_list_caches()
+    like_count = (
+        db.query(models.NovelLike)
+        .filter(models.NovelLike.novel_id == novel.id)
+        .count()
+    )
 
     return {
         "ok": True,
         "liked": False,
-        "like_count": novel.like_count,
+        "like_count": like_count,
     }
 
 # =========================================
@@ -17023,10 +17559,7 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
     like = models.EpisodeLike(episode_id=episode_id, user_id=user.id)
     db.add(like)
 
-    # 集計カラムもインクリメント（あれば）
-    if hasattr(ep, "like_count"):
-        ep.like_count = (ep.like_count or 0) + 1
-        db.add(ep)
+    enqueue_episode_like_delta(ep.id, 1)
 
     if novel and novel.author_id != user.id:
         title = "エピソードにいいねが付きました"
@@ -17042,6 +17575,7 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
         )
 
     db.commit()
+    invalidate_public_list_caches()
 
     like_count = (
         db.query(models.EpisodeLike)
@@ -17101,12 +17635,9 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
 
     db.delete(like)
 
-    # 集計カラムもデクリメント（0 未満にはしない）
-    if hasattr(ep, "like_count"):
-        ep.like_count = max(0, (ep.like_count or 0) - 1)
-        db.add(ep)
-
+    enqueue_episode_like_delta(ep.id, -1)
     db.commit()
+    invalidate_public_list_caches()
 
     like_count = (
         db.query(models.EpisodeLike)
@@ -17400,17 +17931,20 @@ def read_my_novel_analytics(
 # ============================
 @app.get("/api/users/me")
 def read_profile(request: Request, db: Session = Depends(get_db)):
-    user = require_current_user(request, db)
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "birth_date": str(user.birth_date) if user.birth_date else None,
-        "is_premium": is_effective_premium_user(user),
-        "email_notifications_enabled": bool(
-            getattr(user, "email_notifications_enabled", True)
-        ),
-    }
+    uid = _read_token_user_id(request)
+    cached = redis_json_get(_cache_key_user_profile(uid))
+    if isinstance(cached, dict):
+        return cached
+    user = db.query(models.User).get(uid)
+    if not user:
+        raise HTTPException(401, "ユーザーが存在しません")
+    payload = cache_user_payload(user)
+    return payload
+
+
+@app.get("/api/me")
+def read_me(request: Request, db: Session = Depends(get_db)):
+    return read_profile(request, db)
 
 # ============================
 # ユーザープロフィール更新
@@ -17422,6 +17956,7 @@ def update_profile(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
+    old_username = str(user.username or "")
 
     if payload.username is not None:
         new_username = payload.username.strip()
@@ -17452,17 +17987,12 @@ def update_profile(
     db.add(user)
     db.commit()
     db.refresh(user)
-
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "birth_date": str(user.birth_date) if user.birth_date else None,
-        "is_premium": is_effective_premium_user(user),
-        "email_notifications_enabled": bool(
-            getattr(user, "email_notifications_enabled", True)
-        ),
-    }
+    invalidate_user_cache(
+        user_id=user.id,
+        username=user.username,
+        old_username=old_username if old_username != user.username else None,
+    )
+    return cache_user_payload(user)
 
 
 # ============================
@@ -17779,6 +18309,7 @@ def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db
             actor_user_id=user.id,
         )
     db.commit()
+    invalidate_public_list_caches()
     if novel.author_id and novel.author_id != user.id:
         try:
             send_web_push_to_user(
@@ -17805,6 +18336,7 @@ def unfavorite_novel(novel_id: int, request: Request, db: Session = Depends(get_
         return {"ok": True, "favorited": False}
     db.delete(fav)
     db.commit()
+    invalidate_public_list_caches()
     return {"ok": True, "favorited": False}
 
 @app.delete("/api/novels/{novel_id}/comments/{comment_id}")

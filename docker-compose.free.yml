@@ -2,3 +2,4 @@ services:
   backend:
     environment:
       FORCE_ALL_PREMIUM: "1"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

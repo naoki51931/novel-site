@@ -5,9 +5,15 @@ import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
 import { getApiBase } from "../lib/apiBase";
+import {
+  dismissGuideBubble,
+  getDismissedGuideBubbles,
+  isOnboardingGuideEligible,
+} from "../lib/onboardingGuide";
 
 const API_BASE = getApiBase();
 const TRANSLATABLE_LANGS = new Set(["en", "zh-cn", "zh-tw", "ko"]);
+const GUIDE_CREATED_NOVEL_ID_KEY = "onboarding_created_novel_id_v1";
 
 export default function NovelDetail() {
   const { id } = useParams(); // novel_id
@@ -25,6 +31,8 @@ export default function NovelDetail() {
   const [isFavorited, setIsFavorited] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
+  const [expandedBubble, setExpandedBubble] = useState("");
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
@@ -491,6 +499,14 @@ export default function NovelDetail() {
   // ★ エピソード削除ボタン
   // ★ 新規エピソード作成ボタン
   const handleCreateEpisode = () => {
+    try {
+      const guidedNovelId = localStorage.getItem(GUIDE_CREATED_NOVEL_ID_KEY);
+      if (guidedNovelId && String(guidedNovelId) === String(id)) {
+        localStorage.removeItem(GUIDE_CREATED_NOVEL_ID_KEY);
+      }
+    } catch {
+      // ignore
+    }
     navigate(`/novels/${id}/episodes/new`);
   };
 
@@ -670,6 +686,30 @@ export default function NovelDetail() {
 
   const episodes = Array.isArray(novel.episodes) ? novel.episodes : [];
   const tags = getNovelTags(novel, episodes);
+  const canShowGuides = isOnboardingGuideEligible();
+  const isBubbleVisible = (key) => !dismissedBubbles.has(String(key));
+  const handleDismissBubble = (e, key) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dismissGuideBubble(key);
+    setDismissedBubbles(getDismissedGuideBubbles());
+    setExpandedBubble((prev) => (prev === key ? "" : prev));
+  };
+  const showEpisodeGuide = (() => {
+    if (!canShowGuides) return false;
+    if (!myUserId || myUserId !== novel?.author_id) return false;
+    if (episodes.length > 0) return false;
+    try {
+      const guidedNovelId = localStorage.getItem(GUIDE_CREATED_NOVEL_ID_KEY);
+      return (
+        Boolean(guidedNovelId) &&
+        String(guidedNovelId) === String(novel?.id) &&
+        isBubbleVisible("noveldetail_episode")
+      );
+    } catch {
+      return false;
+    }
+  })();
   const coverImageUrl =
     novel.cover_image_url ||
     episodes.find((ep) => ep.cover_image_url)?.cover_image_url ||
@@ -874,9 +914,33 @@ export default function NovelDetail() {
       <div style={{ marginTop: 8, marginBottom: 8 }}>
         <button
           type="button"
-          className="btn btn-border"
+          className={`btn btn-border ${showEpisodeGuide ? "onboarding-guide-anchor" : ""}`.trim()}
           onClick={handleCreateEpisode}
         >
+          {showEpisodeGuide && (
+            <span
+              className={`onboarding-guide-pop ${expandedBubble === "noveldetail_episode" ? "is-expanded" : ""}`.trim()}
+              role="note"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setExpandedBubble((prev) => (prev === "noveldetail_episode" ? "" : "noveldetail_episode"));
+              }}
+            >
+              <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "noveldetail_episode")}>
+                {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+              </span>
+              <span
+                className="onboarding-guide-close"
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleDismissBubble(e, "noveldetail_episode")}
+              >
+                ×
+              </span>
+              <span>{t({ ja: "次はエピソード作成", en: "Next: create episode" })}</span>
+            </span>
+          )}
           {t({ ja: "＋ エピソードを追加", en: "+ Add episode" })}
         </button>
       </div>
