@@ -125,9 +125,16 @@ function parseGeneratedImageMessageContent(rawContent) {
       })
       .filter(Boolean);
     if (!images.length) return null;
+    const kind = String(parsed?.kind || "generated_images").trim() || "generated_images";
+    const rawDescriptions = Array.isArray(parsed?.meta?.descriptions) ? parsed.meta.descriptions : [];
+    const descriptions = rawDescriptions
+      .map((d) => String(d || "").trim())
+      .filter(Boolean);
     return {
       images,
       prompt: String(parsed?.prompt || "").trim(),
+      kind,
+      descriptions,
     };
   } catch {
     return null;
@@ -432,6 +439,8 @@ export default function AiChatPage() {
   const [imagePromptDraft, setImagePromptDraft] = useState("");
   const [imageNegativePromptDraft, setImageNegativePromptDraft] = useState("");
   const [imageGenerating, setImageGenerating] = useState(false);
+  const [chatImageFiles, setChatImageFiles] = useState([]);
+  const [chatImageUploading, setChatImageUploading] = useState(false);
   const [relationshipMemoHistory, setRelationshipMemoHistory] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -450,6 +459,7 @@ export default function AiChatPage() {
   });
   const fanficCacheRef = useRef(new Map());
   const lastImportedPublicCharacterKeyRef = useRef("");
+  const chatImageInputRef = useRef(null);
   const visibleAiModels = useMemo(
     () => (recommendedModelsOnly ? AI_MODELS.filter((m) => RECOMMENDED_MODEL_VALUES.has(m.value)) : AI_MODELS),
     [recommendedModelsOnly]
@@ -1050,14 +1060,120 @@ export default function AiChatPage() {
     }
   };
 
+  const uploadAdditionalChatImages = async () => {
+    if (!Array.isArray(chatImageFiles) || chatImageFiles.length === 0) return;
+    if (!writableSelectedCharacterId) {
+      setError(
+        t({
+          ja: "画像を貼るには、まず編集可能なキャラを選択してください。",
+          en: "Select an editable character before attaching images.",
+        })
+      );
+      return;
+    }
+    const token = getStoredAuthToken();
+    if (!token) {
+      setError(t({ ja: "ログインが必要です。", en: "Login required." }));
+      return;
+    }
+
+    setChatImageUploading(true);
+    setError("");
+    try {
+      const formData = new FormData();
+      chatImageFiles.forEach((file) => {
+        formData.append("files", file);
+      });
+      const res = await fetch(
+        `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/images`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t({ ja: "画像アップロードに失敗しました。", en: "Failed to upload images." })
+        );
+      }
+      const images = Array.isArray(data?.images)
+        ? data.images
+            .map((item) => {
+              if (!item || typeof item !== "object") return null;
+              const url = String(item.url || "").trim();
+              if (!url) return null;
+              return {
+                url,
+                filename: String(item.filename || "").trim(),
+              };
+            })
+            .filter(Boolean)
+        : [];
+      const descriptions = Array.isArray(data?.descriptions)
+        ? data.descriptions.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (!images.length) {
+        throw new Error(
+          t({ ja: "アップロード画像のURLを取得できませんでした。", en: "No uploaded image URL returned." })
+        );
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: data?.message_id != null ? Number(data.message_id) : null,
+          role: "user",
+          mode: "say",
+          is_auto_dialogue: false,
+          is_generated_image: true,
+          image_message_kind: "uploaded_images",
+          content: t({ ja: "画像を追加しました。", en: "Added images." }),
+          speaker_name: String(userSpeakerProfile?.name || characterName || "").trim(),
+          generated_images: images,
+          image_descriptions: descriptions,
+        },
+      ]);
+      setChatImageFiles([]);
+      if (chatImageInputRef.current) {
+        chatImageInputRef.current.value = "";
+      }
+    } catch (e) {
+      setError(
+        e?.message ||
+          t({ ja: "画像アップロード中にエラーが発生しました。", en: "Failed while uploading images." })
+      );
+    } finally {
+      setChatImageUploading(false);
+    }
+  };
+
   const historyPayload = useMemo(
     () =>
       messages
-        .filter((m) => !m?.is_generated_image)
+        .filter((m) => {
+          if (!m?.is_generated_image) return true;
+          return (
+            m?.image_message_kind === "uploaded_images"
+            && Array.isArray(m?.image_descriptions)
+            && m.image_descriptions.length > 0
+          );
+        })
         .slice(-20)
         .map((m) => ({
           role: m.role,
-          content: m.speaker_name ? `[${m.speaker_name}] ${m.content}` : m.content,
+          content: (() => {
+            const base = (
+              m?.is_generated_image
+              && m?.image_message_kind === "uploaded_images"
+              && Array.isArray(m?.image_descriptions)
+              && m.image_descriptions.length > 0
+            )
+              ? `【ユーザー添付画像の説明】\n${m.image_descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`
+              : m.content;
+            return m.speaker_name ? `[${m.speaker_name}] ${base}` : base;
+          })(),
           mode: m.mode,
         })),
     [messages]
@@ -2533,26 +2649,37 @@ export default function AiChatPage() {
     setMessages(
       list.map((m) => {
         const parsedImage = parseGeneratedImageMessageContent(String(m?.content || ""));
+        const imageKind = String(parsedImage?.kind || "").trim();
         return {
           id: m?.id != null ? Number(m.id) : null,
           role: m?.role === "assistant" ? "assistant" : "user",
           mode: m?.mode === "do" ? "do" : "say",
           is_auto_dialogue: !!m?.is_auto_dialogue,
           content: parsedImage
-            ? t({ ja: "画像を生成しました。", en: "Generated an image." })
+            ? (
+              imageKind === "uploaded_images"
+                ? t({ ja: "画像を追加しました。", en: "Added images." })
+                : t({ ja: "画像を生成しました。", en: "Generated an image." })
+            )
             : String(m?.content || ""),
           speaker_name: String(characterName || ""),
           ...(parsedImage
             ? {
                 is_generated_image: true,
+                image_message_kind: imageKind || "generated_images",
                 generated_images: parsedImage.images,
+                image_descriptions: parsedImage.descriptions || [],
               }
             : {}),
         };
       })
     );
 
-    const lastUser = [...list].reverse().find((m) => (m?.role || "") === "user");
+    const lastUser = [...list].reverse().find(
+      (m) =>
+        (m?.role || "") === "user"
+        && !parseGeneratedImageMessageContent(String(m?.content || ""))
+    );
     if (lastUser) {
       const text = String(lastUser.content || "");
       const lastMode = lastUser?.mode === "do" ? "do" : "say";
@@ -2613,8 +2740,12 @@ export default function AiChatPage() {
         if (messageIndex < 0 || messageIndex >= prev.length) return prev;
         const current = prev[messageIndex];
         const list = Array.isArray(current?.generated_images) ? [...current.generated_images] : [];
+        const descs = Array.isArray(current?.image_descriptions) ? [...current.image_descriptions] : [];
         if (imageIndex < 0 || imageIndex >= list.length) return prev;
         list.splice(imageIndex, 1);
+        if (imageIndex < descs.length) {
+          descs.splice(imageIndex, 1);
+        }
         if (!list.length) {
           return prev.filter((_, idx) => idx !== messageIndex);
         }
@@ -2622,6 +2753,7 @@ export default function AiChatPage() {
         next[messageIndex] = {
           ...current,
           generated_images: list,
+          image_descriptions: descs,
         };
         return next;
       });
@@ -2941,6 +3073,12 @@ export default function AiChatPage() {
         </Link>
       </div>
       <h2>{t({ ja: "AIチャット", en: "AI Chat" })}</h2>
+      <p style={{ color: "#666", marginTop: 0, marginBottom: 12 }}>
+        {t({
+          ja: "AIキャラクターと自由に会話できるページです。会話内容はそのままAI小説として書き出すこともできます。",
+          en: "This page lets you chat freely with AI characters. You can also export the conversation directly as an AI novel.",
+        })}
+      </p>
       {chatAccess && (
         <div
           style={{
@@ -3601,6 +3739,27 @@ export default function AiChatPage() {
                   {m.content ? <div>{m.content}</div> : null}
                   {Array.isArray(m.generated_images) && m.generated_images.length > 0 && (
                     <div style={{ marginTop: m.content ? 8 : 0, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                      {Array.isArray(m.image_descriptions) && m.image_descriptions.length > 0 && (
+                        <div
+                          style={{
+                            width: "100%",
+                            maxWidth: 330,
+                            background: "#f7f9ff",
+                            border: "1px solid #d8dce6",
+                            borderRadius: 8,
+                            padding: "7px 9px",
+                            fontSize: "0.82rem",
+                            color: "#334155",
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          {m.image_descriptions.map((desc, didx) => (
+                            <div key={`desc-${didx}`} style={{ marginBottom: didx + 1 < m.image_descriptions.length ? 4 : 0 }}>
+                              {didx + 1}. {desc}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {m.generated_images.map((img, gidx) => {
                         const imageKey = `${m.id ?? `tmp-${idx}`}:${gidx}`;
                         const selected = selectedGeneratedImageKey === imageKey;
@@ -3914,6 +4073,35 @@ export default function AiChatPage() {
           </div>
         </div>
       )}
+
+      <div style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          ref={chatImageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          disabled={loading || chatImageUploading}
+          onChange={(e) => {
+            const files = Array.from(e.target.files || []);
+            setChatImageFiles(files);
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={uploadAdditionalChatImages}
+          disabled={loading || chatImageUploading || chatImageFiles.length === 0}
+        >
+          {chatImageUploading
+            ? t({ ja: "画像を追加中...", en: "Adding images..." })
+            : t({ ja: "画像を貼る", en: "Attach images" })}
+        </button>
+        {chatImageFiles.length > 0 && (
+          <span style={{ fontSize: "0.82rem", color: "#5f6675" }}>
+            {t({ ja: "選択中", en: "Selected" })}: {chatImageFiles.length}
+          </span>
+        )}
+      </div>
 
       <div style={{ display: "flex", gap: 8 }}>
         <input

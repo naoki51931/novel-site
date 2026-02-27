@@ -14,6 +14,7 @@ export default function Mypage() {
   const { t } = useI18n();
   const [novels, setNovels] = useState([]);
   const [favorites, setFavorites] = useState([]);
+  const [aiChatFavorites, setAiChatFavorites] = useState([]);
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -165,6 +166,9 @@ export default function Mypage() {
   const isR18Novel = (novel) => String(novel?.age_limit || "all").toLowerCase() === "r18";
   const novelsVisible = showR18 ? novels : novels.filter((n) => !isR18Novel(n));
   const favoritesVisible = showR18 ? favorites : favorites.filter((n) => !isR18Novel(n));
+  const aiChatFavoritesVisible = showR18
+    ? aiChatFavorites
+    : aiChatFavorites.filter((item) => !item?.is_r18);
 
   const aiJobsFiltered = aiJobs.filter((job) => {
     if (aiJobsFilter === "all") return true;
@@ -201,6 +205,24 @@ export default function Mypage() {
           setFavorites(sortedFav);
         } else {
           console.error("failed to fetch favorites");
+        }
+
+        // AIチャットのブックマーク取得
+        const resAiChatFav = await fetch(`${API_BASE}/api/me/ai/chat/favorites`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (resAiChatFav.ok) {
+          const dataAiChatFav = await resAiChatFav.json();
+          const sortedAiChatFav = (dataAiChatFav || []).slice().sort((a, b) => {
+            const ad = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const bd = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return bd - ad;
+          });
+          setAiChatFavorites(sortedAiChatFav);
+        } else {
+          console.error("failed to fetch ai chat favorites");
         }
 
         // プロフィール取得 → プレミアム判定
@@ -1085,6 +1107,90 @@ export default function Mypage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+      </section>
+
+      {/* お気に入りAIチャット */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+          {t({ ja: "お気に入りAIチャット", en: "Favorite AI chats" })}
+        </h3>
+
+        {aiChatFavoritesVisible.length === 0 ? (
+          <p style={{ marginTop: 10 }}>
+            {aiChatFavorites.length > 0 && !showR18
+              ? t({ ja: "R18作品を非表示にしているため、表示できるお気に入りがありません。", en: "No visible favorites (R18 is hidden)." })
+              : t({ ja: "お気に入りはまだありません。", en: "No favorites yet." })}
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+            {aiChatFavoritesVisible.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  border: "1px solid var(--novel-card-border)",
+                  borderRadius: 8,
+                  padding: 12,
+                  boxShadow: "0 2px 4px var(--shadow)",
+                  backgroundColor: "var(--novel-card-bg)",
+                  color: "var(--text)",
+                }}
+              >
+                {item.image_url && (
+                  <img
+                    src={item.image_url.startsWith("http") ? item.image_url : API_BASE + item.image_url}
+                    alt={t({ ja: "キャラクター画像", en: "Character image" })}
+                    style={{
+                      width: "100%",
+                      maxHeight: 220,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      boxShadow: "0 1px 4px var(--shadow)",
+                      marginBottom: 10,
+                    }}
+                  />
+                )}
+                <h4 style={{ marginBottom: 6 }}>
+                  <Link to={`/ai_chat/public/${item.id}`}>{item.name}</Link>
+                </h4>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 10,
+                    fontSize: 12,
+                    color: "var(--novel-card-meta)",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span>@{item.author_username || "unknown"}</span>
+                  <span>{t({ ja: "LIKE", en: "Likes" })}: {item.like_count ?? 0}</span>
+                  <span>{t({ ja: "ブックマーク", en: "Bookmarks" })}: {item.favorite_count ?? 0}</span>
+                  {item.is_r18 ? <span>R18</span> : null}
+                </div>
+                <p style={{ fontSize: 14, whiteSpace: "pre-wrap", margin: 0 }}>
+                  {item.personality || ""}
+                </p>
+                <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+                  <Link className="btn btn-border" to={`/ai_chat/public/${item.id}`}>
+                    {t({ ja: "公開チャットを見る", en: "View public chat" })}
+                  </Link>
+                  <Link
+                    className="btn btn-border"
+                    to="/ai_chat"
+                    state={{
+                      source: "public_chat_character",
+                      characterId: item.id,
+                      prefillCharacterName: item.name || "",
+                      prefillPersonality: item.personality || "",
+                    }}
+                  >
+                    {t({ ja: "このキャラでAIチャットを開始", en: "Start AI chat with this character" })}
+                  </Link>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </section>

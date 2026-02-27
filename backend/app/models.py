@@ -52,6 +52,8 @@ class User(Base):
     )
     episode_likes = relationship("EpisodeLike", back_populates="user")
     novel_likes = relationship("NovelLike", back_populates="user")
+    ai_chat_character_likes = relationship("AIChatCharacterLike", back_populates="user")
+    ai_chat_character_favorites = relationship("AIChatCharacterFavorite", back_populates="user")
     ai_generate_logs = relationship("AIGenerateLog", back_populates="user")
     oauth_accounts = relationship(
         "OAuthAccount",
@@ -675,6 +677,48 @@ class AIChatCharacter(Base):
         "AIChatMessage",
         back_populates="character",
         cascade="all, delete-orphan",
+    )
+    likes = relationship(
+        "AIChatCharacterLike",
+        back_populates="character",
+        cascade="all, delete-orphan",
+    )
+    favorites = relationship(
+        "AIChatCharacterFavorite",
+        back_populates="character",
+        cascade="all, delete-orphan",
+    )
+
+
+class AIChatCharacterLike(Base):
+    __tablename__ = "ai_chat_character_likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    character_id = Column(Integer, ForeignKey("ai_chat_characters.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    character = relationship("AIChatCharacter", back_populates="likes")
+    user = relationship("User", back_populates="ai_chat_character_likes")
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "user_id", name="uq_ai_chat_character_likes_character_user"),
+    )
+
+
+class AIChatCharacterFavorite(Base):
+    __tablename__ = "ai_chat_character_favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    character_id = Column(Integer, ForeignKey("ai_chat_characters.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    character = relationship("AIChatCharacter", back_populates="favorites")
+    user = relationship("User", back_populates="ai_chat_character_favorites")
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "user_id", name="uq_ai_chat_character_favorites_character_user"),
     )
 
 

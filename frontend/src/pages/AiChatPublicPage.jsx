@@ -40,6 +40,13 @@ export default function AiChatPublicPage() {
       return {};
     }
   };
+  const hasAuthToken = () => {
+    try {
+      return !!(localStorage.getItem("token") || localStorage.getItem("access_token"));
+    } catch {
+      return false;
+    }
+  };
 
   const buildUrlSearch = (query) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -119,6 +126,84 @@ export default function AiChatPublicPage() {
     }
   };
 
+  const applySocialState = (id, patch) => {
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    setDetail((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
+  };
+
+  const toggleLike = async () => {
+    if (!detail?.id) return;
+    if (!hasAuthToken()) {
+      alert(t({ ja: "いいねするにはログインが必要です。", en: "Login required to like." }));
+      return;
+    }
+    const id = Number(detail.id);
+    const prevLiked = !!detail.is_liked;
+    const prevCount = Number(detail.like_count || 0);
+    const optimistic = prevLiked
+      ? { is_liked: false, like_count: Math.max(0, prevCount - 1) }
+      : { is_liked: true, like_count: prevCount + 1 };
+    applySocialState(id, optimistic);
+    try {
+      const res = await fetch(`/api/ai/chat/public/characters/${encodeURIComponent(id)}/like`, {
+        method: prevLiked ? "DELETE" : "POST",
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail || t({ ja: "いいね操作に失敗しました。", en: "Failed to like." })
+        );
+      }
+      applySocialState(id, {
+        is_liked: typeof data?.liked === "boolean" ? data.liked : !prevLiked,
+        like_count:
+          typeof data?.like_count === "number" ? data.like_count : optimistic.like_count,
+      });
+    } catch (e) {
+      applySocialState(id, { is_liked: prevLiked, like_count: prevCount });
+      alert(e?.message || t({ ja: "いいね操作中にエラーが発生しました。", en: "An error occurred while liking." }));
+    }
+  };
+
+  const toggleFavorite = async () => {
+    if (!detail?.id) return;
+    if (!hasAuthToken()) {
+      alert(t({ ja: "ブックマークするにはログインが必要です。", en: "Login required to bookmark." }));
+      return;
+    }
+    const id = Number(detail.id);
+    const prevFavorited = !!detail.is_favorited;
+    const prevCount = Number(detail.favorite_count || 0);
+    const optimistic = prevFavorited
+      ? { is_favorited: false, favorite_count: Math.max(0, prevCount - 1) }
+      : { is_favorited: true, favorite_count: prevCount + 1 };
+    applySocialState(id, optimistic);
+    try {
+      const res = await fetch(`/api/ai/chat/public/characters/${encodeURIComponent(id)}/favorite`, {
+        method: prevFavorited ? "DELETE" : "POST",
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail || t({ ja: "ブックマーク操作に失敗しました。", en: "Failed to bookmark." })
+        );
+      }
+      applySocialState(id, {
+        is_favorited: typeof data?.favorited === "boolean" ? data.favorited : !prevFavorited,
+        favorite_count:
+          typeof data?.favorite_count === "number" ? data.favorite_count : optimistic.favorite_count,
+      });
+    } catch (e) {
+      applySocialState(id, { is_favorited: prevFavorited, favorite_count: prevCount });
+      alert(
+        e?.message ||
+          t({ ja: "ブックマーク操作中にエラーが発生しました。", en: "An error occurred while bookmarking." })
+      );
+    }
+  };
+
   useEffect(() => {
     setQ(qFromUrl);
     search({ query: qFromUrl, syncUrl: false });
@@ -146,7 +231,10 @@ export default function AiChatPublicPage() {
 
       <h2>{t({ ja: "公開チャット検索", en: "Public Chat Search" })}</h2>
       <p style={{ color: "#666" }}>
-        {t({ ja: "キャラ名・性格で公開チャットを検索できます。", en: "Search public chats by character name or personality." })}
+        {t({
+          ja: "他ユーザーが公開したAIキャラクターを探せるページです。気になるキャラクターは詳細を見て、そのまま会話を始められます。",
+          en: "This page helps you find AI characters shared by other users. Check details and start chatting right away.",
+        })}
       </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -194,6 +282,14 @@ export default function AiChatPublicPage() {
             <div style={{ marginTop: 6, color: "#444", whiteSpace: "pre-wrap" }}>
               {item.personality || t({ ja: "性格設定なし", en: "No personality description" })}
             </div>
+            <div style={{ marginTop: 8, fontSize: "0.86rem", color: "#666" }}>
+              <span style={{ marginRight: 10 }}>
+                {t({ ja: "いいね", en: "Likes" })}: {item.like_count ?? 0}
+              </span>
+              <span>
+                {t({ ja: "ブックマーク", en: "Bookmarks" })}: {item.favorite_count ?? 0}
+              </span>
+            </div>
           </button>
         ))}
       </div>
@@ -222,6 +318,20 @@ export default function AiChatPublicPage() {
             >
               {t({ ja: "このキャラでAIチャットを開始", en: "Start AI chat with this character" })}
             </Link>
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <button type="button" className="btn btn-border" onClick={toggleLike}>
+              {detail.is_liked
+                ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+                : t({ ja: "♡ いいね", en: "♡ Like" })}{" "}
+              ({detail.like_count ?? 0})
+            </button>
+            <button type="button" className="btn btn-border" onClick={toggleFavorite} style={{ marginLeft: 8 }}>
+              {detail.is_favorited
+                ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
+                : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}{" "}
+              ({detail.favorite_count ?? 0})
+            </button>
           </div>
           <p style={{ color: "#666", marginTop: 0 }}>@{detail.author_username || "unknown"}</p>
           <p style={{ whiteSpace: "pre-wrap", color: "#444" }}>

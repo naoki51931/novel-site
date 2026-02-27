@@ -469,6 +469,7 @@ button.btn.btn-border.bubble-send-btn {
   align-items: center;
   gap: 10px;
   margin-left: auto;
+  position: relative;
 }
 
 .site-title {
@@ -534,10 +535,15 @@ button.btn.btn-border.bubble-send-btn {
   align-items: center;
   gap: 6px;
   z-index: 20;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+  overflow: visible;
 }
 
 .onboarding-guide-message {
   margin-right: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .onboarding-guide-pop::after {
@@ -577,6 +583,8 @@ button.btn.btn-border.bubble-send-btn {
   padding: 2px 6px;
   cursor: pointer;
   display: none;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .onboarding-guide-pop.is-expanded .onboarding-guide-dismiss {
@@ -597,11 +605,13 @@ button.btn.btn-border.bubble-send-btn {
   align-items: center;
   justify-content: center;
   padding: 0;
+  flex: 0 0 auto;
 }
 
 .onboarding-guide-pop-right {
   left: auto;
   right: 0;
+  max-width: calc(100vw - 16px);
 }
 
 .onboarding-guide-pop-right::after {
@@ -691,7 +701,7 @@ button.nav-toggle.btn.btn-border:hover {
 }
 
 .nav-toggle span {
-  display: block;
+  display: flex;
   width: 20px;
   height: 2px;
   background: var(--header-text);
@@ -1059,19 +1069,90 @@ button.nav-toggle.btn.btn-border:hover {
     font-size: 11px;
   }
 
+  .onboarding-guide-pop-below {
+    top: calc(100% + 8px);
+    transform: none;
+  }
+
   .onboarding-guide-pop::after {
     left: 18px;
     bottom: -5px;
   }
 
+  .onboarding-guide-pop-below::after {
+    top: -5px;
+    bottom: auto;
+    border-right: none;
+    border-bottom: none;
+    border-left: 1px solid var(--border-strong);
+    border-top: 1px solid var(--border-strong);
+  }
+
   .onboarding-guide-pop-right {
     left: auto;
     right: 0;
+    min-width: 92px;
+    max-width: calc(100vw - 16px);
   }
 
   .onboarding-guide-pop-right::after {
     left: auto;
     right: 8px;
+  }
+
+  .onboarding-guide-pop-right.is-expanded:not(.onboarding-guide-pop-menu) {
+    white-space: normal;
+  }
+
+  .onboarding-guide-pop-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    left: auto;
+    z-index: 120;
+    min-width: 132px;
+    max-width: min(240px, calc(100vw - 16px));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .onboarding-guide-pop-right.onboarding-guide-pop-menu.is-expanded {
+    white-space: normal;
+  }
+
+  .onboarding-guide-pop-menu::after {
+    left: auto;
+    right: 12px;
+    top: -5px;
+    bottom: auto;
+    border-right: none;
+    border-bottom: none;
+    border-left: 1px solid var(--border-strong);
+    border-top: 1px solid var(--border-strong);
+  }
+
+  .onboarding-guide-pop-menu .onboarding-guide-message {
+    margin-right: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .onboarding-guide-pop-menu .onboarding-guide-close {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .onboarding-guide-pop-menu .onboarding-guide-dismiss {
+    width: 100%;
+    justify-content: center;
+    white-space: normal;
+  }
+
+  .onboarding-guide-pop-menu:not(.is-expanded) .onboarding-guide-dismiss {
+    display: none;
   }
 
   .nav-link-accent {

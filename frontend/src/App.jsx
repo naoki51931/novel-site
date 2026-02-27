@@ -739,32 +739,32 @@ export default function App() {
             )}
           </Link>
           {/* スマホ用ハンバーガー */}
+          {activeGuideStep !== "none" && isBubbleVisible("app_menu") && (
+            <span
+              className={`onboarding-guide-pop onboarding-guide-pop-right onboarding-guide-pop-below onboarding-guide-pop-menu ${expandedBubble === "app_menu" ? "is-expanded" : ""}`.trim()}
+              role="note"
+              onClick={(e) => handleExpandBubble(e, "app_menu")}
+            >
+              <span className="onboarding-guide-message">{t({ ja: "ここをタップ", en: "Tap here" })}</span>
+              <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "app_menu")}>
+                {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
+              </span>
+              <span
+                className="onboarding-guide-close"
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleDismissBubble(e, "app_menu")}
+              >
+                ×
+              </span>
+            </span>
+          )}
           <button
             type="button"
             className={`nav-toggle ${menuOpen ? "nav-toggle-open" : ""} ${activeGuideStep !== "none" ? "onboarding-guide-anchor onboarding-guide-anchor-right" : ""}`.trim()}
             onClick={() => setMenuOpen((v) => !v)}
             aria-label={t(HEADER_I18N.openMenu)}
           >
-            {activeGuideStep !== "none" && isBubbleVisible("app_menu") && (
-              <span
-                className={`onboarding-guide-pop onboarding-guide-pop-right ${expandedBubble === "app_menu" ? "is-expanded" : ""}`.trim()}
-                role="note"
-                onClick={(e) => handleExpandBubble(e, "app_menu")}
-              >
-                <span className="onboarding-guide-message">{t({ ja: "ここをタップ", en: "Tap here" })}</span>
-                <span className="onboarding-guide-dismiss" role="button" tabIndex={0} onClick={(e) => handleDismissBubble(e, "app_menu")}>
-                  {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
-                </span>
-                <span
-                  className="onboarding-guide-close"
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => handleDismissBubble(e, "app_menu")}
-                >
-                  ×
-                </span>
-              </span>
-            )}
             <span />
             <span />
             <span />

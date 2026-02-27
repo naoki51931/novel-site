@@ -91,6 +91,10 @@ AI_CHAT_CHARACTER_IMAGE_DIR = os.getenv(
     "AI_CHAT_CHARACTER_IMAGE_DIR",
     str(STATIC_DIR / "ai_chat_character_images"),
 )
+AI_CHAT_MESSAGE_IMAGE_DIR = os.getenv(
+    "AI_CHAT_MESSAGE_IMAGE_DIR",
+    str(STATIC_DIR / "ai_chat_message_images"),
+)
 from fastapi import UploadFile, File
 from fastapi import Form
 
@@ -1209,6 +1213,7 @@ def on_startup() -> None:
     ensure_all_tables_exist()
     os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
     os.makedirs(AI_CHAT_CHARACTER_IMAGE_DIR, exist_ok=True)
+    os.makedirs(AI_CHAT_MESSAGE_IMAGE_DIR, exist_ok=True)
     get_redis_client()
     _start_redis_metrics_flusher_if_enabled()
     _start_daily_translation_bot_if_enabled()
@@ -1341,6 +1346,9 @@ AI_CHAT_IMAGE_OOM_RETRY_ENABLED = os.getenv("AI_CHAT_IMAGE_OOM_RETRY_ENABLED", "
 AI_CHAT_IMAGE_OOM_RETRY_SCALE = float(os.getenv("AI_CHAT_IMAGE_OOM_RETRY_SCALE", "0.78"))
 AI_CHAT_IMAGE_OOM_RETRY_STEPS = max(8, min(80, int(os.getenv("AI_CHAT_IMAGE_OOM_RETRY_STEPS", "28"))))
 AI_CHAT_IMAGE_INIT_STRENGTH = max(0.1, min(0.95, float(os.getenv("AI_CHAT_IMAGE_INIT_STRENGTH", "0.75"))))
+AI_CHAT_IMAGE_CAPTION_ENABLED = (os.getenv("AI_CHAT_IMAGE_CAPTION_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+AI_CHAT_IMAGE_CAPTION_MODEL = (os.getenv("AI_CHAT_IMAGE_CAPTION_MODEL", "") or "").strip() or (os.getenv("OPENAI_MODEL_TEXT", "") or "").strip() or "gpt-4.1-mini"
+AI_CHAT_IMAGE_CAPTION_MAX_OUTPUT_TOKENS = max(32, min(300, int(os.getenv("AI_CHAT_IMAGE_CAPTION_MAX_OUTPUT_TOKENS", "120") or 120)))
 AI_CHAT_MEMORY_ENABLED = (os.getenv("AI_CHAT_MEMORY_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AI_CHAT_MEMORY_TOPK = max(1, min(20, int(os.getenv("AI_CHAT_MEMORY_TOPK", "12") or 12)))
 
@@ -4789,6 +4797,22 @@ def admin_delete_user(
     db.execute(text("DELETE FROM episode_likes WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_likes WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_favorites WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_chat_character_likes WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_chat_character_favorites WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(
+        text(
+            "DELETE FROM ai_chat_character_likes "
+            "WHERE character_id IN (SELECT id FROM ai_chat_characters WHERE user_id = :uid)"
+        ),
+        {"uid": user_id},
+    )
+    db.execute(
+        text(
+            "DELETE FROM ai_chat_character_favorites "
+            "WHERE character_id IN (SELECT id FROM ai_chat_characters WHERE user_id = :uid)"
+        ),
+        {"uid": user_id},
+    )
     db.execute(text("DELETE FROM episode_comments WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_comments WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_generate_logs WHERE user_id = :uid"), {"uid": user_id})
@@ -7015,6 +7039,14 @@ class AIChatImageGenerateResponse(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 
+class AIChatMessageImageUploadResponse(BaseModel):
+    ok: bool = True
+    message_id: int
+    images: list[AIChatImageItem] = Field(default_factory=list)
+    descriptions: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+
+
 def normalize_speech_gender(value: str | None) -> Literal["auto", "female", "male"]:
     v = str(value or "").strip().lower()
     if v in {"female", "male"}:
@@ -7032,6 +7064,10 @@ class AIChatPublicCharacterListItem(BaseModel):
     personality: str | None = None
     author_username: str | None = None
     published_at: str | None = None
+    like_count: int = 0
+    favorite_count: int = 0
+    is_liked: bool = False
+    is_favorited: bool = False
 
 
 class AIChatPublicCharacterDetailResponse(BaseModel):
@@ -7040,6 +7076,10 @@ class AIChatPublicCharacterDetailResponse(BaseModel):
     personality: str | None = None
     author_username: str | None = None
     published_at: str | None = None
+    like_count: int = 0
+    favorite_count: int = 0
+    is_liked: bool = False
+    is_favorited: bool = False
     messages: list[AIChatMessageResponse]
 
 
@@ -8633,12 +8673,13 @@ def _extract_session_token_from_payload(payload: dict) -> str:
 
 def _serialize_ai_chat_image_message(
     *,
+    kind: str = "generated_images",
     prompt: str,
     images: list[AIChatImageItem],
     meta: dict | None = None,
 ) -> str:
     payload = {
-        "kind": "generated_images",
+        "kind": str(kind or "generated_images").strip() or "generated_images",
         "prompt": str(prompt or "").strip(),
         "images": [
             {"url": str(img.url or "").strip(), "filename": (str(img.filename).strip() if img.filename is not None else None)}
@@ -8717,6 +8758,103 @@ def _extract_image_field_from_payload(data_obj: dict) -> str:
                 if value:
                     return value
     return ""
+
+
+def _read_secret_from_env_or_file(env_name: str, file_env_name: str) -> str:
+    direct = str(os.getenv(env_name, "") or "").strip()
+    if direct:
+        return direct
+    file_path = str(os.getenv(file_env_name, "") or "").strip()
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return str(f.read() or "").strip()
+    except Exception:
+        return ""
+
+
+def _extract_openai_responses_output_text(payload: dict) -> str:
+    direct = str(payload.get("output_text") or "").strip()
+    if direct:
+        return direct
+    outputs = payload.get("output")
+    if not isinstance(outputs, list):
+        return ""
+    parts: list[str] = []
+    for item in outputs:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            ctype = str(c.get("type") or "").strip().lower()
+            if ctype not in {"output_text", "text"}:
+                continue
+            txt = str(c.get("text") or "").strip()
+            if txt:
+                parts.append(txt)
+    return "\n".join(parts).strip()
+
+
+async def _describe_uploaded_chat_images(image_urls: list[str]) -> list[str]:
+    urls = [str(u or "").strip() for u in (image_urls or []) if str(u or "").strip()]
+    if not urls:
+        return []
+
+    fallback = [f"添付画像 {idx + 1}（内容の自動説明は利用不可）" for idx in range(len(urls))]
+    if not AI_CHAT_IMAGE_CAPTION_ENABLED:
+        return fallback
+
+    api_key = _read_secret_from_env_or_file("OPENAI_API_KEY", "OPENAI_API_KEY_FILE")
+    if not api_key:
+        return fallback
+
+    out: list[str] = []
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        for idx, url in enumerate(urls):
+            local_path = _local_static_path_from_url(url)
+            data_url = _build_data_url_from_local_image(local_path) if local_path else None
+            if not data_url:
+                out.append(fallback[idx])
+                continue
+            try:
+                req_body = {
+                    "model": AI_CHAT_IMAGE_CAPTION_MODEL,
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": "この画像を日本語で1〜2文、客観的かつ簡潔に説明してください。推測は避けてください。",
+                                },
+                                {"type": "input_image", "image_url": data_url},
+                            ],
+                        }
+                    ],
+                    "max_output_tokens": AI_CHAT_IMAGE_CAPTION_MAX_OUTPUT_TOKENS,
+                }
+                res = await client.post(
+                    "https://api.openai.com/v1/responses",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=req_body,
+                )
+                if not res.is_success:
+                    out.append(fallback[idx])
+                    continue
+                payload = res.json()
+                text_out = _extract_openai_responses_output_text(payload if isinstance(payload, dict) else {})
+                out.append(text_out or fallback[idx])
+            except Exception:
+                out.append(fallback[idx])
+    return out
 
 
 async def _resolve_image_to_data_url(
@@ -10517,6 +10655,16 @@ def delete_ai_chat_character(
             os.remove(old_path)
         except Exception:
             pass
+    (
+        db.query(models.AIChatCharacterLike)
+        .filter(models.AIChatCharacterLike.character_id == item.id)
+        .delete(synchronize_session=False)
+    )
+    (
+        db.query(models.AIChatCharacterFavorite)
+        .filter(models.AIChatCharacterFavorite.character_id == item.id)
+        .delete(synchronize_session=False)
+    )
     db.delete(item)
     db.commit()
     return {"deleted": True}
@@ -10557,17 +10705,69 @@ def list_public_ai_chat_characters(
         .limit(limit)
         .all()
     )
+    character_ids = [int(getattr(item, "id", 0) or 0) for item, _ in rows]
+    like_counts: dict[int, int] = {}
+    favorite_counts: dict[int, int] = {}
+    if character_ids:
+        like_rows = (
+            db.query(
+                models.AIChatCharacterLike.character_id,
+                func.count(models.AIChatCharacterLike.id),
+            )
+            .filter(models.AIChatCharacterLike.character_id.in_(character_ids))
+            .group_by(models.AIChatCharacterLike.character_id)
+            .all()
+        )
+        like_counts = {int(cid): int(count or 0) for cid, count in like_rows}
+        favorite_rows = (
+            db.query(
+                models.AIChatCharacterFavorite.character_id,
+                func.count(models.AIChatCharacterFavorite.id),
+            )
+            .filter(models.AIChatCharacterFavorite.character_id.in_(character_ids))
+            .group_by(models.AIChatCharacterFavorite.character_id)
+            .all()
+        )
+        favorite_counts = {int(cid): int(count or 0) for cid, count in favorite_rows}
+
+    liked_ids: set[int] = set()
+    favorited_ids: set[int] = set()
+    if viewer and character_ids:
+        liked_rows = (
+            db.query(models.AIChatCharacterLike.character_id)
+            .filter(
+                models.AIChatCharacterLike.user_id == viewer.id,
+                models.AIChatCharacterLike.character_id.in_(character_ids),
+            )
+            .all()
+        )
+        favorited_rows = (
+            db.query(models.AIChatCharacterFavorite.character_id)
+            .filter(
+                models.AIChatCharacterFavorite.user_id == viewer.id,
+                models.AIChatCharacterFavorite.character_id.in_(character_ids),
+            )
+            .all()
+        )
+        liked_ids = {int(cid) for (cid,) in liked_rows}
+        favorited_ids = {int(cid) for (cid,) in favorited_rows}
+
     output: list[AIChatPublicCharacterListItem] = []
     for item, username in rows:
         if _is_public_chat_r18(item) and not can_view_r18:
             continue
+        item_id = int(item.id)
         output.append(
             AIChatPublicCharacterListItem(
-                id=int(item.id),
+                id=item_id,
                 name=str(item.name or ""),
                 personality=_trim_public_character_intro(item.personality),
                 author_username=str(username or "") if username else None,
                 published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+                like_count=like_counts.get(item_id, 0),
+                favorite_count=favorite_counts.get(item_id, 0),
+                is_liked=item_id in liked_ids,
+                is_favorited=item_id in favorited_ids,
             )
         )
     return output
@@ -10614,12 +10814,47 @@ def get_public_ai_chat_character_detail(
         character.is_r18 = True
         db.add(character)
         db.commit()
+    like_count = (
+        db.query(models.AIChatCharacterLike)
+        .filter(models.AIChatCharacterLike.character_id == character.id)
+        .count()
+    )
+    favorite_count = (
+        db.query(models.AIChatCharacterFavorite)
+        .filter(models.AIChatCharacterFavorite.character_id == character.id)
+        .count()
+    )
+    is_liked = False
+    is_favorited = False
+    if viewer:
+        is_liked = (
+            db.query(models.AIChatCharacterLike.id)
+            .filter(
+                models.AIChatCharacterLike.character_id == character.id,
+                models.AIChatCharacterLike.user_id == viewer.id,
+            )
+            .first()
+            is not None
+        )
+        is_favorited = (
+            db.query(models.AIChatCharacterFavorite.id)
+            .filter(
+                models.AIChatCharacterFavorite.character_id == character.id,
+                models.AIChatCharacterFavorite.user_id == viewer.id,
+            )
+            .first()
+            is not None
+        )
     return AIChatPublicCharacterDetailResponse(
         id=int(character.id),
         name=str(character.name or ""),
         personality=_trim_public_character_intro(character.personality),
         author_username=str(username or "") if username else None,
         published_at=character.published_at.isoformat() if getattr(character, "published_at", None) else None,
+        like_count=int(like_count or 0),
+        favorite_count=int(favorite_count or 0),
+        is_liked=bool(is_liked),
+        is_favorited=bool(is_favorited),
         messages=[
             AIChatMessageResponse(
                 id=int(msg.id),
@@ -10632,6 +10867,222 @@ def get_public_ai_chat_character_detail(
             for msg in messages
         ],
     )
+
+
+@app.post("/api/ai/chat/public/characters/{character_id}/like")
+def like_public_ai_chat_character(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_public == True,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="公開キャラが見つかりません。")
+    if bool(getattr(character, "is_r18", False)) and not can_user_access_novel_age_limit(user, "r18"):
+        raise HTTPException(status_code=403, detail="この公開チャットは18歳以上のみ操作できます。")
+
+    existing = (
+        db.query(models.AIChatCharacterLike)
+        .filter(
+            models.AIChatCharacterLike.character_id == character.id,
+            models.AIChatCharacterLike.user_id == user.id,
+        )
+        .first()
+    )
+    if not existing:
+        db.add(models.AIChatCharacterLike(character_id=character.id, user_id=user.id))
+        if character.user_id and character.user_id != user.id:
+            title = "公開チャットにいいねが付きました"
+            notif_body = f"{user.username}が公開チャット「{character.name}」にいいねしました"
+            link_url = f"/ai_chat/public/{character.id}"
+            create_notification(
+                db,
+                user_id=character.user_id,
+                notif_type="ai_chat_public_like",
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+                actor_user_id=user.id,
+            )
+        db.commit()
+        if character.user_id and character.user_id != user.id:
+            try:
+                send_web_push_to_user(
+                    db,
+                    user_id=character.user_id,
+                    title=title,
+                    body=notif_body,
+                    link_url=link_url,
+                    tag="ai_chat_public_like",
+                )
+            except Exception as e:
+                print(f"[webpush] ai_chat_public_like send failed user_id={character.user_id} err={e!r}")
+            send_notification_email_if_enabled(
+                db,
+                user_id=character.user_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+            )
+    like_count = (
+        db.query(models.AIChatCharacterLike)
+        .filter(models.AIChatCharacterLike.character_id == character.id)
+        .count()
+    )
+    return {"ok": True, "liked": True, "like_count": int(like_count or 0)}
+
+
+@app.delete("/api/ai/chat/public/characters/{character_id}/like")
+def unlike_public_ai_chat_character(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_public == True,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="公開キャラが見つかりません。")
+
+    like = (
+        db.query(models.AIChatCharacterLike)
+        .filter(
+            models.AIChatCharacterLike.character_id == character.id,
+            models.AIChatCharacterLike.user_id == user.id,
+        )
+        .first()
+    )
+    if like:
+        db.delete(like)
+        db.commit()
+    like_count = (
+        db.query(models.AIChatCharacterLike)
+        .filter(models.AIChatCharacterLike.character_id == character.id)
+        .count()
+    )
+    return {"ok": True, "liked": False, "like_count": int(like_count or 0)}
+
+
+@app.post("/api/ai/chat/public/characters/{character_id}/favorite")
+def favorite_public_ai_chat_character(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_public == True,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="公開キャラが見つかりません。")
+    if bool(getattr(character, "is_r18", False)) and not can_user_access_novel_age_limit(user, "r18"):
+        raise HTTPException(status_code=403, detail="この公開チャットは18歳以上のみ操作できます。")
+
+    existing = (
+        db.query(models.AIChatCharacterFavorite)
+        .filter(
+            models.AIChatCharacterFavorite.character_id == character.id,
+            models.AIChatCharacterFavorite.user_id == user.id,
+        )
+        .first()
+    )
+    if not existing:
+        db.add(models.AIChatCharacterFavorite(character_id=character.id, user_id=user.id))
+        if character.user_id and character.user_id != user.id:
+            title = "公開チャットがブックマークされました"
+            notif_body = f"{user.username}が公開チャット「{character.name}」をブックマークしました"
+            link_url = f"/ai_chat/public/{character.id}"
+            create_notification(
+                db,
+                user_id=character.user_id,
+                notif_type="ai_chat_public_favorite",
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+                actor_user_id=user.id,
+            )
+        db.commit()
+        if character.user_id and character.user_id != user.id:
+            try:
+                send_web_push_to_user(
+                    db,
+                    user_id=character.user_id,
+                    title=title,
+                    body=notif_body,
+                    link_url=link_url,
+                    tag="ai_chat_public_favorite",
+                )
+            except Exception as e:
+                print(f"[webpush] ai_chat_public_favorite send failed user_id={character.user_id} err={e!r}")
+            send_notification_email_if_enabled(
+                db,
+                user_id=character.user_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+            )
+    favorite_count = (
+        db.query(models.AIChatCharacterFavorite)
+        .filter(models.AIChatCharacterFavorite.character_id == character.id)
+        .count()
+    )
+    return {"ok": True, "favorited": True, "favorite_count": int(favorite_count or 0)}
+
+
+@app.delete("/api/ai/chat/public/characters/{character_id}/favorite")
+def unfavorite_public_ai_chat_character(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = (
+        db.query(models.AIChatCharacter)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_public == True,
+        )
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="公開キャラが見つかりません。")
+
+    fav = (
+        db.query(models.AIChatCharacterFavorite)
+        .filter(
+            models.AIChatCharacterFavorite.character_id == character.id,
+            models.AIChatCharacterFavorite.user_id == user.id,
+        )
+        .first()
+    )
+    if fav:
+        db.delete(fav)
+        db.commit()
+    favorite_count = (
+        db.query(models.AIChatCharacterFavorite)
+        .filter(models.AIChatCharacterFavorite.character_id == character.id)
+        .count()
+    )
+    return {"ok": True, "favorited": False, "favorite_count": int(favorite_count or 0)}
 
 
 def _trim_public_character_intro(text: str | None, max_chars: int = 450) -> str | None:
@@ -10786,7 +11237,14 @@ def delete_ai_chat_message_image(
 
     prompt = str(parsed.get("prompt") or "").strip()
     meta = parsed.get("meta") if isinstance(parsed.get("meta"), dict) else {}
+    if isinstance(meta.get("descriptions"), list):
+        descs = [str(v or "").strip() for v in meta.get("descriptions") if str(v or "").strip()]
+        if image_index < len(descs):
+            del descs[image_index]
+        meta["descriptions"] = descs
+        prompt = "\n".join(descs)
     serialized = _serialize_ai_chat_image_message(
+        kind=str(parsed.get("kind") or "generated_images").strip() or "generated_images",
         prompt=prompt,
         images=[
             AIChatImageItem(
@@ -10805,6 +11263,117 @@ def delete_ai_chat_message_image(
         ok=True,
         deleted_message=False,
         remaining_images=len(images),
+    )
+
+
+@app.post(
+    "/api/ai/chat/characters/{character_id}/messages/images",
+    response_model=AIChatMessageImageUploadResponse,
+)
+async def upload_ai_chat_message_images(
+    character_id: int,
+    request: Request,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    if not files:
+        raise HTTPException(status_code=400, detail="画像ファイルを指定してください。")
+    if len(files) > 8:
+        raise HTTPException(status_code=400, detail="一度にアップロードできる画像は最大8枚です。")
+
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    saved_images: list[AIChatImageItem] = []
+    for index, file in enumerate(files):
+        content_type = str(file.content_type or "").lower()
+        ext = ext_map.get(content_type)
+        if not ext:
+            raise HTTPException(status_code=400, detail="画像ファイル（jpg/png/webp/gif）のみアップロードできます。")
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="空の画像ファイルはアップロードできません。")
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="画像サイズが大きすぎます（1枚あたり最大10MB）。")
+
+        token = secrets.token_hex(8)
+        filename = f"chat_msg_{character_id}_{user.id}_{token}_{index}{ext}"
+        save_path = os.path.join(AI_CHAT_MESSAGE_IMAGE_DIR, filename)
+
+        if ext == ".gif":
+            with open(save_path, "wb") as f:
+                f.write(data)
+        elif PIL_AVAILABLE:
+            try:
+                img = Image.open(io.BytesIO(data))
+                img = ImageOps.exif_transpose(img)
+                if img.mode not in ("RGB", "RGBA"):
+                    img = img.convert("RGB")
+                img.thumbnail((1600, 1600))
+                if ext == ".jpg":
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    img.save(save_path, format="JPEG", quality=90, optimize=True)
+                elif ext == ".png":
+                    img.save(save_path, format="PNG", optimize=True)
+                elif ext == ".webp":
+                    img.save(save_path, format="WEBP", quality=88, method=6)
+                else:
+                    with open(save_path, "wb") as f:
+                        f.write(data)
+            except Exception:
+                with open(save_path, "wb") as f:
+                    f.write(data)
+        else:
+            with open(save_path, "wb") as f:
+                f.write(data)
+
+        saved_images.append(
+            AIChatImageItem(
+                url=f"/static/ai_chat_message_images/{filename}",
+                filename=filename,
+            )
+        )
+
+    descriptions = await _describe_uploaded_chat_images([img.url for img in saved_images])
+    content = _serialize_ai_chat_image_message(
+        kind="uploaded_images",
+        prompt="\n".join([d for d in descriptions if str(d or "").strip()]),
+        images=saved_images,
+        meta={"descriptions": descriptions},
+    )
+    msg = models.AIChatMessage(
+        user_id=user.id,
+        character_id=character.id,
+        role="user",
+        mode="say",
+        is_auto_dialogue=False,
+        character_name_snapshot=str(character.name or "").strip()[:80] or None,
+        personality_snapshot=str(character.personality or "").strip()[:4000] or None,
+        language_style_snapshot="normal",
+        content=content,
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return AIChatMessageImageUploadResponse(
+        ok=True,
+        message_id=int(msg.id),
+        images=saved_images,
+        descriptions=descriptions,
+        created_at=msg.created_at.isoformat() if getattr(msg, "created_at", None) else None,
     )
 
 
@@ -17718,6 +18287,70 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
         }
         for n in favorites
     ]
+
+
+@app.get("/api/me/ai/chat/favorites")
+def list_my_ai_chat_favorites(request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    can_view_r18 = can_user_access_novel_age_limit(user, "r18")
+
+    rows = (
+        db.query(models.AIChatCharacterFavorite, models.AIChatCharacter, models.User.username)
+        .join(
+            models.AIChatCharacter,
+            models.AIChatCharacter.id == models.AIChatCharacterFavorite.character_id,
+        )
+        .join(models.User, models.User.id == models.AIChatCharacter.user_id)
+        .filter(models.AIChatCharacterFavorite.user_id == user.id)
+        .filter(models.AIChatCharacter.is_public == True)
+        .order_by(models.AIChatCharacterFavorite.created_at.desc(), models.AIChatCharacterFavorite.id.desc())
+        .all()
+    )
+    if not rows:
+        return []
+
+    character_ids = [int(character.id) for _, character, _ in rows]
+    like_rows = (
+        db.query(
+            models.AIChatCharacterLike.character_id,
+            func.count(models.AIChatCharacterLike.id),
+        )
+        .filter(models.AIChatCharacterLike.character_id.in_(character_ids))
+        .group_by(models.AIChatCharacterLike.character_id)
+        .all()
+    )
+    like_counts = {int(cid): int(count or 0) for cid, count in like_rows}
+
+    favorite_rows = (
+        db.query(
+            models.AIChatCharacterFavorite.character_id,
+            func.count(models.AIChatCharacterFavorite.id),
+        )
+        .filter(models.AIChatCharacterFavorite.character_id.in_(character_ids))
+        .group_by(models.AIChatCharacterFavorite.character_id)
+        .all()
+    )
+    favorite_counts = {int(cid): int(count or 0) for cid, count in favorite_rows}
+
+    output = []
+    for favorite_link, character, author_username in rows:
+        if bool(getattr(character, "is_r18", False)) and not can_view_r18:
+            continue
+        output.append(
+            {
+                "id": int(character.id),
+                "name": str(character.name or ""),
+                "personality": _trim_public_character_intro(getattr(character, "personality", None)),
+                "author_username": author_username,
+                "published_at": character.published_at.isoformat() if getattr(character, "published_at", None) else None,
+                "image_url": getattr(character, "image_url", None),
+                "is_r18": bool(getattr(character, "is_r18", False)),
+                "like_count": like_counts.get(int(character.id), 0),
+                "favorite_count": favorite_counts.get(int(character.id), 0),
+                "created_at": favorite_link.created_at.isoformat() if getattr(favorite_link, "created_at", None) else None,
+            }
+        )
+    return output
 
 # ============================
 # マイページ用アクセス解析
