@@ -344,7 +344,8 @@ export default function EpisodeDetail() {
 
   // ★ いいねトグル
   const handleToggleLike = async () => {
-    const token = localStorage.getItem("token");
+    const token =
+      localStorage.getItem("token") || localStorage.getItem("access_token");
     if (!token) {
       alert(t({ ja: "いいねするにはログインが必要です。", en: "Login required to like." }));
       navigate("/login");
@@ -371,9 +372,16 @@ export default function EpisodeDetail() {
       if (typeof data.like_count === "number") {
         setLikeCount(data.like_count);
       } else {
-        setLikeCount((prev) => prev + (isLiked ? -1 : 1));
+        const nextLiked =
+          typeof data.liked === "boolean" ? data.liked : !isLiked;
+        const delta = nextLiked === isLiked ? 0 : nextLiked ? 1 : -1;
+        setLikeCount((prev) => Math.max(0, prev + delta));
       }
-      setIsLiked((prev) => !prev);
+      if (typeof data.liked === "boolean") {
+        setIsLiked(data.liked);
+      } else {
+        setIsLiked((prev) => !prev);
+      }
     } catch (e) {
       console.error(e);
       alert(

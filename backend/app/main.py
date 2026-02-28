@@ -111,6 +111,7 @@ from .ai_novel import (
     call_openai_summary_candidates,
     call_openai_tag_candidates,
     call_openai_title_candidate,
+    call_openai_title_candidates,
     provider_from_model,
     provider_from_request,
 )
@@ -231,10 +232,42 @@ REDIS_RANKING_CACHE_TTL_SEC = max(
 REDIS_PUBLIC_USER_CACHE_TTL_SEC = max(
     60, int(os.getenv("REDIS_PUBLIC_USER_CACHE_TTL_SEC", "600") or "600")
 )
+RECAPTCHA_SECRET_KEY = (os.getenv("RECAPTCHA_SECRET_KEY", "") or "").strip()
+RECAPTCHA_ENABLED = ((os.getenv("RECAPTCHA_ENABLED", "1") or "1").strip() == "1") and bool(
+    RECAPTCHA_SECRET_KEY
+)
 
 _redis_client = None
 _redis_metrics_flusher_started = False
 _redis_metrics_flusher_lock = threading.Lock()
+
+
+def verify_recaptcha_token(token: str, remote_ip: str | None = None) -> bool:
+    if not RECAPTCHA_ENABLED:
+        return True
+    recaptcha_token = (token or "").strip()
+    if not recaptcha_token:
+        return False
+
+    payload: dict[str, str] = {
+        "secret": RECAPTCHA_SECRET_KEY,
+        "response": recaptcha_token,
+    }
+    if remote_ip:
+        payload["remoteip"] = remote_ip
+
+    try:
+        res = httpx.post(
+            "https://www.google.com/recaptcha/api/siteverify",
+            data=payload,
+            timeout=8.0,
+        )
+        if res.status_code != 200:
+            return False
+        data = res.json()
+        return bool(data.get("success"))
+    except Exception:
+        return False
 
 
 def _redis_logger() -> logging.Logger:
@@ -471,30 +504,32 @@ def flush_redis_counters_once() -> dict[str, int]:
     db = SessionLocal()
     try:
         for novel_id, delta in novel_views.items():
-            db.execute(
+            update_result = db.execute(
                 text(
                     "UPDATE novels "
-                    "SET view_count = GREATEST(0, COALESCE(view_count, 0) + :delta), updated_at = NOW() "
+                    "SET view_count = GREATEST(0, COALESCE(view_count, 0) + :delta) "
                     "WHERE id = :novel_id"
                 ),
                 {"novel_id": novel_id, "delta": int(delta)},
             )
-            apply_novel_daily_metric(db, novel_id, view_delta=int(delta))
+            if int(getattr(update_result, "rowcount", 0) or 0) > 0:
+                apply_novel_daily_metric(db, novel_id, view_delta=int(delta))
         for novel_id, delta in novel_likes.items():
-            db.execute(
+            update_result = db.execute(
                 text(
                     "UPDATE novels "
-                    "SET like_count = GREATEST(0, COALESCE(like_count, 0) + :delta), updated_at = NOW() "
+                    "SET like_count = GREATEST(0, COALESCE(like_count, 0) + :delta) "
                     "WHERE id = :novel_id"
                 ),
                 {"novel_id": novel_id, "delta": int(delta)},
             )
-            apply_novel_daily_metric(db, novel_id, like_delta=int(delta))
+            if int(getattr(update_result, "rowcount", 0) or 0) > 0:
+                apply_novel_daily_metric(db, novel_id, like_delta=int(delta))
         for episode_id, delta in episode_views.items():
             db.execute(
                 text(
                     "UPDATE episodes "
-                    "SET view_count = GREATEST(0, COALESCE(view_count, 0) + :delta), updated_at = NOW() "
+                    "SET view_count = GREATEST(0, COALESCE(view_count, 0) + :delta) "
                     "WHERE id = :episode_id"
                 ),
                 {"episode_id": episode_id, "delta": int(delta)},
@@ -503,7 +538,7 @@ def flush_redis_counters_once() -> dict[str, int]:
             db.execute(
                 text(
                     "UPDATE episodes "
-                    "SET like_count = GREATEST(0, COALESCE(like_count, 0) + :delta), updated_at = NOW() "
+                    "SET like_count = GREATEST(0, COALESCE(like_count, 0) + :delta) "
                     "WHERE id = :episode_id"
                 ),
                 {"episode_id": episode_id, "delta": int(delta)},
@@ -770,6 +805,37 @@ def ensure_novels_table_columns():
 
 
 ensure_novels_table_columns()
+
+
+def ensure_board_posts_table_columns():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME, IS_NULLABLE
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'board_posts'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0]: r[1] for r in rows}
+
+            alters: list[str] = []
+            if "guest_name" not in existing:
+                alters.append("ADD COLUMN guest_name VARCHAR(40) NULL")
+            if existing.get("user_id") == "NO":
+                alters.append("MODIFY COLUMN user_id INT NULL")
+
+            for clause in alters:
+                conn.execute(text(f"ALTER TABLE board_posts {clause}"))
+    except Exception as e:
+        print("[db] ensure_board_posts_table_columns failed:", repr(e))
+
+
+ensure_board_posts_table_columns()
+
 
 def ensure_ai_novel_jobs_table_columns():
     try:
@@ -1233,6 +1299,9 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change_me")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 300
 PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
+REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES = int(
+    os.getenv("REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES", "10")
+)
 
 FORCE_ALL_PREMIUM = os.getenv("FORCE_ALL_PREMIUM", "0") == "1"
 FORCE_PREMIUM_USERNAMES = {
@@ -1349,6 +1418,7 @@ AI_CHAT_IMAGE_INIT_STRENGTH = max(0.1, min(0.95, float(os.getenv("AI_CHAT_IMAGE_
 AI_CHAT_IMAGE_CAPTION_ENABLED = (os.getenv("AI_CHAT_IMAGE_CAPTION_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AI_CHAT_IMAGE_CAPTION_MODEL = (os.getenv("AI_CHAT_IMAGE_CAPTION_MODEL", "") or "").strip() or (os.getenv("OPENAI_MODEL_TEXT", "") or "").strip() or "gpt-4.1-mini"
 AI_CHAT_IMAGE_CAPTION_MAX_OUTPUT_TOKENS = max(32, min(300, int(os.getenv("AI_CHAT_IMAGE_CAPTION_MAX_OUTPUT_TOKENS", "120") or 120)))
+BOARD_NOTIFY_USERNAME = (os.getenv("BOARD_NOTIFY_USERNAME", "demo02") or "demo02").strip()
 AI_CHAT_MEMORY_ENABLED = (os.getenv("AI_CHAT_MEMORY_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AI_CHAT_MEMORY_TOPK = max(1, min(20, int(os.getenv("AI_CHAT_MEMORY_TOPK", "12") or 12)))
 
@@ -2598,6 +2668,15 @@ def _hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _hash_register_email_code(email: str, code: str) -> str:
+    seed = f"{_normalize_email(email)}:{(code or '').strip()}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
 def create_access_token(data: dict) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {**data, "exp": expire}
@@ -3565,6 +3644,7 @@ class UserCreate(BaseModel):
     username: str
     email: str
     password: str
+    email_code: str
 
 
 class UserLogin(BaseModel):
@@ -3579,6 +3659,10 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirm(BaseModel):
     token: str
     new_password: str
+
+
+class RegisterEmailStartRequest(BaseModel):
+    email: EmailStr
 
 
 class Token(BaseModel):
@@ -3770,6 +3854,17 @@ class TitleCandidateOut(BaseModel):
     used_tokens: int | None = None
 
 
+class TitleCandidatesRequest(BaseModel):
+    text: str
+    suggestions_count: int = 5
+
+
+class TitleCandidatesOut(BaseModel):
+    candidates: List[str]
+    model: str | None = None
+    used_tokens: int | None = None
+
+
 class EpisodeAssistCandidatesRequest(BaseModel):
     title: str | None = None
     text: str
@@ -3828,8 +3923,68 @@ class AdminIndexingSubmitOut(BaseModel):
 # =========================================
 # 認証 API（通常ログイン）
 # =========================================
+@app.post("/api/auth/register/email/start")
+def start_register_email_verification(
+    payload: RegisterEmailStartRequest,
+    db: Session = Depends(get_db),
+):
+    email = _normalize_email(str(payload.email))
+    if not email:
+        raise HTTPException(400, "メールアドレスを入力してください")
+
+    exists = (
+        db.query(models.User)
+        .filter(func.lower(models.User.email) == email)
+        .first()
+    )
+    if exists:
+        raise HTTPException(400, "そのメールアドレスは既に使われています")
+
+    now = datetime.utcnow()
+    db.query(models.RegisterEmailVerificationToken).filter(
+        models.RegisterEmailVerificationToken.email == email,
+        models.RegisterEmailVerificationToken.consumed == False,
+        models.RegisterEmailVerificationToken.expires_at >= now,
+    ).update(
+        {"consumed": True},
+        synchronize_session=False,
+    )
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = _hash_register_email_code(email, code)
+    expires_at = now + timedelta(minutes=REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES)
+    record = models.RegisterEmailVerificationToken(
+        email=email,
+        code_hash=code_hash,
+        created_at=now,
+        expires_at=expires_at,
+        consumed=False,
+    )
+    db.add(record)
+
+    try:
+        send_register_email_verification_code(
+            email,
+            code,
+            REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES,
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"認証コード送信に失敗しました: {e!r}")
+
+    db.commit()
+    return {"ok": True, "expires_minutes": REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES}
+
+
 @app.post("/api/auth/register")
 def register_user(payload: UserCreate, db: Session = Depends(get_db)):
+    email = _normalize_email(payload.email)
+    if not email:
+        raise HTTPException(400, "メールアドレスを入力してください")
+    email_code = (payload.email_code or "").strip()
+    if not email_code:
+        raise HTTPException(400, "メール認証コードを入力してください")
+
     # username 重複
     if get_user_by_username(db, payload.username):
         raise HTTPException(400, "そのユーザー名は既に使われています")
@@ -3837,18 +3992,36 @@ def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     # email 重複
     exists = (
         db.query(models.User)
-        .filter(models.User.email == payload.email)
+        .filter(func.lower(models.User.email) == email)
         .first()
     )
     if exists:
         raise HTTPException(400, "そのメールアドレスは既に使われています")
 
+    now = datetime.utcnow()
+    code_hash = _hash_register_email_code(email, email_code)
+    verification = (
+        db.query(models.RegisterEmailVerificationToken)
+        .filter(
+            models.RegisterEmailVerificationToken.email == email,
+            models.RegisterEmailVerificationToken.code_hash == code_hash,
+            models.RegisterEmailVerificationToken.consumed == False,
+            models.RegisterEmailVerificationToken.expires_at >= now,
+        )
+        .order_by(models.RegisterEmailVerificationToken.created_at.desc())
+        .first()
+    )
+    if not verification:
+        raise HTTPException(400, "メール認証コードが無効か期限切れです")
+    verification.consumed = True
+
     hashed = hash_password(payload.password)
     user = models.User(
         username=payload.username,
-        email=payload.email,
+        email=email,
         password_hash=hashed,
     )
+    db.add(verification)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -3901,6 +4074,32 @@ def send_password_reset_email(to_email: str, reset_url: str, expires_minutes: in
         print(f"[password-reset] メール送信成功 to={to_email}")
     except Exception as e:
         print(f"[password-reset] メール送信失敗 to={to_email}, err={e!r}")
+
+
+def send_register_email_verification_code(
+    to_email: str,
+    code: str,
+    expires_minutes: int,
+) -> None:
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS or not to_email:
+        raise RuntimeError("SMTP設定が不足しています")
+
+    subject = "小説投稿サイトLexis メール認証コード"
+    body = (
+        "会員登録のメール認証コードです。\n\n"
+        f"認証コード: {code}\n\n"
+        f"このコードは {expires_minutes} 分間有効です。"
+    )
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.send_message(msg)
 
 
 @app.post("/api/auth/password-reset/request")
@@ -5088,6 +5287,25 @@ async def generate_title_candidate(
     source_text = text[:2000]
     title, tokens, model = await call_openai_title_candidate(source_text)
     return TitleCandidateOut(title=title, model=model, used_tokens=tokens)
+
+
+@app.post("/api/ai/title_candidates", response_model=TitleCandidatesOut)
+async def generate_title_candidates(
+    payload: TitleCandidatesRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_current_user(request, db)
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "本文が空です。")
+    source_text = text[:2200]
+    count = max(2, min(8, int(payload.suggestions_count or 5)))
+    candidates, tokens, model = await call_openai_title_candidates(
+        source_text,
+        suggestions_count=count,
+    )
+    return TitleCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
 
 
 @app.post("/api/ai/episodes/assist_candidates", response_model=EpisodeAssistCandidatesOut)
@@ -14284,6 +14502,182 @@ def delete_novel(
 
 
 # =========================================
+@app.get("/api/board/posts")
+def list_board_posts(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    site_key = resolve_site_key(request)
+    posts = (
+        db.query(models.BoardPost)
+        .options(selectinload(models.BoardPost.user))
+        .filter(models.BoardPost.site_key == site_key)
+        .order_by(models.BoardPost.created_at.desc(), models.BoardPost.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": p.id,
+            "title": p.title,
+            "body": p.body,
+            "user_id": p.user_id,
+            "username": p.user.username if p.user else None,
+            "guest_name": getattr(p, "guest_name", None),
+            "display_name": (p.user.username if p.user else None)
+            or getattr(p, "guest_name", None)
+            or "ゲスト",
+            "created_at": p.created_at,
+        }
+        for p in posts
+    ]
+
+
+@app.post("/api/board/posts")
+def create_board_post(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    site_key = resolve_site_key(request)
+    user = get_optional_current_user(request, db)
+    title = str(payload.get("title") or "").strip()
+    body = str(payload.get("body") or "").strip()
+    guest_name = str(payload.get("guest_name") or "").strip()
+    recaptcha_token = str(payload.get("recaptcha_token") or "").strip()
+    if not title:
+        raise HTTPException(400, "タイトルが空です")
+    if not body:
+        raise HTTPException(400, "本文が空です")
+    if len(title) > 120:
+        raise HTTPException(400, "タイトルは120文字以内で入力してください")
+    if len(body) > 5000:
+        raise HTTPException(400, "本文は5000文字以内で入力してください")
+    if user is None:
+        if not guest_name:
+            guest_name = "ゲスト"
+        if len(guest_name) > 40:
+            raise HTTPException(400, "名前は40文字以内で入力してください")
+        remote_ip = request.client.host if request.client else None
+        if not verify_recaptcha_token(recaptcha_token, remote_ip=remote_ip):
+            raise HTTPException(400, "reCAPTCHA認証に失敗しました")
+
+    # 直前投稿者（同一サイトの最新投稿）を取得して、後続投稿通知に使う
+    previous_post = (
+        db.query(models.BoardPost)
+        .filter(models.BoardPost.site_key == site_key)
+        .order_by(models.BoardPost.created_at.desc(), models.BoardPost.id.desc())
+        .first()
+    )
+
+    post = models.BoardPost(
+        site_key=site_key,
+        user_id=user.id if user else None,
+        guest_name=None if user else guest_name,
+        title=title,
+        body=body,
+    )
+
+    actor_user_id = user.id if user else None
+    actor_name = (user.username if user else guest_name) or "ゲスト"
+    title_snippet = _truncate_text(title, 120)
+    body_snippet = _truncate_text(body, 120)
+    link_url = "/board"
+
+    # demo02（既定）には掲示板新規投稿を通知
+    demo_user = None
+    if BOARD_NOTIFY_USERNAME:
+        demo_user = (
+            db.query(models.User)
+            .filter(models.User.username == BOARD_NOTIFY_USERNAME)
+            .first()
+        )
+    if demo_user:
+        admin_title = "掲示板に新規投稿がありました"
+        admin_body = f"{actor_name}が投稿しました: {title_snippet}\n{body_snippet}"
+        create_notification(
+            db,
+            user_id=demo_user.id,
+            notif_type="board_post_new",
+            title=admin_title,
+            body=admin_body,
+            link_url=link_url,
+            actor_user_id=actor_user_id,
+        )
+
+    # 直前投稿者（ユーザー投稿のみ）に「次の投稿が来た」通知
+    previous_user_id = int(previous_post.user_id) if previous_post and previous_post.user_id else None
+    should_notify_previous_user = bool(
+        previous_user_id
+        and (not user or previous_user_id != user.id)
+        and (not demo_user or previous_user_id != demo_user.id)
+    )
+    if should_notify_previous_user and previous_user_id is not None:
+        prev_title = "あなたの投稿の直後に新規投稿がありました"
+        prev_body = f"{actor_name}が投稿しました: {title_snippet}\n{body_snippet}"
+        create_notification(
+            db,
+            user_id=previous_user_id,
+            notif_type="board_post_followup",
+            title=prev_title,
+            body=prev_body,
+            link_url=link_url,
+            actor_user_id=actor_user_id,
+        )
+
+    db.add(post)
+    db.commit()
+    db.refresh(post)
+
+    # メール通知（demo02 は必ず送信 / 直前投稿者は通知設定ON時のみ）
+    if demo_user and demo_user.email:
+        demo_mail_subject = "掲示板に新規投稿がありました"
+        demo_mail_body = (
+            f"{actor_name}が投稿しました。\n\n"
+            f"タイトル: {title_snippet}\n"
+            f"本文: {body_snippet}\n\n"
+            f"{FRONTEND_ORIGIN.rstrip('/')}{link_url}"
+        )
+        send_notification_email(demo_user.email, demo_mail_subject, demo_mail_body)
+    if should_notify_previous_user and previous_user_id is not None:
+        prev_mail_subject = "あなたの投稿の直後に新規投稿がありました"
+        prev_mail_body = (
+            f"{actor_name}が投稿しました。\n\n"
+            f"タイトル: {title_snippet}\n"
+            f"本文: {body_snippet}"
+        )
+        send_notification_email_if_enabled(
+            db,
+            user_id=previous_user_id,
+            title=prev_mail_subject,
+            body=prev_mail_body,
+            link_url=link_url,
+        )
+    return {"ok": True, "id": post.id}
+
+
+@app.delete("/api/admin/board/posts/{post_id}")
+def admin_delete_board_post(
+    post_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    site_key = resolve_site_key(request)
+    post = (
+        db.query(models.BoardPost)
+        .filter(models.BoardPost.id == post_id, models.BoardPost.site_key == site_key)
+        .first()
+    )
+    if not post:
+        raise HTTPException(404, "投稿が見つかりません")
+    db.delete(post)
+    db.commit()
+    return {"ok": True}
+
+
+# =========================================
 @app.get("/api/novels/{novel_id}/comments")
 def get_comments(novel_id: int, request: Request, db: Session = Depends(get_db)):
     _ = get_novel_in_site_or_404(db, request, novel_id)
@@ -16291,6 +16685,62 @@ async def generate_novel_tag_candidates(
         used_tokens=tokens,
     )
 
+
+@app.post("/api/novels/{novel_id}/title_candidates", response_model=TitleCandidatesOut)
+async def generate_novel_title_candidates(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    novel = get_novel_in_site_or_404(db, request, novel_id)
+    if novel.author_id != user.id:
+        raise HTTPException(403, "タイトル生成権限がありません")
+
+    first_episode = (
+        db.query(models.Episode)
+        .filter(models.Episode.novel_id == novel_id, models.Episode.site_key == resolve_site_key(request))
+        .order_by(
+            models.Episode.episode_number.is_(None),
+            models.Episode.episode_number,
+            models.Episode.id,
+        )
+        .first()
+    )
+    if not first_episode or not (first_episode.body or "").strip():
+        raise HTTPException(404, "本文が存在しません")
+
+    source_text = (first_episode.body or "").strip()[:2200]
+    candidates, tokens, model = await call_openai_title_candidates(source_text, suggestions_count=5)
+    return TitleCandidatesOut(
+        candidates=candidates,
+        model=model,
+        used_tokens=tokens,
+    )
+
+
+@app.post("/api/episodes/{episode_id}/title_candidates", response_model=TitleCandidatesOut)
+async def generate_episode_title_candidates(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
+    if not novel or novel.author_id != user.id:
+        raise HTTPException(403, "タイトル生成権限がありません")
+    if not (ep.body or "").strip():
+        raise HTTPException(404, "本文が存在しません")
+
+    source_text = (ep.body or "").strip()[:2200]
+    candidates, tokens, model = await call_openai_title_candidates(source_text, suggestions_count=5)
+    return TitleCandidatesOut(
+        candidates=candidates,
+        model=model,
+        used_tokens=tokens,
+    )
+
 # =========================================
 # =========================================
 # Episode 画像削除（表紙・押絵）
@@ -17995,8 +18445,6 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
     like = models.NovelLike(novel_id=novel_id, user_id=user.id)
     db.add(like)
 
-    enqueue_novel_like_delta(novel.id, 1)
-
     if novel.author_id != user.id:
         title = "小説にいいねが付きました"
         notif_body = f"{user.username}が「{novel.title}」にいいねしました"
@@ -18017,6 +18465,12 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
         .filter(models.NovelLike.novel_id == novel.id)
         .count()
     )
+    db.execute(
+        text("UPDATE novels SET like_count = :like_count WHERE id = :novel_id"),
+        {"like_count": int(like_count), "novel_id": int(novel.id)},
+    )
+    apply_novel_daily_metric(db, int(novel.id), like_delta=1)
+    db.commit()
     if novel.author_id != user.id:
         try:
             send_web_push_to_user(
@@ -18076,7 +18530,6 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
         }
 
     db.delete(existing)
-    enqueue_novel_like_delta(novel.id, -1)
     db.commit()
     invalidate_public_list_caches()
     like_count = (
@@ -18084,6 +18537,12 @@ def unlike_novel(novel_id: int, request: Request, db: Session = Depends(get_db))
         .filter(models.NovelLike.novel_id == novel.id)
         .count()
     )
+    db.execute(
+        text("UPDATE novels SET like_count = :like_count WHERE id = :novel_id"),
+        {"like_count": int(like_count), "novel_id": int(novel.id)},
+    )
+    apply_novel_daily_metric(db, int(novel.id), like_delta=-1)
+    db.commit()
 
     return {
         "ok": True,
@@ -18128,8 +18587,6 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
     like = models.EpisodeLike(episode_id=episode_id, user_id=user.id)
     db.add(like)
 
-    enqueue_episode_like_delta(ep.id, 1)
-
     if novel and novel.author_id != user.id:
         title = "エピソードにいいねが付きました"
         notif_body = f"{user.username}が「{ep.title}」にいいねしました"
@@ -18151,6 +18608,11 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
         .filter(models.EpisodeLike.episode_id == episode_id)
         .count()
     )
+    db.execute(
+        text("UPDATE episodes SET like_count = :like_count WHERE id = :episode_id"),
+        {"like_count": int(like_count), "episode_id": int(ep.id)},
+    )
+    db.commit()
     if novel and novel.author_id != user.id:
         try:
             send_web_push_to_user(
@@ -18204,7 +18666,6 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
 
     db.delete(like)
 
-    enqueue_episode_like_delta(ep.id, -1)
     db.commit()
     invalidate_public_list_caches()
 
@@ -18213,6 +18674,11 @@ def unlike_episode(episode_id: int, request: Request, db: Session = Depends(get_
         .filter(models.EpisodeLike.episode_id == episode_id)
         .count()
     )
+    db.execute(
+        text("UPDATE episodes SET like_count = :like_count WHERE id = :episode_id"),
+        {"like_count": int(like_count), "episode_id": int(ep.id)},
+    )
+    db.commit()
     return {"ok": True, "liked": False, "like_count": like_count}
 
 @app.get("/api/me/favorites")
@@ -18968,6 +19434,7 @@ def unfavorite_novel(novel_id: int, request: Request, db: Session = Depends(get_
     if not fav:
         return {"ok": True, "favorited": False}
     db.delete(fav)
+    apply_novel_daily_metric(db, novel_id, favorite_delta=-1)
     db.commit()
     invalidate_public_list_caches()
     return {"ok": True, "favorited": False}

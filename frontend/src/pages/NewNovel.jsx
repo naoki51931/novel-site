@@ -33,6 +33,9 @@ export default function NewNovel() {
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
   const [tagSuggestError, setTagSuggestError] = useState("");
   const [tagSuggestLoading, setTagSuggestLoading] = useState(false);
+  const [titleSuggestLoading, setTitleSuggestLoading] = useState(false);
+  const [titleSuggestError, setTitleSuggestError] = useState("");
+  const [titleCandidates, setTitleCandidates] = useState([]);
   const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
   const [expandedBubble, setExpandedBubble] = useState("");
 
@@ -111,6 +114,59 @@ export default function NewNovel() {
       );
     } finally {
       setTagSuggestLoading(false);
+    }
+  };
+
+  const handleSuggestTitles = async () => {
+    setTitleSuggestError("");
+    setTitleCandidates([]);
+    const sourceText = [description, title].filter(Boolean).join("\n");
+    if (!sourceText.trim()) {
+      setTitleSuggestError(
+        t({
+          ja: "説明文がないためタイトル候補を生成できません。",
+          en: "No description text available to generate title candidates.",
+        })
+      );
+      return;
+    }
+    try {
+      setTitleSuggestLoading(true);
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
+      }
+      const res = await fetch(`${API_BASE}/api/ai/title_candidates`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: sourceText.slice(0, 2200), suggestions_count: 5 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data.detail || t({ ja: "タイトル候補の生成に失敗しました。", en: "Failed to generate title candidates." })
+        );
+      }
+      const nextCandidates = Array.isArray(data?.candidates)
+        ? data.candidates.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (!nextCandidates.length) {
+        throw new Error(
+          t({ ja: "タイトル候補を取得できませんでした。", en: "Failed to get title candidates." })
+        );
+      }
+      setTitleCandidates(nextCandidates);
+      setTitle(nextCandidates[0]);
+    } catch (err) {
+      console.error(err);
+      setTitleSuggestError(
+        err.message || t({ ja: "タイトル候補の生成に失敗しました。", en: "Failed to generate title candidates." })
+      );
+    } finally {
+      setTitleSuggestLoading(false);
     }
   };
 
@@ -429,6 +485,36 @@ export default function NewNovel() {
           <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
             {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(title)}
           </div>
+          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleSuggestTitles}
+              disabled={titleSuggestLoading}
+            >
+              {titleSuggestLoading
+                ? t({ ja: "タイトル候補を生成中...", en: "Generating title candidates..." })
+                : t({ ja: "本文/説明からタイトル候補を生成", en: "Generate title candidates from text/description" })}
+            </button>
+          </div>
+          {titleSuggestError && (
+            <div style={{ marginTop: 6, color: "red" }}>{titleSuggestError}</div>
+          )}
+          {titleCandidates.length > 0 && (
+            <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+              {titleCandidates.map((candidate, idx) => (
+                <button
+                  key={`${candidate}-${idx}`}
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => setTitle(candidate)}
+                  style={{ textAlign: "left" }}
+                >
+                  {candidate}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 8 }}>

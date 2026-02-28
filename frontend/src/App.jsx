@@ -37,6 +37,7 @@ import Notifications from "./pages/Notifications";
 import AuthorLanding from "./pages/AuthorLanding";
 import PremiumLP from "./pages/PremiumLP";
 import Contact from "./pages/Contact";
+import Board from "./pages/Board";
 import TagPage from "./pages/TagPage";
 import AllSites from "./pages/AllSites";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -96,6 +97,7 @@ const HEADER_I18N = {
     ko: "새 소설 등록",
   },
   aiChat: { ja: "AIチャット", en: "AI Chat", "zh-cn": "AI聊天", "zh-tw": "AI聊天", ko: "AI 채팅" },
+  board: { ja: "掲示板", en: "Board", "zh-cn": "论坛", "zh-tw": "論壇", ko: "게시판" },
   premium: { ja: "プレミアム", en: "Premium", "zh-cn": "高级会员", "zh-tw": "高級會員", ko: "프리미엄" },
   myPage: { ja: "マイページ", en: "My Page", "zh-cn": "我的主页", "zh-tw": "我的主頁", ko: "마이페이지" },
   login: { ja: "ログイン", en: "Login", "zh-cn": "登录", "zh-tw": "登入", ko: "로그인" },
@@ -381,6 +383,7 @@ export default function App() {
         path === "/all" ||
         path.startsWith("/ai-novel") ||
         path.startsWith("/ai_chat") ||
+        path.startsWith("/board") ||
         path.startsWith("/tags/") ||
         path.startsWith("/novels/") ||
         path.startsWith("/episodes/") ||
@@ -620,6 +623,13 @@ export default function App() {
             {t(HEADER_I18N.aiChat)}
           </Link>
           <Link
+            to="/board"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t(HEADER_I18N.board)}
+          </Link>
+          <Link
             to="/premium"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
@@ -807,6 +817,7 @@ export default function App() {
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/register" element={<Register />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/board" element={<Board />} />
           <Route path="/premium" element={<PremiumLP />} />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/notifications" element={<Notifications />} />

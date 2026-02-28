@@ -11,13 +11,51 @@ export default function Register() {
   const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState(""); // ← 追加
+  const [emailCode, setEmailCode] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [codeSentMessage, setCodeSentMessage] = useState("");
   const [error, setError] = useState("");
+
+  const handleSendCode = async () => {
+    setError("");
+    setCodeSentMessage("");
+    try {
+      setSendingCode(true);
+      const res = await fetch(API_BASE + "/api/auth/register/email/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        let msg = t({ ja: "認証コード送信に失敗しました", en: "Failed to send verification code." });
+        try {
+          const data = await res.json();
+          if (data?.detail) msg = data.detail;
+        } catch {}
+        throw new Error(msg);
+      }
+      setCodeSentMessage(
+        t({
+          ja: "認証コードをメール送信しました。受信した6桁コードを入力してください。",
+          en: "Verification code sent. Enter the 6-digit code from your email.",
+        })
+      );
+    } catch (e) {
+      setError(
+        e.message ||
+          t({ ja: "認証コード送信中にエラーが発生しました", en: "An error occurred while sending code." })
+      );
+    } finally {
+      setSendingCode(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    setCodeSentMessage("");
 
     try {
       const res = await fetch(API_BASE + "/api/auth/register", {
@@ -26,6 +64,7 @@ export default function Register() {
         body: JSON.stringify({
           username,
           email,      // ← email を送信
+          email_code: emailCode,
           password,
         }),
       });
@@ -80,12 +119,41 @@ export default function Register() {
 
         <div className="form-group">
           <label>{t({ ja: "メールアドレス", en: "Email" })}</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="input"
+              required
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleSendCode}
+              disabled={sendingCode || !email.trim()}
+            >
+              {sendingCode
+                ? t({ ja: "送信中...", en: "Sending..." })
+                : t({ ja: "認証コード送信", en: "Send code" })}
+            </button>
+          </div>
+          {codeSentMessage && (
+            <div style={{ color: "green", marginTop: 6, fontSize: 13 }}>{codeSentMessage}</div>
+          )}
+        </div>
+
+        <div className="form-group">
+          <label>{t({ ja: "メール認証コード", en: "Email verification code" })}</label>
           <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            type="text"
+            value={emailCode}
+            onChange={(e) => setEmailCode(e.target.value)}
             className="input"
             required
+            maxLength={6}
+            placeholder={t({ ja: "6桁コード", en: "6-digit code" })}
           />
         </div>
 

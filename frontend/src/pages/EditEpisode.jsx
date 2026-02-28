@@ -81,6 +81,7 @@ export default function EditEpisode() {
   const [tagSuggestError, setTagSuggestError] = useState("");
   const [isExtractingTitle, setIsExtractingTitle] = useState(false);
   const [titleSuggestError, setTitleSuggestError] = useState("");
+  const [titleCandidates, setTitleCandidates] = useState([]);
 
   const countChars = (value) => (value || "").length;
 
@@ -370,6 +371,7 @@ export default function EditEpisode() {
 
   const handleSuggestTitleFromBody = async () => {
     setTitleSuggestError("");
+    setTitleCandidates([]);
     if (!body.trim()) {
       setTitleSuggestError(
         t({ ja: "本文がないためタイトルを生成できません。", en: "No body text available to generate a title." })
@@ -382,29 +384,32 @@ export default function EditEpisode() {
         throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
       }
       setIsExtractingTitle(true);
-      const res = await fetch(`${API_BASE}/api/ai/title_candidate`, {
+      const res = await fetch(`${API_BASE}/api/ai/title_candidates`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ text: body.slice(0, 2000) }),
+        body: JSON.stringify({ text: body.slice(0, 2200), suggestions_count: 5 }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.detail || t({ ja: "タイトル生成に失敗しました。", en: "Failed to generate title." }));
+        throw new Error(data.detail || t({ ja: "タイトル候補の生成に失敗しました。", en: "Failed to generate title candidates." }));
       }
-      const nextTitle = typeof data?.title === "string" ? data.title.trim() : "";
-      if (!nextTitle) {
+      const nextCandidates = Array.isArray(data?.candidates)
+        ? data.candidates.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (!nextCandidates.length) {
         throw new Error(
-          t({ ja: "タイトル候補を取得できませんでした。", en: "Failed to get a title candidate." })
+          t({ ja: "タイトル候補を取得できませんでした。", en: "Failed to get title candidates." })
         );
       }
-      setTitle(nextTitle);
+      setTitleCandidates(nextCandidates);
+      setTitle(nextCandidates[0]);
     } catch (err) {
       console.error(err);
       setTitleSuggestError(
-        err.message || t({ ja: "タイトル生成に失敗しました。", en: "Failed to generate title." })
+        err.message || t({ ja: "タイトル候補の生成に失敗しました。", en: "Failed to generate title candidates." })
       );
     } finally {
       setIsExtractingTitle(false);
@@ -727,12 +732,27 @@ export default function EditEpisode() {
                 disabled={isExtractingTitle}
               >
                 {isExtractingTitle
-                  ? t({ ja: "タイトルを生成中...", en: "Generating title..." })
-                  : t({ ja: "本文からタイトルを抽出", en: "Generate title from body" })}
+                  ? t({ ja: "タイトル候補を生成中...", en: "Generating title candidates..." })
+                  : t({ ja: "本文からタイトル候補を生成", en: "Generate title candidates from body" })}
               </button>
             </div>
             {titleSuggestError && (
               <div style={{ marginTop: 6, color: "red" }}>{titleSuggestError}</div>
+            )}
+            {titleCandidates.length > 0 && (
+              <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                {titleCandidates.map((candidate, idx) => (
+                  <button
+                    key={`${candidate}-${idx}`}
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => setTitle(candidate)}
+                    style={{ textAlign: "left" }}
+                  >
+                    {candidate}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         )}

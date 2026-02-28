@@ -171,31 +171,6 @@ export default function NovelDetail() {
 
         const token = localStorage.getItem("token");
         const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
-  const toggleFavorite = async () => {
-    if (!token) {
-      alert(t({ ja: "ログインが必要です", en: "Login required." }));
-      return;
-    }
-    if (!novel) return;
-    const method = isFavorited ? "DELETE" : "POST";
-    try {
-      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!res.ok) {
-        console.error("favorite toggle failed");
-        return;
-      }
-      const data = await res.json();
-      setIsFavorited(!!data.favorited);
-    } catch (e) {
-      console.error(e);
-    }
-  };
         const res = await fetch(`${API_BASE}/api/novels/${id}`, { headers: authHeaders });
 
         if (!res.ok) {
@@ -326,32 +301,8 @@ export default function NovelDetail() {
 
 
   const handleToggleLike = async () => {
-    const token = localStorage.getItem("token");
-  const toggleFavorite = async () => {
-    if (!token) {
-      alert(t({ ja: "ログインが必要です", en: "Login required." }));
-      return;
-    }
-    if (!novel) return;
-    const method = isFavorited ? "DELETE" : "POST";
-    try {
-      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!res.ok) {
-        console.error("favorite toggle failed");
-        return;
-      }
-      const data = await res.json();
-      setIsFavorited(!!data.favorited);
-    } catch (e) {
-      console.error(e);
-    }
-  };
+    const token =
+      localStorage.getItem("token") || localStorage.getItem("access_token");
     if (!token) {
       alert(t({ ja: "いいねするにはログインが必要です。", en: "Login required to like." }));
       navigate("/login");
@@ -375,12 +326,15 @@ export default function NovelDetail() {
         throw new Error(data.detail || t({ ja: "いいね操作に失敗しました", en: "Failed to like." }));
       }
 
+      const nextLiked =
+        typeof data.liked === "boolean" ? data.liked : !isLiked;
+      const delta = nextLiked === isLiked ? 0 : nextLiked ? 1 : -1;
       if (typeof data.like_count === "number") {
         setLikeCount(data.like_count);
       } else {
-        setLikeCount((prev) => prev + (isLiked ? -1 : 1));
+        setLikeCount((prev) => Math.max(0, prev + delta));
       }
-      setIsLiked((prev) => !prev);
+      setIsLiked(nextLiked);
     } catch (e) {
       console.error(e);
       alert(
@@ -400,31 +354,6 @@ export default function NovelDetail() {
       return;
     }
     const token = localStorage.getItem("token");
-  const toggleFavorite = async () => {
-    if (!token) {
-      alert(t({ ja: "ログインが必要です", en: "Login required." }));
-      return;
-    }
-    if (!novel) return;
-    const method = isFavorited ? "DELETE" : "POST";
-    try {
-      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!res.ok) {
-        console.error("favorite toggle failed");
-        return;
-      }
-      const data = await res.json();
-      setIsFavorited(!!data.favorited);
-    } catch (e) {
-      console.error(e);
-    }
-  };
     if (!token) {
       alert(t({ ja: "削除するにはログインが必要です。", en: "Login required to delete." }));
       navigate("/login");
@@ -516,31 +445,6 @@ export default function NovelDetail() {
     }
 
     const token = localStorage.getItem("token");
-  const toggleFavorite = async () => {
-    if (!token) {
-      alert(t({ ja: "ログインが必要です", en: "Login required." }));
-      return;
-    }
-    if (!novel) return;
-    const method = isFavorited ? "DELETE" : "POST";
-    try {
-      const res = await fetch(`${API_BASE}/api/novels/${novel.id}/favorite`, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!res.ok) {
-        console.error("favorite toggle failed");
-        return;
-      }
-      const data = await res.json();
-      setIsFavorited(!!data.favorited);
-    } catch (e) {
-      console.error(e);
-    }
-  };
     if (!token) {
       alert(t({ ja: "削除するにはログインが必要です。", en: "Login required to delete." }));
       navigate("/login");

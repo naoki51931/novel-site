@@ -1120,25 +1120,72 @@ export default function AiChatPage() {
           t({ ja: "アップロード画像のURLを取得できませんでした。", en: "No uploaded image URL returned." })
         );
       }
+      const imageDescriptionText =
+        descriptions.length > 0
+          ? `【ユーザー添付画像の説明】\n${descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`
+          : t({
+              ja: "【ユーザー添付画像】画像を受け取りました。内容を踏まえて返答してください。",
+              en: "[User attached image] I attached an image. Please respond considering it.",
+            });
+      const uploadMessage = {
+        id: data?.message_id != null ? Number(data.message_id) : null,
+        role: "user",
+        mode: "say",
+        is_auto_dialogue: false,
+        is_generated_image: true,
+        image_message_kind: "uploaded_images",
+        content: t({ ja: "画像を追加しました。", en: "Added images." }),
+        speaker_name: String(userSpeakerProfile?.name || characterName || "").trim(),
+        generated_images: images,
+        image_descriptions: descriptions,
+      };
       setMessages((prev) => [
         ...prev,
-        {
-          id: data?.message_id != null ? Number(data.message_id) : null,
-          role: "user",
-          mode: "say",
-          is_auto_dialogue: false,
-          is_generated_image: true,
-          image_message_kind: "uploaded_images",
-          content: t({ ja: "画像を追加しました。", en: "Added images." }),
-          speaker_name: String(userSpeakerProfile?.name || characterName || "").trim(),
-          generated_images: images,
-          image_descriptions: descriptions,
-        },
+        uploadMessage,
       ]);
       setChatImageFiles([]);
       if (chatImageInputRef.current) {
         chatImageInputRef.current.value = "";
       }
+
+      // 画像だけ送っても会話が続くよう、説明文を履歴に含めて1回自動送信する
+      const autoPrompt = t({
+        ja: "この画像の内容に反応して返信して。",
+        en: "Please reply by reacting to this image.",
+      });
+      const userMessage = {
+        id: null,
+        role: "user",
+        mode: "say",
+        content: autoPrompt,
+        speaker_name: String(userSpeakerProfile?.name || characterName || "").trim(),
+      };
+      const explicitHistory = [
+        ...historyPayload,
+        {
+          role: "user",
+          content: uploadMessage.speaker_name
+            ? `[${uploadMessage.speaker_name}] ${imageDescriptionText}`
+            : imageDescriptionText,
+          mode: "say",
+        },
+        {
+          role: "user",
+          content: userMessage.speaker_name
+            ? `[${userMessage.speaker_name}] ${userMessage.content}`
+            : userMessage.content,
+          mode: "say",
+        },
+      ];
+      setMessages((prev) => [...prev, userMessage]);
+      setLastRequest({ text: autoPrompt, mode: "say" });
+      setResendDraft(autoPrompt);
+      setResendMode("say");
+      await sendChat({
+        text: autoPrompt,
+        modeAtSend: "say",
+        explicitHistory,
+      });
     } catch (e) {
       setError(
         e?.message ||

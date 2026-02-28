@@ -65,6 +65,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    board_posts = relationship(
+        "BoardPost",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class PasswordResetToken(Base):
@@ -79,6 +84,17 @@ class PasswordResetToken(Base):
     consumed = Column(Boolean, nullable=False, server_default="0")
 
     user = relationship("User", back_populates="password_reset_tokens")
+
+
+class RegisterEmailVerificationToken(Base):
+    __tablename__ = "register_email_verification_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), nullable=False, index=True)
+    code_hash = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)
+    consumed = Column(Boolean, nullable=False, server_default="0")
 
 
 class OAuthAccount(Base):
@@ -611,6 +627,21 @@ class EpisodeComment(Base):
 
     episode = relationship("Episode", back_populates="comments")
     user = relationship("User", back_populates="episode_comments")
+
+
+class BoardPost(Base):
+    __tablename__ = "board_posts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    site_key = Column(String(32), nullable=False, server_default="main", index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    guest_name = Column(String(40), nullable=True)
+    title = Column(String(120), nullable=False)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    user = relationship("User", back_populates="board_posts")
+
 
 class AIGenerateLog(Base):
     __tablename__ = "ai_generate_logs"
