@@ -103,6 +103,7 @@ from fastapi import APIRouter
 from .ai_novel import (
     AINovelRequest,
     AINovelResponse,
+    assert_openrouter_model_allowed_for_pricing,
     build_ai_prompt,
     call_ai_json,
     call_openai_novel_api,
@@ -375,6 +376,7 @@ def _build_user_cache_payload(user: models.User) -> dict[str, Any]:
         "id": int(user.id),
         "username": str(user.username or ""),
         "email": user.email,
+        "email_address_invalid": bool(getattr(user, "email_address_invalid", False)),
         "birth_date": user.birth_date.isoformat() if user.birth_date else None,
         "is_premium": bool(is_effective_premium_user(user)),
         "email_notifications_enabled": bool(
@@ -616,6 +618,10 @@ def ensure_users_table_columns():
             alters: list[str] = []
             if "email_notifications_enabled" not in existing:
                 alters.append("ADD COLUMN email_notifications_enabled TINYINT(1) NOT NULL DEFAULT 1")
+            if "email_address_invalid" not in existing:
+                alters.append("ADD COLUMN email_address_invalid TINYINT(1) NOT NULL DEFAULT 0")
+            if "email_2fa_skip_until" not in existing:
+                alters.append("ADD COLUMN email_2fa_skip_until DATETIME NULL")
             if "premium_checked_at" not in existing:
                 alters.append("ADD COLUMN premium_checked_at DATETIME NULL")
             if "stripe_customer_id" not in existing:
@@ -2162,6 +2168,75 @@ def send_notification_email(to_email: str, subject: str, body: str) -> None:
         print(f"[notification] メール送信成功 to={to_email}")
     except Exception as e:
         print(f"[notification] メール送信失敗 to={to_email}, err={e!r}")
+
+
+def _is_unknown_email_address_error(err: Exception) -> bool:
+    unknown_markers = (
+        "user unknown",
+        "unknown user",
+        "unknown recipient",
+        "no such user",
+        "no such mailbox",
+        "mailbox unavailable",
+        "recipient address rejected",
+        "address rejected",
+        "does not exist",
+        "not found",
+        "invalid keyword argument for compat32",
+        "invalid email",
+        "email address is invalid",
+    )
+
+    def _contains_unknown_marker(value: Any) -> bool:
+        text_value = str(value or "").strip().lower()
+        if not text_value:
+            return False
+        return any(marker in text_value for marker in unknown_markers)
+
+    if isinstance(err, smtplib.SMTPRecipientsRefused):
+        for _, smtp_err in (err.recipients or {}).items():
+            smtp_code = None
+            smtp_detail: Any = smtp_err
+            if isinstance(smtp_err, tuple) and smtp_err:
+                smtp_code = smtp_err[0]
+                smtp_detail = smtp_err[1] if len(smtp_err) > 1 else smtp_err[0]
+            if smtp_code in {550, 551, 553}:
+                return True
+            if _contains_unknown_marker(smtp_detail):
+                return True
+
+    if isinstance(err, smtplib.SMTPResponseException):
+        smtp_code = int(getattr(err, "smtp_code", 0) or 0)
+        smtp_error = getattr(err, "smtp_error", b"")
+        if smtp_code in {550, 551, 553}:
+            return True
+        if _contains_unknown_marker(smtp_error):
+            return True
+
+    return _contains_unknown_marker(err)
+
+
+def send_test_email_and_detect_invalid_address(
+    to_email: str,
+    *,
+    subject: str,
+    body: str,
+) -> tuple[bool, bool, str | None]:
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS or not to_email:
+        return False, False, "SMTP設定が不足しているか、宛先メールアドレスが空です"
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        return True, False, None
+    except Exception as e:
+        return False, _is_unknown_email_address_error(e), repr(e)
 
 
 def send_admin_contact_email(subject: str, body: str, admin_username: str | None) -> None:
@@ -3828,6 +3903,16 @@ class AdminUserDeleteOut(BaseModel):
     username: str
 
 
+class AdminEmailTestAllOut(BaseModel):
+    total_users: int
+    target_users: int
+    sent_count: int
+    invalid_address_count: int
+    skipped_no_email_count: int
+    failed_other_count: int
+    invalid_user_ids: List[int]
+
+
 class NovelSummaryCandidatesOut(BaseModel):
     candidates: List[str]
     model: str | None = None
@@ -4902,6 +4987,74 @@ def admin_list_users(
         for user, novel_count in rows
     ]
     return AdminUserListOut(total_users=total_users, users=users)
+
+
+@app.post("/api/admin/email-test-all-users", response_model=AdminEmailTestAllOut)
+def admin_send_test_email_all_users(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        raise HTTPException(400, "SMTP設定が不足しています")
+
+    users = db.query(models.User).order_by(models.User.id.asc()).all()
+    now_text = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    subject = "【テスト送信】登録メールアドレス確認"
+    body = (
+        "このメールは登録メールアドレスの疎通確認テストです。\n"
+        f"送信日時: {now_text}\n\n"
+        "身に覚えがない場合は本メールを破棄してください。"
+    )
+
+    target_users = 0
+    sent_count = 0
+    invalid_address_count = 0
+    skipped_no_email_count = 0
+    failed_other_count = 0
+    invalid_user_ids: list[int] = []
+
+    for user in users:
+        email = str(getattr(user, "email", "") or "").strip()
+        if not email:
+            skipped_no_email_count += 1
+            continue
+        target_users += 1
+        sent, invalid_address, _ = send_test_email_and_detect_invalid_address(
+            email,
+            subject=subject,
+            body=body,
+        )
+        if sent:
+            sent_count += 1
+            if bool(getattr(user, "email_address_invalid", False)):
+                user.email_address_invalid = False
+                user.email_2fa_skip_until = None
+                db.add(user)
+                invalidate_user_cache(user_id=user.id, username=user.username)
+            continue
+
+        if invalid_address:
+            invalid_address_count += 1
+            invalid_user_ids.append(int(user.id))
+            user.email_address_invalid = True
+            user.email_2fa_skip_until = datetime.utcnow() + timedelta(days=60)
+            db.add(user)
+            invalidate_user_cache(user_id=user.id, username=user.username)
+            continue
+
+        failed_other_count += 1
+
+    db.commit()
+    return AdminEmailTestAllOut(
+        total_users=len(users),
+        target_users=target_users,
+        sent_count=sent_count,
+        invalid_address_count=invalid_address_count,
+        skipped_no_email_count=skipped_no_email_count,
+        failed_other_count=failed_other_count,
+        invalid_user_ids=invalid_user_ids,
+    )
 
 
 @app.get("/api/admin/users/{user_id}/novels", response_model=List[AdminUserNovelOut])
@@ -7155,6 +7308,7 @@ class AIChatCharacterResponse(BaseModel):
     name: str
     personality: str | None = None
     image_url: str | None = None
+    is_r18: bool = False
     speech_gender: Literal["auto", "female", "male"] = "auto"
     owner_username: str | None = None
     is_readonly: bool = False
@@ -7176,6 +7330,24 @@ class AIChatMessageResponse(BaseModel):
 class AIChatMessageDeleteResponse(BaseModel):
     ok: bool = True
     deleted: int = 0
+
+
+class AIChatMessageImportItemRequest(BaseModel):
+    role: Literal["user", "assistant"]
+    mode: Literal["say", "do"] = "say"
+    is_auto_dialogue: bool = False
+    content: str
+
+
+class AIChatMessageImportRequest(BaseModel):
+    messages: list[AIChatMessageImportItemRequest] = Field(default_factory=list)
+    replace_existing: bool = False
+
+
+class AIChatMessageImportResponse(BaseModel):
+    ok: bool = True
+    imported: int = 0
+    replaced: int = 0
 
 
 class AIChatCharacterImageUploadResponse(BaseModel):
@@ -7280,6 +7452,8 @@ class AIChatPublicCharacterListItem(BaseModel):
     id: int
     name: str
     personality: str | None = None
+    image_url: str | None = None
+    is_r18: bool = False
     author_username: str | None = None
     published_at: str | None = None
     like_count: int = 0
@@ -7292,6 +7466,8 @@ class AIChatPublicCharacterDetailResponse(BaseModel):
     id: int
     name: str
     personality: str | None = None
+    image_url: str | None = None
+    is_r18: bool = False
     author_username: str | None = None
     published_at: str | None = None
     like_count: int = 0
@@ -8444,6 +8620,8 @@ async def _call_ai_chat_json_with_fallback(
     errors: list[str] = []
     normalized_model = _normalize_ai_chat_model_alias(model)
     primary_provider = _resolve_ai_chat_provider(provider, normalized_model)
+    if primary_provider == "openrouter":
+        assert_openrouter_model_allowed_for_pricing(normalized_model)
     primary_model = normalized_model
 
     for candidate in _ai_chat_provider_candidates(provider, normalized_model):
@@ -10585,6 +10763,7 @@ def list_ai_chat_characters(
             name=str(item.name or ""),
             personality=item.personality,
             image_url=str(getattr(item, "image_url", "") or "").strip() or None,
+            is_r18=bool(getattr(item, "is_r18", False)),
             speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
             owner_username=str(username or "") if username else None,
             is_readonly=not _can_edit_ai_chat_character(
@@ -10638,6 +10817,7 @@ def create_ai_chat_character(
             name=str(exists.name or ""),
             personality=exists.personality,
             image_url=str(getattr(exists, "image_url", "") or "").strip() or None,
+            is_r18=bool(getattr(exists, "is_r18", False)),
             speech_gender=normalize_speech_gender(getattr(exists, "speech_gender", None)),
             owner_username=str(getattr(user, "username", "") or "").strip() or None,
             is_readonly=False,
@@ -10662,6 +10842,7 @@ def create_ai_chat_character(
         name=str(item.name or ""),
         personality=item.personality,
         image_url=str(getattr(item, "image_url", "") or "").strip() or None,
+        is_r18=bool(getattr(item, "is_r18", False)),
         speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
         owner_username=str(getattr(user, "username", "") or "").strip() or None,
         is_readonly=False,
@@ -10708,6 +10889,7 @@ def update_ai_chat_character(
         name=str(item.name or ""),
         personality=item.personality,
         image_url=str(getattr(item, "image_url", "") or "").strip() or None,
+        is_r18=bool(getattr(item, "is_r18", False)),
         speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
         owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
         is_readonly=False,
@@ -10843,6 +11025,7 @@ def publish_ai_chat_character(
         name=str(item.name or ""),
         personality=item.personality,
         image_url=str(getattr(item, "image_url", "") or "").strip() or None,
+        is_r18=bool(getattr(item, "is_r18", False)),
         speech_gender=normalize_speech_gender(getattr(item, "speech_gender", None)),
         owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
         is_readonly=False,
@@ -10980,6 +11163,8 @@ def list_public_ai_chat_characters(
                 id=item_id,
                 name=str(item.name or ""),
                 personality=_trim_public_character_intro(item.personality),
+                image_url=str(getattr(item, "image_url", "") or "").strip() or None,
+                is_r18=bool(getattr(item, "is_r18", False)),
                 author_username=str(username or "") if username else None,
                 published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
                 like_count=like_counts.get(item_id, 0),
@@ -11067,6 +11252,8 @@ def get_public_ai_chat_character_detail(
         id=int(character.id),
         name=str(character.name or ""),
         personality=_trim_public_character_intro(character.personality),
+        image_url=str(getattr(character, "image_url", "") or "").strip() or None,
+        is_r18=bool(getattr(character, "is_r18", False)),
         author_username=str(username or "") if username else None,
         published_at=character.published_at.isoformat() if getattr(character, "published_at", None) else None,
         like_count=int(like_count or 0),
@@ -11349,6 +11536,83 @@ def list_ai_chat_messages(
         )
         for item in items
     ]
+
+
+@app.post(
+    "/api/ai/chat/characters/{character_id}/messages/import",
+    response_model=AIChatMessageImportResponse,
+)
+def import_ai_chat_messages(
+    character_id: int,
+    payload: AIChatMessageImportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    source_messages = list(payload.messages or [])
+    if len(source_messages) > 300:
+        raise HTTPException(status_code=400, detail="一度に取り込めるメッセージは最大300件です。")
+
+    replaced = 0
+    if bool(getattr(payload, "replace_existing", False)):
+        replaced = int(
+            db.query(models.AIChatMessage)
+            .filter(
+                models.AIChatMessage.user_id == user.id,
+                models.AIChatMessage.character_id == character_id,
+                models.AIChatMessage.is_deleted == False,
+            )
+            .update(
+                {"is_deleted": True, "deleted_at": datetime.utcnow()},
+                synchronize_session=False,
+            )
+            or 0
+        )
+
+    imported = 0
+    mark_r18 = bool(getattr(character, "is_r18", False))
+    for src in source_messages:
+        content = str(getattr(src, "content", "") or "").strip()
+        if not content:
+            continue
+        role = "assistant" if str(getattr(src, "role", "user")) == "assistant" else "user"
+        mode = "do" if str(getattr(src, "mode", "say")) == "do" else "say"
+        is_auto_dialogue = bool(getattr(src, "is_auto_dialogue", False) and role == "assistant")
+        if _contains_public_chat_r18_hint(content):
+            mark_r18 = True
+        db.add(
+            models.AIChatMessage(
+                user_id=user.id,
+                character_id=character.id,
+                role=role,
+                mode=mode,
+                is_auto_dialogue=is_auto_dialogue,
+                character_name_snapshot=str(character.name or "").strip()[:80] or None,
+                personality_snapshot=str(character.personality or "").strip()[:4000] or None,
+                language_style_snapshot="normal",
+                content=content[:4000],
+            )
+        )
+        imported += 1
+
+    if mark_r18 and not bool(getattr(character, "is_r18", False)):
+        character.is_r18 = True
+        db.add(character)
+
+    db.commit()
+    return AIChatMessageImportResponse(
+        ok=True,
+        imported=imported,
+        replaced=replaced,
+    )
 
 
 @app.delete(
@@ -18365,6 +18629,30 @@ def login_start(payload: UserLogin, db: Session = Depends(get_db)):
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
 
+    # メール不達フラグのユーザーは、最長60日間だけメール認証をスキップする。
+    if bool(getattr(user, "email_address_invalid", False)):
+        now_utc = datetime.utcnow()
+        skip_until = getattr(user, "email_2fa_skip_until", None)
+        if not skip_until:
+            skip_until = now_utc + timedelta(days=60)
+            user.email_2fa_skip_until = skip_until
+            db.add(user)
+            db.commit()
+        if skip_until >= now_utc:
+            user.two_factor_code = None
+            user.two_factor_expires_at = None
+            db.add(user)
+            db.commit()
+            revalidate_premium_on_login(user, db)
+            cache_user_payload(user)
+            access_token = create_access_token({"sub": str(user.id)})
+            return {"ok": True, "two_factor_skipped": True, "access_token": access_token}
+
+    # 通常ユーザーは2FAコードをメール送信してログイン。
+    # 期限切れのメール不達ユーザーもここへ来る（メール認証が必要）。
+    if not user.email:
+        raise HTTPException(400, "メールアドレスが未設定のためログインできません")
+
     # 6桁のランダムコード生成
     code = f"{secrets.randbelow(1000000):06d}"
 
@@ -18377,7 +18665,7 @@ def login_start(payload: UserLogin, db: Session = Depends(get_db)):
     # メール送信（＋ログ）
     send_2fa_email(user.email, code)
 
-    return {"ok": True}
+    return {"ok": True, "two_factor_skipped": False}
 
 
 @app.post("/api/auth/login/verify")
@@ -19076,6 +19364,8 @@ def update_profile(
     if payload.email is not None:
         email = payload.email.strip()
         user.email = email or None
+        user.email_address_invalid = False
+        user.email_2fa_skip_until = None
 
     if payload.birth_date is not None:
         user.birth_date = payload.birth_date

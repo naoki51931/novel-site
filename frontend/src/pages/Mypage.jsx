@@ -48,6 +48,8 @@ export default function Mypage() {
   });
   const [androidAppReady, setAndroidAppReady] = useState(false);
   const [iphoneAppReady, setIphoneAppReady] = useState(false);
+  const [emailAddressInvalid, setEmailAddressInvalid] = useState(false);
+  const [profileEmail, setProfileEmail] = useState("");
   const navigate = useNavigate();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -235,6 +237,8 @@ export default function Mypage() {
         if (resProfile.ok) {
           const profile = await resProfile.json();
           setIsPremium(!!profile.is_premium);
+          setEmailAddressInvalid(profile.email_address_invalid === true);
+          setProfileEmail((profile.email || "").trim());
           if (profile.username) {
             setUsername(profile.username);
             localStorage.setItem("username", profile.username);
@@ -454,6 +458,26 @@ export default function Mypage() {
           </span>
         )}
       </h2>
+
+      {emailAddressInvalid && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "10px 12px",
+            border: "1px solid #b3261e",
+            borderRadius: 8,
+            background: "#fff4f3",
+            color: "#7a1812",
+            lineHeight: 1.6,
+          }}
+        >
+          {t({
+            ja: `登録メールアドレス${profileEmail ? `（${profileEmail}）` : ""}を確認し、アドレス不明の場合はマイページ設定からメールアドレスを変更してください。`,
+            en: `Please confirm your registered email${profileEmail ? ` (${profileEmail})` : ""}. If the address is unknown, update it in account settings.`,
+          })}{" "}
+          <Link to="/mypage/settings">{t({ ja: "マイページ設定へ", en: "Go to settings" })}</Link>
+        </div>
+      )}
 
       {/* プレミアム会員セクション */}
       <section style={{ marginBottom: 24 }}>

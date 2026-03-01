@@ -2,6 +2,52 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 
+const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
+const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
+
+function parseAiChatImageMessageContent(content) {
+  const text = String(content || "").trim();
+  if (!text.startsWith(AI_CHAT_IMAGE_MESSAGE_PREFIX)) return null;
+  const rawJson = text.slice(AI_CHAT_IMAGE_MESSAGE_PREFIX.length).trim();
+  if (!rawJson) return null;
+  try {
+    const parsed = JSON.parse(rawJson);
+    if (!parsed || typeof parsed !== "object") return null;
+    const rawImages = Array.isArray(parsed?.images) ? parsed.images : [];
+    const images = rawImages
+      .map((item) => {
+        if (typeof item === "string") return item.trim();
+        if (item && typeof item === "object") return String(item.url || "").trim();
+        return "";
+      })
+      .filter(Boolean);
+    if (!images.length) return null;
+    const kind = String(parsed?.kind || "generated_images").trim() || "generated_images";
+    const meta = parsed?.meta && typeof parsed.meta === "object" ? parsed.meta : {};
+    const descriptions = Array.isArray(meta?.descriptions)
+      ? meta.descriptions.map((v) => String(v || "").trim()).filter(Boolean)
+      : [];
+    return {
+      kind,
+      images,
+      descriptions,
+      prompt: String(parsed?.prompt || "").trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveImageUrl(rawUrl) {
+  const src = String(rawUrl || "").trim();
+  if (!src) return "";
+  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:image/")) {
+    return src;
+  }
+  if (src.startsWith("/")) return src;
+  return `/${src}`;
+}
+
 function slugifyCharacterName(name) {
   return String(name || "")
     .normalize("NFKC")
@@ -32,6 +78,12 @@ export default function AiChatPublicPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [showR18] = useState(() => {
+    if (typeof window === "undefined") return true;
+    const v = localStorage.getItem(MYPAGE_SHOW_R18_STORAGE_KEY);
+    if (v === null) return true;
+    return v === "1" || v === "true";
+  });
   const getAuthHeaders = () => {
     try {
       const token = localStorage.getItem("token") || localStorage.getItem("access_token");
@@ -107,7 +159,34 @@ export default function AiChatPublicPage() {
             t({ ja: "公開チャット詳細の取得に失敗しました。", en: "Failed to load public chat details." })
         );
       }
-      setDetail(data);
+      const normalizedMessages = (Array.isArray(data?.messages) ? data.messages : []).map((msg) => {
+        const parsedImage = parseAiChatImageMessageContent(msg?.content);
+        if (!parsedImage) return msg;
+        return {
+          ...msg,
+          is_generated_image: true,
+          image_message_kind: parsedImage.kind,
+          generated_images: parsedImage.images,
+          image_descriptions: parsedImage.descriptions,
+          content:
+            parsedImage.prompt ||
+            (parsedImage.kind === "uploaded_images"
+              ? t({ ja: "画像を追加しました。", en: "Added images." })
+              : t({ ja: "画像を生成しました。", en: "Generated an image." })),
+        };
+      });
+      const normalizedDetail = { ...data, messages: normalizedMessages };
+      if (!showR18 && normalizedDetail?.is_r18) {
+        setDetail(null);
+        setError(
+          t({
+            ja: "R18作品を非表示にしているため、この公開チャットは表示できません。",
+            en: "This public chat is hidden because R18 items are disabled in display settings.",
+          })
+        );
+        return;
+      }
+      setDetail(normalizedDetail);
       const query = buildUrlSearch(q);
       const targetPathBase = buildPublicCharacterPath(id, data?.name || name);
       const targetPath = query ? `${targetPathBase}?${query}` : targetPathBase;
@@ -222,6 +301,8 @@ export default function AiChatPublicPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [characterId]);
 
+  const visibleItems = showR18 ? items : items.filter((item) => !item?.is_r18);
+
   return (
     <div style={{ maxWidth: 980, margin: "0 auto" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -255,12 +336,17 @@ export default function AiChatPublicPage() {
       {error && <p style={{ color: "crimson" }}>{error}</p>}
 
       <div style={{ display: "grid", gap: 10, marginBottom: 14 }}>
-        {items.length === 0 && (
+        {visibleItems.length === 0 && (
           <p style={{ color: "#777" }}>
-            {t({ ja: "公開中のチャットが見つかりません。", en: "No public chats found." })}
+            {items.length > 0 && !showR18
+              ? t({
+                  ja: "R18作品を非表示にしているため、表示できる公開チャットがありません。",
+                  en: "No visible public chats (R18 is hidden).",
+                })
+              : t({ ja: "公開中のチャットが見つかりません。", en: "No public chats found." })}
           </p>
         )}
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -276,6 +362,25 @@ export default function AiChatPublicPage() {
             <div style={{ fontWeight: 800, fontSize: "1.2rem", lineHeight: 1.3, color: "var(--text)" }}>
               {item.name || t({ ja: "無名", en: "Unnamed" })}
             </div>
+            {item.image_url && (
+              <div style={{ marginTop: 8 }}>
+                <img
+                  src={resolveImageUrl(item.image_url)}
+                  alt={t({ ja: "キャラ参照画像", en: "Character reference image" })}
+                  style={{
+                    width: 180,
+                    maxWidth: "100%",
+                    height: 120,
+                    borderRadius: 8,
+                    objectFit: "contain",
+                    border: "1px solid var(--border)",
+                    display: "block",
+                    background: "var(--surface)",
+                  }}
+                  loading="lazy"
+                />
+              </div>
+            )}
             <div style={{ fontSize: "0.88rem", color: "#666" }}>
               @{item.author_username || "unknown"}
             </div>
@@ -297,6 +402,27 @@ export default function AiChatPublicPage() {
       {detailLoading && <p>{t({ ja: "詳細読み込み中...", en: "Loading details..." })}</p>}
       {detail && !detailLoading && (
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
+          {detail.image_url && (
+            <div style={{ marginBottom: 10 }}>
+              <a href={resolveImageUrl(detail.image_url)} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={resolveImageUrl(detail.image_url)}
+                  alt={t({ ja: "キャラ参照画像", en: "Character reference image" })}
+                  style={{
+                    width: "min(100%, 320px)",
+                    height: "auto",
+                    maxHeight: 420,
+                    borderRadius: 10,
+                    objectFit: "contain",
+                    border: "1px solid var(--border)",
+                    display: "block",
+                    background: "var(--surface)",
+                  }}
+                  loading="lazy"
+                />
+              </a>
+            </div>
+          )}
           <h3 style={{ marginTop: 0, fontSize: "1.5rem", lineHeight: 1.25 }}>{detail.name}</h3>
           <div style={{ marginBottom: 8 }}>
             <Link
@@ -349,6 +475,37 @@ export default function AiChatPublicPage() {
                     : ""}
                 </div>
                 <div style={{ whiteSpace: "pre-wrap" }}>{m.content || ""}</div>
+                {Array.isArray(m.generated_images) && m.generated_images.length > 0 && (
+                  <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                    {m.generated_images.map((img, gidx) => {
+                      const src = resolveImageUrl(img?.url || img);
+                      if (!src) return null;
+                      const desc = Array.isArray(m.image_descriptions) ? m.image_descriptions[gidx] : "";
+                      return (
+                        <div key={`${m.id || idx}-img-${gidx}`} style={{ maxWidth: 420 }}>
+                          <a href={src} target="_blank" rel="noopener noreferrer">
+                            <img
+                              src={src}
+                              alt={desc || t({ ja: "チャット画像", en: "Chat image" })}
+                              style={{
+                                width: "100%",
+                                borderRadius: 8,
+                                border: "1px solid var(--border)",
+                                display: "block",
+                              }}
+                              loading="lazy"
+                            />
+                          </a>
+                          {desc && (
+                            <div style={{ marginTop: 6, fontSize: "0.86rem", color: "#555", whiteSpace: "pre-wrap" }}>
+                              {desc}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>

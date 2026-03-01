@@ -93,6 +93,30 @@ def provider_from_request(req: "AINovelRequest | None") -> str:
     return provider_from_model(getattr(req, "model", None))
 
 
+def is_openrouter_model_blocked_for_pricing(model: str | None) -> bool:
+    normalized = str(model or "").strip().lower()
+    if not normalized:
+        return False
+    if "/" not in normalized:
+        return False
+    if "claude" not in normalized:
+        return False
+    # 2M/2000円で採算が厳しいClaude系は停止し、比較的安価なHaiku系のみ許可する。
+    return "haiku" not in normalized
+
+
+def assert_openrouter_model_allowed_for_pricing(model: str | None) -> None:
+    if not is_openrouter_model_blocked_for_pricing(model):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "このClaudeモデルは現在の料金設定では提供できません。"
+            "Claude Haiku系または他モデルを選択してください。"
+        ),
+    )
+
+
 # ===== Pydantic モデル =====
 
 class AINovelRequest(BaseModel):
@@ -505,6 +529,7 @@ async def call_ai_json(
         effective_model = (model or os.getenv("OPENROUTER_MODEL_TEXT") or "").strip()
         if not effective_model:
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
+        assert_openrouter_model_allowed_for_pricing(effective_model)
         try:
             resp = await _await_api_call(
                 asyncio.to_thread(
@@ -987,6 +1012,7 @@ async def call_openrouter_novel_api(
 
     if not effective_model:
         raise HTTPException(status_code=400, detail="モデルが指定されていません。")
+    assert_openrouter_model_allowed_for_pricing(effective_model)
 
     try:
         resp = await asyncio.to_thread(

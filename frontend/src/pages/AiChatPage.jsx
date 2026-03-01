@@ -8,6 +8,8 @@ const AI_CHAT_CHARACTER_NAME_KEY = "ai_chat_character_name_v1";
 const AI_CHAT_PERSONALITY_KEY = "ai_chat_personality_v1";
 const AI_CHAT_APPEARANCE_KEY = "ai_chat_appearance_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY = "ai_chat_relationship_memo_history_v1";
+const AI_CHAT_GUEST_DRAFT_KEY = "ai_chat_guest_draft_v1";
+const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
 const PREVIEW_BUBBLE_COUNT = 3;
 const APPEARANCE_SECTION_HEADER = "【見た目設定】";
@@ -365,6 +367,79 @@ function getStoredAuthToken() {
   return jwtLike || candidates[0];
 }
 
+function loadGuestChatDraft() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(AI_CHAT_GUEST_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStoredGuestMessage(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const role = raw.role === "assistant" ? "assistant" : "user";
+  const mode = raw.mode === "do" ? "do" : "say";
+  const content = String(raw.content || "");
+  const generatedImages = Array.isArray(raw.generated_images)
+    ? raw.generated_images
+        .map((img) => {
+          if (!img || typeof img !== "object") return null;
+          const url = String(img.url || "").trim();
+          if (!url) return null;
+          const filename = String(img.filename || "").trim();
+          return { url, ...(filename ? { filename } : {}) };
+        })
+        .filter(Boolean)
+    : [];
+  const imageDescriptions = Array.isArray(raw.image_descriptions)
+    ? raw.image_descriptions.map((d) => String(d || "").trim()).filter(Boolean)
+    : [];
+  return {
+    id: null,
+    role,
+    mode,
+    is_auto_dialogue: !!raw.is_auto_dialogue,
+    content,
+    speaker_name: String(raw.speaker_name || ""),
+    is_generated_image: !!raw.is_generated_image,
+    image_message_kind: raw.image_message_kind === "uploaded_images" ? "uploaded_images" : "generated_images",
+    generated_images: generatedImages,
+    image_descriptions: imageDescriptions,
+  };
+}
+
+function buildGuestImportMessages(rawMessages) {
+  const list = Array.isArray(rawMessages) ? rawMessages : [];
+  return list
+    .map((m) => {
+      const role = m?.role === "assistant" ? "assistant" : "user";
+      const mode = m?.mode === "do" ? "do" : "say";
+      let content = String(m?.content || "").trim();
+      if (
+        m?.is_generated_image
+        && m?.image_message_kind === "uploaded_images"
+        && Array.isArray(m?.image_descriptions)
+        && m.image_descriptions.length > 0
+      ) {
+        content = `【ユーザー添付画像の説明】\n${m.image_descriptions.map((d, i) => `${i + 1}. ${String(d || "").trim()}`).filter(Boolean).join("\n")}`;
+      }
+      if (!content) return null;
+      return {
+        role,
+        mode,
+        is_auto_dialogue: !!m?.is_auto_dialogue && role === "assistant",
+        content: content.slice(0, 4000),
+      };
+    })
+    .filter(Boolean)
+    .slice(-300);
+}
+
 function isDemo02UserLocal() {
   if (typeof window === "undefined") return false;
   return String(localStorage.getItem("username") || "").trim().toLowerCase() === "demo02";
@@ -398,6 +473,12 @@ export default function AiChatPage() {
   const [dailyTalkMode, setDailyTalkMode] = useState(false);
   const [iq80CrudeMode, setIq80CrudeMode] = useState(() => isDemo02UserLocal());
   const [r18Mode, setR18Mode] = useState(() => isDemo02UserLocal());
+  const [showR18ByDisplaySetting] = useState(() => {
+    if (typeof window === "undefined") return true;
+    const v = localStorage.getItem(MYPAGE_SHOW_R18_STORAGE_KEY);
+    if (v === null) return true;
+    return v === "1" || v === "true";
+  });
   const [fanficMode, setFanficMode] = useState(false);
   const [augmentLoading, setAugmentLoading] = useState(false);
   const [augmentNotes, setAugmentNotes] = useState("");
@@ -407,7 +488,11 @@ export default function AiChatPage() {
   const [autoCharacterMode, setAutoCharacterMode] = useState(false);
   const [autoRandomSpeakerKeys, setAutoRandomSpeakerKeys] = useState(["main"]);
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    const draft = loadGuestChatDraft();
+    const raw = Array.isArray(draft?.messages) ? draft.messages : [];
+    return raw.map(normalizeStoredGuestMessage).filter(Boolean).slice(-200);
+  });
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(null);
   const [selectedGeneratedImageKey, setSelectedGeneratedImageKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -441,6 +526,9 @@ export default function AiChatPage() {
   const [imageGenerating, setImageGenerating] = useState(false);
   const [chatImageFiles, setChatImageFiles] = useState([]);
   const [chatImageUploading, setChatImageUploading] = useState(false);
+  const [authToken, setAuthToken] = useState(() => getStoredAuthToken() || "");
+  const [guestMigrationRunning, setGuestMigrationRunning] = useState(false);
+  const [guestMigrationInfo, setGuestMigrationInfo] = useState("");
   const [relationshipMemoHistory, setRelationshipMemoHistory] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -459,6 +547,7 @@ export default function AiChatPage() {
   });
   const fanficCacheRef = useRef(new Map());
   const lastImportedPublicCharacterKeyRef = useRef("");
+  const guestMigrationStartedRef = useRef(false);
   const chatImageInputRef = useRef(null);
   const visibleAiModels = useMemo(
     () => (recommendedModelsOnly ? AI_MODELS.filter((m) => RECOMMENDED_MODEL_VALUES.has(m.value)) : AI_MODELS),
@@ -468,6 +557,22 @@ export default function AiChatPage() {
     if (visibleAiModels.some((m) => m.value === model)) return model;
     return visibleAiModels[0]?.value || DEFAULT_AI_CHAT_MODEL;
   }, [visibleAiModels, model]);
+  const mapApiCharacter = (raw) => {
+    const split = splitPersonalityAndAppearance(String(raw?.personality || ""));
+    return {
+      id: String(raw?.id),
+      name: String(raw?.name || "").trim(),
+      personality: split.personalityText,
+      appearance: split.appearanceText,
+      image_url: String(raw?.image_url || "").trim(),
+      speech_gender: normalizeSpeechGender(raw?.speech_gender),
+      owner_username: String(raw?.owner_username || "").trim(),
+      is_readonly: !!raw?.is_readonly,
+      is_public: !!raw?.is_public,
+      is_r18: !!raw?.is_r18,
+      published_at: raw?.published_at || null,
+    };
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -485,6 +590,20 @@ export default function AiChatPage() {
       setModel(visibleAiModels[0].value);
     }
   }, [visibleAiModels, model]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncAuthToken = () => setAuthToken(getStoredAuthToken() || "");
+    syncAuthToken();
+    window.addEventListener("focus", syncAuthToken);
+    window.addEventListener("storage", syncAuthToken);
+    const timer = window.setInterval(syncAuthToken, 1500);
+    return () => {
+      window.removeEventListener("focus", syncAuthToken);
+      window.removeEventListener("storage", syncAuthToken);
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const normalizeAiNovelResponse = (data) => {
     if (!data || typeof data !== "object") return data;
@@ -1225,9 +1344,13 @@ export default function AiChatPage() {
         })),
     [messages]
   );
+  const visibleSavedCharacters = useMemo(
+    () => (showR18ByDisplaySetting ? savedCharacters : savedCharacters.filter((c) => !c?.is_r18)),
+    [savedCharacters, showR18ByDisplaySetting]
+  );
   const selectedCharacter = useMemo(
-    () => savedCharacters.find((c) => c.id === selectedCharacterId) || null,
-    [savedCharacters, selectedCharacterId]
+    () => visibleSavedCharacters.find((c) => c.id === selectedCharacterId) || null,
+    [visibleSavedCharacters, selectedCharacterId]
   );
   const selectedCharacterReadonly =
     !!selectedCharacter?.is_readonly
@@ -1843,6 +1966,82 @@ export default function AiChatPage() {
     }
   }, [relationshipMemoHistory]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (authToken) return;
+    const trimmedName = String(characterName || "").trim();
+    const trimmedPersonality = String(personality || "").trim();
+    const trimmedAppearance = String(appearance || "").trim();
+    const normalizedMessages = (Array.isArray(messages) ? messages : [])
+      .slice(-200)
+      .map((m) => {
+        if (!m || typeof m !== "object") return null;
+        return {
+          role: m.role === "assistant" ? "assistant" : "user",
+          mode: m.mode === "do" ? "do" : "say",
+          is_auto_dialogue: !!m.is_auto_dialogue,
+          content: String(m.content || ""),
+          speaker_name: String(m.speaker_name || ""),
+          is_generated_image: !!m.is_generated_image,
+          image_message_kind: m.image_message_kind === "uploaded_images" ? "uploaded_images" : "generated_images",
+          generated_images: Array.isArray(m.generated_images)
+            ? m.generated_images
+                .map((img) => {
+                  if (!img || typeof img !== "object") return null;
+                  const url = String(img.url || "").trim();
+                  if (!url) return null;
+                  const filename = String(img.filename || "").trim();
+                  return { url, ...(filename ? { filename } : {}) };
+                })
+                .filter(Boolean)
+            : [],
+          image_descriptions: Array.isArray(m.image_descriptions)
+            ? m.image_descriptions.map((d) => String(d || "").trim()).filter(Boolean)
+            : [],
+        };
+      })
+      .filter(Boolean);
+
+    const hasMeaningfulState = !!(
+      trimmedName
+      || trimmedPersonality
+      || trimmedAppearance
+      || normalizedMessages.some((m) => String(m?.content || "").trim())
+    );
+    if (!hasMeaningfulState) {
+      localStorage.removeItem(AI_CHAT_GUEST_DRAFT_KEY);
+      return;
+    }
+
+    const payload = {
+      version: 1,
+      character_name: trimmedName,
+      personality: personality || "",
+      appearance: appearance || "",
+      speech_gender: normalizeSpeechGender(mainSpeechGender),
+      mode: mode === "do" ? "do" : "say",
+      r18_mode: !!r18Mode,
+      fanfic_mode: !!fanficMode,
+      messages: normalizedMessages,
+      updated_at: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(AI_CHAT_GUEST_DRAFT_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage failures
+    }
+  }, [
+    authToken,
+    appearance,
+    characterName,
+    fanficMode,
+    mainSpeechGender,
+    messages,
+    mode,
+    personality,
+    r18Mode,
+  ]);
+
   const maybeAugmentCharacterProfile = async ({
     nameOverride,
     personalityOverride,
@@ -1887,8 +2086,7 @@ export default function AiChatPage() {
   };
 
   useEffect(() => {
-    const token = getStoredAuthToken();
-    if (!token) {
+    if (!authToken) {
       setSavedCharacters([]);
       setSelectedCharacterId("");
       return;
@@ -1898,7 +2096,7 @@ export default function AiChatPage() {
       try {
         setCharactersLoading(true);
         const res = await fetch("/api/ai/chat/characters", {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${authToken}` },
         });
         const data = await res.json().catch(() => []);
         if (!res.ok) {
@@ -1910,21 +2108,7 @@ export default function AiChatPage() {
         const list = Array.isArray(data) ? data : [];
         setSavedCharacters(
           list
-            .map((c) => {
-              const split = splitPersonalityAndAppearance(String(c.personality || ""));
-              return {
-                id: String(c.id),
-                name: String(c.name || "").trim(),
-                personality: split.personalityText,
-                appearance: split.appearanceText,
-                image_url: String(c.image_url || "").trim(),
-                speech_gender: normalizeSpeechGender(c.speech_gender),
-                owner_username: String(c.owner_username || "").trim(),
-                is_readonly: !!c.is_readonly,
-                is_public: !!c.is_public,
-                published_at: c.published_at || null,
-              };
-            })
+            .map((c) => mapApiCharacter(c))
             .filter((c) => c.name)
         );
       } catch (e) {
@@ -1936,7 +2120,125 @@ export default function AiChatPage() {
         setCharactersLoading(false);
       }
     })();
-  }, [t]);
+  }, [authToken, t]);
+
+  useEffect(() => {
+    if (!authToken || guestMigrationStartedRef.current) return;
+    const draft = loadGuestChatDraft();
+    const importMessages = buildGuestImportMessages(draft?.messages);
+    if (!importMessages.length) return;
+
+    guestMigrationStartedRef.current = true;
+    (async () => {
+      setGuestMigrationRunning(true);
+      setGuestMigrationInfo(
+        t({
+          ja: "ゲスト会話をログインユーザーへ移行しています...",
+          en: "Migrating guest chat to your account...",
+        })
+      );
+      try {
+        const stamp = (() => {
+          const now = new Date();
+          const y = now.getFullYear();
+          const m = String(now.getMonth() + 1).padStart(2, "0");
+          const d = String(now.getDate()).padStart(2, "0");
+          const hh = String(now.getHours()).padStart(2, "0");
+          const mm = String(now.getMinutes()).padStart(2, "0");
+          return `${y}${m}${d}${hh}${mm}`;
+        })();
+        const rawName = String(draft?.character_name || "").trim();
+        const fallbackName = t({ ja: "ゲストチャット", en: "Guest Chat" });
+        const migrationTag = t({ ja: "移行", en: "migrated" });
+        const nextName = `${(rawName || fallbackName).slice(0, 56)} ${migrationTag} ${stamp}`.trim().slice(0, 80);
+        const mergedPersonality = mergePersonalityWithAppearance(
+          String(draft?.personality || personality || ""),
+          String(draft?.appearance || appearance || "")
+        );
+        const createRes = await fetch("/api/ai/chat/characters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            name: nextName,
+            personality: mergedPersonality,
+            speech_gender: normalizeSpeechGender(draft?.speech_gender || mainSpeechGender),
+          }),
+        });
+        const createData = await createRes.json().catch(() => ({}));
+        if (!createRes.ok) {
+          throw new Error(
+            createData?.detail
+            || t({ ja: "移行用キャラの作成に失敗しました。", en: "Failed to create migration character." })
+          );
+        }
+        const createdId = String(createData?.id || "").trim();
+        if (!createdId) {
+          throw new Error(t({ ja: "移行先キャラIDの取得に失敗しました。", en: "Failed to get destination character ID." }));
+        }
+
+        const importRes = await fetch(`/api/ai/chat/characters/${encodeURIComponent(createdId)}/messages/import`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            messages: importMessages,
+            replace_existing: true,
+          }),
+        });
+        const importData = await importRes.json().catch(() => ({}));
+        if (!importRes.ok) {
+          throw new Error(
+            importData?.detail
+            || t({ ja: "ゲスト会話の取り込みに失敗しました。", en: "Failed to import guest messages." })
+          );
+        }
+
+        const normalizedSaved = mapApiCharacter(createData);
+        setSavedCharacters((prev) => [normalizedSaved, ...prev.filter((c) => c.id !== normalizedSaved.id)]);
+        setSelectedCharacterId(normalizedSaved.id);
+        setCharacterName(normalizedSaved.name || "");
+        setPersonality(normalizedSaved.personality || "");
+        setAppearance(normalizedSaved.appearance || "");
+        setMainSpeechGender(normalizeSpeechGender(normalizedSaved.speech_gender));
+
+        const listRes = await fetch(
+          `/api/ai/chat/characters/${encodeURIComponent(createdId)}/messages`,
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        );
+        const listData = await listRes.json().catch(() => []);
+        if (listRes.ok) {
+          applyServerChatMessages(listData);
+        }
+
+        localStorage.removeItem(AI_CHAT_GUEST_DRAFT_KEY);
+        setGuestMigrationInfo(
+          t({
+            ja: "ゲスト会話を新規キャラへ移行しました。",
+            en: "Guest chat has been migrated to a new character.",
+          })
+        );
+      } catch (e) {
+        guestMigrationStartedRef.current = false;
+        setError(
+          e?.message
+          || t({ ja: "ゲスト会話の移行に失敗しました。", en: "Failed to migrate guest chat." })
+        );
+        setGuestMigrationInfo(
+          t({
+            ja: "ゲスト会話の移行に失敗しました。再度ログイン後に再試行されます。",
+            en: "Guest chat migration failed. It will retry after login.",
+          })
+        );
+      } finally {
+        setGuestMigrationRunning(false);
+      }
+    })();
+  }, [authToken, appearance, mainSpeechGender, personality, t]);
 
   const uploadCharacterImage = async (characterId, file, token) => {
     if (!characterId || !file || !token) return null;
@@ -2019,6 +2321,7 @@ export default function AiChatPage() {
         owner_username: String(data.owner_username || "").trim(),
         is_readonly: !!data.is_readonly,
         is_public: !!data.is_public,
+        is_r18: !!data.is_r18,
         published_at: data.published_at || null,
       };
       setSavedCharacters((prev) => {
@@ -2294,6 +2597,7 @@ export default function AiChatPage() {
         owner_username: String(data.owner_username || "").trim(),
         is_readonly: !!data.is_readonly,
         is_public: !!data.is_public,
+        is_r18: !!data.is_r18,
         published_at: data.published_at || null,
       };
       setSavedCharacters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
@@ -2387,6 +2691,7 @@ export default function AiChatPage() {
             owner_username: String(data.owner_username || "").trim(),
             is_readonly: !!data.is_readonly,
             is_public: !!data.is_public,
+            is_r18: !!data.is_r18,
             published_at: data.published_at || null,
           };
           const without = prev.filter((c) => c.id !== savedId);
@@ -2939,7 +3244,10 @@ export default function AiChatPage() {
 
   useEffect(() => {
     const token = getStoredAuthToken();
-    if (!token || !writableSelectedCharacterId) {
+    if (!token) {
+      return;
+    }
+    if (!writableSelectedCharacterId) {
       if (!writableSelectedCharacterId) setMessages([]);
       if (!writableSelectedCharacterId) {
         setLastRequest(null);
@@ -3086,6 +3394,7 @@ export default function AiChatPage() {
 
   const toggleR18Mode = () => {
     if (loading) return;
+    if (!showR18ByDisplaySetting) return;
     if (r18Mode) {
       setR18Mode(false);
       return;
@@ -3099,6 +3408,20 @@ export default function AiChatPage() {
     if (!ok) return;
     setR18Mode(true);
   };
+
+  useEffect(() => {
+    if (showR18ByDisplaySetting) return;
+    setR18Mode(false);
+  }, [showR18ByDisplaySetting]);
+
+  useEffect(() => {
+    if (!selectedCharacterId) return;
+    if (showR18ByDisplaySetting) return;
+    const selected = savedCharacters.find((c) => c.id === selectedCharacterId);
+    if (selected?.is_r18) {
+      setSelectedCharacterId("");
+    }
+  }, [selectedCharacterId, savedCharacters, showR18ByDisplaySetting]);
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -3275,7 +3598,7 @@ export default function AiChatPage() {
                   ? t({ ja: "読み込み中...", en: "Loading..." })
                   : t({ ja: "未選択", en: "Not selected" })}
               </option>
-              {savedCharacters.map((c) => (
+              {visibleSavedCharacters.map((c) => (
                 <option key={c.id} value={c.id}>
                   {`${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                 </option>
@@ -3487,7 +3810,7 @@ export default function AiChatPage() {
                     ? t({ ja: "読み込み中...", en: "Loading..." })
                     : t({ ja: "登録キャラから選択", en: "Select saved character" })}
                 </option>
-                {savedCharacters.map((c) => (
+                {visibleSavedCharacters.map((c) => (
                   <option key={c.id} value={c.id}>
                     {`${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                   </option>
@@ -3998,6 +4321,11 @@ export default function AiChatPage() {
         </div>
       </div>
 
+      {guestMigrationInfo && (
+        <p style={{ color: guestMigrationRunning ? "#2d5a9e" : "#2e7d32", marginBottom: 8 }}>
+          {guestMigrationInfo}
+        </p>
+      )}
       {error && <p style={{ color: "crimson", marginBottom: 8 }}>{error}</p>}
       {latestPromptPreview && (
         <div style={{ marginBottom: 10, border: "1px solid #d9d9d9", borderRadius: 8, padding: 10, background: "#fcfcfc" }}>
@@ -4259,7 +4587,7 @@ export default function AiChatPage() {
 	          type="button"
 	          className={r18Mode ? "btn btn-border" : "btn"}
           onClick={toggleR18Mode}
-          disabled={loading}
+          disabled={loading || !showR18ByDisplaySetting}
           aria-pressed={r18Mode}
           style={{
             fontWeight: r18Mode ? 700 : 400,
@@ -4271,10 +4599,15 @@ export default function AiChatPage() {
 	          {r18Mode ? "R18: ON" : "R18: OFF"}
 	        </button>
 	        <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
-	          {t({
-	            ja: "ON時は年齢確認済みとして扱います。",
-	            en: "When ON, age confirmation is considered accepted.",
-	          })}
+	          {!showR18ByDisplaySetting
+	            ? t({
+	                ja: "マイページ設定でR18作品を非表示にしているため、AIチャットのR18も無効です。",
+	                en: "R18 is disabled in AI Chat because it is hidden in My Page display settings.",
+	              })
+	            : t({
+	                ja: "ON時は年齢確認済みとして扱います。",
+	                en: "When ON, age confirmation is considered accepted.",
+	              })}
 	        </span>
 	      </div>
 	      {autoDialogue && (

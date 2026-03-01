@@ -14,6 +14,8 @@ class User(Base):
     username = Column(String(50), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=True)
+    email_address_invalid = Column(Boolean, nullable=False, server_default="0")
+    email_2fa_skip_until = Column(DateTime, nullable=True)
     birth_date = Column(Date, nullable=True)
     # 通知センター用: メール通知の送信可否
     email_notifications_enabled = Column(Boolean, nullable=False, server_default="1")

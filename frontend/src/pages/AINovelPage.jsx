@@ -3028,7 +3028,6 @@ export default function AINovelPage() {
             <option value="deepseek:deepseek-chat">{t({ ja: "DeepSeek（公式 / deepseek-chat）", en: "DeepSeek (official / deepseek-chat)" })}</option>
             <option value="deepseek:deepseek-reasoner">{t({ ja: "DeepSeek（公式 / deepseek-reasoner）", en: "DeepSeek (official / deepseek-reasoner)" })}</option>
             <option value="google/gemini-2.0-flash-001">{t({ ja: "Gemini（OpenRouter / gemini-2.0-flash）", en: "Gemini (OpenRouter / gemini-2.0-flash)" })}</option>
-            <option value="anthropic/claude-3.5-sonnet">{t({ ja: "Claude（OpenRouter / claude-3.5-sonnet）", en: "Claude (OpenRouter / claude-3.5-sonnet)" })}</option>
           </select>
         </div>
 

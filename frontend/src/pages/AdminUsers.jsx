@@ -14,6 +14,8 @@ export default function AdminUsers() {
   const [novelsByUser, setNovelsByUser] = useState({});
   const [novelsLoading, setNovelsLoading] = useState({});
   const [novelsError, setNovelsError] = useState({});
+  const [mailTestRunning, setMailTestRunning] = useState(false);
+  const [mailTestMessage, setMailTestMessage] = useState("");
 
   const loadUsers = async () => {
     try {
@@ -90,6 +92,34 @@ export default function AdminUsers() {
     }
   };
 
+  const handleSendTestEmails = async () => {
+    const confirmMessage = t({
+      ja: "全ユーザーへテストメールを送信します。実行しますか？",
+      en: "Send test emails to all users. Continue?",
+    });
+    if (!window.confirm(confirmMessage)) return;
+
+    try {
+      setError("");
+      setMailTestMessage("");
+      setMailTestRunning(true);
+      const result = await apiFetch("/api/admin/email-test-all-users", {
+        method: "POST",
+        credentials: "include",
+      });
+      setMailTestMessage(
+        t({
+          ja: `送信対象 ${result.target_users} 件 / 成功 ${result.sent_count} 件 / アドレス不明 ${result.invalid_address_count} 件 / 未設定 ${result.skipped_no_email_count} 件 / その他失敗 ${result.failed_other_count} 件`,
+          en: `Target ${result.target_users} / Sent ${result.sent_count} / Invalid ${result.invalid_address_count} / No email ${result.skipped_no_email_count} / Other failures ${result.failed_other_count}`,
+        })
+      );
+    } catch (e) {
+      setError(e.message || t({ ja: "テストメール送信に失敗しました。", en: "Failed to send test emails." }));
+    } finally {
+      setMailTestRunning(false);
+    }
+  };
+
   const expandedIds = useMemo(() => expandedUsers, [expandedUsers]);
 
   return (
@@ -106,6 +136,19 @@ export default function AdminUsers() {
       </p>
       <div style={{ fontSize: 14, marginBottom: 16 }}>
         {t({ ja: "現在のユーザー数", en: "Total users" })}: {totalUsers}
+      </div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleSendTestEmails}
+          disabled={mailTestRunning}
+        >
+          {mailTestRunning
+            ? t({ ja: "送信中...", en: "Sending..." })
+            : t({ ja: "全ユーザーへテストメール送信", en: "Send test email to all users" })}
+        </button>
+        {mailTestMessage && <span style={{ fontSize: 13, color: "#0a0" }}>{mailTestMessage}</span>}
       </div>
 
       {error && <div style={{ color: "red", marginBottom: 12 }}>{error}</div>}
