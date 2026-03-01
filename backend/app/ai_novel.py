@@ -93,6 +93,12 @@ def provider_from_request(req: "AINovelRequest | None") -> str:
     return provider_from_model(getattr(req, "model", None))
 
 
+CLAUDE_MODEL_WHITELIST: set[str] = {
+    "anthropic/claude-3-haiku",
+    "anthropic/claude-3.5-haiku",
+}
+
+
 def is_openrouter_model_blocked_for_pricing(model: str | None) -> bool:
     normalized = str(model or "").strip().lower()
     if not normalized:
@@ -101,8 +107,8 @@ def is_openrouter_model_blocked_for_pricing(model: str | None) -> bool:
         return False
     if "claude" not in normalized:
         return False
-    # 2M/2000円で採算が厳しいClaude系は停止し、比較的安価なHaiku系のみ許可する。
-    return "haiku" not in normalized
+    # Claude は許可IDのみ通す（ホワイトリスト方式）。
+    return normalized not in CLAUDE_MODEL_WHITELIST
 
 
 def assert_openrouter_model_allowed_for_pricing(model: str | None) -> None:
@@ -111,8 +117,8 @@ def assert_openrouter_model_allowed_for_pricing(model: str | None) -> None:
     raise HTTPException(
         status_code=400,
         detail=(
-            "このClaudeモデルは現在の料金設定では提供できません。"
-            "Claude Haiku系または他モデルを選択してください。"
+            "このClaudeモデルは利用できません。"
+            f"許可モデル: {', '.join(sorted(CLAUDE_MODEL_WHITELIST))}"
         ),
     )
 
@@ -461,6 +467,8 @@ async def call_ai_json(
     provider: str | None = None,
     system_instructions: str | None = None,
     timeout_sec: float | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
 ) -> tuple[dict, int | None, str | None]:
     if not prompt:
         raise HTTPException(status_code=400, detail="プロンプトが空です。")
@@ -501,15 +509,22 @@ async def call_ai_json(
         if not effective_model:
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
         try:
+            create_kwargs = {
+                "model": effective_model,
+                "messages": [
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_output_tokens,
+            }
+            if temperature is not None:
+                create_kwargs["temperature"] = max(0.0, min(2.0, float(temperature)))
+            if top_p is not None:
+                create_kwargs["top_p"] = max(0.0, min(1.0, float(top_p)))
             resp = await _await_api_call(
                 asyncio.to_thread(
                     deepseek_client.chat.completions.create,
-                    model=effective_model,
-                    messages=[
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": prompt},
-                    ],
-                    max_tokens=max_output_tokens,
+                    **create_kwargs,
                 )
             )
         except HTTPException:
@@ -531,15 +546,22 @@ async def call_ai_json(
             raise HTTPException(status_code=400, detail="モデルが指定されていません。")
         assert_openrouter_model_allowed_for_pricing(effective_model)
         try:
+            create_kwargs = {
+                "model": effective_model,
+                "messages": [
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_output_tokens,
+            }
+            if temperature is not None:
+                create_kwargs["temperature"] = max(0.0, min(2.0, float(temperature)))
+            if top_p is not None:
+                create_kwargs["top_p"] = max(0.0, min(1.0, float(top_p)))
             resp = await _await_api_call(
                 asyncio.to_thread(
                     openrouter_client.chat.completions.create,
-                    model=effective_model,
-                    messages=[
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": prompt},
-                    ],
-                    max_tokens=max_output_tokens,
+                    **create_kwargs,
                 )
             )
         except HTTPException:
@@ -558,18 +580,25 @@ async def call_ai_json(
             raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
         effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
         try:
+            create_kwargs = {
+                "model": effective_model,
+                "messages": [
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                # GPT-5系では chat.completions の出力上限は max_completion_tokens が必要。
+                "max_completion_tokens": max_output_tokens,
+            }
+            if temperature is not None:
+                create_kwargs["temperature"] = max(0.0, min(2.0, float(temperature)))
+            if top_p is not None:
+                create_kwargs["top_p"] = max(0.0, min(1.0, float(top_p)))
             # Use Chat Completions with response_format to guarantee valid JSON.
             resp = await _await_api_call(
                 asyncio.to_thread(
                     client.chat.completions.create,
-                    model=effective_model,
-                    messages=[
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    # GPT-5系では chat.completions の出力上限は max_completion_tokens が必要。
-                    max_completion_tokens=max_output_tokens,
+                    **create_kwargs,
                 )
             )
         except HTTPException:

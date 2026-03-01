@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { getSavedTheme, setTheme } from "../theme";
 import { useI18n } from "../lib/i18n";
 
+const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
+
 export default function AccountSettings() {
   const navigate = useNavigate();
   const { t } = useI18n();
@@ -19,6 +21,15 @@ export default function AccountSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showChatbot, setShowChatbot] = useState(() => {
+    try {
+      const v = localStorage.getItem(MYPAGE_SHOW_CHATBOT_STORAGE_KEY);
+      if (v === null) return false; // default: unchecked
+      return v === "1" || v === "true";
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -113,6 +124,14 @@ export default function AccountSettings() {
     }
   };
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(MYPAGE_SHOW_CHATBOT_STORAGE_KEY, showChatbot ? "1" : "0");
+    } catch {
+      // ignore storage errors
+    }
+  }, [showChatbot]);
+
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
@@ -146,6 +165,25 @@ export default function AccountSettings() {
             <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted-text)" }}>
               {t({ ja: "テーマ設定はこのブラウザに保存されます。", en: "Theme settings are saved in this browser." })}
             </div>
+          </fieldset>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <fieldset style={{ padding: 12, border: "1px solid var(--border)" }}>
+            <legend>{t({ ja: "表示設定", en: "Display" })}</legend>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={showChatbot}
+                onChange={(e) => setShowChatbot(e.target.checked)}
+              />
+              <span>
+                {t({
+                  ja: "チャットbotを表示（AIチャットで使用モデルを表示）",
+                  en: "Show chatbot info (show model in AI chat)",
+                })}
+              </span>
+            </label>
           </fieldset>
         </div>
 

@@ -9,6 +9,7 @@ const AI_CHAT_PERSONALITY_KEY = "ai_chat_personality_v1";
 const AI_CHAT_APPEARANCE_KEY = "ai_chat_appearance_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY = "ai_chat_relationship_memo_history_v1";
 const AI_CHAT_GUEST_DRAFT_KEY = "ai_chat_guest_draft_v1";
+const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
 const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
 const PREVIEW_BUBBLE_COUNT = 3;
@@ -406,6 +407,7 @@ function normalizeStoredGuestMessage(raw) {
     is_auto_dialogue: !!raw.is_auto_dialogue,
     content,
     speaker_name: String(raw.speaker_name || ""),
+    model_name: String(raw.model_name || "").trim(),
     is_generated_image: !!raw.is_generated_image,
     image_message_kind: raw.image_message_kind === "uploaded_images" ? "uploaded_images" : "generated_images",
     generated_images: generatedImages,
@@ -479,6 +481,12 @@ export default function AiChatPage() {
     if (v === null) return true;
     return v === "1" || v === "true";
   });
+  const [showChatbotByDisplaySetting] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const v = localStorage.getItem(MYPAGE_SHOW_CHATBOT_STORAGE_KEY);
+    if (v === null) return false; // default: unchecked
+    return v === "1" || v === "true";
+  });
   const [fanficMode, setFanficMode] = useState(false);
   const [augmentLoading, setAugmentLoading] = useState(false);
   const [augmentNotes, setAugmentNotes] = useState("");
@@ -510,6 +518,8 @@ export default function AiChatPage() {
   const [charactersLoading, setCharactersLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [chatAccess, setChatAccess] = useState(null);
+  const [engagementSummary, setEngagementSummary] = useState(null);
+  const [engagementLoading, setEngagementLoading] = useState(false);
   const [addonCheckoutLoading, setAddonCheckoutLoading] = useState(false);
   const [latestPromptPreview, setLatestPromptPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -570,7 +580,11 @@ export default function AiChatPage() {
       is_readonly: !!raw?.is_readonly,
       is_public: !!raw?.is_public,
       is_r18: !!raw?.is_r18,
+      recommendation_score: Number(raw?.recommendation_score || 0),
+      recommendation_samples: Number(raw?.recommendation_samples || 0),
+      is_recommended: !!raw?.is_recommended,
       published_at: raw?.published_at || null,
+      updated_at: raw?.updated_at || null,
     };
   };
 
@@ -1344,10 +1358,22 @@ export default function AiChatPage() {
         })),
     [messages]
   );
-  const visibleSavedCharacters = useMemo(
-    () => (showR18ByDisplaySetting ? savedCharacters : savedCharacters.filter((c) => !c?.is_r18)),
-    [savedCharacters, showR18ByDisplaySetting]
-  );
+  const visibleSavedCharacters = useMemo(() => {
+    const filtered = showR18ByDisplaySetting
+      ? [...savedCharacters]
+      : savedCharacters.filter((c) => !c?.is_r18);
+    return filtered.sort((a, b) => {
+      const aRecommended = a?.is_recommended ? 1 : 0;
+      const bRecommended = b?.is_recommended ? 1 : 0;
+      if (bRecommended !== aRecommended) return bRecommended - aRecommended;
+      const aScore = Number(a?.recommendation_score || 0);
+      const bScore = Number(b?.recommendation_score || 0);
+      if (bScore !== aScore) return bScore - aScore;
+      const aUpdated = new Date(a?.updated_at || 0).getTime();
+      const bUpdated = new Date(b?.updated_at || 0).getTime();
+      return bUpdated - aUpdated;
+    });
+  }, [savedCharacters, showR18ByDisplaySetting]);
   const selectedCharacter = useMemo(
     () => visibleSavedCharacters.find((c) => c.id === selectedCharacterId) || null,
     [visibleSavedCharacters, selectedCharacterId]
@@ -1357,6 +1383,32 @@ export default function AiChatPage() {
     && String(selectedCharacter?.owner_username || "").trim().toLowerCase() !== "demo02";
   const writableSelectedCharacterId =
     selectedCharacterId && !selectedCharacterReadonly ? selectedCharacterId : "";
+  const engagementMetricRows = useMemo(() => {
+    const data = engagementSummary;
+    if (!data || typeof data !== "object") return [];
+    const gender = String(data?.speech_gender || selectedCharacter?.speech_gender || "auto");
+    const rows = [
+      { key: "engagement", label: t({ ja: "総合", en: "Overall" }), value: Number(data?.average_engagement_score || 0) },
+      { key: "latency", label: t({ ja: "速度", en: "Speed" }), value: Number(data?.average_latency_score || 0) },
+      { key: "intimacy", label: t({ ja: "親密度", en: "Intimacy" }), value: Number(data?.average_intimacy_score || 0) },
+      { key: "proactive", label: t({ ja: "積極度", en: "Proactiveness" }), value: Number(data?.average_proactiveness_score || 0) },
+      { key: "consistency", label: t({ ja: "設定整合度", en: "Consistency" }), value: Number(data?.average_consistency_score || 0) },
+      { key: "empathy", label: t({ ja: "共感度", en: "Empathy" }), value: Number(data?.average_empathy_score || 0) },
+      { key: "novelty", label: t({ ja: "新規性", en: "Novelty" }), value: Number(data?.average_novelty_score || 0) },
+      { key: "clarity", label: t({ ja: "明瞭さ", en: "Clarity" }), value: Number(data?.average_clarity_score || 0) },
+    ];
+    if (gender === "male") {
+      rows.push(
+        { key: "coolness", label: t({ ja: "かっこよさ", en: "Coolness" }), value: Number(data?.average_coolness_score || 0) },
+        { key: "seriousness", label: t({ ja: "まじめさ", en: "Seriousness" }), value: Number(data?.average_seriousness_score || 0) }
+      );
+    } else {
+      rows.push(
+        { key: "cuteness", label: t({ ja: "かわいさ", en: "Cuteness" }), value: Number(data?.average_cuteness_score || 0) }
+      );
+    }
+    return rows.map((row) => ({ ...row, value: Math.max(0, Math.min(1, Number(row.value || 0))) }));
+  }, [engagementSummary, selectedCharacter?.speech_gender, t]);
   const getSpeakerProfileByKey = (key) => {
     if (key === "you") {
       return {
@@ -1808,6 +1860,39 @@ export default function AiChatPage() {
     }
   };
 
+  const loadEngagementSummary = async () => {
+    const token = getStoredAuthToken();
+    if (!token || !writableSelectedCharacterId) {
+      setEngagementSummary(null);
+      return;
+    }
+    setEngagementLoading(true);
+    try {
+      const res = await fetch(
+        `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/engagement_summary`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t({ ja: "学習スコアの取得に失敗しました。", en: "Failed to load learning scores." })
+        );
+      }
+      setEngagementSummary(data || null);
+    } catch (e) {
+      setEngagementSummary(null);
+      setError(
+        e?.message ||
+          t({ ja: "学習スコア取得中にエラーが発生しました。", en: "Failed while loading learning scores." })
+      );
+    } finally {
+      setEngagementLoading(false);
+    }
+  };
+
   const startAiChatAddonCheckout = async () => {
     if (addonCheckoutLoading) return;
     const token = getStoredAuthToken();
@@ -1982,6 +2067,7 @@ export default function AiChatPage() {
           is_auto_dialogue: !!m.is_auto_dialogue,
           content: String(m.content || ""),
           speaker_name: String(m.speaker_name || ""),
+          model_name: String(m.model_name || "").trim(),
           is_generated_image: !!m.is_generated_image,
           image_message_kind: m.image_message_kind === "uploaded_images" ? "uploaded_images" : "generated_images",
           generated_images: Array.isArray(m.generated_images)
@@ -2797,7 +2883,7 @@ export default function AiChatPage() {
       const extras = Array.isArray(data?.extra_messages) ? data.extra_messages : [];
       setMessages((prev) => {
         if (!isDoMode) {
-          const next = [...prev, { id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName }];
+          const next = [...prev, { id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() }];
           extras.forEach((m) => {
             const c = String(m?.content || "").trim();
             if (!c) return;
@@ -2808,13 +2894,14 @@ export default function AiChatPage() {
               is_auto_dialogue: true,
               content: c,
               speaker_name: characterNameAtSend ?? characterName,
+              model_name: String(data?.model || activeModel || "").trim(),
             });
           });
           return next;
         }
-        const next = [...prev, { id: null, role: "assistant", mode: "do", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName }];
+        const next = [...prev, { id: null, role: "assistant", mode: "do", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() }];
         if (sayText) {
-          next.push({ id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: sayText, speaker_name: characterNameAtSend ?? characterName });
+          next.push({ id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: sayText, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() });
         }
         extras.forEach((m) => {
           const c = String(m?.content || "").trim();
@@ -2826,6 +2913,7 @@ export default function AiChatPage() {
             is_auto_dialogue: true,
             content: c,
             speaker_name: characterNameAtSend ?? characterName,
+            model_name: String(data?.model || activeModel || "").trim(),
           });
         });
         return next;
@@ -2896,7 +2984,7 @@ export default function AiChatPage() {
       if (!reply) return false;
       setMessages((prev) => [
         ...prev,
-        { id: null, role: "assistant", mode: "say", is_auto_dialogue: true, content: reply, speaker_name: assistantName },
+        { id: null, role: "assistant", mode: "say", is_auto_dialogue: true, content: reply, speaker_name: assistantName, model_name: String(data?.model || activeModel || "").trim() },
       ]);
       return true;
     } catch (e) {
@@ -3007,6 +3095,7 @@ export default function AiChatPage() {
           role: m?.role === "assistant" ? "assistant" : "user",
           mode: m?.mode === "do" ? "do" : "say",
           is_auto_dialogue: !!m?.is_auto_dialogue,
+          model_name: "",
           content: parsedImage
             ? (
               imageKind === "uploaded_images"
@@ -3276,6 +3365,14 @@ export default function AiChatPage() {
   }, [selectedCharacterId]);
 
   useEffect(() => {
+    if (!writableSelectedCharacterId) {
+      setEngagementSummary(null);
+      return;
+    }
+    loadEngagementSummary();
+  }, [writableSelectedCharacterId, messages.length]);
+
+  useEffect(() => {
     if (!autoDialogue) return;
     if (loading || autoContinuing || messagesLoading) return;
     if (messages.length === 0) return;
@@ -3510,6 +3607,78 @@ export default function AiChatPage() {
           )}
         </div>
       )}
+      {!!writableSelectedCharacterId && (
+        <div
+          style={{
+            border: "1px solid #d5dbe7",
+            borderRadius: 8,
+            padding: 10,
+            marginBottom: 10,
+            background: "#fcfdff",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <strong>{t({ ja: "会話学習スコア", en: "Conversation Learning Scores" })}</strong>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={loadEngagementSummary}
+              disabled={engagementLoading}
+            >
+              {engagementLoading
+                ? t({ ja: "更新中...", en: "Refreshing..." })
+                : t({ ja: "再取得", en: "Refresh" })}
+            </button>
+          </div>
+          <div style={{ marginTop: 6, fontSize: "0.85rem", color: "#5f6675" }}>
+            {t({
+              ja: "速度・親密度・積極度・共感度はユーザー入力解析、他は返信テキスト特性から算出（0.00〜1.00）。",
+              en: "Speed/intimacy/proactiveness/empathy come from user follow-up signals; others come from reply text traits (0.00-1.00).",
+            })}
+          </div>
+          {engagementSummary && Number(engagementSummary.sample_size || 0) > 0 ? (
+            <>
+              <div style={{ marginTop: 6, fontSize: "0.86rem", color: "#4b5568" }}>
+                {t({ ja: "サンプル数", en: "Samples" })}: {Number(engagementSummary.sample_size || 0)}
+              </div>
+              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {engagementMetricRows.map((row) => (
+                  <div key={row.key}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
+                      <span>{row.label}</span>
+                      <span>{row.value.toFixed(2)}</span>
+                    </div>
+                    <div
+                      style={{
+                        position: "relative",
+                        height: 10,
+                        borderRadius: 999,
+                        background: "#e8edf5",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          width: `${Math.round(row.value * 100)}%`,
+                          background: "linear-gradient(90deg, #5ca9ff 0%, #44d7b6 100%)",
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ marginTop: 8, fontSize: "0.86rem", color: "#6b7280" }}>
+              {engagementLoading
+                ? t({ ja: "読み込み中...", en: "Loading..." })
+                : t({ ja: "まだ学習データがありません。会話を続けると表示されます。", en: "No learning data yet. Keep chatting to populate scores." })}
+            </div>
+          )}
+        </div>
+      )}
       {animeTitleDialogOpen && (
         <div
           style={{
@@ -3600,7 +3769,7 @@ export default function AiChatPage() {
               </option>
               {visibleSavedCharacters.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {`${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
+                  {`${c.is_recommended ? "★" : ""}${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                 </option>
               ))}
             </select>
@@ -3812,7 +3981,7 @@ export default function AiChatPage() {
                 </option>
                 {visibleSavedCharacters.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {`${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
+                    {`${c.is_recommended ? "★" : ""}${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                   </option>
                 ))}
               </select>
@@ -4068,12 +4237,15 @@ export default function AiChatPage() {
 	                }}
 	              >
 	                <div style={{ fontSize: "0.78rem", color: "#3f2c14", marginBottom: 4, fontWeight: 700 }}>
-	                  {(m.role === "user"
-	                    ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
-	                    : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" })) ) +
-	                    " / do"}
+		                  {(m.role === "user"
+		                    ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
+		                    : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" })) ) +
+		                    " / do"}
                   {m.is_auto_dialogue
                     ? ` ${t({ ja: "[自動会話]", en: "[Auto]" })}`
+                    : ""}
+                  {showChatbotByDisplaySetting && m.role === "assistant" && m.model_name
+                    ? ` [${m.model_name}]`
                     : ""}
                 </div>
                 {m.content}
@@ -4098,12 +4270,15 @@ export default function AiChatPage() {
 	                  }}
 	                >
 	                  <div style={{ fontSize: "0.78rem", color: "#334155", marginBottom: 4 }}>
-	                    {m.role === "user"
-	                      ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
-	                      : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" }))}{" "}
-	                    / say
+		                    {m.role === "user"
+		                      ? (m.speaker_name?.trim() || t({ ja: "あなた", en: "You" }))
+		                      : (m.speaker_name?.trim() || characterName.trim() || t({ ja: "AI", en: "AI" }))}{" "}
+		                    / say
                     {m.is_auto_dialogue
                       ? ` ${t({ ja: "[自動会話]", en: "[Auto]" })}`
+                      : ""}
+                    {showChatbotByDisplaySetting && m.role === "assistant" && m.model_name
+                      ? ` [${m.model_name}]`
                       : ""}
                   </div>
                   {m.content ? <div>{m.content}</div> : null}

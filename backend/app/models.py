@@ -776,6 +776,59 @@ class AIChatMessage(Base):
     character = relationship("AIChatCharacter", back_populates="messages")
 
 
+class AIChatTurnFeedback(Base):
+    __tablename__ = "ai_chat_turn_feedback"
+    __table_args__ = (
+        UniqueConstraint("assistant_message_id", name="uq_ai_chat_turn_feedback_assistant_message"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    character_id = Column(Integer, ForeignKey("ai_chat_characters.id"), nullable=False, index=True)
+    assistant_message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=False, index=True)
+    followup_user_message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=True, index=True)
+    character_profile_key = Column(String(64), nullable=False, server_default="", index=True)
+    followup_latency_seconds = Column(Float, nullable=False)
+    latency_score = Column(Float, nullable=False, server_default="0")
+    intimacy_score = Column(Float, nullable=False, server_default="0")
+    cuteness_score = Column(Float, nullable=False, server_default="0")
+    proactiveness_score = Column(Float, nullable=False, server_default="0")
+    consistency_score = Column(Float, nullable=False, server_default="0")
+    empathy_score = Column(Float, nullable=False, server_default="0")
+    novelty_score = Column(Float, nullable=False, server_default="0")
+    clarity_score = Column(Float, nullable=False, server_default="0")
+    coolness_score = Column(Float, nullable=False, server_default="0")
+    seriousness_score = Column(Float, nullable=False, server_default="0")
+    engagement_score = Column(Float, nullable=False, server_default="0")
+    latency_bucket = Column(String(16), nullable=False, server_default="slow")
+    score_version = Column(String(16), nullable=False, server_default="v1")
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
+class AIChatProfileLearningStat(Base):
+    __tablename__ = "ai_chat_profile_learning_stats"
+    __table_args__ = (
+        UniqueConstraint("profile_key", name="uq_ai_chat_profile_learning_stats_profile_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_key = Column(String(64), nullable=False, index=True)
+    sample_count = Column(Integer, nullable=False, server_default="0")
+    average_engagement_score = Column(Float, nullable=False, server_default="0")
+    average_latency_score = Column(Float, nullable=False, server_default="0")
+    average_intimacy_score = Column(Float, nullable=False, server_default="0")
+    average_proactiveness_score = Column(Float, nullable=False, server_default="0")
+    average_empathy_score = Column(Float, nullable=False, server_default="0")
+    average_cuteness_score = Column(Float, nullable=False, server_default="0")
+    average_consistency_score = Column(Float, nullable=False, server_default="0")
+    average_novelty_score = Column(Float, nullable=False, server_default="0")
+    average_clarity_score = Column(Float, nullable=False, server_default="0")
+    average_coolness_score = Column(Float, nullable=False, server_default="0")
+    average_seriousness_score = Column(Float, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
+
+
 class AIMemoryItem(Base):
     __tablename__ = "ai_memory_items"
     __table_args__ = (

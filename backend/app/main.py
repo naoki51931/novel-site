@@ -939,6 +939,45 @@ def ensure_ai_chat_tables():
                 msg_alters.append("ADD COLUMN language_style_snapshot VARCHAR(24) NULL")
             for clause in msg_alters:
                 conn.execute(text(f"ALTER TABLE ai_chat_messages {clause}"))
+
+            feedback_rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'ai_chat_turn_feedback'
+                    """
+                )
+            ).fetchall()
+            feedback_existing = {r[0] for r in feedback_rows}
+            feedback_alters: list[str] = []
+            if "character_profile_key" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN character_profile_key VARCHAR(64) NOT NULL DEFAULT ''")
+            if "latency_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN latency_score FLOAT NOT NULL DEFAULT 0")
+            if "intimacy_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN intimacy_score FLOAT NOT NULL DEFAULT 0")
+            if "cuteness_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN cuteness_score FLOAT NOT NULL DEFAULT 0")
+            if "proactiveness_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN proactiveness_score FLOAT NOT NULL DEFAULT 0")
+            if "consistency_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN consistency_score FLOAT NOT NULL DEFAULT 0")
+            if "empathy_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN empathy_score FLOAT NOT NULL DEFAULT 0")
+            if "novelty_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN novelty_score FLOAT NOT NULL DEFAULT 0")
+            if "clarity_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN clarity_score FLOAT NOT NULL DEFAULT 0")
+            if "coolness_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN coolness_score FLOAT NOT NULL DEFAULT 0")
+            if "seriousness_score" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN seriousness_score FLOAT NOT NULL DEFAULT 0")
+            if "score_version" not in feedback_existing:
+                feedback_alters.append("ADD COLUMN score_version VARCHAR(16) NOT NULL DEFAULT 'v1'")
+            for clause in feedback_alters:
+                conn.execute(text(f"ALTER TABLE ai_chat_turn_feedback {clause}"))
     except Exception as e:
         print("[db] ensure_ai_chat_tables failed:", repr(e))
 
@@ -1407,6 +1446,16 @@ MONTHLY_STRIPE_PREMIUM_SYNC_INTERVAL_SECONDS = max(3600, int(os.getenv("MONTHLY_
 MONTHLY_STRIPE_PREMIUM_SYNC_DAY = max(1, min(28, int(os.getenv("MONTHLY_STRIPE_PREMIUM_SYNC_DAY", "1") or 1)))
 MONTHLY_STRIPE_PREMIUM_SYNC_HOUR_UTC = max(0, min(23, int(os.getenv("MONTHLY_STRIPE_PREMIUM_SYNC_HOUR_UTC", "3") or 3)))
 AI_CHAT_DEMO_BYPASS_USERNAME = os.getenv("AI_CHAT_DEMO_BYPASS_USERNAME", "demo02").strip()
+try:
+    AI_CHAT_TEMPERATURE = float(os.getenv("AI_CHAT_TEMPERATURE", "0.9") or 0.9)
+except Exception:
+    AI_CHAT_TEMPERATURE = 0.9
+AI_CHAT_TEMPERATURE = max(0.0, min(2.0, AI_CHAT_TEMPERATURE))
+try:
+    AI_CHAT_TOP_P = float(os.getenv("AI_CHAT_TOP_P", "0.95") or 0.95)
+except Exception:
+    AI_CHAT_TOP_P = 0.95
+AI_CHAT_TOP_P = max(0.0, min(1.0, AI_CHAT_TOP_P))
 AI_CHAT_IMAGE_API_BASE_URL = os.getenv("AI_CHAT_IMAGE_API_BASE_URL", "").strip().rstrip("/")
 AI_CHAT_IMAGE_API_KEY = os.getenv("AI_CHAT_IMAGE_API_KEY", "").strip()
 AI_CHAT_IMAGE_MODEL_ID = os.getenv("AI_CHAT_IMAGE_MODEL_ID", "").strip()
@@ -5168,6 +5217,14 @@ def admin_delete_user(
     db.execute(text("DELETE FROM episode_comments WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_comments WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_generate_logs WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM ai_chat_turn_feedback WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(
+        text(
+            "DELETE FROM ai_chat_turn_feedback "
+            "WHERE character_id IN (SELECT id FROM ai_chat_characters WHERE user_id = :uid)"
+        ),
+        {"uid": user_id},
+    )
     db.execute(text("DELETE FROM ai_chat_messages WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_characters WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_addon_purchases WHERE user_id = :uid"), {"uid": user_id})
@@ -7313,6 +7370,9 @@ class AIChatCharacterResponse(BaseModel):
     owner_username: str | None = None
     is_readonly: bool = False
     is_public: bool = False
+    recommendation_score: float = 0.0
+    recommendation_samples: int = 0
+    is_recommended: bool = False
     published_at: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -7373,6 +7433,42 @@ class AIChatPromptPreviewResponse(BaseModel):
     language_style: Literal["normal", "daily", "iq80_crude"] = "normal"
     summary_text: str | None = None
     long_term_memories_text: str | None = None
+
+
+class AIChatEngagementSummaryItem(BaseModel):
+    id: int
+    created_at: str | None = None
+    latency_bucket: str
+    followup_latency_seconds: float
+    engagement_score: float
+    latency_score: float
+    intimacy_score: float
+    cuteness_score: float
+    proactiveness_score: float
+    consistency_score: float
+    empathy_score: float
+    novelty_score: float
+    clarity_score: float
+    coolness_score: float
+    seriousness_score: float
+
+
+class AIChatEngagementSummaryResponse(BaseModel):
+    character_id: int
+    speech_gender: Literal["auto", "female", "male"] = "auto"
+    sample_size: int
+    average_engagement_score: float
+    average_latency_score: float
+    average_intimacy_score: float
+    average_cuteness_score: float
+    average_proactiveness_score: float
+    average_consistency_score: float
+    average_empathy_score: float
+    average_novelty_score: float
+    average_clarity_score: float
+    average_coolness_score: float
+    average_seriousness_score: float
+    recent: list[AIChatEngagementSummaryItem] = Field(default_factory=list)
 
 
 class AIChatMemoryBackfillRequest(BaseModel):
@@ -8237,6 +8333,699 @@ def _build_ai_chat_branching_instruction(
     )
 
 
+def _build_ai_chat_variation_instruction(
+    *,
+    mode: Literal["say", "do"],
+    history: list[AIChatHistoryItem],
+) -> str:
+    openers = [
+        "短い反応から入り、その後で本題へ展開する",
+        "情景を一行入れてから返答する",
+        "相手の意図を言い換えて確認してから返答する",
+        "感情のニュアンスを先に示してから返答する",
+    ]
+    structures = [
+        "結論→理由→次の一手",
+        "観察→提案→問いかけ",
+        "共感→具体化→提案",
+        "要点→補足→余韻",
+    ]
+    transitions = ["ただし", "そのうえで", "一方で", "だからこそ"]
+    endings = [
+        "最後に短い問いかけで締める",
+        "最後に一言の余韻を残す",
+        "最後に次の行動を一歩だけ示す",
+        "最後に相手の反応を促す",
+    ]
+    mode_note = "行動描写(do)では動きと心情の両方を入れる" if mode == "do" else "会話(say)では語尾と語順を前回と変える"
+    has_assistant_turn = any((item.role or "") == "assistant" for item in (history or []))
+    repeat_guard = (
+        "- 直前のAI返答の冒頭8文字と同一の書き出しを禁止する。\n"
+        if has_assistant_turn
+        else ""
+    )
+    return (
+        "【表現バリエーション指示】\n"
+        f"- 書き出し方: {secrets.choice(openers)}\n"
+        f"- 構成: {secrets.choice(structures)}\n"
+        f"- 接続表現: 「{secrets.choice(transitions)}」を自然に1回以上使う\n"
+        f"- 締め方: {secrets.choice(endings)}\n"
+        f"- 補足: {mode_note}\n"
+        f"{repeat_guard}"
+        f"- バリエーションID: {secrets.token_hex(2)}\n"
+    )
+
+
+def _score_ai_chat_followup_latency(latency_seconds: float | None) -> tuple[float, str]:
+    sec = min(300.0, max(0.0, float(latency_seconds or 0.0)))
+    if sec <= 20.0:
+        return 1.0, "instant"
+    if sec <= 45.0:
+        return 0.8, "very_fast"
+    if sec <= 90.0:
+        return 0.5, "fast"
+    if sec <= 180.0:
+        return 0.25, "normal"
+    return 0.0, "slow"
+
+
+def _clip01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _build_ai_chat_profile_key(
+    *,
+    character_name: str,
+    personality: str,
+    speech_gender: str | None = None,
+) -> str:
+    normalized_name = re.sub(r"\s+", " ", str(character_name or "").strip().lower())
+    normalized_personality = re.sub(r"\s+", " ", str(personality or "").strip().lower())
+    normalized_gender = normalize_speech_gender(speech_gender)
+    payload = f"{normalized_name}||{normalized_gender}||{normalized_personality[:1500]}"
+    if not payload.strip("|"):
+        payload = "default_profile"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _calc_user_personalization_weight(user_samples: int) -> float:
+    n = max(0, int(user_samples or 0))
+    # 序盤: グローバル学習を優先
+    if n < 8:
+        return 0.0
+    # 中盤: ユーザー嗜好を段階的に反映
+    if n < 24:
+        return 0.2 + ((n - 8) / 16.0) * 0.45  # 0.20 -> 0.65
+    # 後半: ユーザー最適化を強く反映
+    return 0.85
+
+
+def _update_profile_learning_stats(
+    db: Session,
+    *,
+    profile_key: str,
+    detail_scores: dict[str, float],
+) -> None:
+    key = str(profile_key or "").strip()
+    if not key:
+        return
+    row = (
+        db.query(models.AIChatProfileLearningStat)
+        .filter(models.AIChatProfileLearningStat.profile_key == key)
+        .first()
+    )
+    if row is None:
+        row = models.AIChatProfileLearningStat(
+            profile_key=key,
+            sample_count=0,
+        )
+        db.add(row)
+        db.flush()
+
+    prev_count = int(getattr(row, "sample_count", 0) or 0)
+    next_count = prev_count + 1
+
+    def rolling(prev_avg: float, new_value: float) -> float:
+        if prev_count <= 0:
+            return float(new_value)
+        return ((float(prev_avg) * prev_count) + float(new_value)) / next_count
+
+    row.sample_count = next_count
+    row.average_engagement_score = rolling(getattr(row, "average_engagement_score", 0.0), detail_scores.get("engagement_score", 0.0))
+    row.average_latency_score = rolling(getattr(row, "average_latency_score", 0.0), detail_scores.get("latency_score", 0.0))
+    row.average_intimacy_score = rolling(getattr(row, "average_intimacy_score", 0.0), detail_scores.get("intimacy_score", 0.0))
+    row.average_proactiveness_score = rolling(getattr(row, "average_proactiveness_score", 0.0), detail_scores.get("proactiveness_score", 0.0))
+    row.average_empathy_score = rolling(getattr(row, "average_empathy_score", 0.0), detail_scores.get("empathy_score", 0.0))
+    row.average_cuteness_score = rolling(getattr(row, "average_cuteness_score", 0.0), detail_scores.get("cuteness_score", 0.0))
+    row.average_consistency_score = rolling(getattr(row, "average_consistency_score", 0.0), detail_scores.get("consistency_score", 0.0))
+    row.average_novelty_score = rolling(getattr(row, "average_novelty_score", 0.0), detail_scores.get("novelty_score", 0.0))
+    row.average_clarity_score = rolling(getattr(row, "average_clarity_score", 0.0), detail_scores.get("clarity_score", 0.0))
+    row.average_coolness_score = rolling(getattr(row, "average_coolness_score", 0.0), detail_scores.get("coolness_score", 0.0))
+    row.average_seriousness_score = rolling(getattr(row, "average_seriousness_score", 0.0), detail_scores.get("seriousness_score", 0.0))
+    db.add(row)
+
+
+def _normalized_keyword_score(text: str, keywords: list[str], *, cap_hits: int) -> float:
+    normalized = str(text or "").lower()
+    if not normalized:
+        return 0.0
+    hits = 0
+    for kw in keywords:
+        if not kw:
+            continue
+        hits += normalized.count(str(kw).lower())
+    return _clip01(hits / max(1, cap_hits))
+
+
+def _extract_personality_keywords(personality_hint: str, max_items: int = 8) -> list[str]:
+    words = re.findall(r"[ぁ-んァ-ヴー一-龥A-Za-z]{2,}", str(personality_hint or ""))
+    uniq: list[str] = []
+    for w in words:
+        token = str(w).strip().lower()
+        if len(token) < 2:
+            continue
+        if token in uniq:
+            continue
+        uniq.append(token)
+        if len(uniq) >= max_items:
+            break
+    return uniq
+
+
+def _estimate_ai_reply_scores(
+    *,
+    assistant_content: str,
+    personality_hint: str = "",
+    assistant_mode: str = "say",
+    character_gender: Literal["auto", "female", "male"] = "auto",
+    latency_score: float = 0.0,
+) -> dict[str, float]:
+    text = str(assistant_content or "").strip()
+    if not text:
+        return {
+            "latency_score": _clip01(latency_score),
+            "intimacy_score": 0.0,
+            "cuteness_score": 0.0,
+            "proactiveness_score": 0.0,
+            "consistency_score": 0.0,
+            "empathy_score": 0.0,
+            "novelty_score": 0.0,
+            "clarity_score": 0.0,
+            "coolness_score": 0.0,
+            "seriousness_score": 0.0,
+            "engagement_score": _clip01(latency_score),
+        }
+
+    intimacy_keywords = [
+        "好き", "愛", "大切", "そば", "一緒", "抱き", "ぎゅ", "キス", "恋人", "会いた",
+        "darling", "love", "dear",
+    ]
+    cuteness_keywords = [
+        "かわいい", "えへ", "ふふ", "にゃ", "なの", "だよ", "♡", "♪", "きゅん", "ふわ",
+    ]
+    proactive_keywords = [
+        "しよう", "やろう", "行こう", "任せて", "まず", "次に", "今から", "私が", "提案", "試そう",
+        "let's", "i will", "first",
+    ]
+    empathy_keywords = [
+        "わかる", "気持ち", "大丈夫", "無理しない", "つら", "しんど", "安心", "寄り添", "嬉しい", "悲しい",
+        "i understand", "it's okay",
+    ]
+    clarity_keywords = [
+        "まず", "次に", "最後に", "つまり", "要するに", "具体的", "結論", "理由", "だから", "そのうえで",
+    ]
+    coolness_keywords = [
+        "冷静", "鋭い", "余裕", "堂々", "頼れる", "守る", "強い", "キメ", "決める", "信念",
+        "cool", "calm", "confident",
+    ]
+    seriousness_keywords = [
+        "真面目", "誠実", "責任", "約束", "計画", "丁寧", "慎重", "優先", "必要", "重要",
+        "sincere", "responsible", "careful",
+    ]
+
+    intimacy_score = _normalized_keyword_score(text, intimacy_keywords, cap_hits=4)
+    cuteness_score = _normalized_keyword_score(text, cuteness_keywords, cap_hits=4)
+    proactiveness_score = _normalized_keyword_score(text, proactive_keywords, cap_hits=4)
+    empathy_score = _normalized_keyword_score(text, empathy_keywords, cap_hits=4)
+    coolness_score = _normalized_keyword_score(text, coolness_keywords, cap_hits=4)
+    seriousness_score = _normalized_keyword_score(text, seriousness_keywords, cap_hits=4)
+
+    if assistant_mode == "do":
+        proactiveness_score = _clip01(proactiveness_score + 0.15)
+
+    personality_keywords = _extract_personality_keywords(personality_hint, max_items=8)
+    consistency_score = _normalized_keyword_score(text, personality_keywords, cap_hits=max(2, len(personality_keywords)))
+
+    tokens = re.findall(r"[ぁ-んァ-ヴー一-龥A-Za-z0-9]+", text)
+    if tokens:
+        uniq_ratio = len(set(tokens)) / len(tokens)
+    else:
+        uniq_ratio = 0.0
+    length_bonus = _clip01(len(text) / 220.0)
+    repetition_penalty = 0.25 if re.search(r"(.{4,12})\1{1,}", text) else 0.0
+    novelty_score = _clip01((uniq_ratio * 0.45) + (length_bonus * 0.55) - repetition_penalty)
+
+    punctuation_count = len(re.findall(r"[。！？!?]", text))
+    clarity_base = 0.35
+    if punctuation_count >= 1:
+        clarity_base += 0.2
+    if len(text) >= 45:
+        clarity_base += 0.15
+    clarity_base += _normalized_keyword_score(text, clarity_keywords, cap_hits=3) * 0.3
+    clarity_score = _clip01(clarity_base)
+
+    latency = _clip01(latency_score)
+    engagement_score = _clip01(
+        (latency * (0.26 if character_gender == "male" else 0.30))
+        + (intimacy_score * 0.12)
+        + (cuteness_score * (0.03 if character_gender == "male" else 0.09))
+        + (proactiveness_score * 0.14)
+        + (consistency_score * 0.10)
+        + (empathy_score * 0.10)
+        + (novelty_score * 0.07)
+        + (clarity_score * 0.06)
+        + (coolness_score * (0.07 if character_gender == "male" else 0.01))
+        + (seriousness_score * (0.05 if character_gender == "male" else 0.01))
+    )
+    return {
+        "latency_score": latency,
+        "intimacy_score": intimacy_score,
+        "cuteness_score": cuteness_score,
+        "proactiveness_score": proactiveness_score,
+        "consistency_score": consistency_score,
+        "empathy_score": empathy_score,
+        "novelty_score": novelty_score,
+        "clarity_score": clarity_score,
+        "coolness_score": coolness_score,
+        "seriousness_score": seriousness_score,
+        "engagement_score": engagement_score,
+    }
+
+
+def _estimate_user_followup_signal_scores(
+    *,
+    user_content: str,
+    latency_score: float = 0.0,
+) -> dict[str, float]:
+    text = str(user_content or "").strip()
+    if not text:
+        return {
+            "latency_score": _clip01(latency_score),
+            "intimacy_score": 0.0,
+            "proactiveness_score": 0.0,
+            "empathy_score": 0.0,
+        }
+
+    intimacy_keywords = [
+        "好き", "会いたい", "一緒", "そば", "大事", "嬉しい", "ありがとう", "もっと話したい",
+        "love", "dear", "miss you",
+    ]
+    proactive_keywords = [
+        "しよう", "やろう", "行こう", "今から", "次は", "こうして", "提案", "決めた",
+        "let's", "i will", "next",
+    ]
+    empathy_keywords = [
+        "わかる", "共感", "気持ち", "つらい", "しんどい", "大丈夫", "無理しない", "安心して",
+        "i understand", "i feel you", "it's okay",
+    ]
+
+    intimacy_score = _normalized_keyword_score(text, intimacy_keywords, cap_hits=4)
+    proactiveness_score = _normalized_keyword_score(text, proactive_keywords, cap_hits=4)
+    empathy_score = _normalized_keyword_score(text, empathy_keywords, cap_hits=4)
+
+    text_len = len(text)
+    if text_len >= 50:
+        intimacy_score = _clip01(intimacy_score + 0.08)
+        empathy_score = _clip01(empathy_score + 0.05)
+    if "?" in text or "？" in text:
+        proactiveness_score = _clip01(proactiveness_score + 0.08)
+
+    return {
+        "latency_score": _clip01(latency_score),
+        "intimacy_score": intimacy_score,
+        "proactiveness_score": proactiveness_score,
+        "empathy_score": empathy_score,
+    }
+
+
+def _record_ai_chat_followup_feedback(
+    db: Session,
+    *,
+    user_id: int,
+    character_id: int,
+    assistant_message_id: int,
+    followup_user_message_id: int | None,
+    latency_seconds: float,
+    assistant_content: str = "",
+    personality_hint: str = "",
+    assistant_mode: str = "say",
+    character_gender: Literal["auto", "female", "male"] = "auto",
+    followup_user_content: str = "",
+    character_profile_key: str = "",
+) -> None:
+    existing = (
+        db.query(models.AIChatTurnFeedback.id)
+        .filter(models.AIChatTurnFeedback.assistant_message_id == int(assistant_message_id))
+        .first()
+    )
+    if existing:
+        return
+    normalized_latency_seconds = min(300.0, max(0.0, float(latency_seconds or 0.0)))
+    latency_score, bucket = _score_ai_chat_followup_latency(normalized_latency_seconds)
+    detail_scores = _estimate_ai_reply_scores(
+        assistant_content=assistant_content,
+        personality_hint=personality_hint,
+        assistant_mode=assistant_mode,
+        character_gender=character_gender,
+        latency_score=latency_score,
+    )
+    user_signal_scores = _estimate_user_followup_signal_scores(
+        user_content=followup_user_content,
+        latency_score=latency_score,
+    )
+    # User-side behavior defines these four KPIs.
+    detail_scores["latency_score"] = float(user_signal_scores.get("latency_score", latency_score))
+    detail_scores["intimacy_score"] = float(user_signal_scores.get("intimacy_score", 0.0))
+    detail_scores["proactiveness_score"] = float(user_signal_scores.get("proactiveness_score", 0.0))
+    detail_scores["empathy_score"] = float(user_signal_scores.get("empathy_score", 0.0))
+    detail_scores["engagement_score"] = _clip01(
+        (detail_scores["latency_score"] * 0.34)
+        + (detail_scores["intimacy_score"] * 0.20)
+        + (detail_scores["proactiveness_score"] * 0.20)
+        + (detail_scores["empathy_score"] * 0.16)
+        + (float(detail_scores.get("consistency_score", 0.0)) * 0.04)
+        + (float(detail_scores.get("clarity_score", 0.0)) * 0.03)
+        + (float(detail_scores.get("novelty_score", 0.0)) * 0.03)
+    )
+    db.add(
+        models.AIChatTurnFeedback(
+            user_id=int(user_id),
+            character_id=int(character_id),
+            assistant_message_id=int(assistant_message_id),
+            followup_user_message_id=int(followup_user_message_id) if followup_user_message_id else None,
+            character_profile_key=str(character_profile_key or "").strip(),
+            followup_latency_seconds=normalized_latency_seconds,
+            latency_score=float(detail_scores.get("latency_score", latency_score)),
+            intimacy_score=float(detail_scores.get("intimacy_score", 0.0)),
+            cuteness_score=float(detail_scores.get("cuteness_score", 0.0)),
+            proactiveness_score=float(detail_scores.get("proactiveness_score", 0.0)),
+            consistency_score=float(detail_scores.get("consistency_score", 0.0)),
+            empathy_score=float(detail_scores.get("empathy_score", 0.0)),
+            novelty_score=float(detail_scores.get("novelty_score", 0.0)),
+            clarity_score=float(detail_scores.get("clarity_score", 0.0)),
+            coolness_score=float(detail_scores.get("coolness_score", 0.0)),
+            seriousness_score=float(detail_scores.get("seriousness_score", 0.0)),
+            engagement_score=float(detail_scores.get("engagement_score", latency_score)),
+            latency_bucket=bucket,
+            score_version="v3_10d",
+        )
+    )
+    _update_profile_learning_stats(
+        db,
+        profile_key=str(character_profile_key or "").strip(),
+        detail_scores=detail_scores,
+    )
+
+
+def _build_ai_chat_engagement_learning_instruction(
+    db: Session,
+    *,
+    viewer: models.User | None,
+    character: models.AIChatCharacter | None,
+) -> str:
+    if viewer is None or character is None:
+        return ""
+    profile_key = _build_ai_chat_profile_key(
+        character_name=str(getattr(character, "name", "") or ""),
+        personality=str(getattr(character, "personality", "") or ""),
+        speech_gender=str(getattr(character, "speech_gender", "auto") or "auto"),
+    )
+    profile_stat = (
+        db.query(models.AIChatProfileLearningStat)
+        .filter(models.AIChatProfileLearningStat.profile_key == profile_key)
+        .first()
+    )
+    rows = (
+        db.query(models.AIChatTurnFeedback)
+        .filter(
+            models.AIChatTurnFeedback.character_profile_key == profile_key,
+        )
+        .order_by(models.AIChatTurnFeedback.id.desc())
+        .limit(40)
+        .all()
+    )
+    if not rows:
+        rows = (
+            db.query(models.AIChatTurnFeedback)
+            .filter(models.AIChatTurnFeedback.character_id == int(character.id))
+            .order_by(models.AIChatTurnFeedback.id.desc())
+            .limit(40)
+            .all()
+        )
+    user_rows = (
+        db.query(models.AIChatTurnFeedback)
+        .filter(
+            models.AIChatTurnFeedback.user_id == int(viewer.id),
+            models.AIChatTurnFeedback.character_profile_key == profile_key,
+        )
+        .order_by(models.AIChatTurnFeedback.id.desc())
+        .limit(40)
+        .all()
+    )
+    if not user_rows:
+        user_rows = (
+            db.query(models.AIChatTurnFeedback)
+            .filter(
+                models.AIChatTurnFeedback.user_id == int(viewer.id),
+                models.AIChatTurnFeedback.character_id == int(character.id),
+            )
+            .order_by(models.AIChatTurnFeedback.id.desc())
+            .limit(40)
+            .all()
+        )
+    if not rows and profile_stat is None:
+        return ""
+
+    def _avg_from_rows(items: list[models.AIChatTurnFeedback], attr: str) -> float:
+        if not items:
+            return 0.0
+        vals = [float(getattr(r, attr, 0.0) or 0.0) for r in items]
+        return float(sum(vals) / len(vals)) if vals else 0.0
+
+    if profile_stat is not None:
+        global_avg_score = float(getattr(profile_stat, "average_engagement_score", 0.0) or 0.0)
+        global_avg_latency = float(getattr(profile_stat, "average_latency_score", 0.0) or 0.0)
+        global_avg_intimacy = float(getattr(profile_stat, "average_intimacy_score", 0.0) or 0.0)
+        global_avg_cuteness = float(getattr(profile_stat, "average_cuteness_score", 0.0) or 0.0)
+        global_avg_proactive = float(getattr(profile_stat, "average_proactiveness_score", 0.0) or 0.0)
+        global_avg_consistency = float(getattr(profile_stat, "average_consistency_score", 0.0) or 0.0)
+        global_avg_empathy = float(getattr(profile_stat, "average_empathy_score", 0.0) or 0.0)
+        global_avg_novelty = float(getattr(profile_stat, "average_novelty_score", 0.0) or 0.0)
+        global_avg_clarity = float(getattr(profile_stat, "average_clarity_score", 0.0) or 0.0)
+        global_avg_coolness = float(getattr(profile_stat, "average_coolness_score", 0.0) or 0.0)
+        global_avg_seriousness = float(getattr(profile_stat, "average_seriousness_score", 0.0) or 0.0)
+    else:
+        global_avg_score = _avg_from_rows(rows, "engagement_score")
+        global_avg_latency = _avg_from_rows(rows, "latency_score")
+        global_avg_intimacy = _avg_from_rows(rows, "intimacy_score")
+        global_avg_cuteness = _avg_from_rows(rows, "cuteness_score")
+        global_avg_proactive = _avg_from_rows(rows, "proactiveness_score")
+        global_avg_consistency = _avg_from_rows(rows, "consistency_score")
+        global_avg_empathy = _avg_from_rows(rows, "empathy_score")
+        global_avg_novelty = _avg_from_rows(rows, "novelty_score")
+        global_avg_clarity = _avg_from_rows(rows, "clarity_score")
+        global_avg_coolness = _avg_from_rows(rows, "coolness_score")
+        global_avg_seriousness = _avg_from_rows(rows, "seriousness_score")
+
+    user_avg_score = _avg_from_rows(user_rows, "engagement_score")
+    user_avg_latency = _avg_from_rows(user_rows, "latency_score")
+    user_avg_intimacy = _avg_from_rows(user_rows, "intimacy_score")
+    user_avg_cuteness = _avg_from_rows(user_rows, "cuteness_score")
+    user_avg_proactive = _avg_from_rows(user_rows, "proactiveness_score")
+    user_avg_consistency = _avg_from_rows(user_rows, "consistency_score")
+    user_avg_empathy = _avg_from_rows(user_rows, "empathy_score")
+    user_avg_novelty = _avg_from_rows(user_rows, "novelty_score")
+    user_avg_clarity = _avg_from_rows(user_rows, "clarity_score")
+    user_avg_coolness = _avg_from_rows(user_rows, "coolness_score")
+    user_avg_seriousness = _avg_from_rows(user_rows, "seriousness_score")
+
+    user_weight = _calc_user_personalization_weight(len(user_rows))
+    global_weight = 1.0 - user_weight
+
+    avg_score = (user_avg_score * user_weight) + (global_avg_score * global_weight)
+    avg_latency = (user_avg_latency * user_weight) + (global_avg_latency * global_weight)
+    avg_intimacy = (user_avg_intimacy * user_weight) + (global_avg_intimacy * global_weight)
+    avg_cuteness = (user_avg_cuteness * user_weight) + (global_avg_cuteness * global_weight)
+    avg_proactive = (user_avg_proactive * user_weight) + (global_avg_proactive * global_weight)
+    avg_consistency = (user_avg_consistency * user_weight) + (global_avg_consistency * global_weight)
+    avg_empathy = (user_avg_empathy * user_weight) + (global_avg_empathy * global_weight)
+    avg_novelty = (user_avg_novelty * user_weight) + (global_avg_novelty * global_weight)
+    avg_clarity = (user_avg_clarity * user_weight) + (global_avg_clarity * global_weight)
+    avg_coolness = (user_avg_coolness * user_weight) + (global_avg_coolness * global_weight)
+    avg_seriousness = (user_avg_seriousness * user_weight) + (global_avg_seriousness * global_weight)
+    instant_rate = _clip01(avg_latency)
+
+    top_rows = sorted(rows, key=lambda x: float(getattr(x, "engagement_score", 0.0) or 0.0), reverse=True)[:3]
+    top_msg_ids = [int(r.assistant_message_id) for r in top_rows if getattr(r, "assistant_message_id", None)]
+    top_lines: list[str] = []
+    if top_msg_ids:
+        top_msgs = (
+            db.query(models.AIChatMessage.id, models.AIChatMessage.content)
+            .filter(models.AIChatMessage.id.in_(top_msg_ids))
+            .all()
+        )
+        by_id = {int(mid): str(content or "") for mid, content in top_msgs}
+        for rid in top_msg_ids:
+            text_snippet = re.sub(r"\s+", " ", by_id.get(int(rid), "")).strip()[:120]
+            if text_snippet:
+                top_lines.append(f"- {text_snippet}")
+
+    gender = normalize_speech_gender(getattr(character, "speech_gender", None))
+    if user_weight >= 0.80:
+        phase_note = "後半フェーズ（ユーザー最適化強）"
+    elif user_weight >= 0.20:
+        phase_note = "中盤フェーズ（ユーザー最適化へ移行）"
+    else:
+        phase_note = "序盤フェーズ（グローバル学習優先）"
+    weak_pool = [
+        ("親密度", avg_intimacy),
+        ("積極度", avg_proactive),
+        ("整合度", avg_consistency),
+        ("共感度", avg_empathy),
+        ("新規性", avg_novelty),
+        ("明瞭さ", avg_clarity),
+    ]
+    if gender == "male":
+        weak_pool.extend([
+            ("かっこよさ", avg_coolness),
+            ("まじめさ", avg_seriousness),
+        ])
+    else:
+        weak_pool.append(("かわいさ", avg_cuteness))
+    weak_dimensions = sorted(weak_pool, key=lambda x: x[1])[:2]
+    weak_names = "・".join([name for name, _ in weak_dimensions]) if weak_dimensions else "なし"
+    if avg_score >= 0.70:
+        tuning = "全体良好。テンポと関係性を維持し、毎回1つだけ新しい展開を追加。"
+    elif avg_score >= 0.45:
+        tuning = f"中間。弱い軸（{weak_names}）を優先補強し、短い問いかけで継続率を上げる。"
+    else:
+        tuning = f"改善余地大。弱い軸（{weak_names}）を最優先し、結論先出し+次アクション提示。"
+
+    example_block = "\n".join(top_lines) if top_lines else "- （高評価履歴なし）"
+    return (
+        "【継続入力学習フィードバック】\n"
+        f"- 即レス率(<=45秒): {instant_rate:.0%}\n"
+        f"- 総合: {avg_score:.2f}\n"
+        f"- 速度: {avg_latency:.2f}\n"
+        f"- 親密度: {avg_intimacy:.2f}\n"
+        f"- かわいさ: {avg_cuteness:.2f}\n"
+        f"- 積極度: {avg_proactive:.2f}\n"
+        f"- 設定整合度: {avg_consistency:.2f}\n"
+        f"- 共感度: {avg_empathy:.2f}\n"
+        f"- 新規性: {avg_novelty:.2f}\n"
+        f"- 明瞭さ: {avg_clarity:.2f}\n"
+        f"- かっこよさ: {avg_coolness:.2f}\n"
+        f"- まじめさ: {avg_seriousness:.2f}\n"
+        f"- 個人最適化重み: {user_weight:.0%}\n"
+        f"- 学習フェーズ: {phase_note}\n"
+        f"- 調整方針: {tuning}\n"
+        "- 直近高評価返信の要素を参考にする（内容のコピペは禁止）:\n"
+        f"{example_block}\n"
+    )
+
+
+def _build_ai_chat_recommendation_map(
+    db: Session,
+    *,
+    user_id: int,
+    character_ids: list[int],
+) -> dict[int, dict]:
+    if not character_ids:
+        return {}
+    character_rows = (
+        db.query(
+            models.AIChatCharacter.id,
+            models.AIChatCharacter.name,
+            models.AIChatCharacter.personality,
+            models.AIChatCharacter.speech_gender,
+        )
+        .filter(
+            models.AIChatCharacter.id.in_(character_ids),
+        )
+        .all()
+    )
+    if not character_rows:
+        return {}
+
+    char_to_key: dict[int, str] = {}
+    profile_keys: list[str] = []
+    for cid, name, personality, speech_gender in character_rows:
+        key = _build_ai_chat_profile_key(
+            character_name=str(name or ""),
+            personality=str(personality or ""),
+            speech_gender=str(speech_gender or "auto"),
+        )
+        char_to_key[int(cid)] = key
+        profile_keys.append(key)
+
+    global_rows = (
+        db.query(models.AIChatProfileLearningStat)
+        .filter(models.AIChatProfileLearningStat.profile_key.in_(profile_keys))
+        .all()
+    )
+    global_map = {
+        str(getattr(r, "profile_key", "") or ""): r
+        for r in global_rows
+        if str(getattr(r, "profile_key", "") or "")
+    }
+    user_rows = (
+        db.query(
+            models.AIChatTurnFeedback.character_profile_key,
+            func.count(models.AIChatTurnFeedback.id),
+            func.avg(models.AIChatTurnFeedback.latency_score),
+            func.avg(models.AIChatTurnFeedback.intimacy_score),
+            func.avg(models.AIChatTurnFeedback.proactiveness_score),
+            func.avg(models.AIChatTurnFeedback.empathy_score),
+        )
+        .filter(
+            models.AIChatTurnFeedback.user_id == int(user_id),
+            models.AIChatTurnFeedback.character_profile_key.in_(profile_keys),
+        )
+        .group_by(models.AIChatTurnFeedback.character_profile_key)
+        .all()
+    )
+    user_map = {
+        str(k): {
+            "samples": int(c or 0),
+            "latency": float(lat or 0.0),
+            "intimacy": float(inti or 0.0),
+            "proactive": float(pro or 0.0),
+            "empathy": float(emp or 0.0),
+        }
+        for k, c, lat, inti, pro, emp in user_rows
+        if str(k or "").strip()
+    }
+
+    def _score(latency: float, intimacy: float, proactive: float, empathy: float) -> float:
+        return _clip01(
+            (float(latency) * 0.30)
+            + (float(intimacy) * 0.24)
+            + (float(proactive) * 0.24)
+            + (float(empathy) * 0.22)
+        )
+
+    result: dict[int, dict] = {}
+    for cid in character_ids:
+        key = char_to_key.get(int(cid), "")
+        global_stat = global_map.get(key)
+        user_stat = user_map.get(key)
+        global_score = _score(
+            float(getattr(global_stat, "average_latency_score", 0.0) or 0.0),
+            float(getattr(global_stat, "average_intimacy_score", 0.0) or 0.0),
+            float(getattr(global_stat, "average_proactiveness_score", 0.0) or 0.0),
+            float(getattr(global_stat, "average_empathy_score", 0.0) or 0.0),
+        ) if global_stat is not None else 0.0
+        global_samples = int(getattr(global_stat, "sample_count", 0) or 0) if global_stat is not None else 0
+
+        user_score = _score(
+            float(user_stat.get("latency", 0.0)),
+            float(user_stat.get("intimacy", 0.0)),
+            float(user_stat.get("proactive", 0.0)),
+            float(user_stat.get("empathy", 0.0)),
+        ) if user_stat else 0.0
+        user_samples = int(user_stat.get("samples", 0)) if user_stat else 0
+
+        user_weight = _calc_user_personalization_weight(user_samples)
+        blended = (user_score * user_weight) + (global_score * (1.0 - user_weight))
+        combined_samples = max(global_samples, user_samples)
+        result[int(cid)] = {
+            "score": blended,
+            "samples": combined_samples,
+            "is_recommended": bool(combined_samples >= 3 and blended >= 0.45),
+        }
+    return result
+
+
 def _build_relationship_tone_rules(personality: str) -> str:
     text = (personality or "").lower()
     romantic_keywords = [
@@ -8633,6 +9422,8 @@ async def _call_ai_chat_json_with_fallback(
                 provider=candidate,
                 system_instructions=system_instructions,
                 timeout_sec=AI_CHAT_TEXT_TIMEOUT_SECONDS,
+                temperature=AI_CHAT_TEMPERATURE,
+                top_p=AI_CHAT_TOP_P,
             )
         except HTTPException as e:
             status_code = int(getattr(e, "status_code", 500) or 500)
@@ -8865,6 +9656,8 @@ def _build_ai_chat_prompt(
     history_text: str,
     message: str,
     branching_instruction: str = "",
+    variation_instruction: str = "",
+    engagement_learning_instruction: str = "",
     language_style_rules: str = "",
     summary_text: str | None = None,
     long_term_memories_text: str | None = None,
@@ -8901,6 +9694,8 @@ def _build_ai_chat_prompt(
         "会話履歴:\n"
         f"{history_text}\n\n"
         f"{branching_instruction}\n"
+        f"{variation_instruction}\n"
+        f"{engagement_learning_instruction}\n"
         f"ユーザー最新入力: {message[:1200]}\n\n"
         "出力は必ずJSON 1個のみ。キーは say と do。\n"
         '例: {"say":"セリフ","do":"行動描写"}\n'
@@ -10221,6 +11016,15 @@ async def ai_chat(
         except Exception as e:
             logger.warning("memory retrieval failed user=%s err=%r", getattr(viewer, "id", None), e)
     branching_instruction = _build_ai_chat_branching_instruction(req.history or [], message)
+    variation_instruction = _build_ai_chat_variation_instruction(
+        mode=mode,
+        history=req.history or [],
+    )
+    engagement_learning_instruction = _build_ai_chat_engagement_learning_instruction(
+        db,
+        viewer=viewer,
+        character=character,
+    )
     prompt = _build_ai_chat_prompt(
         character_name=character_name,
         personality=personality,
@@ -10230,6 +11034,8 @@ async def ai_chat(
         history_text=history_text,
         message=message,
         branching_instruction=branching_instruction,
+        variation_instruction=variation_instruction,
+        engagement_learning_instruction=engagement_learning_instruction,
         language_style_rules=language_style_rules,
         summary_text=summary_text,
         long_term_memories_text=long_term_memories_text,
@@ -10338,6 +11144,31 @@ async def ai_chat(
     )
     user_msg: models.AIChatMessage | None = None
     if can_persist_character_chat:
+        character_profile_key = _build_ai_chat_profile_key(
+            character_name=character_name or str(getattr(character, "name", "") or ""),
+            personality=personality or str(getattr(character, "personality", "") or ""),
+            speech_gender=str(getattr(character, "speech_gender", "auto") or "auto"),
+        )
+        latest_persisted = (
+            db.query(models.AIChatMessage)
+            .filter(
+                models.AIChatMessage.user_id == int(user.id),
+                models.AIChatMessage.character_id == int(character.id),
+                models.AIChatMessage.is_deleted == False,
+            )
+            .order_by(models.AIChatMessage.created_at.desc(), models.AIChatMessage.id.desc())
+            .first()
+        )
+        followup_target_msg: models.AIChatMessage | None = None
+        followup_latency_seconds: float | None = None
+        if latest_persisted is not None and str(getattr(latest_persisted, "role", "")) == "assistant":
+            created_at = getattr(latest_persisted, "created_at", None)
+            if created_at is not None:
+                followup_target_msg = latest_persisted
+                followup_latency_seconds = max(
+                    0.0,
+                    float((datetime.utcnow() - created_at).total_seconds()),
+                )
         mark_r18 = bool(
             r18
             or _contains_public_chat_r18_hint(personality)
@@ -10396,6 +11227,30 @@ async def ai_chat(
                 content=str(extra.content or "")[:4000],
             )
             db.add(extra_msg)
+        db.flush()
+        if (
+            followup_target_msg is not None
+            and followup_latency_seconds is not None
+            and user_msg is not None
+            and user_msg.id
+            and followup_target_msg.id
+        ):
+            _record_ai_chat_followup_feedback(
+                db,
+                user_id=int(user.id),
+                character_id=int(character.id),
+                assistant_message_id=int(followup_target_msg.id),
+                followup_user_message_id=int(user_msg.id),
+                latency_seconds=float(followup_latency_seconds),
+                assistant_content=str(getattr(followup_target_msg, "content", "") or ""),
+                personality_hint=str(
+                    getattr(followup_target_msg, "personality_snapshot", "") or personality or ""
+                ),
+                assistant_mode=str(getattr(followup_target_msg, "mode", "say") or "say"),
+                character_gender=normalize_speech_gender(getattr(character, "speech_gender", None)),
+                followup_user_content=message[:4000],
+                character_profile_key=character_profile_key,
+            )
         if mark_r18:
             character.is_r18 = True
             db.add(character)
@@ -10757,6 +11612,12 @@ def list_ai_chat_characters(
             .all()
         )
         rows.extend(extra_rows)
+    character_ids = [int(getattr(item, "id", 0) or 0) for item, _ in rows]
+    recommendation_map = _build_ai_chat_recommendation_map(
+        db,
+        user_id=int(user.id),
+        character_ids=character_ids,
+    )
     return [
         AIChatCharacterResponse(
             id=int(item.id),
@@ -10773,6 +11634,15 @@ def list_ai_chat_characters(
                 db=db,
             ),
             is_public=bool(getattr(item, "is_public", False)),
+            recommendation_score=float(
+                recommendation_map.get(int(item.id), {}).get("score", 0.0)
+            ),
+            recommendation_samples=int(
+                recommendation_map.get(int(item.id), {}).get("samples", 0)
+            ),
+            is_recommended=bool(
+                recommendation_map.get(int(item.id), {}).get("is_recommended", False)
+            ),
             published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
             created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
             updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
@@ -11064,6 +11934,11 @@ def delete_ai_chat_character(
     (
         db.query(models.AIChatCharacterFavorite)
         .filter(models.AIChatCharacterFavorite.character_id == item.id)
+        .delete(synchronize_session=False)
+    )
+    (
+        db.query(models.AIChatTurnFeedback)
+        .filter(models.AIChatTurnFeedback.character_id == item.id)
         .delete(synchronize_session=False)
     )
     db.delete(item)
@@ -11538,6 +12413,109 @@ def list_ai_chat_messages(
     ]
 
 
+@app.get(
+    "/api/ai/chat/characters/{character_id}/engagement_summary",
+    response_model=AIChatEngagementSummaryResponse,
+)
+def get_ai_chat_engagement_summary(
+    character_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    character = _find_editable_ai_chat_character(
+        db=db,
+        viewer=user,
+        character_id=character_id,
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+
+    rows = (
+        db.query(models.AIChatTurnFeedback)
+        .filter(
+            models.AIChatTurnFeedback.user_id == int(user.id),
+            models.AIChatTurnFeedback.character_id == int(character_id),
+        )
+        .order_by(models.AIChatTurnFeedback.id.desc())
+        .limit(200)
+        .all()
+    )
+    if not rows:
+        return AIChatEngagementSummaryResponse(
+            character_id=int(character_id),
+            speech_gender=normalize_speech_gender(getattr(character, "speech_gender", None)),
+            sample_size=0,
+            average_engagement_score=0.0,
+            average_latency_score=0.0,
+            average_intimacy_score=0.0,
+            average_cuteness_score=0.0,
+            average_proactiveness_score=0.0,
+            average_consistency_score=0.0,
+            average_empathy_score=0.0,
+            average_novelty_score=0.0,
+            average_clarity_score=0.0,
+            average_coolness_score=0.0,
+            average_seriousness_score=0.0,
+            recent=[],
+        )
+
+    def _avg(values: list[float]) -> float:
+        return float(sum(values) / len(values)) if values else 0.0
+
+    engagement_scores = [float(getattr(r, "engagement_score", 0.0) or 0.0) for r in rows]
+    latency_scores = [float(getattr(r, "latency_score", 0.0) or 0.0) for r in rows]
+    intimacy_scores = [float(getattr(r, "intimacy_score", 0.0) or 0.0) for r in rows]
+    cuteness_scores = [float(getattr(r, "cuteness_score", 0.0) or 0.0) for r in rows]
+    proactiveness_scores = [float(getattr(r, "proactiveness_score", 0.0) or 0.0) for r in rows]
+    consistency_scores = [float(getattr(r, "consistency_score", 0.0) or 0.0) for r in rows]
+    empathy_scores = [float(getattr(r, "empathy_score", 0.0) or 0.0) for r in rows]
+    novelty_scores = [float(getattr(r, "novelty_score", 0.0) or 0.0) for r in rows]
+    clarity_scores = [float(getattr(r, "clarity_score", 0.0) or 0.0) for r in rows]
+    coolness_scores = [float(getattr(r, "coolness_score", 0.0) or 0.0) for r in rows]
+    seriousness_scores = [float(getattr(r, "seriousness_score", 0.0) or 0.0) for r in rows]
+
+    recent_rows = rows[:20]
+    recent_items = [
+        AIChatEngagementSummaryItem(
+            id=int(r.id),
+            created_at=r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+            latency_bucket=str(getattr(r, "latency_bucket", "slow") or "slow"),
+            followup_latency_seconds=float(getattr(r, "followup_latency_seconds", 0.0) or 0.0),
+            engagement_score=float(getattr(r, "engagement_score", 0.0) or 0.0),
+            latency_score=float(getattr(r, "latency_score", 0.0) or 0.0),
+            intimacy_score=float(getattr(r, "intimacy_score", 0.0) or 0.0),
+            cuteness_score=float(getattr(r, "cuteness_score", 0.0) or 0.0),
+            proactiveness_score=float(getattr(r, "proactiveness_score", 0.0) or 0.0),
+            consistency_score=float(getattr(r, "consistency_score", 0.0) or 0.0),
+            empathy_score=float(getattr(r, "empathy_score", 0.0) or 0.0),
+            novelty_score=float(getattr(r, "novelty_score", 0.0) or 0.0),
+            clarity_score=float(getattr(r, "clarity_score", 0.0) or 0.0),
+            coolness_score=float(getattr(r, "coolness_score", 0.0) or 0.0),
+            seriousness_score=float(getattr(r, "seriousness_score", 0.0) or 0.0),
+        )
+        for r in recent_rows
+    ]
+
+    return AIChatEngagementSummaryResponse(
+        character_id=int(character_id),
+        speech_gender=normalize_speech_gender(getattr(character, "speech_gender", None)),
+        sample_size=len(rows),
+        average_engagement_score=_avg(engagement_scores),
+        average_latency_score=_avg(latency_scores),
+        average_intimacy_score=_avg(intimacy_scores),
+        average_cuteness_score=_avg(cuteness_scores),
+        average_proactiveness_score=_avg(proactiveness_scores),
+        average_consistency_score=_avg(consistency_scores),
+        average_empathy_score=_avg(empathy_scores),
+        average_novelty_score=_avg(novelty_scores),
+        average_clarity_score=_avg(clarity_scores),
+        average_coolness_score=_avg(coolness_scores),
+        average_seriousness_score=_avg(seriousness_scores),
+        recent=recent_items,
+    )
+
+
 @app.post(
     "/api/ai/chat/characters/{character_id}/messages/import",
     response_model=AIChatMessageImportResponse,
@@ -11955,6 +12933,11 @@ def get_ai_chat_latest_prompt_preview(
                 e,
             )
     language_style_rules = _build_language_style_rules(language_style)
+    engagement_learning_instruction = _build_ai_chat_engagement_learning_instruction(
+        db,
+        viewer=user,
+        character=character,
+    )
     prompt = _build_ai_chat_prompt(
         character_name=character_name,
         personality=personality,
@@ -11963,6 +12946,7 @@ def get_ai_chat_latest_prompt_preview(
         short_reply=False,
         history_text=history_text,
         message=message,
+        engagement_learning_instruction=engagement_learning_instruction,
         language_style_rules=language_style_rules,
         summary_text=summary_text,
         long_term_memories_text=long_term_memories_text,
