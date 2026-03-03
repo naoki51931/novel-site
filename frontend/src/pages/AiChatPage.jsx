@@ -8,6 +8,7 @@ const AI_CHAT_CHARACTER_NAME_KEY = "ai_chat_character_name_v1";
 const AI_CHAT_PERSONALITY_KEY = "ai_chat_personality_v1";
 const AI_CHAT_APPEARANCE_KEY = "ai_chat_appearance_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY = "ai_chat_relationship_memo_history_v1";
+const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_LIMIT = 30;
 const AI_CHAT_GUEST_DRAFT_KEY = "ai_chat_guest_draft_v1";
 const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
 const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
@@ -146,6 +147,34 @@ function parseGeneratedImageMessageContent(rawContent) {
 
 function compactText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeRelationshipMemoHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  const now = Date.now();
+  const normalized = [];
+  const seen = new Set();
+  raw.forEach((item, idx) => {
+    const isObject = item && typeof item === "object";
+    const text = compactText(isObject ? item.text : item);
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const useCountRaw = isObject ? Number(item.use_count) : NaN;
+    const lastUsedRaw = isObject ? Number(item.last_used_at) : NaN;
+    normalized.push({
+      text,
+      use_count: Number.isFinite(useCountRaw) && useCountRaw > 0 ? Math.floor(useCountRaw) : 1,
+      last_used_at: Number.isFinite(lastUsedRaw) && lastUsedRaw > 0 ? Math.floor(lastUsedRaw) : now - idx,
+    });
+  });
+  return normalized
+    .sort((a, b) => {
+      if (b.use_count !== a.use_count) return b.use_count - a.use_count;
+      return b.last_used_at - a.last_used_at;
+    })
+    .slice(0, AI_CHAT_RELATIONSHIP_MEMO_HISTORY_LIMIT);
 }
 
 function normalizeChatFetchErrorMessage(error, fallbackMessage, t) {
@@ -544,13 +573,12 @@ export default function AiChatPage() {
     try {
       const raw = localStorage.getItem(AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY);
       const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed)
-        ? parsed.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 30)
-        : [];
+      return normalizeRelationshipMemoHistory(parsed);
     } catch {
       return [];
     }
   });
+  const [castRelationshipSelectMap, setCastRelationshipSelectMap] = useState({});
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia(MOBILE_VIEWPORT_MEDIA_QUERY).matches;
@@ -1437,6 +1465,10 @@ export default function AiChatPage() {
   );
   const selectedSpeakerName = normalizeSpeakerName(userSpeakerProfile?.name || characterName)
     || t({ ja: "未選択", en: "Not selected" });
+  const relationshipMemoOptions = useMemo(
+    () => normalizeRelationshipMemoHistory(relationshipMemoHistory),
+    [relationshipMemoHistory]
+  );
   const selectedSpeakerBubbles = useMemo(() => {
     const bubbles = [];
     for (let i = 0; i < PREVIEW_BUBBLE_COUNT; i += 1) {
@@ -1483,12 +1515,32 @@ export default function AiChatPage() {
       prev.map((c) => (c.key === key ? { ...c, ...patch } : c))
     );
   };
+  const getResolvedCastRelationship = (cast) => {
+    const typed = compactText(cast?.relationship || "");
+    if (typed) return typed;
+    return compactText(castRelationshipSelectMap?.[cast?.key] || "");
+  };
   const rememberRelationshipMemo = (text) => {
     const v = compactText(text);
     if (!v) return;
     setRelationshipMemoHistory((prev) => {
-      const next = [v, ...prev.filter((item) => item !== v)].slice(0, 30);
-      return next;
+      const now = Date.now();
+      const key = v.toLowerCase();
+      const rows = normalizeRelationshipMemoHistory(prev);
+      let found = false;
+      const next = rows.map((item) => {
+        if (item.text.toLowerCase() !== key) return item;
+        found = true;
+        return {
+          ...item,
+          use_count: Number(item.use_count || 0) + 1,
+          last_used_at: now,
+        };
+      });
+      if (!found) {
+        next.push({ text: v, use_count: 1, last_used_at: now });
+      }
+      return normalizeRelationshipMemoHistory(next);
     });
   };
 
@@ -1512,6 +1564,11 @@ export default function AiChatPage() {
 
   const removeCastCharacter = (key) => {
     setCastCharacters((prev) => prev.filter((c) => c.key !== key));
+    setCastRelationshipSelectMap((prev) => {
+      const next = { ...(prev || {}) };
+      delete next[key];
+      return next;
+    });
     setUserSpeakerKey((prev) => (prev === key ? "you" : prev));
     setRandomSpeakerKeys((prev) => {
       const next = prev.filter((k) => k !== key);
@@ -1661,7 +1718,7 @@ export default function AiChatPage() {
       if (c.key === speakerKey) return;
       const n = c.__name;
       if (!n) return;
-      const rel = String(c.relationship || "").trim();
+      const rel = getResolvedCastRelationship(c);
       const relText = rel ? ` / 関係性: ${rel}` : "";
       const label = renderCastLabel(n, c.__idx);
       participants.push(`- ${label}: ${formatProfileForContext(c.personality)}${relText}`);
@@ -2044,7 +2101,7 @@ export default function AiChatPage() {
     try {
       localStorage.setItem(
         AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY,
-        JSON.stringify((relationshipMemoHistory || []).slice(0, 30))
+        JSON.stringify(normalizeRelationshipMemoHistory(relationshipMemoHistory))
       );
     } catch {
       // ignore storage failures
@@ -3947,6 +4004,20 @@ export default function AiChatPage() {
           </label>
           {castCharacters.map((cast) => (
             <div key={cast.key} style={{ borderTop: "1px solid #eee", paddingTop: 8, marginTop: 8 }}>
+              {(() => {
+                const currentRelationship = compactText(cast.relationship || "");
+                const selectedRelationship = compactText(castRelationshipSelectMap?.[cast.key] || "");
+                const effectiveRelationship = currentRelationship || selectedRelationship;
+                const hasCurrentInHistory = relationshipMemoOptions.some(
+                  (memo) => memo.text === effectiveRelationship
+                );
+                const relationshipSelectOptions = (
+                  effectiveRelationship && !hasCurrentInHistory
+                    ? [{ text: effectiveRelationship }, ...relationshipMemoOptions]
+                    : relationshipMemoOptions
+                );
+                return (
+                  <>
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input
                   type="radio"
@@ -4005,15 +4076,37 @@ export default function AiChatPage() {
                 placeholder={t({ ja: "サブキャラの見た目（例: 黒髪, 制服, 青い目）", en: "Sub character appearance (e.g. black hair, uniform, blue eyes)" })}
                 style={{ width: "100%", marginTop: 6 }}
               />
-              <input
-                value={cast.relationship || ""}
-                onChange={(e) => updateCastCharacter(cast.key, { relationship: e.target.value })}
-                onBlur={(e) => rememberRelationshipMemo(e.target.value)}
-                placeholder={t({ ja: "関係性メモ（例: 幼なじみ/恋人/師弟）", en: "Relationship note (e.g. childhood friend / partner / mentor)" })}
-                list="relationship-memo-history"
-                autoComplete="on"
-                style={{ width: "100%", marginTop: 6 }}
-              />
+              <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <select
+                  value={effectiveRelationship || ""}
+                  onChange={(e) => {
+                    const next = String(e.target.value || "");
+                    if (!next) return;
+                    setCastRelationshipSelectMap((prev) => ({ ...(prev || {}), [cast.key]: next }));
+                    updateCastCharacter(cast.key, { relationship: next });
+                    rememberRelationshipMemo(next);
+                  }}
+                  style={{ flex: "1 1 220px", minWidth: 180 }}
+                >
+                  <option value="">
+                    {t({ ja: "関係性履歴から選択", en: "Select from relationship history" })}
+                  </option>
+                  {relationshipSelectOptions.map((memo) => (
+                    <option key={`relationship-select-${memo.text}`} value={memo.text}>
+                      {memo.text}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={cast.relationship || ""}
+                  onChange={(e) => updateCastCharacter(cast.key, { relationship: e.target.value })}
+                  onBlur={(e) => rememberRelationshipMemo(e.target.value)}
+                  placeholder={t({ ja: "関係性メモ（例: 幼なじみ/恋人/師弟）", en: "Relationship note (e.g. childhood friend / partner / mentor)" })}
+                  list="relationship-memo-history"
+                  autoComplete="on"
+                  style={{ flex: "2 1 260px", minWidth: 220 }}
+                />
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <input
@@ -4048,11 +4141,14 @@ export default function AiChatPage() {
                   {t({ ja: "削除", en: "Delete" })}
                 </button>
               </div>
+                  </>
+                );
+              })()}
             </div>
           ))}
           <datalist id="relationship-memo-history">
-            {relationshipMemoHistory.map((memo, idx) => (
-              <option key={`relationship-memo-${idx}`} value={memo} />
+            {relationshipMemoOptions.map((memo, idx) => (
+              <option key={`relationship-memo-${idx}`} value={memo.text} />
             ))}
           </datalist>
         </div>

@@ -137,6 +137,11 @@ from .ai.memory_schemas import (
     MemoryDeleteResponse,
 )
 from .ai.weaviate_client import ensure_schema as ensure_weaviate_schema
+from .ai.weaviate_features import (
+    ensure_feature_schema as ensure_weaviate_feature_schema,
+    semantic_search_feature_docs,
+    upsert_feature_docs,
+)
 
 try:
     from PIL import Image, ImageOps  # type: ignore
@@ -1336,13 +1341,18 @@ def on_startup() -> None:
             ensure_weaviate_schema()
         except Exception as e:
             logger.warning("weaviate schema ensure failed: %r", e)
+    if AI_WEAVIATE_FEATURES_ENABLED:
+        try:
+            ensure_weaviate_feature_schema()
+        except Exception as e:
+            logger.warning("weaviate feature schema ensure failed: %r", e)
 
 # =========================================
 # JWT / Stripe 設定
 # =========================================
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change_me")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 300
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 2  # 2 days
 PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
 REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES = int(
     os.getenv("REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES", "10")
@@ -1476,9 +1486,173 @@ AI_CHAT_IMAGE_CAPTION_MAX_OUTPUT_TOKENS = max(32, min(300, int(os.getenv("AI_CHA
 BOARD_NOTIFY_USERNAME = (os.getenv("BOARD_NOTIFY_USERNAME", "demo02") or "demo02").strip()
 AI_CHAT_MEMORY_ENABLED = (os.getenv("AI_CHAT_MEMORY_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AI_CHAT_MEMORY_TOPK = max(1, min(20, int(os.getenv("AI_CHAT_MEMORY_TOPK", "12") or 12)))
+AI_WEAVIATE_FEATURES_ENABLED = (os.getenv("AI_WEAVIATE_FEATURES_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+AI_WEAVIATE_FEATURES_TOPK = max(1, min(12, int(os.getenv("AI_WEAVIATE_FEATURES_TOPK", "4") or 4)))
 
 stripe.api_key = STRIPE_SECRET_KEY
 
+
+def _semantic_score_from_distance(distance: float | None) -> float:
+    try:
+        d = float(distance if distance is not None else 1.0)
+    except Exception:
+        d = 1.0
+    return max(0.0, min(1.0, 1.0 - d))
+
+
+def _compact_text(value: str | None, limit: int = 400) -> str:
+    text_value = " ".join(str(value or "").split()).strip()
+    if len(text_value) <= limit:
+        return text_value
+    return text_value[:limit].rstrip()
+
+
+def _build_ai_novel_request_with_context(req: AINovelRequest, context_lines: list[str]) -> AINovelRequest:
+    if not context_lines:
+        return req
+    lines = [f"- {_compact_text(line, 180)}" for line in context_lines if str(line or "").strip()]
+    if not lines:
+        return req
+    append_block = "参考コンテキスト:\n" + "\n".join(lines[:AI_WEAVIATE_FEATURES_TOPK])
+    base = req.dict()
+    current_characters = str(base.get("characters") or "").strip()
+    merged = (
+        f"{current_characters}\n\n{append_block}"
+        if current_characters
+        else append_block
+    )
+    base["characters"] = merged[:1500]
+    return AINovelRequest(**base)
+
+
+def _collect_novel_feature_docs(
+    db: Session,
+    *,
+    site_key: str,
+    novels: list[models.Novel],
+    feature_name: str,
+) -> list[dict[str, Any]]:
+    docs: list[dict[str, Any]] = []
+    for novel in novels:
+        tag_names = [
+            str(getattr(getattr(nt, "tag", None), "name", "") or "").strip()
+            for nt in (getattr(novel, "novel_tags", []) or [])
+            if getattr(nt, "tag", None) is not None
+        ]
+        content_parts = [
+            f"タイトル: {str(getattr(novel, 'title', '') or '').strip()}",
+            f"概要: {str(getattr(novel, 'description', '') or '').strip()}",
+            f"タグ: {', '.join([t for t in tag_names if t])}",
+        ]
+        content = _compact_text("\n".join([p for p in content_parts if p.strip()]), 3500)
+        if not content:
+            continue
+        docs.append(
+            {
+                "doc_id": f"novel:{int(novel.id)}",
+                "feature": feature_name,
+                "site_key": site_key,
+                "target_id": int(novel.id),
+                "target_type": "novel",
+                "title": str(getattr(novel, "title", "") or ""),
+                "content": content,
+                "is_public": bool(getattr(novel, "is_public", False)),
+                "is_r18": str(getattr(novel, "age_limit", "all") or "all") == "r18",
+            }
+        )
+    return docs
+
+
+def _collect_user_preference_text_for_novels(db: Session, *, user_id: int, site_key: str) -> str:
+    fav_tags = get_user_favorite_tag_weights(db, user_id)
+    sorted_tags = [name for name, _ in sorted(fav_tags.items(), key=lambda row: row[1], reverse=True)[:8] if name]
+    favorite_titles = [
+        str(row[0] or "").strip()
+        for row in (
+            db.query(models.Novel.title)
+            .join(models.NovelFavorite, models.NovelFavorite.novel_id == models.Novel.id)
+            .filter(models.NovelFavorite.user_id == user_id, models.Novel.site_key == site_key)
+            .order_by(models.NovelFavorite.id.desc())
+            .limit(12)
+            .all()
+        )
+        if str(row[0] or "").strip()
+    ]
+    viewed_ids = [
+        int(row[0])
+        for row in (
+            db.query(models.UserViewHistory.target_id)
+            .filter(
+                models.UserViewHistory.user_id == user_id,
+                models.UserViewHistory.target_type == "novel",
+                models.UserViewHistory.site_key == site_key,
+            )
+            .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+            .limit(12)
+            .all()
+        )
+    ]
+    viewed_titles: list[str] = []
+    if viewed_ids:
+        viewed_titles = [
+            str(row[0] or "").strip()
+            for row in db.query(models.Novel.title).filter(models.Novel.id.in_(viewed_ids)).all()
+            if str(row[0] or "").strip()
+        ]
+    parts: list[str] = []
+    if sorted_tags:
+        parts.append(f"好みタグ: {', '.join(sorted_tags)}")
+    if favorite_titles:
+        parts.append(f"お気に入り作品: {' / '.join(favorite_titles[:6])}")
+    if viewed_titles:
+        parts.append(f"最近読んだ作品: {' / '.join(viewed_titles[:6])}")
+    return _compact_text("\n".join(parts), 1200)
+
+
+def _collect_public_chat_preference_text(db: Session, *, user_id: int) -> str:
+    fav_rows = (
+        db.query(models.AIChatCharacter.name, models.AIChatCharacter.personality)
+        .join(
+            models.AIChatCharacterFavorite,
+            models.AIChatCharacterFavorite.character_id == models.AIChatCharacter.id,
+        )
+        .filter(models.AIChatCharacterFavorite.user_id == user_id)
+        .order_by(models.AIChatCharacterFavorite.id.desc())
+        .limit(12)
+        .all()
+    )
+    viewed_ids = [
+        int(row[0])
+        for row in (
+            db.query(models.UserViewHistory.target_id)
+            .filter(
+                models.UserViewHistory.user_id == user_id,
+                models.UserViewHistory.target_type == "ai_public_character",
+            )
+            .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+            .limit(12)
+            .all()
+        )
+    ]
+    viewed_rows: list[tuple[str, str | None]] = []
+    if viewed_ids:
+        viewed_rows = [
+            (str(name or "").strip(), _compact_text(str(personality or "").strip(), 120))
+            for name, personality in (
+                db.query(models.AIChatCharacter.name, models.AIChatCharacter.personality)
+                .filter(models.AIChatCharacter.id.in_(viewed_ids))
+                .all()
+            )
+            if str(name or "").strip()
+        ]
+    parts: list[str] = []
+    if fav_rows:
+        names = [str(name or "").strip() for name, _ in fav_rows if str(name or "").strip()]
+        if names:
+            parts.append(f"お気に入り公開チャット: {' / '.join(names[:8])}")
+    if viewed_rows:
+        parts.append(f"最近見た公開チャット: {' / '.join([n for n, _ in viewed_rows[:8]])}")
+    return _compact_text("\n".join(parts), 1200)
 
 def _stripe_checkout_customer_kwargs(user) -> dict:
     customer_id = getattr(user, "stripe_customer_id", None) if user else None
@@ -3450,6 +3624,48 @@ def _read_token_user_id(request: Request) -> int:
         raise HTTPException(401, "トークンが不正です")
     return uid
 
+
+def record_user_view_history(
+    db: Session,
+    *,
+    user_id: int,
+    target_type: str,
+    target_id: int,
+    site_key: str = "main",
+) -> None:
+    if user_id <= 0 or target_id <= 0:
+        return
+    if target_type not in {"novel", "ai_public_character"}:
+        return
+    now = datetime.utcnow()
+    normalized_site_key = normalize_site_key(site_key or "main")
+    row = (
+        db.query(models.UserViewHistory)
+        .filter(
+            models.UserViewHistory.user_id == int(user_id),
+            models.UserViewHistory.target_type == str(target_type),
+            models.UserViewHistory.target_id == int(target_id),
+            models.UserViewHistory.site_key == normalized_site_key,
+        )
+        .first()
+    )
+    if row:
+        row.view_count = int(getattr(row, "view_count", 0) or 0) + 1
+        row.last_viewed_at = now
+        db.add(row)
+    else:
+        db.add(
+            models.UserViewHistory(
+                user_id=int(user_id),
+                target_type=str(target_type),
+                target_id=int(target_id),
+                site_key=normalized_site_key,
+                view_count=1,
+                first_viewed_at=now,
+                last_viewed_at=now,
+            )
+        )
+
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
@@ -3922,6 +4138,44 @@ class AdminContactMessageOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ViewHistoryRecordRequest(BaseModel):
+    target_type: Literal["novel", "ai_public_character"]
+    target_id: int
+    site_key: str | None = None
+
+
+class NovelViewHistoryItemOut(BaseModel):
+    target_id: int
+    viewed_at: datetime
+    view_count: int
+    site_key: str
+    title: str | None = None
+    author_username: str | None = None
+    age_limit: str | None = None
+
+
+class AIPublicChatViewHistoryItemOut(BaseModel):
+    target_id: int
+    viewed_at: datetime
+    view_count: int
+    site_key: str
+    character_name: str | None = None
+    author_username: str | None = None
+    is_public: bool
+    is_r18: bool
+
+
+class AIChatUsageHistoryItemOut(BaseModel):
+    character_id: int
+    character_name: str | None = None
+    owner_username: str | None = None
+    message_count: int
+    last_used_at: datetime
+    last_role: str
+    last_mode: str
+    last_content_preview: str | None = None
 
 
 class AdminUserOut(BaseModel):
@@ -5226,6 +5480,7 @@ def admin_delete_user(
         {"uid": user_id},
     )
     db.execute(text("DELETE FROM ai_chat_messages WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM user_view_histories WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_characters WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_addon_purchases WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_novel_addon_purchases WHERE user_id = :uid"), {"uid": user_id})
@@ -5524,7 +5779,8 @@ async def generate_episode_assist_candidates(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    require_current_user(request, db)
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
     source_text = (payload.text or "").strip()
     if not source_text:
         raise HTTPException(400, "本文が空です。")
@@ -5534,6 +5790,60 @@ async def generate_episode_assist_candidates(
     suggestions_count = max(2, min(6, int(payload.suggestions_count or 4)))
     context_text = source_text[-2200:]
     context_tail = context_text[-220:]
+    weaviate_context_lines: list[str] = []
+    if AI_WEAVIATE_FEATURES_ENABLED:
+        try:
+            rows = (
+                db.query(models.Episode, models.Novel.title)
+                .join(models.Novel, models.Novel.id == models.Episode.novel_id)
+                .filter(
+                    models.Novel.author_id == user.id,
+                    models.Episode.site_key == site_key,
+                )
+                .order_by(models.Episode.id.desc())
+                .limit(40)
+                .all()
+            )
+            docs = []
+            for ep, novel_title in rows:
+                body_text = _compact_text(str(getattr(ep, "body", "") or ""), 1200)
+                title_text = _compact_text(str(getattr(ep, "title", "") or ""), 80)
+                merged = _compact_text(
+                    f"作品: {str(novel_title or '').strip()} / 話数: {title_text}\n{body_text}",
+                    3500,
+                )
+                if not merged:
+                    continue
+                docs.append(
+                    {
+                        "doc_id": f"episode:{int(ep.id)}",
+                        "feature": "episode_assist_context",
+                        "site_key": site_key,
+                        "target_id": int(ep.id),
+                        "target_type": "episode",
+                        "title": title_text or f"episode:{int(ep.id)}",
+                        "content": merged,
+                        "is_public": bool(getattr(ep, "is_public", False)),
+                        "is_r18": False,
+                    }
+                )
+            if docs:
+                upsert_feature_docs(docs)
+                hits = semantic_search_feature_docs(
+                    f"{title} {' '.join(tags)} {context_text[-800:]}",
+                    feature="episode_assist_context",
+                    site_key=site_key,
+                    limit=min(6, AI_WEAVIATE_FEATURES_TOPK + 2),
+                    target_ids=[int(doc["target_id"]) for doc in docs],
+                    include_r18=True,
+                    public_only=False,
+                )
+                for hit in hits[:AI_WEAVIATE_FEATURES_TOPK]:
+                    snippet = _compact_text(str(hit.get("content") or ""), 180)
+                    if snippet:
+                        weaviate_context_lines.append(snippet)
+        except Exception as e:
+            logger.warning("episode assist weaviate context failed user=%s err=%r", user.id, e)
     prompt = (
         "あなたは日本語小説執筆アシスタントです。\n"
         "与えられた本文の直後に続く『次の1文〜2文』の候補を複数作ってください。\n"
@@ -5549,6 +5859,12 @@ async def generate_episode_assist_candidates(
         "本文（末尾重視）:\n"
         f"{context_text}\n"
     )
+    if weaviate_context_lines:
+        prompt += (
+            "\n参考コンテキスト（文体・展開の整合にのみ使用し、文面をそのままコピーしない）:\n"
+            + "\n".join([f"- {line}" for line in weaviate_context_lines[:AI_WEAVIATE_FEATURES_TOPK]])
+            + "\n"
+        )
 
     data: dict = {}
     tokens: int | None = None
@@ -7550,6 +7866,9 @@ class AIChatPublicCharacterListItem(BaseModel):
     personality: str | None = None
     image_url: str | None = None
     is_r18: bool = False
+    recommendation_score: float = 0.0
+    recommendation_samples: int = 0
+    is_recommended: bool = False
     author_username: str | None = None
     published_at: str | None = None
     like_count: int = 0
@@ -8095,20 +8414,80 @@ async def generate_ai_novel(
     """
     user = get_optional_current_user(request, db)
     is_premium = is_effective_premium_user(user)
+    site_key = resolve_site_key(request)
+    req_for_ai = req
+    if AI_WEAVIATE_FEATURES_ENABLED:
+        try:
+            novel_query = (
+                db.query(models.Novel)
+                .options(selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag))
+                .filter(models.Novel.site_key == site_key)
+                .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+            )
+            if user is None:
+                novel_query = novel_query.filter(models.Novel.is_public == True)
+            else:
+                novel_query = novel_query.filter(
+                    or_(
+                        models.Novel.is_public == True,
+                        models.Novel.author_id == int(user.id),
+                    )
+                )
+            novels_for_context = novel_query.limit(40).all()
+            docs = _collect_novel_feature_docs(
+                db,
+                site_key=site_key,
+                novels=novels_for_context,
+                feature_name="ai_novel_generate_context",
+            )
+            if docs:
+                upsert_feature_docs(docs)
+                query_text = _compact_text(
+                    " ".join(
+                        [
+                            str(getattr(req, "title_hint", "") or ""),
+                            str(getattr(req, "genre", "") or ""),
+                            str(getattr(req, "characters", "") or ""),
+                            str(getattr(req, "tone", "") or ""),
+                            str(getattr(req, "prompt", "") or ""),
+                        ]
+                    ),
+                    1200,
+                )
+                hits = semantic_search_feature_docs(
+                    query_text,
+                    feature="ai_novel_generate_context",
+                    site_key=site_key,
+                    limit=min(8, AI_WEAVIATE_FEATURES_TOPK + 2),
+                    target_ids=[int(doc["target_id"]) for doc in docs],
+                    include_r18=bool(getattr(req, "r18", False)),
+                    public_only=False,
+                )
+                context_lines: list[str] = []
+                for hit in hits[:AI_WEAVIATE_FEATURES_TOPK]:
+                    title_line = _compact_text(str(hit.get("title") or ""), 50)
+                    content_line = _compact_text(str(hit.get("content") or ""), 120)
+                    if title_line:
+                        context_lines.append(f"{title_line}: {content_line}")
+                    elif content_line:
+                        context_lines.append(content_line)
+                req_for_ai = _build_ai_novel_request_with_context(req, context_lines)
+        except Exception as e:
+            logger.warning("ai novel weaviate context failed user=%s err=%r", getattr(user, "id", None), e)
 
     if not is_premium:
         guest_id = get_or_set_ai_guest_id(request, response)
         usage = require_guest_ai_quota(db, guest_id)
 
-        provider = provider_from_request(req)
-        if getattr(req, "provider", None) is None and provider == "openai":
-            provider = provider_from_model(getattr(req, "model", None))
+        provider = provider_from_request(req_for_ai)
+        if getattr(req_for_ai, "provider", None) is None and provider == "openai":
+            provider = provider_from_model(getattr(req_for_ai, "model", None))
         if provider == "deepseek":
-            resp = await call_deepseek_novel_api(req)
+            resp = await call_deepseek_novel_api(req_for_ai)
         elif provider == "openrouter":
-            resp = await call_openrouter_novel_api(req)
+            resp = await call_openrouter_novel_api(req_for_ai)
         else:
-            resp = await call_openai_novel_api(req)
+            resp = await call_openai_novel_api(req_for_ai)
 
         usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
         usage.last_used_at = datetime.utcnow()
@@ -8124,15 +8503,15 @@ async def generate_ai_novel(
     total_remaining_before = _reserve_ai_novel_generation_slot(db, user)
 
     # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
-    provider = provider_from_request(req)
-    if getattr(req, "provider", None) is None and provider == "openai":
-        provider = provider_from_model(getattr(req, "model", None))
+    provider = provider_from_request(req_for_ai)
+    if getattr(req_for_ai, "provider", None) is None and provider == "openai":
+        provider = provider_from_model(getattr(req_for_ai, "model", None))
     if provider == "deepseek":
-        resp = await call_deepseek_novel_api(req)
+        resp = await call_deepseek_novel_api(req_for_ai)
     elif provider == "openrouter":
-        resp = await call_openrouter_novel_api(req)
+        resp = await call_openrouter_novel_api(req_for_ai)
     else:
-        resp = await call_openai_novel_api(req)
+        resp = await call_openai_novel_api(req_for_ai)
 
     # ★ ログ保存用サマリを作成（タイトル/ジャンル/キャラ/トーンを適当にまとめて200文字まで）
     parts = [req.title_hint, req.genre, req.characters, req.tone]
@@ -8281,6 +8660,7 @@ def _build_ai_chat_system_instructions(
         "あなたはキャラクターロールプレイAIです。"
         "必ずJSON 1個のみを返してください。"
         "JSONキーは say と do のみを使ってください。"
+        "「結論から言うと」「理由は」「次の一手は」のような見出し的な定型句は使わず、自然な会話文で返してください。"
         "プロンプト中に長期メモリがある場合は、それを会話履歴より優先して厳守してください。"
         "ユーザーの同一入力が過去履歴にある場合でも、前回返答の焼き直しを避けて別分岐で続けてください。"
         "入力された性格設定は最優先で厳守し、勝手に改変・薄化・上書きしないでください。"
@@ -8345,10 +8725,10 @@ def _build_ai_chat_variation_instruction(
         "感情のニュアンスを先に示してから返答する",
     ]
     structures = [
-        "結論→理由→次の一手",
-        "観察→提案→問いかけ",
-        "共感→具体化→提案",
-        "要点→補足→余韻",
+        "短い導入のあとに具体化し、最後に軽く問いかける",
+        "状況の観察を挟んで提案し、会話が続く余地を残す",
+        "共感を示してから具体化し、自然に次の一歩を示す",
+        "要点を一文で伝えたあと、補足して余韻を残す",
     ]
     transitions = ["ただし", "そのうえで", "一方で", "だからこそ"]
     endings = [
@@ -8732,6 +9112,8 @@ def _build_ai_chat_engagement_learning_instruction(
     *,
     viewer: models.User | None,
     character: models.AIChatCharacter | None,
+    query_text: str | None = None,
+    vector_context_text: str | None = None,
 ) -> str:
     if viewer is None or character is None:
         return ""
@@ -8892,6 +9274,31 @@ def _build_ai_chat_engagement_learning_instruction(
         tuning = f"改善余地大。弱い軸（{weak_names}）を最優先し、結論先出し+次アクション提示。"
 
     example_block = "\n".join(top_lines) if top_lines else "- （高評価履歴なし）"
+    vector_lines: list[str] = []
+    raw_vector_text = str(vector_context_text or "").strip()
+    if not raw_vector_text and query_text and viewer is not None and character is not None:
+        try:
+            mem_scope, mem_scope_id = resolve_memory_scope(int(character.id))
+            vec_memories = retrieve_memories(
+                db,
+                user_id=int(viewer.id),
+                scope=mem_scope,
+                scope_id=mem_scope_id,
+                query_text=str(query_text),
+                topk=min(6, AI_CHAT_MEMORY_TOPK),
+            )
+            raw_vector_text = format_long_term_memories(vec_memories, max_items=4) or ""
+        except Exception:
+            raw_vector_text = ""
+    if raw_vector_text:
+        for line in str(raw_vector_text).splitlines():
+            text = str(line or "").strip()
+            if not text:
+                continue
+            vector_lines.append(text[:140])
+            if len(vector_lines) >= 3:
+                break
+    vector_block = "\n".join([f"- {v}" for v in vector_lines]) if vector_lines else "- （類似メモなし）"
     return (
         "【継続入力学習フィードバック】\n"
         f"- 即レス率(<=45秒): {instant_rate:.0%}\n"
@@ -8908,6 +9315,8 @@ def _build_ai_chat_engagement_learning_instruction(
         f"- まじめさ: {avg_seriousness:.2f}\n"
         f"- 個人最適化重み: {user_weight:.0%}\n"
         f"- 学習フェーズ: {phase_note}\n"
+        "- ベクトル類似メモ（解析参照）:\n"
+        f"{vector_block}\n"
         f"- 調整方針: {tuning}\n"
         "- 直近高評価返信の要素を参考にする（内容のコピペは禁止）:\n"
         f"{example_block}\n"
@@ -9022,6 +9431,39 @@ def _build_ai_chat_recommendation_map(
             "score": blended,
             "samples": combined_samples,
             "is_recommended": bool(combined_samples >= 3 and blended >= 0.45),
+        }
+    return result
+
+
+def _build_public_profile_recommendation_map(
+    db: Session,
+    *,
+    profile_keys: list[str],
+) -> dict[str, dict]:
+    keys = [str(k or "").strip() for k in profile_keys if str(k or "").strip()]
+    if not keys:
+        return {}
+    rows = (
+        db.query(models.AIChatProfileLearningStat)
+        .filter(models.AIChatProfileLearningStat.profile_key.in_(keys))
+        .all()
+    )
+    result: dict[str, dict] = {}
+    for row in rows:
+        key = str(getattr(row, "profile_key", "") or "").strip()
+        if not key:
+            continue
+        score = _clip01(
+            (float(getattr(row, "average_latency_score", 0.0) or 0.0) * 0.30)
+            + (float(getattr(row, "average_intimacy_score", 0.0) or 0.0) * 0.24)
+            + (float(getattr(row, "average_proactiveness_score", 0.0) or 0.0) * 0.24)
+            + (float(getattr(row, "average_empathy_score", 0.0) or 0.0) * 0.22)
+        )
+        samples = int(getattr(row, "sample_count", 0) or 0)
+        result[key] = {
+            "score": score,
+            "samples": samples,
+            "is_recommended": bool(samples >= 3 and score >= 0.45),
         }
     return result
 
@@ -11024,6 +11466,8 @@ async def ai_chat(
         db,
         viewer=viewer,
         character=character,
+        query_text=message,
+        vector_context_text=long_term_memories_text,
     )
     prompt = _build_ai_chat_prompt(
         character_name=character_name,
@@ -11384,6 +11828,7 @@ async def ai_chat_auto_continue(
             "あなたはキャラクターロールプレイAIです。"
             "必ずJSON 1個のみを返してください。"
             "JSONキーは say と do のみを使ってください。"
+            "「結論から言うと」「理由は」「次の一手は」のような見出し的な定型句は使わず、自然な会話文で返してください。"
             "say はキャラクター同士の会話を含むやや長めのテキストにしてください。"
             "主題を維持し、少なくとも10ターンは同じ話題を継続してください。"
             "long_reply が有効な場合は通常より約2倍の分量にしてください。"
@@ -11955,6 +12400,7 @@ def list_public_ai_chat_characters(
     db: Session = Depends(get_db),
 ):
     viewer = get_optional_current_user(request, db)
+    site_key = resolve_site_key(request)
     can_view_r18 = can_user_access_novel_age_limit(viewer, "r18")
     keyword = (q or "").strip()
     query = (
@@ -11981,7 +12427,72 @@ def list_public_ai_chat_characters(
         .limit(limit)
         .all()
     )
+    profile_key_map: dict[int, str] = {}
+    for item, _ in rows:
+        cid = int(getattr(item, "id", 0) or 0)
+        if cid <= 0:
+            continue
+        profile_key_map[cid] = _build_ai_chat_profile_key(
+            character_name=str(getattr(item, "name", "") or ""),
+            personality=str(getattr(item, "personality", "") or ""),
+            speech_gender=str(getattr(item, "speech_gender", "auto") or "auto"),
+        )
+    public_recommendation_map = _build_public_profile_recommendation_map(
+        db,
+        profile_keys=list(profile_key_map.values()),
+    )
     character_ids = [int(getattr(item, "id", 0) or 0) for item, _ in rows]
+    semantic_score_map: dict[int, float] = {}
+    if AI_WEAVIATE_FEATURES_ENABLED and character_ids:
+        try:
+            docs: list[dict[str, Any]] = []
+            for item, _ in rows:
+                cid = int(getattr(item, "id", 0) or 0)
+                if cid <= 0:
+                    continue
+                content = _compact_text(
+                    "\n".join(
+                        [
+                            f"名前: {str(getattr(item, 'name', '') or '').strip()}",
+                            f"性格: {str(getattr(item, 'personality', '') or '').strip()}",
+                        ]
+                    ),
+                    3500,
+                )
+                if not content:
+                    continue
+                docs.append(
+                    {
+                        "doc_id": f"public_character:{cid}",
+                        "feature": "public_ai_chat_recommend",
+                        "site_key": site_key,
+                        "target_id": cid,
+                        "target_type": "ai_public_character",
+                        "title": str(getattr(item, "name", "") or ""),
+                        "content": content,
+                        "is_public": bool(getattr(item, "is_public", False)),
+                        "is_r18": bool(getattr(item, "is_r18", False)),
+                    }
+                )
+            if docs:
+                upsert_feature_docs(docs)
+                semantic_query = keyword
+                if not semantic_query and viewer is not None:
+                    semantic_query = _collect_public_chat_preference_text(db, user_id=int(viewer.id))
+                hits = semantic_search_feature_docs(
+                    semantic_query,
+                    feature="public_ai_chat_recommend",
+                    site_key=site_key,
+                    limit=min(max(limit * 3, 20), 80),
+                    target_ids=character_ids,
+                    include_r18=can_view_r18,
+                    public_only=True,
+                )
+                for hit in hits:
+                    semantic_score_map[int(hit["target_id"])] = _semantic_score_from_distance(hit.get("distance"))
+        except Exception as e:
+            logger.warning("public ai chat semantic ranking failed user=%s err=%r", getattr(viewer, "id", None), e)
+
     like_counts: dict[int, int] = {}
     favorite_counts: dict[int, int] = {}
     if character_ids:
@@ -12033,6 +12544,12 @@ def list_public_ai_chat_characters(
         if _is_public_chat_r18(item) and not can_view_r18:
             continue
         item_id = int(item.id)
+        rec = public_recommendation_map.get(profile_key_map.get(item_id, ""), {})
+        blended_score = (
+            (float(rec.get("score", 0.0)) * 0.6)
+            + (semantic_score_map.get(item_id, 0.0) * 0.4)
+        )
+        blended_samples = int(rec.get("samples", 0)) + (1 if item_id in semantic_score_map else 0)
         output.append(
             AIChatPublicCharacterListItem(
                 id=item_id,
@@ -12040,6 +12557,9 @@ def list_public_ai_chat_characters(
                 personality=_trim_public_character_intro(item.personality),
                 image_url=str(getattr(item, "image_url", "") or "").strip() or None,
                 is_r18=bool(getattr(item, "is_r18", False)),
+                recommendation_score=blended_score,
+                recommendation_samples=blended_samples,
+                is_recommended=bool(blended_samples >= 2 and blended_score >= 0.42),
                 author_username=str(username or "") if username else None,
                 published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
                 like_count=like_counts.get(item_id, 0),
@@ -12048,6 +12568,14 @@ def list_public_ai_chat_characters(
                 is_favorited=item_id in favorited_ids,
             )
         )
+    output.sort(
+        key=lambda x: (
+            1 if bool(getattr(x, "is_recommended", False)) else 0,
+            float(getattr(x, "recommendation_score", 0.0) or 0.0),
+            str(getattr(x, "published_at", "") or ""),
+        ),
+        reverse=True,
+    )
     return output
 
 
@@ -12061,6 +12589,7 @@ def get_public_ai_chat_character_detail(
     db: Session = Depends(get_db),
 ):
     viewer = get_optional_current_user(request, db)
+    site_key = resolve_site_key(request)
     can_view_r18 = can_user_access_novel_age_limit(viewer, "r18")
     row = (
         db.query(models.AIChatCharacter, models.User.username)
@@ -12123,6 +12652,14 @@ def get_public_ai_chat_character_detail(
             .first()
             is not None
         )
+        record_user_view_history(
+            db,
+            user_id=int(viewer.id),
+            target_type="ai_public_character",
+            target_id=int(character.id),
+            site_key=site_key,
+        )
+        db.commit()
     return AIChatPublicCharacterDetailResponse(
         id=int(character.id),
         name=str(character.name or ""),
@@ -12937,6 +13474,8 @@ def get_ai_chat_latest_prompt_preview(
         db,
         viewer=user,
         character=character,
+        query_text=message,
+        vector_context_text=long_term_memories_text,
     )
     prompt = _build_ai_chat_prompt(
         character_name=character_name,
@@ -16068,8 +16607,17 @@ def get_novel_detail(
             raise HTTPException(404, "小説が存在しません")
 
     # 閲覧数は Redis に集計し、DB 反映はバッチで実施
-    novel.view_count = (novel.view_count or 0) + 1
+    display_view_count = (novel.view_count or 0) + 1
     enqueue_novel_view(novel.id)
+    if user:
+        record_user_view_history(
+            db,
+            user_id=int(user.id),
+            target_type="novel",
+            target_id=int(novel.id),
+            site_key=site_key,
+        )
+        db.commit()
 
     # --- 年齢制限チェック（R15/R18） ---
     if not AGE_RESTRICTION_DISABLED and novel.age_limit in ("r15", "r18"):
@@ -16145,7 +16693,7 @@ def get_novel_detail(
         "created_at": novel.created_at,
         "author_id": novel.author_id,
         "author_username": novel.author.username if novel.author else None,
-        "view_count": novel.view_count,
+        "view_count": display_view_count,
         "like_count": novel.like_count or 0,
         "is_liked": is_liked,
         "is_favorited": is_favorited,
@@ -16574,16 +17122,56 @@ def list_recommended_public_novels(
     if not scored:
         return []
 
+    semantic_score_map: dict[int, float] = {}
+    if AI_WEAVIATE_FEATURES_ENABLED:
+        try:
+            candidate_novels = [item[1] for item in scored]
+            docs = _collect_novel_feature_docs(
+                db,
+                site_key=site_key,
+                novels=candidate_novels,
+                feature_name="public_novel_recommend",
+            )
+            if docs:
+                upsert_feature_docs(docs)
+                preference_text = _collect_user_preference_text_for_novels(
+                    db,
+                    user_id=int(user.id),
+                    site_key=site_key,
+                )
+                hits = semantic_search_feature_docs(
+                    preference_text,
+                    feature="public_novel_recommend",
+                    site_key=site_key,
+                    limit=min(max(limit * 3, 12), 60),
+                    target_ids=[int(doc["target_id"]) for doc in docs],
+                    include_r18=can_user_access_novel_age_limit(user, "r18"),
+                    public_only=True,
+                )
+                for hit in hits:
+                    semantic_score_map[int(hit["target_id"])] = _semantic_score_from_distance(hit.get("distance"))
+        except Exception as e:
+            logger.warning("novel recommend weaviate failed user=%s err=%r", user.id, e)
+
     ranked_items = sorted(
         scored,
         key=lambda item: (
-            -item[0],
+            -(
+                (item[0] * 1.0)
+                + (semantic_score_map.get(int(item[1].id), 0.0) * 8.0)
+            ),
             -(getattr(item[1], "created_at", datetime.min) or datetime.min).timestamp(),
             -item[1].id,
         ),
     )[:limit]
     novels = [item[1] for item in ranked_items]
-    recommendation_scores = {item[1].id: item[0] for item in ranked_items}
+    recommendation_scores = {
+        item[1].id: (
+            item[0]
+            + (semantic_score_map.get(int(item[1].id), 0.0) * 8.0)
+        )
+        for item in ranked_items
+    }
 
     novel_ids = [novel.id for novel in novels]
     cover_map: dict[int, str] = {}
@@ -17793,6 +18381,10 @@ def delete_episode(
 
     db.execute(
         text("DELETE FROM episode_comments WHERE episode_id = :eid"),
+        {"eid": episode_id},
+    )
+    db.execute(
+        text("DELETE FROM supports WHERE episode_id = :eid"),
         {"eid": episode_id},
     )
     db.delete(ep)
@@ -20089,6 +20681,172 @@ def list_my_ai_chat_favorites(request: Request, db: Session = Depends(get_db)):
             }
         )
     return output
+
+
+@app.post("/api/me/view-history/record")
+def record_my_view_history(
+    payload: ViewHistoryRecordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    target_type = str(payload.target_type or "").strip()
+    target_id = int(payload.target_id or 0)
+    if target_id <= 0:
+        raise HTTPException(400, "target_id が不正です")
+    site_key = normalize_site_key(payload.site_key or resolve_site_key(request))
+
+    if target_type == "novel":
+        novel = (
+            db.query(models.Novel)
+            .filter(models.Novel.id == target_id, models.Novel.site_key == site_key)
+            .first()
+        )
+        if not novel:
+            raise HTTPException(404, "小説が存在しません")
+    elif target_type == "ai_public_character":
+        character = (
+            db.query(models.AIChatCharacter)
+            .filter(
+                models.AIChatCharacter.id == target_id,
+                models.AIChatCharacter.is_public == True,
+            )
+            .first()
+        )
+        if not character:
+            raise HTTPException(404, "公開チャットが存在しません")
+    else:
+        raise HTTPException(400, "target_type が不正です")
+
+    record_user_view_history(
+        db,
+        user_id=int(user.id),
+        target_type=target_type,
+        target_id=target_id,
+        site_key=site_key,
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/me/view-history/novels", response_model=list[NovelViewHistoryItemOut])
+def list_my_novel_view_history(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    rows = (
+        db.query(models.UserViewHistory, models.Novel, models.User.username)
+        .outerjoin(
+            models.Novel,
+            and_(
+                models.Novel.id == models.UserViewHistory.target_id,
+                models.Novel.site_key == models.UserViewHistory.site_key,
+            ),
+        )
+        .outerjoin(models.User, models.User.id == models.Novel.author_id)
+        .filter(models.UserViewHistory.user_id == user.id)
+        .filter(models.UserViewHistory.target_type == "novel")
+        .filter(models.UserViewHistory.site_key == site_key)
+        .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        NovelViewHistoryItemOut(
+            target_id=int(hist.target_id),
+            viewed_at=hist.last_viewed_at,
+            view_count=int(hist.view_count or 0),
+            site_key=str(hist.site_key or "main"),
+            title=str(novel.title or "") if novel else None,
+            author_username=str(username or "") if username else None,
+            age_limit=str(getattr(novel, "age_limit", "") or "") if novel else None,
+        )
+        for hist, novel, username in rows
+    ]
+
+
+@app.get("/api/me/view-history/ai-public-chats", response_model=list[AIPublicChatViewHistoryItemOut])
+def list_my_public_ai_chat_view_history(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    rows = (
+        db.query(models.UserViewHistory, models.AIChatCharacter, models.User.username)
+        .outerjoin(
+            models.AIChatCharacter,
+            models.AIChatCharacter.id == models.UserViewHistory.target_id,
+        )
+        .outerjoin(models.User, models.User.id == models.AIChatCharacter.user_id)
+        .filter(models.UserViewHistory.user_id == user.id)
+        .filter(models.UserViewHistory.target_type == "ai_public_character")
+        .filter(models.UserViewHistory.site_key == site_key)
+        .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        AIPublicChatViewHistoryItemOut(
+            target_id=int(hist.target_id),
+            viewed_at=hist.last_viewed_at,
+            view_count=int(hist.view_count or 0),
+            site_key=str(hist.site_key or "main"),
+            character_name=str(character.name or "") if character else None,
+            author_username=str(username or "") if username else None,
+            is_public=bool(getattr(character, "is_public", False)) if character else False,
+            is_r18=bool(getattr(character, "is_r18", False)) if character else False,
+        )
+        for hist, character, username in rows
+    ]
+
+
+@app.get("/api/me/ai/chat/usage-history", response_model=list[AIChatUsageHistoryItemOut])
+def list_my_ai_chat_usage_history(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    user = require_current_user(request, db)
+    usage_subq = (
+        db.query(
+            models.AIChatMessage.character_id.label("character_id"),
+            func.count(models.AIChatMessage.id).label("message_count"),
+            func.max(models.AIChatMessage.id).label("last_message_id"),
+            func.max(models.AIChatMessage.created_at).label("last_used_at"),
+        )
+        .filter(models.AIChatMessage.user_id == user.id)
+        .filter(models.AIChatMessage.is_deleted == False)
+        .group_by(models.AIChatMessage.character_id)
+        .subquery()
+    )
+    last_msg = aliased(models.AIChatMessage)
+    rows = (
+        db.query(usage_subq, last_msg, models.AIChatCharacter, models.User.username)
+        .join(last_msg, last_msg.id == usage_subq.c.last_message_id)
+        .outerjoin(models.AIChatCharacter, models.AIChatCharacter.id == usage_subq.c.character_id)
+        .outerjoin(models.User, models.User.id == models.AIChatCharacter.user_id)
+        .order_by(usage_subq.c.last_used_at.desc(), usage_subq.c.last_message_id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        AIChatUsageHistoryItemOut(
+            character_id=int(r[0].character_id),
+            character_name=str(r[2].name or "") if r[2] else None,
+            owner_username=str(r[3] or "") if r[3] else None,
+            message_count=int(r[0].message_count or 0),
+            last_used_at=r[0].last_used_at,
+            last_role=str(r[1].role or "user"),
+            last_mode=str(r[1].mode or "say"),
+            last_content_preview=(str(r[1].content or "")[:120] if r[1] else None),
+        )
+        for r in rows
+    ]
 
 # ============================
 # マイページ用アクセス解析

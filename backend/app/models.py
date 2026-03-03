@@ -935,6 +935,26 @@ class Notification(Base):
     actor = relationship("User", foreign_keys=[actor_user_id])
 
 
+class UserViewHistory(Base):
+    __tablename__ = "user_view_histories"
+    __table_args__ = (
+        UniqueConstraint("user_id", "target_type", "target_id", "site_key", name="uq_user_view_histories_target"),
+        Index("idx_user_view_histories_user_last", "user_id", "last_viewed_at"),
+        Index("idx_user_view_histories_target", "target_type", "target_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    target_type = Column(String(32), nullable=False, index=True)  # novel / ai_public_character
+    target_id = Column(Integer, nullable=False, index=True)
+    site_key = Column(String(32), nullable=False, server_default="main", index=True)
+    view_count = Column(Integer, nullable=False, server_default="1")
+    first_viewed_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_viewed_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+    user = relationship("User")
+
+
 class UII18nJob(Base):
     __tablename__ = "ui_i18n_jobs"
 
