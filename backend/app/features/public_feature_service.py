@@ -11,7 +11,10 @@ def list_public_ai_chat_characters_service(request, q, limit, offset, db):
     query = (
         db.query(legacy.models.AIChatCharacter, legacy.models.User.username)
         .join(legacy.models.User, legacy.models.User.id == legacy.models.AIChatCharacter.user_id)
-        .filter(legacy.models.AIChatCharacter.is_public == True)
+        .filter(
+            legacy.models.AIChatCharacter.is_public == True,
+            legacy.models.AIChatCharacter.is_deleted == False,
+        )
     )
     if keyword:
         needle = f"%{keyword.lower()}%"
@@ -190,8 +193,27 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
             target_language = None
 
     user = legacy.require_current_user(request, db)
+    user_age = None
+    if getattr(user, "birth_date", None):
+        user_age = legacy.calc_age(user.birth_date)
+    cache_key = legacy.build_public_cache_key(
+        "novels_recommended",
+        {
+            "site_key": site_key,
+            "user_id": int(user.id),
+            "limit": int(limit),
+            "lang": target_language or "",
+            "user_age": user_age if user_age is not None else -1,
+            "age_restriction_disabled": int(legacy.AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = legacy.redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
+
     favorite_tag_weights = legacy.get_user_favorite_tag_weights(db, user.id)
     if not favorite_tag_weights:
+        legacy.redis_json_set(cache_key, [], legacy.REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
         return []
 
     favorite_novel_ids = {
@@ -230,6 +252,7 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
             continue
         scored.append((score, novel))
     if not scored:
+        legacy.redis_json_set(cache_key, [], legacy.REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
         return []
 
     semantic_score_map: dict[int, float] = {}
@@ -336,7 +359,7 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
         background_tasks=background_tasks,
     )
 
-    return [
+    payload = [
         {
             "id": novel.id,
             "title": translated_cards.get(int(novel.id), {}).get("title", novel.title),
@@ -361,3 +384,5 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
         }
         for novel in novels
     ]
+    legacy.redis_json_set(cache_key, payload, legacy.REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload

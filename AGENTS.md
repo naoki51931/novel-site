@@ -63,3 +63,6 @@ Codex で作業するときの要点と入口をまとめます。
 - 公開状態は互換のため `status` と `is_public` を併用している箇所がある。公開制御を変える場合は一覧/詳細/権限チェックを必ず横断確認する。
 - フロント変更は `frontend/src` を編集し、`npm run build` 後に nginx 配信物（`frontend/dist`）へ反映される前提。
 - 画像は `static/episode_images` に保存し、nginx から `/static` 配下で配信する。保存パス変更時は backend・nginx・compose を同時に確認する。
+- AIチャットのキャラ削除は物理削除ではなく論理削除（`ai_chat_characters.is_deleted/deleted_at`）。取得系は削除済み除外を前提に実装する。
+- AIチャットの同名キャラは別レコードで作成可能。`AIChatCharacterResponse` の `is_name_duplicate` と `name_duplicate_index` で表示上の識別（例: `キャラ名 #2`）を行う。
+- AIチャット学習キー（`character_profile_key`）は同名キャラ間で学習継続するよう、実装上 `キャラ名 + speech_gender` ベースで算出している。性格文の差分で学習を分断しない。

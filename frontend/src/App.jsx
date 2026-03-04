@@ -20,6 +20,8 @@ import AINovelPage from "./pages/AINovelPage";
 import AiLogsPage from "./pages/AiLogsPage";
 import AiChatPage from "./pages/AiChatPage";
 import AiChatPublicPage from "./pages/AiChatPublicPage";
+import AiChatHowToPage from "./pages/AiChatHowToPage";
+import AiChatLPPage from "./pages/AiChatLPPage";
 import DirectMessageThread from "./pages/DirectMessageThread";
 import ResetPassword from "./pages/ResetPassword";
 import CreatorDashboard from "./pages/CreatorDashboard";
@@ -731,7 +733,17 @@ export default function App() {
                 )}
               </span>
             ) : (
-              <span>{t(HEADER_I18N.notLoggedIn)}</span>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={() => {
+                  setMenuOpen(false);
+                  navigate("/login");
+                }}
+                style={{ fontSize: 12, padding: "4px 8px", lineHeight: 1.2 }}
+              >
+                {t(HEADER_I18N.notLoggedIn)}
+              </button>
             )}
           </div>
           <Link
@@ -839,6 +851,8 @@ export default function App() {
           <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
 	  <Route path="/ai-novel" element={<AINovelPage />} />
 	  <Route path="/ai_chat" element={<AiChatPage />} />
+	  <Route path="/ai_chat/lp" element={<AiChatLPPage />} />
+	  <Route path="/ai_chat/howto" element={<AiChatHowToPage />} />
 	  <Route path="/ai_chat/public" element={<AiChatPublicPage />} />
 	  <Route path="/ai_chat/public/:characterId" element={<AiChatPublicPage />} />
 	  <Route path="/ai_chat/public/:characterId/:slug" element={<AiChatPublicPage />} />

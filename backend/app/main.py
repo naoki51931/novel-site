@@ -142,6 +142,16 @@ from .ai.weaviate_features import (
     semantic_search_feature_docs,
     upsert_feature_docs,
 )
+from .features import include_feature_routers
+from .features.ai_feature_service import (
+    create_ai_novel_job_service,
+    generate_ai_novel_service,
+    generate_episode_assist_candidates_service,
+)
+from .features.public_feature_service import (
+    list_public_ai_chat_characters_service,
+    list_recommended_public_novels_service,
+)
 
 try:
     from PIL import Image, ImageOps  # type: ignore
@@ -406,6 +416,7 @@ def cache_user_payload(user: models.User) -> dict[str, Any]:
 
 def invalidate_public_list_caches() -> None:
     redis_delete_pattern("cache:public:novels:*")
+    redis_delete_pattern("cache:public:novels_recommended:*")
     redis_delete_pattern("cache:public:ranking:*")
     redis_delete_pattern("cache:public:user_profile:*")
     redis_delete_pattern("cache:public:user_novels:*")
@@ -891,6 +902,23 @@ ensure_ai_novel_jobs_table_columns()
 def ensure_ai_chat_tables():
     try:
         with engine.begin() as conn:
+            uq_rows = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'ai_chat_characters'
+                      AND INDEX_NAME = 'uq_ai_chat_characters_user_name'
+                    """
+                )
+            ).scalar() or 0
+            if int(uq_rows) > 0:
+                try:
+                    conn.execute(text("ALTER TABLE ai_chat_characters DROP INDEX uq_ai_chat_characters_user_name"))
+                except Exception:
+                    pass
+
             rows = conn.execute(
                 text(
                     """
@@ -914,6 +942,12 @@ def ensure_ai_chat_tables():
                 alters.append("ADD COLUMN image_url VARCHAR(512) NULL")
             if "is_r18" not in existing:
                 alters.append("ADD COLUMN is_r18 TINYINT(1) NOT NULL DEFAULT 0")
+            if "is_name_duplicate" not in existing:
+                alters.append("ADD COLUMN is_name_duplicate TINYINT(1) NOT NULL DEFAULT 0")
+            if "is_deleted" not in existing:
+                alters.append("ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0")
+            if "deleted_at" not in existing:
+                alters.append("ADD COLUMN deleted_at DATETIME NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE ai_chat_characters {clause}"))
@@ -1324,6 +1358,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+include_feature_routers(app)
+
 @app.on_event("startup")
 def on_startup() -> None:
     ensure_all_tables_exist()
@@ -1531,6 +1567,7 @@ def _collect_novel_feature_docs(
     site_key: str,
     novels: list[models.Novel],
     feature_name: str,
+    include_episode_content: bool = False,
 ) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for novel in novels:
@@ -1544,6 +1581,26 @@ def _collect_novel_feature_docs(
             f"概要: {str(getattr(novel, 'description', '') or '').strip()}",
             f"タグ: {', '.join([t for t in tag_names if t])}",
         ]
+        if include_episode_content:
+            episode_rows = (
+                db.query(models.Episode.title, models.Episode.body)
+                .filter(
+                    models.Episode.novel_id == int(novel.id),
+                    models.Episode.site_key == site_key,
+                    models.Episode.status == "public",
+                    models.Episode.is_public == True,
+                )
+                .order_by(models.Episode.id.asc())
+                .limit(3)
+                .all()
+            )
+            for ep_title, ep_body in episode_rows:
+                snippet = _compact_text(str(ep_body or ""), 320)
+                if not snippet:
+                    continue
+                content_parts.append(
+                    f"本文要約断片({str(ep_title or '').strip()[:40]}): {snippet}"
+                )
         content = _compact_text("\n".join([p for p in content_parts if p.strip()]), 3500)
         if not content:
             continue
@@ -1606,6 +1663,36 @@ def _collect_user_preference_text_for_novels(db: Session, *, user_id: int, site_
         parts.append(f"お気に入り作品: {' / '.join(favorite_titles[:6])}")
     if viewed_titles:
         parts.append(f"最近読んだ作品: {' / '.join(viewed_titles[:6])}")
+    favorite_novel_ids = [
+        int(row[0])
+        for row in (
+            db.query(models.NovelFavorite.novel_id)
+            .filter(models.NovelFavorite.user_id == user_id)
+            .order_by(models.NovelFavorite.id.desc())
+            .limit(4)
+            .all()
+        )
+    ]
+    if favorite_novel_ids:
+        fav_episode_rows = (
+            db.query(models.Episode.body)
+            .filter(
+                models.Episode.novel_id.in_(favorite_novel_ids),
+                models.Episode.site_key == site_key,
+                models.Episode.status == "public",
+                models.Episode.is_public == True,
+            )
+            .order_by(models.Episode.id.desc())
+            .limit(6)
+            .all()
+        )
+        content_snippets = [
+            _compact_text(str(row[0] or ""), 180)
+            for row in fav_episode_rows
+            if _compact_text(str(row[0] or ""), 180)
+        ]
+        if content_snippets:
+            parts.append(f"好み本文傾向: {' / '.join(content_snippets[:4])}")
     return _compact_text("\n".join(parts), 1200)
 
 
@@ -3763,7 +3850,10 @@ def _find_editable_ai_chat_character(
 ) -> models.AIChatCharacter | None:
     item = (
         db.query(models.AIChatCharacter)
-        .filter(models.AIChatCharacter.id == character_id)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_deleted == False,
+        )
         .first()
     )
     if not item:
@@ -3786,7 +3876,10 @@ def _find_accessible_ai_chat_character(
 ) -> models.AIChatCharacter | None:
     item = (
         db.query(models.AIChatCharacter)
-        .filter(models.AIChatCharacter.id == character_id)
+        .filter(
+            models.AIChatCharacter.id == character_id,
+            models.AIChatCharacter.is_deleted == False,
+        )
         .first()
     )
     if not item:
@@ -3800,6 +3893,31 @@ def _find_accessible_ai_chat_character(
     if can_edit or bool(getattr(item, "is_public", False)):
         return item
     return None
+
+
+def _compute_ai_chat_name_duplicate_index(
+    *,
+    db: Session,
+    character: models.AIChatCharacter | None,
+) -> int:
+    if character is None:
+        return 1
+    cid = int(getattr(character, "id", 0) or 0)
+    owner_id = int(getattr(character, "user_id", 0) or 0)
+    name = str(getattr(character, "name", "") or "").strip()
+    if cid <= 0 or owner_id <= 0 or not name:
+        return 1
+    count = (
+        db.query(func.count(models.AIChatCharacter.id))
+        .filter(
+            models.AIChatCharacter.user_id == owner_id,
+            models.AIChatCharacter.name == name,
+            models.AIChatCharacter.is_deleted == False,
+            models.AIChatCharacter.id <= cid,
+        )
+        .scalar()
+    )
+    return max(1, int(count or 1))
 
 
 def _ai_chat_allowed_tokens(user: models.User) -> int:
@@ -4419,7 +4537,6 @@ def register_user(payload: UserCreate, db: Session = Depends(get_db)):
     return Token(access_token=token)
 
 
-@app.post("/api/auth/login")
 def login(payload: UserLogin, db: Session = Depends(get_db)):
     user = get_user_by_username(db, payload.username)
     if not user or not verify_password(payload.password, user.password_hash):
@@ -5773,149 +5890,16 @@ async def generate_title_candidates(
     return TitleCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
 
 
-@app.post("/api/ai/episodes/assist_candidates", response_model=EpisodeAssistCandidatesOut)
 async def generate_episode_assist_candidates(
     payload: EpisodeAssistCandidatesRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    user = require_current_user(request, db)
-    site_key = resolve_site_key(request)
-    source_text = (payload.text or "").strip()
-    if not source_text:
-        raise HTTPException(400, "本文が空です。")
-
-    title = (payload.title or "").strip()
-    tags = [str(t or "").strip() for t in (payload.tags or []) if str(t or "").strip()][:20]
-    suggestions_count = max(2, min(6, int(payload.suggestions_count or 4)))
-    context_text = source_text[-2200:]
-    context_tail = context_text[-220:]
-    weaviate_context_lines: list[str] = []
-    if AI_WEAVIATE_FEATURES_ENABLED:
-        try:
-            rows = (
-                db.query(models.Episode, models.Novel.title)
-                .join(models.Novel, models.Novel.id == models.Episode.novel_id)
-                .filter(
-                    models.Novel.author_id == user.id,
-                    models.Episode.site_key == site_key,
-                )
-                .order_by(models.Episode.id.desc())
-                .limit(40)
-                .all()
-            )
-            docs = []
-            for ep, novel_title in rows:
-                body_text = _compact_text(str(getattr(ep, "body", "") or ""), 1200)
-                title_text = _compact_text(str(getattr(ep, "title", "") or ""), 80)
-                merged = _compact_text(
-                    f"作品: {str(novel_title or '').strip()} / 話数: {title_text}\n{body_text}",
-                    3500,
-                )
-                if not merged:
-                    continue
-                docs.append(
-                    {
-                        "doc_id": f"episode:{int(ep.id)}",
-                        "feature": "episode_assist_context",
-                        "site_key": site_key,
-                        "target_id": int(ep.id),
-                        "target_type": "episode",
-                        "title": title_text or f"episode:{int(ep.id)}",
-                        "content": merged,
-                        "is_public": bool(getattr(ep, "is_public", False)),
-                        "is_r18": False,
-                    }
-                )
-            if docs:
-                upsert_feature_docs(docs)
-                hits = semantic_search_feature_docs(
-                    f"{title} {' '.join(tags)} {context_text[-800:]}",
-                    feature="episode_assist_context",
-                    site_key=site_key,
-                    limit=min(6, AI_WEAVIATE_FEATURES_TOPK + 2),
-                    target_ids=[int(doc["target_id"]) for doc in docs],
-                    include_r18=True,
-                    public_only=False,
-                )
-                for hit in hits[:AI_WEAVIATE_FEATURES_TOPK]:
-                    snippet = _compact_text(str(hit.get("content") or ""), 180)
-                    if snippet:
-                        weaviate_context_lines.append(snippet)
-        except Exception as e:
-            logger.warning("episode assist weaviate context failed user=%s err=%r", user.id, e)
-    prompt = (
-        "あなたは日本語小説執筆アシスタントです。\n"
-        "与えられた本文の直後に続く『次の1文〜2文』の候補を複数作ってください。\n"
-        "既存本文の文体・時制・視点に合わせ、冗長な説明や注釈は不要です。\n"
-        "本文末尾をそのまま繰り返さず、いきなり同一フレーズで開始しないでください。\n"
-        "句読点は自然にし、「、。」や「。。」を含めないでください。\n"
-        "候補同士は展開を少し変えてください。\n"
-        "出力は必ずJSON 1個のみ。形式: "
-        '{"candidates":["候補1","候補2"]}\n'
-        f"候補数は必ず {suggestions_count} 件にしてください。\n"
-        f"タイトル: {title or '(なし)'}\n"
-        f"タグ: {', '.join(tags) if tags else '(なし)'}\n"
-        "本文（末尾重視）:\n"
-        f"{context_text}\n"
+    return await generate_episode_assist_candidates_service(
+        payload=payload,
+        request=request,
+        db=db,
     )
-    if weaviate_context_lines:
-        prompt += (
-            "\n参考コンテキスト（文体・展開の整合にのみ使用し、文面をそのままコピーしない）:\n"
-            + "\n".join([f"- {line}" for line in weaviate_context_lines[:AI_WEAVIATE_FEATURES_TOPK]])
-            + "\n"
-        )
-
-    data: dict = {}
-    tokens: int | None = None
-    model_used: str | None = None
-    try:
-        data, tokens, model_used = await call_ai_json(
-            prompt,
-            model=payload.model or (os.getenv("OPENAI_MODEL_TEXT", "") or "").strip() or None,
-            provider=payload.provider or "openai",
-            system_instructions=(
-                "あなたは小説執筆補助AIです。"
-                "必ずJSONのみを返し、キーは candidates のみ。"
-                "候補は短めで、すぐ本文に挿入できる自然な日本語にしてください。"
-            ),
-            timeout_sec=90,
-        )
-    except Exception as e:
-        logger.warning("episode assist candidates failed err=%r", e)
-
-    raw_candidates = data.get("candidates") if isinstance(data, dict) else None
-    candidates: list[str] = []
-    if isinstance(raw_candidates, list):
-        for item in raw_candidates:
-            line = str(item or "").strip()
-            if not line or line in candidates:
-                continue
-            line = line.replace("、。", "。")
-            line = re.sub(r"。{2,}", "。", line)
-            line = re.sub(r"、{2,}", "、", line)
-            line = re.sub(r"([!?！？]){2,}", r"\1", line)
-            # Trim overlap with already-written tail.
-            max_overlap = min(len(context_tail), len(line))
-            for n in range(max_overlap, 1, -1):
-                if context_tail[-n:] == line[:n]:
-                    line = line[n:]
-                    break
-            line = line.strip()
-            if not line:
-                continue
-            # Skip candidates that are effectively already present at the tail.
-            if line in context_tail:
-                continue
-            candidates.append(line[:220])
-            if len(candidates) >= suggestions_count:
-                break
-
-    # Avoid generic/non-predictive fallback lines; require AI-generated candidates.
-    if not candidates:
-        raise HTTPException(502, "AI候補の生成に失敗しました。しばらくして再試行してください。")
-
-    return EpisodeAssistCandidatesOut(candidates=candidates, model=model_used, used_tokens=tokens)
 
 
 @app.get("/api/support_plans", response_model=List[SupportPlanOut])
@@ -7689,6 +7673,8 @@ class AIChatCharacterResponse(BaseModel):
     recommendation_score: float = 0.0
     recommendation_samples: int = 0
     is_recommended: bool = False
+    is_name_duplicate: bool = False
+    name_duplicate_index: int = 1
     published_at: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -8400,184 +8386,31 @@ async def _run_ai_job(job_id: int) -> None:
         db.close()
 
 
-@app.post("/api/ai/novels/generate", response_model=AINovelResponse)
 async def generate_ai_novel(
     req: AINovelRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
-    """
-    プレミアムユーザー向けAI小説生成API。
-    - 1日あたりの利用回数制限あり
-    - 生成内容を ai_generate_logs テーブルに記録
-    """
-    user = get_optional_current_user(request, db)
-    is_premium = is_effective_premium_user(user)
-    site_key = resolve_site_key(request)
-    req_for_ai = req
-    if AI_WEAVIATE_FEATURES_ENABLED:
-        try:
-            novel_query = (
-                db.query(models.Novel)
-                .options(selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag))
-                .filter(models.Novel.site_key == site_key)
-                .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
-            )
-            if user is None:
-                novel_query = novel_query.filter(models.Novel.is_public == True)
-            else:
-                novel_query = novel_query.filter(
-                    or_(
-                        models.Novel.is_public == True,
-                        models.Novel.author_id == int(user.id),
-                    )
-                )
-            novels_for_context = novel_query.limit(40).all()
-            docs = _collect_novel_feature_docs(
-                db,
-                site_key=site_key,
-                novels=novels_for_context,
-                feature_name="ai_novel_generate_context",
-            )
-            if docs:
-                upsert_feature_docs(docs)
-                query_text = _compact_text(
-                    " ".join(
-                        [
-                            str(getattr(req, "title_hint", "") or ""),
-                            str(getattr(req, "genre", "") or ""),
-                            str(getattr(req, "characters", "") or ""),
-                            str(getattr(req, "tone", "") or ""),
-                            str(getattr(req, "prompt", "") or ""),
-                        ]
-                    ),
-                    1200,
-                )
-                hits = semantic_search_feature_docs(
-                    query_text,
-                    feature="ai_novel_generate_context",
-                    site_key=site_key,
-                    limit=min(8, AI_WEAVIATE_FEATURES_TOPK + 2),
-                    target_ids=[int(doc["target_id"]) for doc in docs],
-                    include_r18=bool(getattr(req, "r18", False)),
-                    public_only=False,
-                )
-                context_lines: list[str] = []
-                for hit in hits[:AI_WEAVIATE_FEATURES_TOPK]:
-                    title_line = _compact_text(str(hit.get("title") or ""), 50)
-                    content_line = _compact_text(str(hit.get("content") or ""), 120)
-                    if title_line:
-                        context_lines.append(f"{title_line}: {content_line}")
-                    elif content_line:
-                        context_lines.append(content_line)
-                req_for_ai = _build_ai_novel_request_with_context(req, context_lines)
-        except Exception as e:
-            logger.warning("ai novel weaviate context failed user=%s err=%r", getattr(user, "id", None), e)
-
-    if not is_premium:
-        guest_id = get_or_set_ai_guest_id(request, response)
-        usage = require_guest_ai_quota(db, guest_id)
-
-        provider = provider_from_request(req_for_ai)
-        if getattr(req_for_ai, "provider", None) is None and provider == "openai":
-            provider = provider_from_model(getattr(req_for_ai, "model", None))
-        if provider == "deepseek":
-            resp = await call_deepseek_novel_api(req_for_ai)
-        elif provider == "openrouter":
-            resp = await call_openrouter_novel_api(req_for_ai)
-        else:
-            resp = await call_openai_novel_api(req_for_ai)
-
-        usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
-        usage.last_used_at = datetime.utcnow()
-        db.add(usage)
-        db.commit()
-
-        resp.guest_remaining = max(0, AI_GUEST_FREE_MAX - int(getattr(usage, "generate_count", 0) or 0))
-        return resp
-
-    # --- premium flow ---
-    assert user is not None
-
-    total_remaining_before = _reserve_ai_novel_generation_slot(db, user)
-
-    # ★ AI で小説生成（OpenAI / OpenRouter をモデルで切り替え）
-    provider = provider_from_request(req_for_ai)
-    if getattr(req_for_ai, "provider", None) is None and provider == "openai":
-        provider = provider_from_model(getattr(req_for_ai, "model", None))
-    if provider == "deepseek":
-        resp = await call_deepseek_novel_api(req_for_ai)
-    elif provider == "openrouter":
-        resp = await call_openrouter_novel_api(req_for_ai)
-    else:
-        resp = await call_openai_novel_api(req_for_ai)
-
-    # ★ ログ保存用サマリを作成（タイトル/ジャンル/キャラ/トーンを適当にまとめて200文字まで）
-    parts = [req.title_hint, req.genre, req.characters, req.tone]
-    prompt_summary = " / ".join([p for p in parts if p])[:200] if any(parts) else None
-
-    # 使用モデル・トークン数（取れなければ None のまま）
-    model_used = getattr(resp, "model", None) or getattr(req, "model", None) or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
-    model_log = _format_ai_log_model(provider, model_used)
-    tokens_used = getattr(resp, "used_tokens", None)
-
-    log = models.AIGenerateLog(
-        user_id=user.id,
-        prompt_summary=prompt_summary,
-        tokens_used=tokens_used,
-        model=model_log,
+    return await generate_ai_novel_service(
+        req=req,
+        request=request,
+        response=response,
+        db=db,
     )
-    db.add(log)
-    db.commit()
 
-    resp.user_remaining = max(0, total_remaining_before - 1)
-    return resp
-
-@app.post("/api/ai/novels/generate_job", response_model=AINovelJobCreateResponse)
 async def create_ai_novel_job(
     req: AINovelRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
-    user = get_optional_current_user(request, db)
-    is_premium = is_effective_premium_user(user)
-
-    if not is_premium:
-        guest_id = get_or_set_ai_guest_id(request, response)
-        usage = require_guest_ai_quota(db, guest_id)
-        usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
-        usage.last_used_at = datetime.utcnow()
-        db.add(usage)
-        db.commit()
-
-        job = models.AINovelJob(
-            guest_id=guest_id,
-            job_type="novel_generate",
-            status="pending",
-            request_json=json.dumps(req.dict(), ensure_ascii=True),
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        asyncio.create_task(_run_ai_job(job.id))
-        return AINovelJobCreateResponse(job_id=job.id, status=job.status)
-
-    assert user is not None
-    _reserve_ai_novel_generation_slot(db, user)
-
-    job = models.AINovelJob(
-        user_id=user.id,
-        job_type="novel_generate",
-        status="pending",
-        request_json=json.dumps(req.dict(), ensure_ascii=True),
+    return await create_ai_novel_job_service(
+        req=req,
+        request=request,
+        response=response,
+        db=db,
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    asyncio.create_task(_run_ai_job(job.id))
-    return AINovelJobCreateResponse(job_id=job.id, status=job.status)
 
 @app.post("/api/ai/episodes/{episode_id}/continue_job", response_model=AINovelJobCreateResponse)
 async def create_ai_episode_continue_job(
@@ -8780,9 +8613,9 @@ def _build_ai_chat_profile_key(
     speech_gender: str | None = None,
 ) -> str:
     normalized_name = re.sub(r"\s+", " ", str(character_name or "").strip().lower())
-    normalized_personality = re.sub(r"\s+", " ", str(personality or "").strip().lower())
     normalized_gender = normalize_speech_gender(speech_gender)
-    payload = f"{normalized_name}||{normalized_gender}||{normalized_personality[:1500]}"
+    # Keep learning continuous across same-name character duplicates.
+    payload = f"{normalized_name}||{normalized_gender}"
     if not payload.strip("|"):
         payload = "default_profile"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
@@ -10617,7 +10450,6 @@ async def _score_ai_chat_image_quality(url: str) -> tuple[float | None, dict]:
         return None, {"reason": "quality_check_error"}
 
 
-@app.get("/api/ai/memory/items", response_model=MemoryListResponse)
 def list_ai_memory_items(
     request: Request,
     scope: Literal["global", "novel", "episode", "character"] = "global",
@@ -10637,7 +10469,6 @@ def list_ai_memory_items(
     )
 
 
-@app.patch("/api/ai/memory/items/{memory_id}/deactivate", response_model=MemoryDeactivateResponse)
 def deactivate_ai_memory_item(
     memory_id: int,
     request: Request,
@@ -10654,7 +10485,6 @@ def deactivate_ai_memory_item(
     return result
 
 
-@app.delete("/api/ai/memory/items/{memory_id}", response_model=MemoryDeleteResponse)
 def delete_ai_memory_item(
     memory_id: int,
     request: Request,
@@ -10671,7 +10501,6 @@ def delete_ai_memory_item(
     return result
 
 
-@app.post("/api/ai/memory/backfill", response_model=AIChatMemoryBackfillResponse)
 async def backfill_ai_memory_from_logs(
     payload: AIChatMemoryBackfillRequest,
     request: Request,
@@ -12043,7 +11872,10 @@ def list_ai_chat_characters(
     rows = (
         db.query(models.AIChatCharacter, models.User.username)
         .join(models.User, models.User.id == models.AIChatCharacter.user_id)
-        .filter(models.AIChatCharacter.user_id == user.id)
+        .filter(
+            models.AIChatCharacter.user_id == user.id,
+            models.AIChatCharacter.is_deleted == False,
+        )
         .order_by(models.AIChatCharacter.updated_at.desc(), models.AIChatCharacter.id.desc())
         .all()
     )
@@ -12052,7 +11884,10 @@ def list_ai_chat_characters(
         extra_rows = (
             db.query(models.AIChatCharacter, models.User.username)
             .join(models.User, models.User.id == models.AIChatCharacter.user_id)
-            .filter(models.AIChatCharacter.user_id != user.id)
+            .filter(
+                models.AIChatCharacter.user_id != user.id,
+                models.AIChatCharacter.is_deleted == False,
+            )
             .order_by(models.AIChatCharacter.updated_at.desc(), models.AIChatCharacter.id.desc())
             .all()
         )
@@ -12088,6 +11923,8 @@ def list_ai_chat_characters(
             is_recommended=bool(
                 recommendation_map.get(int(item.id), {}).get("is_recommended", False)
             ),
+            is_name_duplicate=bool(getattr(item, "is_name_duplicate", False)),
+            name_duplicate_index=_compute_ai_chat_name_duplicate_index(db=db, character=item),
             published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
             created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
             updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
@@ -12110,37 +11947,20 @@ def create_ai_chat_character(
     personality = (payload.personality or "").strip()[:4000] or None
     speech_gender = normalize_speech_gender(getattr(payload, "speech_gender", None))
     is_r18 = bool(_contains_public_chat_r18_hint(name) or _contains_public_chat_r18_hint(personality))
-
-    exists = (
+    same_name_rows = (
         db.query(models.AIChatCharacter)
         .filter(
             models.AIChatCharacter.user_id == user.id,
             models.AIChatCharacter.name == name,
         )
-        .first()
+        .all()
     )
-    if exists:
-        exists.personality = personality
-        exists.is_r18 = bool(getattr(exists, "is_r18", False) or is_r18)
-        if getattr(payload, "speech_gender", None) is not None:
-            exists.speech_gender = speech_gender
-        db.add(exists)
-        db.commit()
-        db.refresh(exists)
-        return AIChatCharacterResponse(
-            id=int(exists.id),
-            name=str(exists.name or ""),
-            personality=exists.personality,
-            image_url=str(getattr(exists, "image_url", "") or "").strip() or None,
-            is_r18=bool(getattr(exists, "is_r18", False)),
-            speech_gender=normalize_speech_gender(getattr(exists, "speech_gender", None)),
-            owner_username=str(getattr(user, "username", "") or "").strip() or None,
-            is_readonly=False,
-            is_public=bool(getattr(exists, "is_public", False)),
-            published_at=exists.published_at.isoformat() if getattr(exists, "published_at", None) else None,
-            created_at=exists.created_at.isoformat() if getattr(exists, "created_at", None) else None,
-            updated_at=exists.updated_at.isoformat() if getattr(exists, "updated_at", None) else None,
-        )
+    is_name_duplicate = len(same_name_rows) > 0
+    if is_name_duplicate:
+        for row in same_name_rows:
+            if not bool(getattr(row, "is_name_duplicate", False)):
+                row.is_name_duplicate = True
+                db.add(row)
 
     item = models.AIChatCharacter(
         user_id=user.id,
@@ -12148,6 +11968,7 @@ def create_ai_chat_character(
         personality=personality,
         speech_gender=speech_gender,
         is_r18=is_r18,
+        is_name_duplicate=is_name_duplicate,
     )
     db.add(item)
     db.commit()
@@ -12162,6 +11983,8 @@ def create_ai_chat_character(
         owner_username=str(getattr(user, "username", "") or "").strip() or None,
         is_readonly=False,
         is_public=bool(getattr(item, "is_public", False)),
+        is_name_duplicate=bool(getattr(item, "is_name_duplicate", False)),
+        name_duplicate_index=_compute_ai_chat_name_duplicate_index(db=db, character=item),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
         updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
@@ -12209,6 +12032,8 @@ def update_ai_chat_character(
         owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
         is_readonly=False,
         is_public=bool(getattr(item, "is_public", False)),
+        is_name_duplicate=bool(getattr(item, "is_name_duplicate", False)),
+        name_duplicate_index=_compute_ai_chat_name_duplicate_index(db=db, character=item),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
         updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
@@ -12345,6 +12170,8 @@ def publish_ai_chat_character(
         owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
         is_readonly=False,
         is_public=bool(getattr(item, "is_public", False)),
+        is_name_duplicate=bool(getattr(item, "is_name_duplicate", False)),
+        name_duplicate_index=_compute_ai_chat_name_duplicate_index(db=db, character=item),
         published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
         created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
         updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
@@ -12371,27 +12198,15 @@ def delete_ai_chat_character(
             os.remove(old_path)
         except Exception:
             pass
-    (
-        db.query(models.AIChatCharacterLike)
-        .filter(models.AIChatCharacterLike.character_id == item.id)
-        .delete(synchronize_session=False)
-    )
-    (
-        db.query(models.AIChatCharacterFavorite)
-        .filter(models.AIChatCharacterFavorite.character_id == item.id)
-        .delete(synchronize_session=False)
-    )
-    (
-        db.query(models.AIChatTurnFeedback)
-        .filter(models.AIChatTurnFeedback.character_id == item.id)
-        .delete(synchronize_session=False)
-    )
-    db.delete(item)
+    item.is_deleted = True
+    item.deleted_at = datetime.utcnow()
+    item.is_public = False
+    item.published_at = None
+    db.add(item)
     db.commit()
     return {"deleted": True}
 
 
-@app.get("/api/ai/chat/public/characters", response_model=list[AIChatPublicCharacterListItem])
 def list_public_ai_chat_characters(
     request: Request,
     q: str = Query(default=""),
@@ -12399,184 +12214,13 @@ def list_public_ai_chat_characters(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    viewer = get_optional_current_user(request, db)
-    site_key = resolve_site_key(request)
-    can_view_r18 = can_user_access_novel_age_limit(viewer, "r18")
-    keyword = (q or "").strip()
-    query = (
-        db.query(models.AIChatCharacter, models.User.username)
-        .join(models.User, models.User.id == models.AIChatCharacter.user_id)
-        .filter(models.AIChatCharacter.is_public == True)
+    return list_public_ai_chat_characters_service(
+        request=request,
+        q=q,
+        limit=limit,
+        offset=offset,
+        db=db,
     )
-    if keyword:
-        needle = f"%{keyword.lower()}%"
-        query = query.filter(
-            or_(
-                func.lower(models.AIChatCharacter.name).like(needle),
-                func.lower(func.coalesce(models.AIChatCharacter.personality, "")).like(needle),
-            )
-        )
-
-    rows = (
-        query.order_by(
-            models.AIChatCharacter.published_at.desc(),
-            models.AIChatCharacter.updated_at.desc(),
-            models.AIChatCharacter.id.desc(),
-        )
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    profile_key_map: dict[int, str] = {}
-    for item, _ in rows:
-        cid = int(getattr(item, "id", 0) or 0)
-        if cid <= 0:
-            continue
-        profile_key_map[cid] = _build_ai_chat_profile_key(
-            character_name=str(getattr(item, "name", "") or ""),
-            personality=str(getattr(item, "personality", "") or ""),
-            speech_gender=str(getattr(item, "speech_gender", "auto") or "auto"),
-        )
-    public_recommendation_map = _build_public_profile_recommendation_map(
-        db,
-        profile_keys=list(profile_key_map.values()),
-    )
-    character_ids = [int(getattr(item, "id", 0) or 0) for item, _ in rows]
-    semantic_score_map: dict[int, float] = {}
-    if AI_WEAVIATE_FEATURES_ENABLED and character_ids:
-        try:
-            docs: list[dict[str, Any]] = []
-            for item, _ in rows:
-                cid = int(getattr(item, "id", 0) or 0)
-                if cid <= 0:
-                    continue
-                content = _compact_text(
-                    "\n".join(
-                        [
-                            f"名前: {str(getattr(item, 'name', '') or '').strip()}",
-                            f"性格: {str(getattr(item, 'personality', '') or '').strip()}",
-                        ]
-                    ),
-                    3500,
-                )
-                if not content:
-                    continue
-                docs.append(
-                    {
-                        "doc_id": f"public_character:{cid}",
-                        "feature": "public_ai_chat_recommend",
-                        "site_key": site_key,
-                        "target_id": cid,
-                        "target_type": "ai_public_character",
-                        "title": str(getattr(item, "name", "") or ""),
-                        "content": content,
-                        "is_public": bool(getattr(item, "is_public", False)),
-                        "is_r18": bool(getattr(item, "is_r18", False)),
-                    }
-                )
-            if docs:
-                upsert_feature_docs(docs)
-                semantic_query = keyword
-                if not semantic_query and viewer is not None:
-                    semantic_query = _collect_public_chat_preference_text(db, user_id=int(viewer.id))
-                hits = semantic_search_feature_docs(
-                    semantic_query,
-                    feature="public_ai_chat_recommend",
-                    site_key=site_key,
-                    limit=min(max(limit * 3, 20), 80),
-                    target_ids=character_ids,
-                    include_r18=can_view_r18,
-                    public_only=True,
-                )
-                for hit in hits:
-                    semantic_score_map[int(hit["target_id"])] = _semantic_score_from_distance(hit.get("distance"))
-        except Exception as e:
-            logger.warning("public ai chat semantic ranking failed user=%s err=%r", getattr(viewer, "id", None), e)
-
-    like_counts: dict[int, int] = {}
-    favorite_counts: dict[int, int] = {}
-    if character_ids:
-        like_rows = (
-            db.query(
-                models.AIChatCharacterLike.character_id,
-                func.count(models.AIChatCharacterLike.id),
-            )
-            .filter(models.AIChatCharacterLike.character_id.in_(character_ids))
-            .group_by(models.AIChatCharacterLike.character_id)
-            .all()
-        )
-        like_counts = {int(cid): int(count or 0) for cid, count in like_rows}
-        favorite_rows = (
-            db.query(
-                models.AIChatCharacterFavorite.character_id,
-                func.count(models.AIChatCharacterFavorite.id),
-            )
-            .filter(models.AIChatCharacterFavorite.character_id.in_(character_ids))
-            .group_by(models.AIChatCharacterFavorite.character_id)
-            .all()
-        )
-        favorite_counts = {int(cid): int(count or 0) for cid, count in favorite_rows}
-
-    liked_ids: set[int] = set()
-    favorited_ids: set[int] = set()
-    if viewer and character_ids:
-        liked_rows = (
-            db.query(models.AIChatCharacterLike.character_id)
-            .filter(
-                models.AIChatCharacterLike.user_id == viewer.id,
-                models.AIChatCharacterLike.character_id.in_(character_ids),
-            )
-            .all()
-        )
-        favorited_rows = (
-            db.query(models.AIChatCharacterFavorite.character_id)
-            .filter(
-                models.AIChatCharacterFavorite.user_id == viewer.id,
-                models.AIChatCharacterFavorite.character_id.in_(character_ids),
-            )
-            .all()
-        )
-        liked_ids = {int(cid) for (cid,) in liked_rows}
-        favorited_ids = {int(cid) for (cid,) in favorited_rows}
-
-    output: list[AIChatPublicCharacterListItem] = []
-    for item, username in rows:
-        if _is_public_chat_r18(item) and not can_view_r18:
-            continue
-        item_id = int(item.id)
-        rec = public_recommendation_map.get(profile_key_map.get(item_id, ""), {})
-        blended_score = (
-            (float(rec.get("score", 0.0)) * 0.6)
-            + (semantic_score_map.get(item_id, 0.0) * 0.4)
-        )
-        blended_samples = int(rec.get("samples", 0)) + (1 if item_id in semantic_score_map else 0)
-        output.append(
-            AIChatPublicCharacterListItem(
-                id=item_id,
-                name=str(item.name or ""),
-                personality=_trim_public_character_intro(item.personality),
-                image_url=str(getattr(item, "image_url", "") or "").strip() or None,
-                is_r18=bool(getattr(item, "is_r18", False)),
-                recommendation_score=blended_score,
-                recommendation_samples=blended_samples,
-                is_recommended=bool(blended_samples >= 2 and blended_score >= 0.42),
-                author_username=str(username or "") if username else None,
-                published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
-                like_count=like_counts.get(item_id, 0),
-                favorite_count=favorite_counts.get(item_id, 0),
-                is_liked=item_id in liked_ids,
-                is_favorited=item_id in favorited_ids,
-            )
-        )
-    output.sort(
-        key=lambda x: (
-            1 if bool(getattr(x, "is_recommended", False)) else 0,
-            float(getattr(x, "recommendation_score", 0.0) or 0.0),
-            str(getattr(x, "published_at", "") or ""),
-        ),
-        reverse=True,
-    )
-    return output
 
 
 @app.get(
@@ -12597,6 +12241,7 @@ def get_public_ai_chat_character_detail(
         .filter(
             models.AIChatCharacter.id == character_id,
             models.AIChatCharacter.is_public == True,
+            models.AIChatCharacter.is_deleted == False,
         )
         .first()
     )
@@ -12686,7 +12331,6 @@ def get_public_ai_chat_character_detail(
     )
 
 
-@app.post("/api/ai/chat/public/characters/{character_id}/like")
 def like_public_ai_chat_character(
     character_id: int,
     request: Request,
@@ -12698,6 +12342,7 @@ def like_public_ai_chat_character(
         .filter(
             models.AIChatCharacter.id == character_id,
             models.AIChatCharacter.is_public == True,
+            models.AIChatCharacter.is_deleted == False,
         )
         .first()
     )
@@ -12757,7 +12402,6 @@ def like_public_ai_chat_character(
     return {"ok": True, "liked": True, "like_count": int(like_count or 0)}
 
 
-@app.delete("/api/ai/chat/public/characters/{character_id}/like")
 def unlike_public_ai_chat_character(
     character_id: int,
     request: Request,
@@ -12769,6 +12413,7 @@ def unlike_public_ai_chat_character(
         .filter(
             models.AIChatCharacter.id == character_id,
             models.AIChatCharacter.is_public == True,
+            models.AIChatCharacter.is_deleted == False,
         )
         .first()
     )
@@ -12794,7 +12439,6 @@ def unlike_public_ai_chat_character(
     return {"ok": True, "liked": False, "like_count": int(like_count or 0)}
 
 
-@app.post("/api/ai/chat/public/characters/{character_id}/favorite")
 def favorite_public_ai_chat_character(
     character_id: int,
     request: Request,
@@ -12806,6 +12450,7 @@ def favorite_public_ai_chat_character(
         .filter(
             models.AIChatCharacter.id == character_id,
             models.AIChatCharacter.is_public == True,
+            models.AIChatCharacter.is_deleted == False,
         )
         .first()
     )
@@ -12865,7 +12510,6 @@ def favorite_public_ai_chat_character(
     return {"ok": True, "favorited": True, "favorite_count": int(favorite_count or 0)}
 
 
-@app.delete("/api/ai/chat/public/characters/{character_id}/favorite")
 def unfavorite_public_ai_chat_character(
     character_id: int,
     request: Request,
@@ -12877,6 +12521,7 @@ def unfavorite_public_ai_chat_character(
         .filter(
             models.AIChatCharacter.id == character_id,
             models.AIChatCharacter.is_public == True,
+            models.AIChatCharacter.is_deleted == False,
         )
         .first()
     )
@@ -15917,8 +15562,6 @@ def get_episode_tag_names(db: Session, episode_id: int) -> list[str]:
     return [row[0] for row in rows]
 
 
-@app.post("/api/novels/")
-@app.post("/api/novels")
 def create_novel(
     payload: schemas.NovelCreate,
     request: Request,
@@ -15990,7 +15633,6 @@ def create_novel(
     return novel
 
 
-@app.get("/api/novels")
 def list_novels(
     request: Request,
     mine: bool = False,
@@ -17063,7 +16705,6 @@ def list_public_novels(
     return result
 
 
-@app.get("/api/public/novels/recommended")
 def list_recommended_public_novels(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -17071,200 +16712,15 @@ def list_recommended_public_novels(
     lang: str | None = None,
     db: Session = Depends(get_db),
 ):
-    site_key = resolve_site_key(request)
-    target_language = None
-    raw_lang = (lang or "").strip()
-    if raw_lang:
-        try:
-            target_language = normalize_language(raw_lang)
-        except Exception:
-            target_language = None
-    user = require_current_user(request, db)
-    favorite_tag_weights = get_user_favorite_tag_weights(db, user.id)
-    if not favorite_tag_weights:
-        return []
-
-    favorite_novel_ids = {
-        row[0]
-        for row in db.query(models.NovelFavorite.novel_id)
-        .filter(models.NovelFavorite.user_id == user.id)
-        .all()
-    }
-
-    candidate_query = (
-        db.query(models.Novel)
-        .options(
-            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
-            selectinload(models.Novel.author),
-        )
-        .filter(models.Novel.is_public == True)
-        .filter(models.Novel.site_key == site_key)
-        .filter(models.Novel.author_id != user.id)
-        .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
-    )
-    if favorite_novel_ids:
-        candidate_query = candidate_query.filter(~models.Novel.id.in_(favorite_novel_ids))
-
-    candidates = candidate_query.limit(max(100, limit * 12)).all()
-    scored: list[tuple[int, models.Novel]] = []
-    for novel in candidates:
-        if not can_user_access_novel_age_limit(user, getattr(novel, "age_limit", "all")):
-            continue
-        tag_names = [
-            (getattr(nt.tag, "name", None) or "").strip()
-            for nt in (getattr(novel, "novel_tags", []) or [])
-            if getattr(nt, "tag", None) is not None
-        ]
-        score = sum(favorite_tag_weights.get(name, 0) for name in tag_names if name)
-        if score <= 0:
-            continue
-        scored.append((score, novel))
-    if not scored:
-        return []
-
-    semantic_score_map: dict[int, float] = {}
-    if AI_WEAVIATE_FEATURES_ENABLED:
-        try:
-            candidate_novels = [item[1] for item in scored]
-            docs = _collect_novel_feature_docs(
-                db,
-                site_key=site_key,
-                novels=candidate_novels,
-                feature_name="public_novel_recommend",
-            )
-            if docs:
-                upsert_feature_docs(docs)
-                preference_text = _collect_user_preference_text_for_novels(
-                    db,
-                    user_id=int(user.id),
-                    site_key=site_key,
-                )
-                hits = semantic_search_feature_docs(
-                    preference_text,
-                    feature="public_novel_recommend",
-                    site_key=site_key,
-                    limit=min(max(limit * 3, 12), 60),
-                    target_ids=[int(doc["target_id"]) for doc in docs],
-                    include_r18=can_user_access_novel_age_limit(user, "r18"),
-                    public_only=True,
-                )
-                for hit in hits:
-                    semantic_score_map[int(hit["target_id"])] = _semantic_score_from_distance(hit.get("distance"))
-        except Exception as e:
-            logger.warning("novel recommend weaviate failed user=%s err=%r", user.id, e)
-
-    ranked_items = sorted(
-        scored,
-        key=lambda item: (
-            -(
-                (item[0] * 1.0)
-                + (semantic_score_map.get(int(item[1].id), 0.0) * 8.0)
-            ),
-            -(getattr(item[1], "created_at", datetime.min) or datetime.min).timestamp(),
-            -item[1].id,
-        ),
-    )[:limit]
-    novels = [item[1] for item in ranked_items]
-    recommendation_scores = {
-        item[1].id: (
-            item[0]
-            + (semantic_score_map.get(int(item[1].id), 0.0) * 8.0)
-        )
-        for item in ranked_items
-    }
-
-    novel_ids = [novel.id for novel in novels]
-    cover_map: dict[int, str] = {}
-    if novel_ids:
-        cover_rows = (
-            db.query(
-                models.Episode.novel_id,
-                models.Episode.cover_image_url,
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .filter(models.Episode.novel_id.in_(novel_ids))
-            .filter(models.Episode.site_key == site_key)
-            .filter(models.Episode.cover_image_url.isnot(None))
-            .filter(models.Episode.status == "public")
-            .filter(models.Episode.is_public == True)
-            .order_by(
-                models.Episode.novel_id,
-                models.Episode.episode_number.is_(None),
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .all()
-        )
-        for novel_id, cover_url, _, __ in cover_rows:
-            if novel_id not in cover_map and cover_url:
-                cover_map[novel_id] = cover_url
-    favorite_counts: dict[int, int] = {}
-    if novel_ids:
-        favorite_rows = (
-            db.query(
-                models.NovelFavorite.novel_id,
-                func.count(models.NovelFavorite.id),
-            )
-            .filter(models.NovelFavorite.novel_id.in_(novel_ids))
-            .group_by(models.NovelFavorite.novel_id)
-            .all()
-        )
-        favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
-    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
-    liked_ids = {
-        row[0]
-        for row in db.query(models.NovelLike.novel_id)
-        .filter(
-            models.NovelLike.user_id == user.id,
-            models.NovelLike.novel_id.in_(novel_ids),
-        )
-        .all()
-    } if novel_ids else set()
-    favorited_ids = {
-        row[0]
-        for row in db.query(models.NovelFavorite.novel_id)
-        .filter(
-            models.NovelFavorite.user_id == user.id,
-            models.NovelFavorite.novel_id.in_(novel_ids),
-        )
-        .all()
-    } if novel_ids else set()
-    translated_cards = _resolve_public_novel_card_translations(
-        db,
-        novels=novels,
-        target_language=target_language,
+    return list_recommended_public_novels_service(
+        request=request,
         background_tasks=background_tasks,
+        limit=limit,
+        lang=lang,
+        db=db,
     )
 
-    return [
-        {
-            "id": novel.id,
-            "title": translated_cards.get(int(novel.id), {}).get("title", novel.title),
-            "description": translated_cards.get(int(novel.id), {}).get("description", novel.description),
-            "created_at": novel.created_at,
-            "author_id": novel.author_id,
-            "author_username": novel.author.username if novel.author else None,
-            "tag_names": translated_cards.get(int(novel.id), {}).get("tag_names") or [
-                nt.tag.name
-                for nt in (getattr(novel, "novel_tags", []) or [])
-                if getattr(nt, "tag", None) is not None
-            ],
-            "view_count": getattr(novel, "view_count", 0) or 0,
-            "like_count": getattr(novel, "like_count", 0) or 0,
-            "favorite_count": favorite_counts.get(novel.id, 0),
-            "total_char_count": char_counts.get(novel.id, 0),
-            "age_limit": getattr(novel, "age_limit", "all") or "all",
-            "is_liked": novel.id in liked_ids,
-            "is_favorited": novel.id in favorited_ids,
-            "cover_image_url": cover_map.get(novel.id),
-            "recommendation_score": recommendation_scores.get(novel.id, 0),
-        }
-        for novel in novels
-    ]
 
-
-@app.get("/api/public/novels/ranking")
 def list_public_novel_rankings(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -20633,6 +20089,7 @@ def list_my_ai_chat_favorites(request: Request, db: Session = Depends(get_db)):
         .join(models.User, models.User.id == models.AIChatCharacter.user_id)
         .filter(models.AIChatCharacterFavorite.user_id == user.id)
         .filter(models.AIChatCharacter.is_public == True)
+        .filter(models.AIChatCharacter.is_deleted == False)
         .order_by(models.AIChatCharacterFavorite.created_at.desc(), models.AIChatCharacterFavorite.id.desc())
         .all()
     )
@@ -20710,6 +20167,7 @@ def record_my_view_history(
             .filter(
                 models.AIChatCharacter.id == target_id,
                 models.AIChatCharacter.is_public == True,
+                models.AIChatCharacter.is_deleted == False,
             )
             .first()
         )

@@ -689,9 +689,6 @@ class AINovelDraft(Base):
 
 class AIChatCharacter(Base):
     __tablename__ = "ai_chat_characters"
-    __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_ai_chat_characters_user_name"),
-    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -701,6 +698,9 @@ class AIChatCharacter(Base):
     speech_gender = Column(String(16), nullable=False, server_default="auto")
     is_r18 = Column(Boolean, nullable=False, server_default="0", index=True)
     is_public = Column(Boolean, nullable=False, server_default="0", index=True)
+    is_name_duplicate = Column(Boolean, nullable=False, server_default="0", index=True)
+    is_deleted = Column(Boolean, nullable=False, server_default="0", index=True)
+    deleted_at = Column(DateTime, nullable=True, index=True)
     published_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)

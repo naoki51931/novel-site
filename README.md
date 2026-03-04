@@ -46,6 +46,11 @@ FastAPI + React + MySQL + nginx + Docker で構成した小説投稿サイトで
   - タイトル候補 / タグ候補 / 要約候補
   - 生成ジョブ管理（ユーザー/管理者）
   - AI 利用ログ
+  - AIチャット:
+    - 自動会話モード（停止ボタン + チャットで「停止」「止める」停止）
+    - ゲスト会話のログイン時移行（JSONバックアップ自動保存）
+    - 同名キャラの複製作成 + インデックス表示（`#1`, `#2`）
+    - キャラ削除は論理削除（`is_deleted`）
 - 管理
   - 管理者ログイン
   - ユーザー管理
@@ -120,6 +125,12 @@ npm run dev
   - schema/model 変更時は `ALTER TABLE` 等の手動DDLが必要。
 - API 実装は `backend/app/main.py` に集約:
   - `backend/app/routers/*.py` は一部旧実装が残るため、修正箇所を誤らない。
+- AIチャットの同名キャラ運用:
+  - 同名は別IDで作成できる（上書きしない）。
+  - APIレスポンスに `is_name_duplicate`, `name_duplicate_index` を含み、UIで識別表示する。
+- AIチャットの削除/学習:
+  - キャラ削除は `ai_chat_characters` の論理削除（`is_deleted`, `deleted_at`）。
+  - 学習キー（`character_profile_key`）は同名キャラ間で継続される仕様（キャラ名 + speech_gender ベース）。
 - 公開状態は互換対応が混在:
   - `status` と `is_public` を併用する箇所があるため、公開ロジック変更時は一覧/詳細/権限を横断確認する。
 - フロント成果物:

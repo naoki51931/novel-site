@@ -10,6 +10,9 @@ const AI_CHAT_APPEARANCE_KEY = "ai_chat_appearance_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_KEY = "ai_chat_relationship_memo_history_v1";
 const AI_CHAT_RELATIONSHIP_MEMO_HISTORY_LIMIT = 30;
 const AI_CHAT_GUEST_DRAFT_KEY = "ai_chat_guest_draft_v1";
+const AI_CHAT_GUEST_DRAFT_BACKUP_HASH_KEY = "ai_chat_guest_draft_backup_hash_v1";
+const AI_CHAT_GUEST_DRAFT_BACKUP_BYTES_KEY = "ai_chat_guest_draft_backup_bytes_v1";
+const AI_CHAT_GUEST_DRAFT_BACKUP_HASHES_KEY = "ai_chat_guest_draft_backup_hashes_v1";
 const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
 const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
@@ -17,6 +20,7 @@ const PREVIEW_BUBBLE_COUNT = 3;
 const APPEARANCE_SECTION_HEADER = "【見た目設定】";
 const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
 const DEFAULT_AI_CHAT_MODEL = "gpt-5-mini";
+const DEMO02_AI_CHAT_MODEL = "google/gemini-3-flash-preview";
 const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 768px)";
 const RECOMMENDED_MODEL_VALUES = new Set([
   "moonshotai/kimi-k2",
@@ -410,6 +414,131 @@ function loadGuestChatDraft() {
   }
 }
 
+function hashGuestDraftText(text) {
+  const raw = String(text || "");
+  if (!raw) return "";
+  // FNV-1a 32-bit hash for lightweight duplicate detection in browser.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function getByteLengthUtf8(text) {
+  try {
+    if (typeof TextEncoder !== "undefined") {
+      return new TextEncoder().encode(String(text || "")).length;
+    }
+  } catch {
+    // fallback below
+  }
+  return unescape(encodeURIComponent(String(text || ""))).length;
+}
+
+function downloadGuestChatDraftJson(draft, rawText = "") {
+  if (typeof window === "undefined" || typeof document === "undefined") return false;
+  try {
+    const payload = typeof rawText === "string" && rawText.trim()
+      ? rawText
+      : JSON.stringify(draft || {}, null, 2);
+    if (!payload) return false;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const characterPart = String(draft?.character_name || "guest")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "_")
+      .slice(0, 40);
+    const filename = `ai-chat-guest-backup-${characterPart || "guest"}-${stamp}.json`;
+    const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldBackupGuestDraft(rawText) {
+  if (typeof window === "undefined") return { shouldBackup: false, hash: "" };
+  const nextHash = hashGuestDraftText(rawText);
+  const nextBytes = getByteLengthUtf8(rawText);
+  if (!nextHash) return { shouldBackup: false, hash: "" };
+  const prevHash = String(localStorage.getItem(AI_CHAT_GUEST_DRAFT_BACKUP_HASH_KEY) || "").trim();
+  const prevBytes = Number(localStorage.getItem(AI_CHAT_GUEST_DRAFT_BACKUP_BYTES_KEY) || 0);
+  const savedHashListRaw = localStorage.getItem(AI_CHAT_GUEST_DRAFT_BACKUP_HASHES_KEY);
+  let savedHashList = [];
+  try {
+    const parsed = JSON.parse(savedHashListRaw || "[]");
+    savedHashList = Array.isArray(parsed) ? parsed.map((v) => String(v || "").trim()).filter(Boolean) : [];
+  } catch {
+    savedHashList = [];
+  }
+  const hashAlreadySaved = savedHashList.includes(nextHash);
+  const isNewerByBytes = nextBytes > prevBytes;
+  return {
+    shouldBackup: !hashAlreadySaved && (prevHash !== nextHash || isNewerByBytes),
+    hash: nextHash,
+    bytes: nextBytes,
+  };
+}
+
+function markGuestDraftBackedUp(hash, bytes = 0) {
+  if (typeof window === "undefined") return;
+  if (!hash) return;
+  localStorage.setItem(AI_CHAT_GUEST_DRAFT_BACKUP_HASH_KEY, String(hash));
+  let savedHashList = [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AI_CHAT_GUEST_DRAFT_BACKUP_HASHES_KEY) || "[]");
+    savedHashList = Array.isArray(parsed) ? parsed.map((v) => String(v || "").trim()).filter(Boolean) : [];
+  } catch {
+    savedHashList = [];
+  }
+  if (!savedHashList.includes(hash)) {
+    savedHashList.push(hash);
+    localStorage.setItem(
+      AI_CHAT_GUEST_DRAFT_BACKUP_HASHES_KEY,
+      JSON.stringify(savedHashList.slice(-80))
+    );
+  }
+  if (Number.isFinite(Number(bytes)) && Number(bytes) > 0) {
+    localStorage.setItem(AI_CHAT_GUEST_DRAFT_BACKUP_BYTES_KEY, String(Number(bytes)));
+  }
+}
+
+function messageDiffSignature(m) {
+  const role = m?.role === "assistant" ? "assistant" : "user";
+  const mode = m?.mode === "do" ? "do" : "say";
+  const autoFlag = m?.is_auto_dialogue ? "1" : "0";
+  const content = String(m?.content || "").trim().slice(0, 4000);
+  return `${role}\t${mode}\t${autoFlag}\t${content}`;
+}
+
+function extractAppendOnlyDiffMessages(sourceMessages, existingMessages) {
+  const src = Array.isArray(sourceMessages) ? sourceMessages : [];
+  const existing = Array.isArray(existingMessages) ? existingMessages : [];
+  const srcSig = src.map((m) => messageDiffSignature(m));
+  const existingSig = existing.map((m) => messageDiffSignature(m));
+  let matched = 0;
+  while (
+    matched < srcSig.length
+    && matched < existingSig.length
+    && srcSig[matched] === existingSig[matched]
+  ) {
+    matched += 1;
+  }
+  if (matched >= src.length) return [];
+  return src.slice(matched);
+}
+
 function normalizeStoredGuestMessage(raw) {
   if (!raw || typeof raw !== "object") return null;
   const role = raw.role === "assistant" ? "assistant" : "user";
@@ -481,9 +610,9 @@ export default function AiChatPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [model, setModel] = useState(() =>
-    isDemo02UserLocal() ? "moonshotai/kimi-k2" : DEFAULT_AI_CHAT_MODEL
+    isDemo02UserLocal() ? DEMO02_AI_CHAT_MODEL : DEFAULT_AI_CHAT_MODEL
   );
-  const [recommendedModelsOnly, setRecommendedModelsOnly] = useState(false);
+  const [recommendedModelsOnly, setRecommendedModelsOnly] = useState(() => isDemo02UserLocal());
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem(AI_CHAT_CHARACTER_NAME_KEY) || "";
@@ -568,6 +697,7 @@ export default function AiChatPage() {
   const [authToken, setAuthToken] = useState(() => getStoredAuthToken() || "");
   const [guestMigrationRunning, setGuestMigrationRunning] = useState(false);
   const [guestMigrationInfo, setGuestMigrationInfo] = useState("");
+  const [saveNameConflict, setSaveNameConflict] = useState(null);
   const [relationshipMemoHistory, setRelationshipMemoHistory] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -586,7 +716,10 @@ export default function AiChatPage() {
   const fanficCacheRef = useRef(new Map());
   const lastImportedPublicCharacterKeyRef = useRef("");
   const guestMigrationStartedRef = useRef(false);
+  const guestDraftBackupDoneRef = useRef(false);
   const chatImageInputRef = useRef(null);
+  const autoSaveTimerRef = useRef(null);
+  const lastAutoSavedSignatureRef = useRef("");
   const visibleAiModels = useMemo(
     () => (recommendedModelsOnly ? AI_MODELS.filter((m) => RECOMMENDED_MODEL_VALUES.has(m.value)) : AI_MODELS),
     [recommendedModelsOnly]
@@ -611,9 +744,18 @@ export default function AiChatPage() {
       recommendation_score: Number(raw?.recommendation_score || 0),
       recommendation_samples: Number(raw?.recommendation_samples || 0),
       is_recommended: !!raw?.is_recommended,
+      is_name_duplicate: !!raw?.is_name_duplicate,
+      name_duplicate_index: Number(raw?.name_duplicate_index || 1),
       published_at: raw?.published_at || null,
       updated_at: raw?.updated_at || null,
     };
+  };
+  const formatCharacterNameWithIndex = (c) => {
+    const name = String(c?.name || "").trim();
+    const idx = Math.max(1, Number(c?.name_duplicate_index || 1));
+    if (!name) return "";
+    if (c?.is_name_duplicate) return `${name} #${idx}`;
+    return name;
   };
 
   useEffect(() => {
@@ -646,6 +788,12 @@ export default function AiChatPage() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isDemo02UserLocal()) return;
+    setRecommendedModelsOnly(true);
+    setModel(DEMO02_AI_CHAT_MODEL);
+  }, [authToken]);
 
   const normalizeAiNovelResponse = (data) => {
     if (!data || typeof data !== "object") return data;
@@ -2270,6 +2418,14 @@ export default function AiChatPage() {
     const draft = loadGuestChatDraft();
     const importMessages = buildGuestImportMessages(draft?.messages);
     if (!importMessages.length) return;
+    if (!guestDraftBackupDoneRef.current && typeof window !== "undefined") {
+      const rawText = localStorage.getItem(AI_CHAT_GUEST_DRAFT_KEY) || "";
+      const { shouldBackup, hash, bytes } = shouldBackupGuestDraft(rawText);
+      if (shouldBackup && downloadGuestChatDraftJson(draft, rawText)) {
+        markGuestDraftBackedUp(hash, bytes);
+        guestDraftBackupDoneRef.current = true;
+      }
+    }
 
     guestMigrationStartedRef.current = true;
     (async () => {
@@ -2322,6 +2478,24 @@ export default function AiChatPage() {
           throw new Error(t({ ja: "移行先キャラIDの取得に失敗しました。", en: "Failed to get destination character ID." }));
         }
 
+        const beforeListRes = await fetch(
+          `/api/ai/chat/characters/${encodeURIComponent(createdId)}/messages`,
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        );
+        const beforeListData = await beforeListRes.json().catch(() => []);
+        const existingMessages = beforeListRes.ok && Array.isArray(beforeListData) ? beforeListData : [];
+        const diffMessages = extractAppendOnlyDiffMessages(importMessages, existingMessages);
+        if (!diffMessages.length) {
+          localStorage.removeItem(AI_CHAT_GUEST_DRAFT_KEY);
+          setGuestMigrationInfo(
+            t({
+              ja: "差分がないため、ゲスト会話の追加入力はありませんでした。",
+              en: "No diff found. No additional guest messages were imported.",
+            })
+          );
+          return;
+        }
+
         const importRes = await fetch(`/api/ai/chat/characters/${encodeURIComponent(createdId)}/messages/import`, {
           method: "POST",
           headers: {
@@ -2329,8 +2503,8 @@ export default function AiChatPage() {
             Authorization: `Bearer ${authToken}`,
           },
           body: JSON.stringify({
-            messages: importMessages,
-            replace_existing: true,
+            messages: diffMessages,
+            replace_existing: false,
           }),
         });
         const importData = await importRes.json().catch(() => ({}));
@@ -2406,7 +2580,7 @@ export default function AiChatPage() {
     return imageUrl || null;
   };
 
-  const saveCharacter = () => {
+  const saveCharacter = (saveMode = "ask") => {
     const run = async () => {
       const token = getStoredAuthToken();
       if (!token) {
@@ -2424,10 +2598,26 @@ export default function AiChatPage() {
         force: true,
       });
       const selected = savedCharacters.find((c) => c.id === selectedCharacterId) || null;
+      const sameNameEditable = savedCharacters.filter(
+        (c) => !c.is_readonly && String(c.name || "").trim() === name
+      );
+      const overwriteTarget =
+        selected && !selected.is_readonly && String(selected.name || "").trim() === name
+          ? selected
+          : (sameNameEditable[0] || null);
+      if (saveMode === "ask" && sameNameEditable.length > 0) {
+        setSaveNameConflict({
+          name,
+          count: sameNameEditable.length,
+          overwriteTargetId: String(overwriteTarget?.id || ""),
+        });
+        return;
+      }
       const shouldUpdateExisting =
-        !!selected && !selected.is_readonly && selected.name.trim() === name;
+        saveMode === "overwrite" && !!overwriteTarget && !!overwriteTarget.id;
+      setSaveNameConflict(null);
       const url = shouldUpdateExisting
-        ? `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}`
+        ? `/api/ai/chat/characters/${encodeURIComponent(String(overwriteTarget?.id || ""))}`
         : "/api/ai/chat/characters";
       const method = shouldUpdateExisting ? "PUT" : "POST";
       const res = await fetch(url, {
@@ -2465,6 +2655,8 @@ export default function AiChatPage() {
         is_readonly: !!data.is_readonly,
         is_public: !!data.is_public,
         is_r18: !!data.is_r18,
+        is_name_duplicate: !!data.is_name_duplicate,
+        name_duplicate_index: Number(data.name_duplicate_index || 1),
         published_at: data.published_at || null,
       };
       setSavedCharacters((prev) => {
@@ -2500,6 +2692,10 @@ export default function AiChatPage() {
       );
     });
   };
+
+  useEffect(() => {
+    setSaveNameConflict(null);
+  }, [characterName, selectedCharacterId]);
 
   const applySelectedCharacter = (id) => {
     if (!id) {
@@ -2741,6 +2937,8 @@ export default function AiChatPage() {
         is_readonly: !!data.is_readonly,
         is_public: !!data.is_public,
         is_r18: !!data.is_r18,
+        is_name_duplicate: !!data.is_name_duplicate,
+        name_duplicate_index: Number(data.name_duplicate_index || 1),
         published_at: data.published_at || null,
       };
       setSavedCharacters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
@@ -2835,6 +3033,8 @@ export default function AiChatPage() {
             is_readonly: !!data.is_readonly,
             is_public: !!data.is_public,
             is_r18: !!data.is_r18,
+            is_name_duplicate: !!data.is_name_duplicate,
+            name_duplicate_index: Number(data.name_duplicate_index || 1),
             published_at: data.published_at || null,
           };
           const without = prev.filter((c) => c.id !== savedId);
@@ -3465,6 +3665,55 @@ export default function AiChatPage() {
   }, [messages.length, selectedMessageIndex]);
 
   useEffect(() => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    if (!writableSelectedCharacterId) return undefined;
+    if (!authToken) return undefined;
+    if (messagesLoading) return undefined;
+
+    const importMessages = buildGuestImportMessages(messages);
+    const signature = JSON.stringify(importMessages);
+    if (!signature || signature === "[]" || signature === lastAutoSavedSignatureRef.current) {
+      return undefined;
+    }
+
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/import`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              messages: importMessages,
+              replace_existing: true,
+            }),
+          }
+        );
+        if (res.ok) {
+          lastAutoSavedSignatureRef.current = signature;
+        }
+      } catch {
+        // Keep chat UX stable even when autosave fails transiently.
+      } finally {
+        autoSaveTimerRef.current = null;
+      }
+    }, 700);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [messages, writableSelectedCharacterId, authToken, messagesLoading]);
+
+  useEffect(() => {
     setSelectedGeneratedImageKey("");
   }, [selectedCharacterId]);
 
@@ -3577,14 +3826,46 @@ export default function AiChatPage() {
     }
   }, [selectedCharacterId, savedCharacters, showR18ByDisplaySetting]);
 
+  const topNavRowStyle = isMobileViewport
+    ? {
+        display: "grid",
+        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+        gap: 8,
+        marginBottom: 10,
+      }
+    : {
+        display: "flex",
+        gap: 8,
+        marginBottom: 10,
+        flexWrap: "wrap",
+      };
+  const topNavButtonStyle = isMobileViewport
+    ? {
+        width: "100%",
+        textAlign: "center",
+        whiteSpace: "normal",
+        lineHeight: 1.25,
+        fontSize: "0.92rem",
+        fontWeight: 700,
+        padding: "11px 8px",
+      }
+    : undefined;
+
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <Link to="/" className="btn btn-border">{t({ ja: "トップへ", en: "Home" })}</Link>
-        <Link to="/ai-novel" className="btn btn-border">{t({ ja: "AI小説", en: "AI Novel" })}</Link>
+      <div style={topNavRowStyle}>
+        <Link to="/" className="btn btn-border" style={topNavButtonStyle}>{t({ ja: "トップへ", en: "Home" })}</Link>
+        <Link to="/ai_chat/lp" className="btn btn-border" style={topNavButtonStyle}>
+          {t({ ja: "AIチャットLP", en: "AI Chat LP" })}
+        </Link>
+        <Link to="/ai-novel" className="btn btn-border" style={topNavButtonStyle}>{t({ ja: "AI小説", en: "AI Novel" })}</Link>
+        <Link to="/ai_chat/howto" className="btn btn-border" style={topNavButtonStyle}>
+          {t({ ja: "使い方", en: "How to Use" })}
+        </Link>
         <button
           type="button"
           className="btn btn-border"
+          style={topNavButtonStyle}
           onClick={handleCreateNovelFromConversation}
           disabled={loading || creatingNovelFromChat || messages.length < 2}
         >
@@ -3592,7 +3873,7 @@ export default function AiChatPage() {
             ? t({ ja: "書き出し中...", en: "Exporting..." })
             : t({ ja: "先頭からAI小説化して書き出す", en: "Convert full chat to AI novel" })}
         </button>
-        <Link to="/ai_chat/public" className="btn btn-border">
+        <Link to="/ai_chat/public" className="btn btn-border" style={topNavButtonStyle}>
           {t({ ja: "公開チャット検索", en: "Public Chat Search" })}
         </Link>
       </div>
@@ -3826,7 +4107,7 @@ export default function AiChatPage() {
               </option>
               {visibleSavedCharacters.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {`${c.is_recommended ? "★" : ""}${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
+                  {`${c.is_recommended ? "★" : ""}${formatCharacterNameWithIndex(c)}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                 </option>
               ))}
             </select>
@@ -3871,6 +4152,52 @@ export default function AiChatPage() {
               {selectedCharacter?.is_public
                 ? t({ ja: "このキャラのチャットは公開中です。", en: "This character's chat is public." })
                 : t({ ja: "このキャラのチャットは非公開です。", en: "This character's chat is private." })}
+            </div>
+          )}
+          {saveNameConflict && (
+            <div
+              style={{
+                marginTop: 8,
+                border: "1px solid #d7b97a",
+                background: "#fff8e9",
+                borderRadius: 8,
+                padding: "8px 10px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <div style={{ fontSize: "0.88rem", color: "#6e4b11" }}>
+                {t({
+                  ja: `同名キャラ「${saveNameConflict.name}」が ${saveNameConflict.count} 件あります。上書き保存か、同名で複製保存か選択してください。`,
+                  en: `Same-name character \"${saveNameConflict.name}\" already exists (${saveNameConflict.count}). Choose overwrite or duplicate save.`,
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => saveCharacter("overwrite")}
+                  disabled={loading || augmentLoading}
+                >
+                  {t({ ja: "既存を上書き", en: "Overwrite existing" })}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => saveCharacter("duplicate")}
+                  disabled={loading || augmentLoading}
+                >
+                  {t({ ja: "同名で複製", en: "Duplicate with same name" })}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => setSaveNameConflict(null)}
+                >
+                  {t({ ja: "キャンセル", en: "Cancel" })}
+                </button>
+              </div>
             </div>
           )}
           {selectedCharacterReadonly && (
@@ -4052,7 +4379,7 @@ export default function AiChatPage() {
                 </option>
                 {visibleSavedCharacters.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {`${c.is_recommended ? "★" : ""}${c.name}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
+                    {`${c.is_recommended ? "★" : ""}${formatCharacterNameWithIndex(c)}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
                   </option>
                 ))}
               </select>
@@ -4767,20 +5094,66 @@ export default function AiChatPage() {
           {loading ? t({ ja: "送信中...", en: "Sending..." }) : t({ ja: "送信", en: "Send" })}
         </button>
       </div>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: "0.92rem" }}>
-        <input
-          type="checkbox"
-          checked={autoDialogue}
-          onChange={(e) => setAutoDialogue(e.target.checked)}
-          disabled={loading}
-        />
-        <span>
-          {t({
-            ja: "自動会話モード（キャラ同士の会話を自動で続ける。「停止」「止める」で停止）",
-            en: "Auto dialogue mode (continue character-to-character conversation; type stop to halt)",
-          })}
-        </span>
-      </label>
+      <div style={{ marginTop: 8 }}>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: "0.92rem" }}>
+          <input
+            type="checkbox"
+            checked={autoDialogue}
+            onChange={(e) => setAutoDialogue(e.target.checked)}
+            disabled={loading}
+            style={{ marginTop: 3 }}
+          />
+          <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+            <span>
+              {t({
+                ja: "自動会話モード（キャラ同士の会話を自動で続ける）",
+                en: "Auto dialogue mode (continue character-to-character conversation)",
+              })}
+            </span>
+            <span style={{ fontSize: "0.82rem", color: "var(--muted-text)" }}>
+              {t({
+                ja: "停止したいときはチャットで「停止」または「止める」と発言してください。",
+                en: "To stop, send \"stop\" in chat.",
+              })}
+            </span>
+          </span>
+        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          <span
+            aria-live="polite"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: "0.84rem",
+              color: autoDialogue ? "#17663a" : "var(--muted-text)",
+              fontWeight: autoDialogue ? 700 : 500,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                background: autoDialogue ? "#22c55e" : "#b9c0cc",
+                boxShadow: autoDialogue ? "0 0 0 3px rgba(34, 197, 94, 0.2)" : "none",
+              }}
+            />
+            {autoDialogue
+              ? t({ ja: "自動会話 ON", en: "Auto dialogue ON" })
+              : t({ ja: "自動会話 OFF", en: "Auto dialogue OFF" })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => setAutoDialogue(false)}
+            disabled={!autoDialogue}
+          >
+            {t({ ja: "自動会話を停止", en: "Stop auto dialogue" })}
+          </button>
+        </div>
+      </div>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: "0.92rem" }}>
         <input
           type="checkbox"
@@ -4881,13 +5254,13 @@ export default function AiChatPage() {
 	              })}
 	        </span>
 	      </div>
-	      {autoDialogue && (
-	        <div style={{ marginTop: 4, fontSize: "0.85rem", color: autoContinuing ? "#235a93" : "var(--muted-text)" }}>
-	          {autoContinuing
-	            ? t({ ja: "キャラ会話を自動生成中...", en: "Generating auto character dialogue..." })
-	            : t({ ja: "自動会話が有効です。停止したい場合は「停止」または「止める」を送信してください。", en: "Auto dialogue is active. Send \"stop\" to halt." })}
-	        </div>
-	      )}
+      {autoDialogue && (
+        <div style={{ marginTop: 4, fontSize: "0.85rem", color: autoContinuing ? "#235a93" : "var(--muted-text)" }}>
+          {autoContinuing
+            ? t({ ja: "キャラ会話を自動生成中...", en: "Generating auto character dialogue..." })
+            : t({ ja: "自動会話が有効です。停止するには停止ボタン、またはチャットで「停止」「止める」を発言してください。", en: "Auto dialogue is active. Use the stop button or send \"stop\" in chat." })}
+        </div>
+      )}
 
       <div
         style={{
@@ -4941,6 +5314,22 @@ export default function AiChatPage() {
         >
           {t({ ja: "do（行動）", en: "do (action)" })}
         </button>
+      </div>
+      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={saveCharacter}
+          disabled={loading || augmentLoading}
+        >
+          {t({ ja: "キャラ登録/更新", en: "Save/Update character" })}
+        </button>
+        <span style={{ fontSize: "0.82rem", color: "var(--muted-text)" }}>
+          {t({
+            ja: "保存済みキャラを選択中は会話履歴を自動で継続保存します。",
+            en: "While a saved character is selected, chat history is continuously auto-saved.",
+          })}
+        </span>
       </div>
     </div>
   );
