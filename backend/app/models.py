@@ -1018,6 +1018,15 @@ class AIGuestGenerateUsage(Base):
     last_used_at = Column(DateTime, nullable=True)
 
 
+class AIChatGuestUsage(Base):
+    __tablename__ = "ai_chat_guest_usage"
+
+    guest_id = Column(String(64), primary_key=True)
+    tokens_used = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+
+
 class AIChatAddonPurchase(Base):
     __tablename__ = "ai_chat_addon_purchases"
 

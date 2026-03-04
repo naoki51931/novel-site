@@ -13,6 +13,8 @@ const AI_CHAT_GUEST_DRAFT_KEY = "ai_chat_guest_draft_v1";
 const AI_CHAT_GUEST_DRAFT_BACKUP_HASH_KEY = "ai_chat_guest_draft_backup_hash_v1";
 const AI_CHAT_GUEST_DRAFT_BACKUP_BYTES_KEY = "ai_chat_guest_draft_backup_bytes_v1";
 const AI_CHAT_GUEST_DRAFT_BACKUP_HASHES_KEY = "ai_chat_guest_draft_backup_hashes_v1";
+const AI_CHAT_GUEST_DRAFT_LAST_DOWNLOAD_AT_KEY = "ai_chat_guest_draft_last_download_at_v1";
+const AI_CHAT_GUEST_DRAFT_DOWNLOAD_INTERVAL_MS = 60 * 60 * 1000;
 const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
 const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
@@ -467,8 +469,9 @@ function downloadGuestChatDraftJson(draft, rawText = "") {
   }
 }
 
-function shouldBackupGuestDraft(rawText) {
+function shouldBackupGuestDraft(rawText, options = {}) {
   if (typeof window === "undefined") return { shouldBackup: false, hash: "" };
+  const force = !!options?.force;
   const nextHash = hashGuestDraftText(rawText);
   const nextBytes = getByteLengthUtf8(rawText);
   if (!nextHash) return { shouldBackup: false, hash: "" };
@@ -485,7 +488,7 @@ function shouldBackupGuestDraft(rawText) {
   const hashAlreadySaved = savedHashList.includes(nextHash);
   const isNewerByBytes = nextBytes > prevBytes;
   return {
-    shouldBackup: !hashAlreadySaved && (prevHash !== nextHash || isNewerByBytes),
+    shouldBackup: force || (!hashAlreadySaved && (prevHash !== nextHash || isNewerByBytes)),
     hash: nextHash,
     bytes: nextBytes,
   };
@@ -512,6 +515,19 @@ function markGuestDraftBackedUp(hash, bytes = 0) {
   if (Number.isFinite(Number(bytes)) && Number(bytes) > 0) {
     localStorage.setItem(AI_CHAT_GUEST_DRAFT_BACKUP_BYTES_KEY, String(Number(bytes)));
   }
+}
+
+function shouldBackupGuestDraftByInterval(nowMs = Date.now()) {
+  if (typeof window === "undefined") return false;
+  const lastRaw = localStorage.getItem(AI_CHAT_GUEST_DRAFT_LAST_DOWNLOAD_AT_KEY);
+  const last = Number(lastRaw || 0);
+  if (!Number.isFinite(last) || last <= 0) return true;
+  return (nowMs - last) >= AI_CHAT_GUEST_DRAFT_DOWNLOAD_INTERVAL_MS;
+}
+
+function markGuestDraftDownloadTime(nowMs = Date.now()) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(AI_CHAT_GUEST_DRAFT_LAST_DOWNLOAD_AT_KEY, String(nowMs));
 }
 
 function messageDiffSignature(m) {
@@ -2049,13 +2065,11 @@ export default function AiChatPage() {
 
   const loadChatAccess = async () => {
     const token = getStoredAuthToken();
-    if (!token) {
-      setChatAccess(null);
-      return;
-    }
     try {
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch("/api/ai/chat/access", {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return;
@@ -2420,9 +2434,11 @@ export default function AiChatPage() {
     if (!importMessages.length) return;
     if (!guestDraftBackupDoneRef.current && typeof window !== "undefined") {
       const rawText = localStorage.getItem(AI_CHAT_GUEST_DRAFT_KEY) || "";
-      const { shouldBackup, hash, bytes } = shouldBackupGuestDraft(rawText);
+      const forceByInterval = shouldBackupGuestDraftByInterval();
+      const { shouldBackup, hash, bytes } = shouldBackupGuestDraft(rawText, { force: forceByInterval });
       if (shouldBackup && downloadGuestChatDraftJson(draft, rawText)) {
         markGuestDraftBackedUp(hash, bytes);
+        markGuestDraftDownloadTime();
         guestDraftBackupDoneRef.current = true;
       }
     }
@@ -2556,6 +2572,29 @@ export default function AiChatPage() {
       }
     })();
   }, [authToken, appearance, mainSpeechGender, personality, t]);
+
+  useEffect(() => {
+    if (!authToken || typeof window === "undefined") return undefined;
+    const backupGuestDraftHourly = () => {
+      const draft = loadGuestChatDraft();
+      const importMessages = buildGuestImportMessages(draft?.messages);
+      if (!importMessages.length) return;
+      const rawText = localStorage.getItem(AI_CHAT_GUEST_DRAFT_KEY) || "";
+      const forceByInterval = shouldBackupGuestDraftByInterval();
+      const { shouldBackup, hash, bytes } = shouldBackupGuestDraft(rawText, { force: forceByInterval });
+      if (!shouldBackup) return;
+      if (!downloadGuestChatDraftJson(draft, rawText)) return;
+      if (!forceByInterval) {
+        markGuestDraftBackedUp(hash, bytes);
+      } else {
+        markGuestDraftBackedUp(hash, Math.max(0, Number(bytes) || 0));
+      }
+      markGuestDraftDownloadTime();
+    };
+    backupGuestDraftHourly();
+    const timer = window.setInterval(backupGuestDraftHourly, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [authToken]);
 
   const uploadCharacterImage = async (characterId, file, token) => {
     if (!characterId || !file || !token) return null;
@@ -3897,15 +3936,35 @@ export default function AiChatPage() {
           <div style={{ fontSize: "0.9rem", marginBottom: 6 }}>
             {t({ ja: "AIチャット利用量", en: "AI chat usage" })}: {Number(chatAccess.used_tokens || 0).toLocaleString()} / {Number(chatAccess.allowed_tokens || 0).toLocaleString()} tokens
           </div>
-          {chatAccess.show_premium_prompt && (
-            <div style={{ fontSize: "0.9rem", color: "#5b4a1f", marginBottom: 8 }}>
+          {chatAccess.is_guest && (
+            <div style={{ fontSize: "0.9rem", color: "#4b5569", marginBottom: 8 }}>
               {t({
-                ja: `無料枠到達以降は、まずプレミアム登録が必要です。プレミアム登録後は追加で${Number(chatAccess.block_tokens || 0).toLocaleString()}トークンの利用枠が付与されます。`,
-                en: `After the free quota, premium registration is required first. After premium, an additional ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens will be granted.`,
+                ja: "ゲスト利用はクッキー/セッションで管理され、上限は200万トークンです。",
+                en: "Guest usage is tracked by cookie/session with a 2,000,000 token cap.",
               })}
             </div>
           )}
-          {chatAccess.show_premium_prompt && !chatAccess.demo_bypass && (
+          {chatAccess.show_premium_prompt && (
+            <div style={{ fontSize: "0.9rem", color: "#5b4a1f", marginBottom: 8 }}>
+              {chatAccess.is_guest
+                ? t({
+                    ja: "ゲスト上限に達しました。ログインすると継続利用できます。",
+                    en: "Guest cap reached. Log in to continue.",
+                  })
+                : t({
+                    ja: `無料枠到達以降は、まずプレミアム登録が必要です。プレミアム登録後は追加で${Number(chatAccess.block_tokens || 0).toLocaleString()}トークンの利用枠が付与されます。`,
+                    en: `After the free quota, premium registration is required first. After premium, an additional ${Number(chatAccess.block_tokens || 0).toLocaleString()} tokens will be granted.`,
+                  })}
+            </div>
+          )}
+          {chatAccess.show_premium_prompt && chatAccess.is_guest && (
+            <div style={{ marginBottom: 8 }}>
+              <Link to="/login" className="btn btn-border">
+                {t({ ja: "ログインする", en: "Log In" })}
+              </Link>
+            </div>
+          )}
+          {chatAccess.show_premium_prompt && !chatAccess.demo_bypass && !chatAccess.is_guest && (
             <div style={{ marginBottom: 8 }}>
               <Link to="/premium" className="btn btn-border">
                 {t({ ja: "プレミアム登録へ", en: "Go Premium" })}

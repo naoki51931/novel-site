@@ -4,6 +4,13 @@ import { useI18n } from "../lib/i18n";
 export default function AiChatLPPage() {
   const { t } = useI18n();
   const aiChatCtaPath = "/ai_chat?ref=ai_chat_lp";
+  const subCtaStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 50,
+    textAlign: "center",
+  };
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: "20px 8px 40px" }}>
@@ -53,10 +60,10 @@ export default function AiChatLPPage() {
           >
             {t({ ja: "今すぐAIチャットで遊ぶ", en: "Start Chat Now" })}
           </Link>
-          <Link to="/ai_chat/howto" className="btn btn-border">
+          <Link to="/ai_chat/howto" className="btn btn-border" style={subCtaStyle}>
             {t({ ja: "使い方を見る", en: "View How-To" })}
           </Link>
-          <Link to="/ai_chat/public" className="btn btn-border">
+          <Link to="/ai_chat/public" className="btn btn-border" style={subCtaStyle}>
             {t({ ja: "公開チャットを見る", en: "Browse Public Chats" })}
           </Link>
         </div>

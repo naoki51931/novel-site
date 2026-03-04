@@ -1484,6 +1484,7 @@ DAILY_TRANSLATION_BOT_MAX_EPISODES = max(
 DAILY_TRANSLATION_BOT_ONLY_PUBLIC = os.getenv("DAILY_TRANSLATION_BOT_ONLY_PUBLIC", "0") == "1"
 DAILY_TRANSLATION_BOT_SITE_KEY = (os.getenv("DAILY_TRANSLATION_BOT_SITE_KEY", "") or "").strip().lower() or None
 AI_CHAT_FREE_TOKENS = int(os.getenv("AI_CHAT_FREE_TOKENS", "2000000"))
+AI_CHAT_GUEST_TOKENS = int(os.getenv("AI_CHAT_GUEST_TOKENS", "2000000"))
 AI_CHAT_BLOCK_TOKENS = int(os.getenv("AI_CHAT_BLOCK_TOKENS", "2000000"))
 AI_CHAT_BLOCK_PRICE_YEN = int(os.getenv("AI_CHAT_BLOCK_PRICE_YEN", "1000"))
 AI_CHAT_PREMIUM_INCLUDED_BLOCKS = max(0, int(os.getenv("AI_CHAT_PREMIUM_INCLUDED_BLOCKS", "1") or 1))
@@ -3959,21 +3960,41 @@ def _ensure_ai_chat_access(user: models.User) -> None:
     )
 
 
+def _ensure_ai_chat_guest_access(usage: models.AIChatGuestUsage) -> None:
+    used = max(0, int(getattr(usage, "tokens_used", 0) or 0))
+    allowed = max(0, int(AI_CHAT_GUEST_TOKENS or 0))
+    if used < allowed:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail=(
+            f"ゲスト利用の上限（{allowed:,}トークン）に達しました。"
+            "継続するにはログインしてください。"
+        ),
+    )
+
+
 def _record_ai_chat_tokens(
     db: Session,
     user: models.User | None,
+    guest_usage: models.AIChatGuestUsage | None,
     tokens_used: int | None,
 ) -> None:
-    if not user:
-        return
     if tokens_used is None:
         return
     n = int(tokens_used or 0)
     if n <= 0:
         return
-    user.ai_chat_tokens_used = int(getattr(user, "ai_chat_tokens_used", 0) or 0) + n
-    db.add(user)
-    db.commit()
+    if user is not None:
+        user.ai_chat_tokens_used = int(getattr(user, "ai_chat_tokens_used", 0) or 0) + n
+        db.add(user)
+        db.commit()
+        return
+    if guest_usage is not None:
+        guest_usage.tokens_used = int(getattr(guest_usage, "tokens_used", 0) or 0) + n
+        guest_usage.last_used_at = datetime.utcnow()
+        db.add(guest_usage)
+        db.commit()
 
 
 def get_optional_current_user(request: Request, db: Session) -> models.User | None:
@@ -3996,12 +4017,44 @@ def get_optional_current_user(request: Request, db: Session) -> models.User | No
     return user
 
 
+def _get_client_ip_for_guest(request: Request) -> str:
+    xff = (request.headers.get("x-forwarded-for") or "").strip()
+    if xff:
+        for part in xff.split(","):
+            candidate = (part or "").strip()
+            if candidate and candidate.lower() != "unknown":
+                return candidate[:64]
+    xri = (request.headers.get("x-real-ip") or "").strip()
+    if xri and xri.lower() != "unknown":
+        return xri[:64]
+    client = getattr(request, "client", None)
+    host = str(getattr(client, "host", "") or "").strip()
+    if host and host.lower() != "unknown":
+        return host[:64]
+    return ""
+
+
 def get_or_set_ai_guest_id(request: Request, response: Response) -> str:
+    client_ip = _get_client_ip_for_guest(request)
+    if client_ip:
+        digest = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()[:40]
+        guest_id = f"gip_{digest}"
+        response.set_cookie(
+            key=AI_GUEST_COOKIE_NAME,
+            value=guest_id,
+            max_age=60 * 60 * 24 * 365,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            path="/",
+        )
+        return guest_id
+
     raw = request.cookies.get(AI_GUEST_COOKIE_NAME)
     if isinstance(raw, str):
-        guest_id = raw.strip()
-        if 1 <= len(guest_id) <= 64 and re.fullmatch(r"[A-Za-z0-9_-]+", guest_id):
-            return guest_id
+        cookie_guest_id = raw.strip()
+        if 1 <= len(cookie_guest_id) <= 64 and re.fullmatch(r"[A-Za-z0-9_-]+", cookie_guest_id):
+            return cookie_guest_id
 
     guest_id = secrets.token_urlsafe(24)[:64]
     response.set_cookie(
@@ -4028,6 +4081,21 @@ def get_guest_ai_usage(db: Session, guest_id: str) -> models.AIGuestGenerateUsag
         db.commit()
         db.refresh(usage)
     return usage
+
+
+def get_ai_chat_guest_usage(db: Session, guest_id: str) -> models.AIChatGuestUsage:
+    usage = (
+        db.query(models.AIChatGuestUsage)
+        .filter(models.AIChatGuestUsage.guest_id == guest_id)
+        .first()
+    )
+    if not usage:
+        usage = models.AIChatGuestUsage(guest_id=guest_id, tokens_used=0)
+        db.add(usage)
+        db.commit()
+        db.refresh(usage)
+    return usage
+
 
 def require_guest_ai_quota(db: Session, guest_id: str) -> models.AIGuestGenerateUsage:
     usage = get_guest_ai_usage(db, guest_id)
@@ -4149,6 +4217,7 @@ class AINovelAddonCheckoutRequest(BaseModel):
 
 
 class AIChatAccessStatusResponse(BaseModel):
+    is_guest: bool
     is_premium: bool
     demo_bypass: bool
     used_tokens: int
@@ -6177,9 +6246,32 @@ def memberships_checkout(
 @app.get("/api/ai/chat/access", response_model=AIChatAccessStatusResponse)
 def get_ai_chat_access_status(
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
-    user = require_current_user(request, db)
+    user = get_optional_current_user(request, db)
+    if user is None:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        guest_usage = get_ai_chat_guest_usage(db, guest_id)
+        used = max(0, int(getattr(guest_usage, "tokens_used", 0) or 0))
+        allowed = max(0, int(AI_CHAT_GUEST_TOKENS or 0))
+        needs_upgrade = used >= allowed
+        return AIChatAccessStatusResponse(
+            is_guest=True,
+            is_premium=False,
+            demo_bypass=False,
+            used_tokens=used,
+            free_tokens=allowed,
+            block_tokens=max(1, AI_CHAT_BLOCK_TOKENS),
+            block_price_yen=max(1, AI_CHAT_BLOCK_PRICE_YEN),
+            paid_blocks=0,
+            allowed_tokens=allowed,
+            needs_upgrade=needs_upgrade,
+            show_premium_prompt=needs_upgrade,
+            show_addon_prompt=False,
+            premium_included_blocks=0,
+        )
+
     used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
     paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
     allowed = _ai_chat_allowed_tokens(user)
@@ -6189,6 +6281,7 @@ def get_ai_chat_access_status(
     show_premium_prompt = (not is_premium) and used >= max(0, AI_CHAT_FREE_TOKENS)
     show_addon_prompt = is_premium and used >= allowed
     return AIChatAccessStatusResponse(
+        is_guest=False,
         is_premium=is_premium,
         demo_bypass=demo_bypass,
         used_tokens=used,
@@ -10605,13 +10698,19 @@ async def backfill_ai_memory_from_logs(
 async def ai_chat_next_user_lines(
     req: AIChatNextLineSuggestRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     user: models.User | None = None
     character: models.AIChatCharacter | None = None
+    guest_usage: models.AIChatGuestUsage | None = None
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
         _ensure_ai_chat_access(viewer)
+    else:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        guest_usage = get_ai_chat_guest_usage(db, guest_id)
+        _ensure_ai_chat_guest_access(guest_usage)
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = _find_accessible_ai_chat_character(
@@ -10622,6 +10721,7 @@ async def ai_chat_next_user_lines(
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
         viewer = user
+        guest_usage = None
 
     count = max(1, min(5, int(getattr(req, "suggestions_count", 3) or 3)))
     character_name = (req.character_name or "").strip()[:80]
@@ -10721,7 +10821,7 @@ async def ai_chat_next_user_lines(
             if len(suggestions) >= count:
                 break
 
-    _record_ai_chat_tokens(db, viewer, tokens)
+    _record_ai_chat_tokens(db, viewer, guest_usage, tokens)
     return AIChatNextLineSuggestResponse(
         character_name=character_name or None,
         suggestions=suggestions[:count],
@@ -11226,6 +11326,7 @@ async def ai_chat_generate_image(
 async def ai_chat(
     req: AIChatRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     message = (req.message or "").strip()
@@ -11234,9 +11335,14 @@ async def ai_chat(
 
     user: models.User | None = None
     character: models.AIChatCharacter | None = None
+    guest_usage: models.AIChatGuestUsage | None = None
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
         _ensure_ai_chat_access(viewer)
+    else:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        guest_usage = get_ai_chat_guest_usage(db, guest_id)
+        _ensure_ai_chat_guest_access(guest_usage)
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = _find_accessible_ai_chat_character(
@@ -11247,6 +11353,7 @@ async def ai_chat(
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
         viewer = user
+        guest_usage = None
 
     character_name = (req.character_name or "").strip()[:80]
     personality = (req.personality or "").strip()[:4000]
@@ -11549,7 +11656,7 @@ async def ai_chat(
         except Exception as e:
             logger.warning("memory sync failed user=%s err=%r", getattr(viewer, "id", None), e)
 
-    _record_ai_chat_tokens(db, viewer, total_tokens_used)
+    _record_ai_chat_tokens(db, viewer, guest_usage, total_tokens_used)
 
     return AIChatResponse(
         reply=reply,
@@ -11566,13 +11673,19 @@ async def ai_chat(
 async def ai_chat_auto_continue(
     req: AIChatAutoContinueRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     user: models.User | None = None
     character: models.AIChatCharacter | None = None
+    guest_usage: models.AIChatGuestUsage | None = None
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
         _ensure_ai_chat_access(viewer)
+    else:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        guest_usage = get_ai_chat_guest_usage(db, guest_id)
+        _ensure_ai_chat_guest_access(guest_usage)
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = _find_accessible_ai_chat_character(
@@ -11583,6 +11696,7 @@ async def ai_chat_auto_continue(
         if not character:
             raise HTTPException(status_code=404, detail="キャラが見つかりません。")
         viewer = user
+        guest_usage = None
 
     character_name = (req.character_name or "").strip()[:80]
     personality = (req.personality or "").strip()[:4000]
@@ -11717,7 +11831,7 @@ async def ai_chat_auto_continue(
             db.add(character)
         db.commit()
 
-    _record_ai_chat_tokens(db, viewer, tokens)
+    _record_ai_chat_tokens(db, viewer, guest_usage, tokens)
 
     return AIChatResponse(
         reply=reply,
