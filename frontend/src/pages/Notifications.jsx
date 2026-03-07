@@ -11,6 +11,26 @@ export default function Notifications() {
   const [message, setMessage] = useState("");
   const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(true);
   const [notifications, setNotifications] = useState([]);
+  const [activeFilter, setActiveFilter] = useState("all");
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [counts, setCounts] = useState({
+    all: 0,
+    reaction: 0,
+    follow: 0,
+    update: 0,
+    system: 0,
+  });
+  const [unreadCountsByGroup, setUnreadCountsByGroup] = useState({
+    all: 0,
+    reaction: 0,
+    follow: 0,
+    update: 0,
+    system: 0,
+  });
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -21,6 +41,8 @@ export default function Notifications() {
 
     const load = async () => {
       try {
+        setLoading(true);
+        setError("");
         const res = await fetch("/api/users/me", {
           headers: { Authorization: "Bearer " + token },
         });
@@ -38,10 +60,26 @@ export default function Notifications() {
         setEmailNotificationsEnabled(
           profile.email_notifications_enabled !== false
         );
+        const params = new URLSearchParams();
+        if (activeFilter !== "all") params.set("group", activeFilter);
+        if (unreadOnly) params.set("unread_only", "true");
+        params.set("limit", String(pageSize));
+        params.set("offset", String(page * pageSize));
+        const notificationsPath = params.toString()
+          ? `/api/notifications?${params.toString()}`
+          : "/api/notifications";
 
-        const resNotifications = await fetch("/api/notifications", {
-          headers: { Authorization: "Bearer " + token },
-        });
+        const [resNotifications, resCounts, resUnreadCounts] = await Promise.all([
+          fetch(notificationsPath, {
+            headers: { Authorization: "Bearer " + token },
+          }),
+          fetch("/api/notifications/counts", {
+            headers: { Authorization: "Bearer " + token },
+          }),
+          fetch("/api/notifications/counts?unread_only=true", {
+            headers: { Authorization: "Bearer " + token },
+          }),
+        ]);
         if (resNotifications.status === 401) {
           navigate("/login");
           return;
@@ -54,6 +92,23 @@ export default function Notifications() {
         }
         const items = await resNotifications.json();
         setNotifications(items || []);
+        const countsData = await resCounts.json().catch(() => ({}));
+        const unreadCountsData = await resUnreadCounts.json().catch(() => ({}));
+        setCounts({
+          all: Number(countsData?.all || 0),
+          reaction: Number(countsData?.reaction || 0),
+          follow: Number(countsData?.follow || 0),
+          update: Number(countsData?.update || 0),
+          system: Number(countsData?.system || 0),
+        });
+        setUnreadCountsByGroup({
+          all: Number(unreadCountsData?.all || 0),
+          reaction: Number(unreadCountsData?.reaction || 0),
+          follow: Number(unreadCountsData?.follow || 0),
+          update: Number(unreadCountsData?.update || 0),
+          system: Number(unreadCountsData?.system || 0),
+        });
+        setUnreadCount(Number(unreadCountsData?.all || 0));
       } catch (e) {
         setError(
           e.message || t({ ja: "通知の取得に失敗しました", en: "Failed to load notifications." })
@@ -64,7 +119,7 @@ export default function Notifications() {
     };
 
     load();
-  }, [navigate]);
+  }, [navigate, activeFilter, unreadOnly, page, pageSize, reloadTick, t]);
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -122,6 +177,7 @@ export default function Notifications() {
           n.id === notificationId ? { ...n, is_read: true } : n
         )
       );
+      setReloadTick((v) => v + 1);
     } catch (e) {
       setError(e.message || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
     }
@@ -139,7 +195,7 @@ export default function Notifications() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
       }
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      setReloadTick((v) => v + 1);
     } catch (e) {
       setError(e.message || t({ ja: "既読に失敗しました", en: "Failed to mark as read." }));
     }
@@ -157,17 +213,99 @@ export default function Notifications() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || t({ ja: "削除に失敗しました", en: "Failed to delete." }));
       }
-      setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+      setReloadTick((v) => v + 1);
     } catch (e) {
       setError(e.message || t({ ja: "削除に失敗しました", en: "Failed to delete." }));
     }
+  };
+
+  const filterOptions = [
+    { key: "all", label: t({ ja: "すべて", en: "All" }) },
+    { key: "reaction", label: t({ ja: "反応", en: "Reactions" }) },
+    { key: "follow", label: t({ ja: "フォロー", en: "Follow" }) },
+    { key: "update", label: t({ ja: "作品更新", en: "Updates" }) },
+  ];
+  const visibleTotal = unreadOnly
+    ? Number(unreadCountsByGroup[activeFilter] || 0)
+    : Number(counts[activeFilter] || 0);
+  const maxPage = Math.max(0, Math.ceil(visibleTotal / Math.max(1, pageSize)) - 1);
+  const canPrev = page > 0;
+  const canNext = page < maxPage;
+  const typeLabelMap = {
+    user_follow: t({ ja: "フォロー", en: "Follow" }),
+    followed_author_new_novel: t({ ja: "新作公開", en: "New novel" }),
+    followed_author_new_episode: t({ ja: "新話公開", en: "New episode" }),
+    tag_follow_new: t({ ja: "タグ新着", en: "Tag update" }),
+    novel_like: t({ ja: "いいね", en: "Like" }),
+    episode_like: t({ ja: "いいね", en: "Like" }),
+    novel_comment: t({ ja: "コメント", en: "Comment" }),
+    episode_comment: t({ ja: "コメント", en: "Comment" }),
+    novel_favorite: t({ ja: "ブックマーク", en: "Bookmark" }),
+    favorite_update: t({ ja: "更新", en: "Update" }),
+    dm_message: t({ ja: "DM", en: "DM" }),
+    recommended_novel_new: t({ ja: "おすすめ", en: "Recommended" }),
+    ai_generation_done: t({ ja: "AI生成完了", en: "AI done" }),
+    ai_generation_failed: t({ ja: "AI生成失敗", en: "AI failed" }),
+    support_paid: t({ ja: "支援", en: "Support" }),
+    membership_paid: t({ ja: "月額支援", en: "Membership" }),
+    multilingual_ready: t({ ja: "翻訳対応", en: "Translation" }),
+  };
+  const getTypeLabel = (type) => {
+    const key = String(type || "").trim();
+    if (!key) return t({ ja: "通知", en: "Notice" });
+    return typeLabelMap[key] || key;
+  };
+  const resolveNotificationLink = (n) => {
+    const explicit = String(n?.link_url || "").trim();
+    if (explicit) return explicit;
+    const type = String(n?.type || "").trim();
+    if (type === "user_follow" && n?.actor_username) {
+      return `/users/${encodeURIComponent(n.actor_username)}`;
+    }
+    if (type === "dm_message") {
+      return "/mypage";
+    }
+    if (
+      type === "followed_author_new_novel" ||
+      type === "followed_author_new_episode" ||
+      type === "tag_follow_new" ||
+      type === "favorite_update" ||
+      type === "recommended_novel_new"
+    ) {
+      return "/";
+    }
+    return "/notifications";
+  };
+  const getBodyText = (n) => {
+    const raw = String(n?.body || "").trim();
+    if (raw) return raw;
+    return t({ ja: "詳細は通知リンクから確認できます。", en: "Open the notification link for details." });
   };
 
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
-      <h2>{t({ ja: "通知センター", en: "Notifications" })}</h2>
+      <h2 style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        {t({ ja: "通知センター", en: "Notifications" })}
+        {unreadCount > 0 && (
+          <span
+            style={{
+              display: "inline-block",
+              minWidth: 22,
+              textAlign: "center",
+              padding: "2px 8px",
+              borderRadius: "999px",
+              backgroundColor: "var(--accent)",
+              color: "var(--on-accent)",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            {unreadCount}
+          </span>
+        )}
+      </h2>
 
       <section
         style={{
@@ -180,9 +318,81 @@ export default function Notifications() {
         <h3 style={{ margin: 0, marginBottom: 8 }}>
           {t({ ja: "サイト内通知", en: "Site notifications" })}
         </h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {filterOptions.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className="btn btn-border"
+              onClick={() => {
+                setActiveFilter(option.key);
+                setPage(0);
+              }}
+              disabled={activeFilter === option.key}
+            style={activeFilter === option.key ? { opacity: 0.7 } : undefined}
+          >
+              {option.label} ({counts[option.key] ?? 0})
+            </button>
+          ))}
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => {
+              setUnreadOnly((prev) => !prev);
+              setPage(0);
+            }}
+            style={unreadOnly ? { borderColor: "var(--cta)", color: "var(--cta)" } : undefined}
+          >
+            {unreadOnly
+              ? t({ ja: "未読のみ: ON", en: "Unread only: ON" })
+              : t({ ja: "未読のみ: OFF", en: "Unread only: OFF" })}
+          </button>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
+            <span style={{ fontSize: 12, color: "var(--muted-text)" }}>
+              {t({ ja: "件数", en: "Per page" })}
+            </span>
+            <select
+              className="search-input"
+              value={pageSize}
+              onChange={(e) => {
+                const next = Number(e.target.value || 50);
+                setPageSize(next);
+                setPage(0);
+              }}
+              style={{ width: 88, minWidth: 88 }}
+            >
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={!canPrev}
+          >
+            {t({ ja: "前へ", en: "Prev" })}
+          </button>
+          <span style={{ fontSize: 12, color: "var(--muted-text)" }}>
+            {t({ ja: "{{current}} / {{total}} ページ", en: "Page {{current}} / {{total}}" }, { current: page + 1, total: maxPage + 1 })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => setPage((p) => p + 1)}
+            disabled={!canNext}
+          >
+            {t({ ja: "次へ", en: "Next" })}
+          </button>
+        </div>
         {notifications.length === 0 ? (
           <p style={{ margin: 0, color: "var(--muted-text)" }}>
-            {t({ ja: "まだ通知はありません。", en: "No notifications yet." })}
+            {activeFilter === "all"
+              ? t({ ja: "まだ通知はありません。", en: "No notifications yet." })
+              : t({ ja: "この条件の通知はありません。", en: "No notifications for this filter." })}
           </p>
         ) : (
           <div>
@@ -229,11 +439,20 @@ export default function Notifications() {
                           {t({ ja: "未読", en: "Unread" })}
                         </span>
                       )}
-                      {n.link_url ? (
-                        <Link to={n.link_url}>{n.title}</Link>
-                      ) : (
-                        n.title
-                      )}
+                      <span
+                        style={{
+                          display: "inline-block",
+                          marginRight: 6,
+                          padding: "2px 6px",
+                          borderRadius: 999,
+                          border: "1px solid var(--border)",
+                          color: "var(--muted-text)",
+                          fontSize: 11,
+                        }}
+                      >
+                        {getTypeLabel(n.type)}
+                      </span>
+                      <Link to={resolveNotificationLink(n)}>{n.title}</Link>
                     </div>
                     <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                       {n.created_at
@@ -243,11 +462,14 @@ export default function Notifications() {
                         : ""}
                     </div>
                   </div>
-                  {n.body && (
-                    <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>
-                      {n.body}
-                    </p>
-                  )}
+                  <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>
+                    {n.actor_username ? (
+                      <>
+                        <strong>@{n.actor_username}</strong>{" "}
+                      </>
+                    ) : null}
+                    {getBodyText(n)}
+                  </p>
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                     {!n.is_read && (
                       <button

@@ -3,6 +3,32 @@ import { Link, useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 
+function SparkBars({ data, width = 220, height = 42, color = "#2f6f6d" }) {
+  const max = useMemo(() => Math.max(...(Array.isArray(data) ? data : [0]), 1), [data]);
+  const list = Array.isArray(data) && data.length ? data : [0];
+  const barWidth = width / list.length;
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+      {list.map((value, index) => {
+        const h = Math.max(1, (Number(value || 0) / max) * (height - 6));
+        const x = index * barWidth + 0.5;
+        const y = height - h - 1;
+        return (
+          <rect
+            key={`${index}-${value}`}
+            x={x}
+            y={y}
+            width={Math.max(1, barWidth - 1)}
+            height={h}
+            fill={color}
+            rx={1}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function AdminUsers() {
   const navigate = useNavigate();
   const { t, lang } = useI18n();
@@ -16,6 +42,11 @@ export default function AdminUsers() {
   const [novelsError, setNovelsError] = useState({});
   const [mailTestRunning, setMailTestRunning] = useState(false);
   const [mailTestMessage, setMailTestMessage] = useState("");
+  const [tokenDays, setTokenDays] = useState(30);
+  const [tokenLimit, setTokenLimit] = useState(20);
+  const [tokenTimeline, setTokenTimeline] = useState(null);
+  const [tokenLoading, setTokenLoading] = useState(false);
+  const [tokenError, setTokenError] = useState("");
 
   const loadUsers = async () => {
     try {
@@ -41,6 +72,33 @@ export default function AdminUsers() {
   useEffect(() => {
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    const loadTokenTimeline = async () => {
+      try {
+        setTokenLoading(true);
+        setTokenError("");
+        await apiFetch("/api/admin/auth/me", { credentials: "include" });
+        const data = await apiFetch(
+          `/api/admin/ai-chat/token-consumers/timeline?days=${encodeURIComponent(tokenDays)}&limit=${encodeURIComponent(tokenLimit)}`,
+          { credentials: "include" }
+        );
+        setTokenTimeline(data || null);
+      } catch (e) {
+        if (String(e?.message || "").includes("401")) {
+          navigate("/admin/login", { replace: true });
+          return;
+        }
+        setTokenError(
+          e.message ||
+            t({ ja: "AIチャットトークン集計の取得に失敗しました。", en: "Failed to load AI chat token timeline." })
+        );
+      } finally {
+        setTokenLoading(false);
+      }
+    };
+    loadTokenTimeline();
+  }, [navigate, t, tokenDays, tokenLimit]);
 
   const handleToggleNovels = async (userId) => {
     setExpandedUsers((prev) => {
@@ -150,6 +208,105 @@ export default function AdminUsers() {
         </button>
         {mailTestMessage && <span style={{ fontSize: 13, color: "#0a0" }}>{mailTestMessage}</span>}
       </div>
+
+      <section
+        style={{
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 14,
+          marginBottom: 16,
+          background: "var(--surface)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <h3 style={{ margin: 0 }}>{t({ ja: "AIチャット トークン消費者（時系列）", en: "AI Chat Token Consumers (Timeline)" })}</h3>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 13 }}>
+              {t({ ja: "期間", en: "Range" })}
+              <select value={tokenDays} onChange={(e) => setTokenDays(Number(e.target.value))} style={{ marginLeft: 6 }}>
+                <option value={7}>7d</option>
+                <option value={30}>30d</option>
+                <option value={90}>90d</option>
+                <option value={180}>180d</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 13 }}>
+              {t({ ja: "上位", en: "Top" })}
+              <select value={tokenLimit} onChange={(e) => setTokenLimit(Number(e.target.value))} style={{ marginLeft: 6 }}>
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {tokenLoading && <div style={{ marginTop: 10, fontSize: 13 }}>{t({ ja: "集計中...", en: "Loading timeline..." })}</div>}
+        {tokenError && <div style={{ marginTop: 10, fontSize: 13, color: "red" }}>{tokenError}</div>}
+
+        {!tokenLoading && !tokenError && tokenTimeline && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "var(--muted-text)", marginBottom: 8 }}>
+              {t(
+                {
+                  ja: "{{start}} 〜 {{end}} / 期間合計 {{total}} tokens",
+                  en: "{{start}} to {{end}} / Range total {{total}} tokens",
+                },
+                {
+                  start: tokenTimeline.start_date,
+                  end: tokenTimeline.end_date,
+                  total: Number(tokenTimeline.total_range_tokens_used || 0).toLocaleString(lang === "en" ? "en-US" : "ja-JP"),
+                }
+              )}
+            </div>
+            {Array.isArray(tokenTimeline.consumers) && tokenTimeline.consumers.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {tokenTimeline.consumers.map((item) => (
+                  <div
+                    key={item.user_id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "minmax(180px, 1fr) auto",
+                      gap: 10,
+                      alignItems: "center",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: 10,
+                      background: "var(--surface-2)",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600 }}>
+                        {item.username} (ID: {item.user_id})
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
+                        {t(
+                          {
+                            ja: "期間 {{range}} / 累計 {{current}} / イベント {{events}}",
+                            en: "Range {{range}} / Lifetime {{current}} / Events {{events}}",
+                          },
+                          {
+                            range: Number(item.range_tokens_used || 0).toLocaleString(lang === "en" ? "en-US" : "ja-JP"),
+                            current: Number(item.current_tokens_used || 0).toLocaleString(lang === "en" ? "en-US" : "ja-JP"),
+                            events: Number(item.events || 0).toLocaleString(lang === "en" ? "en-US" : "ja-JP"),
+                          }
+                        )}
+                      </div>
+                    </div>
+                    <SparkBars
+                      data={(Array.isArray(item.days) ? item.days : []).map((d) => Number(d?.tokens_used || 0))}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: "var(--muted-text)" }}>
+                {t({ ja: "該当期間のデータがありません。", en: "No data for this period." })}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {error && <div style={{ color: "red", marginBottom: 12 }}>{error}</div>}
       {loading && <div>{t({ ja: "読み込み中...", en: "Loading..." })}</div>}

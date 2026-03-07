@@ -42,6 +42,9 @@ import Contact from "./pages/Contact";
 import Board from "./pages/Board";
 import TagPage from "./pages/TagPage";
 import AllSites from "./pages/AllSites";
+import FanficPage from "./pages/FanficPage";
+import SeriesPage from "./pages/SeriesPage";
+import DiscoverPage from "./pages/DiscoverPage";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBell } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
@@ -83,6 +86,8 @@ const NEXT_LANGUAGE_NAME_LOCALIZED = {
 };
 const HEADER_I18N = {
   home: { ja: "トップ", en: "Home", "zh-cn": "首页", "zh-tw": "首頁", ko: "홈" },
+  ranking: { ja: "ランキング", en: "Ranking", "zh-cn": "排行榜", "zh-tw": "排行榜", ko: "랭킹" },
+  discover: { ja: "発見", en: "Discover", "zh-cn": "发现", "zh-tw": "發現", ko: "발견" },
   siteSwitch: {
     ja: "ジャンル切替",
     en: "Switch Genre",
@@ -101,6 +106,7 @@ const HEADER_I18N = {
   aiChat: { ja: "AIチャット", en: "AI Chat", "zh-cn": "AI聊天", "zh-tw": "AI聊天", ko: "AI 채팅" },
   board: { ja: "掲示板", en: "Board", "zh-cn": "论坛", "zh-tw": "論壇", ko: "게시판" },
   premium: { ja: "プレミアム", en: "Premium", "zh-cn": "高级会员", "zh-tw": "高級會員", ko: "프리미엄" },
+  fanficTop: { ja: "二次創作", en: "Fanfic", "zh-cn": "同人", "zh-tw": "同人", ko: "팬픽" },
   myPage: { ja: "マイページ", en: "My Page", "zh-cn": "我的主页", "zh-tw": "我的主頁", ko: "마이페이지" },
   login: { ja: "ログイン", en: "Login", "zh-cn": "登录", "zh-tw": "登入", ko: "로그인" },
   register: { ja: "新規登録", en: "Register", "zh-cn": "注册", "zh-tw": "註冊", ko: "회원가입" },
@@ -193,6 +199,9 @@ export default function App() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("search_exclude_query") || "";
   });
+  const [sort, setSort] = useState("new");
+  const [ageLimit, setAgeLimit] = useState("");
+  const [creativeType, setCreativeType] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [registerVisited, setRegisterVisited] = useState(() => {
@@ -321,12 +330,11 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (params.has("q")) {
-      setQuery(params.get("q") ?? "");
-    }
-    if (params.has("exclude")) {
-      setExcludeQuery(params.get("exclude") ?? "");
-    }
+    setQuery(params.get("q") ?? "");
+    setExcludeQuery(params.get("exclude") ?? "");
+    setSort(params.get("sort") || "new");
+    setAgeLimit(params.get("age_limit") || "");
+    setCreativeType(params.get("creative_type") || "");
   }, [location.search]);
 
   useEffect(() => {
@@ -576,6 +584,12 @@ export default function App() {
           <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
             {t(HEADER_I18N.home)}
           </Link>
+          <Link to="/ranking" className="nav-link" onClick={() => setMenuOpen(false)}>
+            {t(HEADER_I18N.ranking)}
+          </Link>
+          <Link to="/discover" className="nav-link" onClick={() => setMenuOpen(false)}>
+            {t(HEADER_I18N.discover)}
+          </Link>
           <Link
             to="/all"
             className="nav-link"
@@ -637,6 +651,13 @@ export default function App() {
             onClick={() => setMenuOpen(false)}
           >
             {t(HEADER_I18N.premium)}
+          </Link>
+          <Link
+            to="/fanfic"
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t(HEADER_I18N.fanficTop)}
           </Link>
           <Link
             to="/mypage"
@@ -799,19 +820,31 @@ export default function App() {
         <SearchBar
           query={query}
           excludeQuery={excludeQuery}
+          sort={sort}
+          ageLimit={ageLimit}
+          creativeType={creativeType}
           onChangeQuery={setQuery}
           onChangeExcludeQuery={setExcludeQuery}
-          onSearch={({ query: inputQuery, excludeQuery: inputExclude } = {}) => {
+          onChangeSort={setSort}
+          onChangeAgeLimit={setAgeLimit}
+          onChangeCreativeType={setCreativeType}
+          onSearch={({ query: inputQuery, excludeQuery: inputExclude, sort: inputSort, ageLimit: inputAgeLimit, creativeType: inputCreativeType } = {}) => {
             setMenuOpen(false);
             const q = (inputQuery ?? "").trim();
             const exclude = (inputExclude ?? "").trim();
-            if (!q && !exclude) {
-              navigate("/");
-              return;
-            }
+            const sortValue = (inputSort || "new").trim();
+            const ageValue = (inputAgeLimit || "").trim();
+            const creativeValue = (inputCreativeType || "").trim();
             const params = new URLSearchParams();
             if (q) params.set("q", q);
             if (exclude) params.set("exclude", exclude);
+            if (sortValue && sortValue !== "new") params.set("sort", sortValue);
+            if (ageValue) params.set("age_limit", ageValue);
+            if (creativeValue) params.set("creative_type", creativeValue);
+            if (!q && !exclude && !ageValue && !creativeValue && sortValue === "new") {
+              navigate("/");
+              return;
+            }
             navigate(`/?${params.toString()}`);
           }}
         />
@@ -820,9 +853,37 @@ export default function App() {
       <main style={{ padding: "0 16px 32px" }}>
         <Routes>
           <Route path="/mypage/settings" element={<AccountSettings />} />
-          <Route path="/" element={<Home query={query} excludeQuery={excludeQuery} />} />
+          <Route
+            path="/"
+            element={
+              <Home
+                query={query}
+                excludeQuery={excludeQuery}
+                sort={sort}
+                ageLimit={ageLimit}
+                creativeType={creativeType}
+              />
+            }
+          />
+          <Route
+            path="/ranking"
+            element={
+              <Home
+                query={query}
+                excludeQuery={excludeQuery}
+                sort={sort}
+                ageLimit={ageLimit}
+                creativeType={creativeType}
+                showRanking
+                rankingOnly
+              />
+            }
+          />
+          <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/all" element={<AllSites />} />
+          <Route path="/tags" element={<TagPage />} />
           <Route path="/tags/:slug" element={<TagPage />} />
+          <Route path="/series/:slug" element={<SeriesPage />} />
           <Route path="/authors" element={<AuthorLanding />} />
           <Route path="/login" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -831,6 +892,17 @@ export default function App() {
           <Route path="/contact" element={<Contact />} />
           <Route path="/board" element={<Board />} />
           <Route path="/premium" element={<PremiumLP />} />
+          <Route
+            path="/fanfic"
+            element={
+              <FanficPage
+                query={query}
+                excludeQuery={excludeQuery}
+                sort={sort}
+                ageLimit={ageLimit}
+              />
+            }
+          />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
@@ -851,6 +923,8 @@ export default function App() {
           <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
 	  <Route path="/ai-novel" element={<AINovelPage />} />
 	  <Route path="/ai_chat" element={<AiChatPage />} />
+	  <Route path="/ai_chat/girlfriend" element={<AiChatPage />} />
+	  <Route path="/ai_chat/boyfriend" element={<AiChatPage />} />
 	  <Route path="/ai_chat/lp" element={<AiChatLPPage />} />
 	  <Route path="/ai_chat/howto" element={<AiChatHowToPage />} />
 	  <Route path="/ai_chat/public" element={<AiChatPublicPage />} />

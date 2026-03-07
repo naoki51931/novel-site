@@ -42,6 +42,15 @@ export default function EpisodeDetail() {
     return `${clean.slice(0, limit)}...`;
   };
 
+  useEffect(() => {
+    if (typeof window === "undefined" || comments.length === 0) return;
+    const match = String(window.location.hash || "").match(/^#comment-(\d+)$/);
+    if (!match) return;
+    const el = document.getElementById(`comment-${match[1]}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [comments]);
+
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
   const isPremiumUser = !!episode?.is_premium_user;
@@ -849,6 +858,7 @@ export default function EpisodeDetail() {
             {comments.map((c) => (
               <div
                 key={c.id}
+                id={`comment-${c.id}`}
                 style={{
                   borderBottom: "1px solid #ddd",
                   padding: "6px 0",

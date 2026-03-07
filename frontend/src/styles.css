@@ -740,6 +740,73 @@ button.nav-toggle.btn.btn-border:hover {
   margin-bottom: 1rem;
 }
 
+.search-query-wrap {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+
+.search-query-wrap .search-input {
+  width: 100%;
+}
+
+.search-suggest-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 16px var(--shadow);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.search-suggest-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.search-suggest-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.search-suggest-button:hover {
+  background: var(--surface-2);
+}
+
+.search-suggest-active {
+  background: var(--surface-2);
+}
+
+.search-suggest-error {
+  color: var(--danger);
+}
+
+.search-suggest-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted-text);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
 .tag-chip-row {
   display: inline-block;
 }
@@ -783,6 +850,131 @@ button.nav-toggle.btn.btn-border:hover {
   background: #fee2e2;
   color: #991b1b;
   border-color: #b91c1c;
+}
+
+.novel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.novel-card-ui {
+  border: 1px solid var(--novel-card-border);
+  border-radius: 10px;
+  background: var(--novel-card-bg);
+  box-shadow: 0 2px 6px var(--shadow);
+  overflow: hidden;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.novel-card-ui:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 18px var(--shadow);
+}
+
+.novel-card-cover-link {
+  display: block;
+}
+
+.novel-card-cover {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  display: block;
+}
+
+.novel-card-body {
+  padding: 12px;
+}
+
+.novel-card-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.novel-card-title a {
+  text-decoration: none;
+}
+
+.novel-card-author-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--novel-card-meta);
+  margin-bottom: 8px;
+}
+
+.novel-type-chip {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.novel-card-description {
+  margin: 0 0 10px;
+  color: var(--novel-card-desc);
+  white-space: pre-wrap;
+  min-height: 2.6em;
+  font-size: 14px;
+}
+
+.novel-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  font-size: 12px;
+  color: var(--novel-card-meta);
+  margin-bottom: 10px;
+}
+
+.tag-chip-button {
+  cursor: pointer;
+}
+
+.novel-card-created-at {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--novel-card-meta);
+}
+
+.novel-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.novel-card-footer {
+  margin-top: 10px;
+  text-align: right;
+}
+
+.section-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+.section-heading-title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.section-heading-more {
+  font-size: 12px;
+  color: var(--muted-text);
+  text-decoration: none;
+}
+
+.section-heading-more:hover {
+  text-decoration: underline;
 }
 
 /* 入力欄（タイトル／タグ） */
@@ -1193,6 +1385,12 @@ button.nav-toggle.btn.btn-border:hover {
     width: 100%;
     flex: 0 0 auto;           /* 幅100%で段ごとに並べる */
     box-sizing: border-box;
+  }
+
+  .search-query-wrap {
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
   }
 
   .episode-cover-wrap {

@@ -27,6 +27,12 @@ export default function NewNovel() {
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [creativeType, setCreativeType] = useState("original"); // オリジナル / 二次創作
+  const [fanficSourceTitle, setFanficSourceTitle] = useState("");
+  const [fanficCharacters, setFanficCharacters] = useState("");
+  const [fanficCoupling, setFanficCoupling] = useState("");
+  const [fanficNotes, setFanficNotes] = useState("");
+  const [seriesName, setSeriesName] = useState("");
+  const [seriesOrder, setSeriesOrder] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [tagCandidates, setTagCandidates] = useState([]);
@@ -36,6 +42,9 @@ export default function NewNovel() {
   const [titleSuggestLoading, setTitleSuggestLoading] = useState(false);
   const [titleSuggestError, setTitleSuggestError] = useState("");
   const [titleCandidates, setTitleCandidates] = useState([]);
+  const [summarySuggestLoading, setSummarySuggestLoading] = useState(false);
+  const [summarySuggestError, setSummarySuggestError] = useState("");
+  const [summaryCandidates, setSummaryCandidates] = useState([]);
   const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
   const [expandedBubble, setExpandedBubble] = useState("");
 
@@ -170,6 +179,69 @@ export default function NewNovel() {
     }
   };
 
+  const handleSuggestSummaries = async () => {
+    setSummarySuggestError("");
+    setSummaryCandidates([]);
+    const sourceText = [
+      title,
+      description,
+      tagNamesInput,
+      creativeType === "fanfic" ? fanficSourceTitle : "",
+      creativeType === "fanfic" ? fanficCharacters : "",
+      creativeType === "fanfic" ? fanficCoupling : "",
+      creativeType === "fanfic" ? fanficNotes : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (!sourceText.trim()) {
+      setSummarySuggestError(
+        t({
+          ja: "入力がないためあらすじ候補を生成できません。",
+          en: "No input text to generate summary candidates.",
+        })
+      );
+      return;
+    }
+    try {
+      setSummarySuggestLoading(true);
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
+      }
+      const res = await fetch(`${API_BASE}/api/ai/summary_candidates`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: sourceText.slice(0, 3000), suggestions_count: 4 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data.detail || t({ ja: "あらすじ候補の生成に失敗しました。", en: "Failed to generate summary candidates." })
+        );
+      }
+      const candidates = Array.isArray(data?.candidates)
+        ? data.candidates.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (!candidates.length) {
+        throw new Error(
+          t({ ja: "あらすじ候補を取得できませんでした。", en: "Failed to get summary candidates." })
+        );
+      }
+      setSummaryCandidates(candidates);
+      setDescription(candidates[0]);
+    } catch (err) {
+      console.error(err);
+      setSummarySuggestError(
+        err.message || t({ ja: "あらすじ候補の生成に失敗しました。", en: "Failed to generate summary candidates." })
+      );
+    } finally {
+      setSummarySuggestLoading(false);
+    }
+  };
+
   const handleToggleCandidate = (candidate) => {
     setSelectedTagCandidates((prev) => {
       const next = new Set(prev);
@@ -203,6 +275,12 @@ export default function NewNovel() {
       if (draft.description) setDescription(draft.description);
       if (draft.tagNamesInput) setTagNamesInput(draft.tagNamesInput);
       if (draft.creativeType) setCreativeType(draft.creativeType);
+      if (draft.fanficSourceTitle) setFanficSourceTitle(draft.fanficSourceTitle);
+      if (draft.fanficCharacters) setFanficCharacters(draft.fanficCharacters);
+      if (draft.fanficCoupling) setFanficCoupling(draft.fanficCoupling);
+      if (draft.fanficNotes) setFanficNotes(draft.fanficNotes);
+      if (draft.seriesName) setSeriesName(draft.seriesName);
+      if (draft.seriesOrder) setSeriesOrder(String(draft.seriesOrder));
     } catch (e) {
       console.error("failed to load draft", e);
     }
@@ -216,6 +294,12 @@ export default function NewNovel() {
         description,
         tagNamesInput,
         creativeType,
+        fanficSourceTitle,
+        fanficCharacters,
+        fanficCoupling,
+        fanficNotes,
+        seriesName,
+        seriesOrder,
         saved_at: new Date().toISOString(),
       };
       try {
@@ -226,7 +310,18 @@ export default function NewNovel() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [title, description, tagNamesInput]);
+  }, [
+    title,
+    description,
+    tagNamesInput,
+    creativeType,
+    fanficSourceTitle,
+    fanficCharacters,
+    fanficCoupling,
+    fanficNotes,
+    seriesName,
+    seriesOrder,
+  ]);
   // === auto-save draft end ===
 
 
@@ -256,6 +351,12 @@ export default function NewNovel() {
           .map((s) => s.trim())
           .filter(Boolean),
         creative_type: creativeType,
+        fanfic_source_title: creativeType === "fanfic" ? fanficSourceTitle : "",
+        fanfic_characters: creativeType === "fanfic" ? fanficCharacters : "",
+        fanfic_coupling: creativeType === "fanfic" ? fanficCoupling : "",
+        fanfic_notes: creativeType === "fanfic" ? fanficNotes : "",
+        series_name: seriesName,
+        series_order: seriesOrder === "" ? null : Number(seriesOrder),
       };
 
       const res = await fetch(`${API_BASE}/api/novels`, {
@@ -531,6 +632,36 @@ export default function NewNovel() {
           <div style={{ fontSize: "0.85rem", color: "#666", marginTop: 4 }}>
             {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(description)}
           </div>
+          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleSuggestSummaries}
+              disabled={summarySuggestLoading}
+            >
+              {summarySuggestLoading
+                ? t({ ja: "あらすじ候補を生成中...", en: "Generating summary candidates..." })
+                : t({ ja: "AIであらすじ候補を生成", en: "Generate summary candidates with AI" })}
+            </button>
+          </div>
+          {summarySuggestError && (
+            <div style={{ marginTop: 6, color: "red" }}>{summarySuggestError}</div>
+          )}
+          {summaryCandidates.length > 0 && (
+            <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+              {summaryCandidates.map((candidate, idx) => (
+                <button
+                  key={`summary-${idx}-${candidate.slice(0, 16)}`}
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => setDescription(candidate)}
+                  style={{ textAlign: "left" }}
+                >
+                  {candidate}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 8 }}>
@@ -633,6 +764,103 @@ export default function NewNovel() {
             </div>
           </label>
         </div>
+
+        {creativeType === "fanfic" && (
+          <section
+            style={{
+              marginBottom: 10,
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: 10,
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+              {t({ ja: "二次創作向け入力", en: "Fanfic fields" })}
+            </h3>
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "原作名", en: "Source title" })}<br />
+                <input
+                  type="text"
+                  value={fanficSourceTitle}
+                  onChange={(e) => setFanficSourceTitle(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                />
+              </label>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "キャラ", en: "Characters" })}<br />
+                <input
+                  type="text"
+                  value={fanficCharacters}
+                  onChange={(e) => setFanficCharacters(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                  placeholder={t({ ja: "例: A, B, C", en: "e.g., A, B, C" })}
+                />
+              </label>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "カップリング", en: "Pairing" })}<br />
+                <input
+                  type="text"
+                  value={fanficCoupling}
+                  onChange={(e) => setFanficCoupling(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                  placeholder={t({ ja: "例: A×B", en: "e.g., A x B" })}
+                />
+              </label>
+            </div>
+            <div style={{ marginBottom: 0 }}>
+              <label>
+                {t({ ja: "注意事項", en: "Notes / warnings" })}<br />
+                <textarea
+                  rows={3}
+                  value={fanficNotes}
+                  onChange={(e) => setFanficNotes(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                />
+              </label>
+            </div>
+          </section>
+        )}
+
+        <section
+          style={{
+            marginBottom: 10,
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: 10,
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+            {t({ ja: "シリーズ設定（任意）", en: "Series (optional)" })}
+          </h3>
+          <div style={{ marginBottom: 8 }}>
+            <label>
+              {t({ ja: "シリーズ名", en: "Series name" })}<br />
+              <input
+                type="text"
+                value={seriesName}
+                onChange={(e) => setSeriesName(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              />
+            </label>
+          </div>
+          <div style={{ marginBottom: 0 }}>
+            <label>
+              {t({ ja: "シリーズ順", en: "Series order" })}<br />
+              <input
+                type="number"
+                min="1"
+                value={seriesOrder}
+                onChange={(e) => setSeriesOrder(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              />
+            </label>
+          </div>
+        </section>
 
         <div style={{ marginBottom: 8 }}>
           <label>

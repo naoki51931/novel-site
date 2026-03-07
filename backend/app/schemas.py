@@ -35,6 +35,12 @@ class NovelBase(BaseModel):
     is_ai_generated: bool = False
     creative_type: Literal["original", "fanfic"] = "original"
     is_public: bool = True
+    fanfic_source_title: Optional[str] = None
+    fanfic_characters: Optional[str] = None
+    fanfic_coupling: Optional[str] = None
+    fanfic_notes: Optional[str] = None
+    series_name: Optional[str] = None
+    series_order: Optional[int] = None
 
 
 class NovelCreate(NovelBase):
@@ -52,6 +58,12 @@ class NovelUpdate(BaseModel):
     is_ai_generated: Optional[bool] = None
     creative_type: Optional[Literal["original", "fanfic"]] = None
     is_public: Optional[bool] = None
+    fanfic_source_title: Optional[str] = None
+    fanfic_characters: Optional[str] = None
+    fanfic_coupling: Optional[str] = None
+    fanfic_notes: Optional[str] = None
+    series_name: Optional[str] = None
+    series_order: Optional[int] = None
 
 
 class Novel(BaseModel):
@@ -65,6 +77,12 @@ class Novel(BaseModel):
 
     # 小説詳細で返すタグ一覧
     tags: List[TagRead] = []
+    fanfic_source_title: Optional[str] = None
+    fanfic_characters: Optional[str] = None
+    fanfic_coupling: Optional[str] = None
+    fanfic_notes: Optional[str] = None
+    series_name: Optional[str] = None
+    series_order: Optional[int] = None
 
     # SQLAlchemy のインスタンスから生成できるように
     model_config = ConfigDict(from_attributes=True)
@@ -128,6 +146,12 @@ class ProfileRead(BaseModel):
     email: Optional[str] = None
     birth_date: Optional[date] = None
     email_notifications_enabled: Optional[bool] = None
+    favorite_visibility: Optional[Literal["public", "private"]] = "public"
+    profile_bio: Optional[str] = None
+    profile_icon_url: Optional[str] = None
+    profile_header_url: Optional[str] = None
+    profile_website_url: Optional[str] = None
+    profile_x_url: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -138,6 +162,12 @@ class ProfileUpdate(BaseModel):
     email: Optional[str] = None
     birth_date: Optional[date] = None
     email_notifications_enabled: Optional[bool] = None
+    favorite_visibility: Optional[Literal["public", "private"]] = None
+    profile_bio: Optional[str] = None
+    profile_icon_url: Optional[str] = None
+    profile_header_url: Optional[str] = None
+    profile_website_url: Optional[str] = None
+    profile_x_url: Optional[str] = None
 
 
 # =========================

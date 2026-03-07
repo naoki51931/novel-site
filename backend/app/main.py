@@ -48,7 +48,7 @@ from pydantic import BaseModel, EmailStr, Field
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import text, or_, func
+from sqlalchemy import text, or_, func, case
 from sqlalchemy.orm import selectinload
 from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
@@ -182,6 +182,16 @@ ensure_all_tables_exist()
 def get_novel_char_counts(db: Session, novel_ids: list[int], public_only: bool = False) -> dict[int, int]:
     if not novel_ids:
         return {}
+    description_rows = (
+        db.query(
+            models.Novel.id,
+            func.coalesce(func.char_length(models.Novel.description), 0),
+        )
+        .filter(models.Novel.id.in_(novel_ids))
+        .all()
+    )
+    counts: dict[int, int] = {row[0]: int(row[1] or 0) for row in description_rows}
+
     q = (
         db.query(
             models.Episode.novel_id,
@@ -197,7 +207,10 @@ def get_novel_char_counts(db: Session, novel_ids: list[int], public_only: bool =
     if public_only:
         q = q.filter(models.Episode.status == "public").filter(models.Episode.is_public == True)
     rows = q.group_by(models.Episode.novel_id).all()
-    return {row[0]: int(row[1] or 0) for row in rows}
+    for row in rows:
+        novel_id = int(row[0])
+        counts[novel_id] = counts.get(novel_id, 0) + int(row[1] or 0)
+    return counts
 
 def apply_novel_daily_metric(
     db: Session,
@@ -387,6 +400,9 @@ def _cache_key_user_profile(user_id: int) -> str:
 
 
 def _build_user_cache_payload(user: models.User) -> dict[str, Any]:
+    favorite_visibility = str(getattr(user, "favorite_visibility", "public") or "public").strip().lower()
+    if favorite_visibility not in ("public", "private"):
+        favorite_visibility = "public"
     return {
         "id": int(user.id),
         "username": str(user.username or ""),
@@ -397,6 +413,12 @@ def _build_user_cache_payload(user: models.User) -> dict[str, Any]:
         "email_notifications_enabled": bool(
             getattr(user, "email_notifications_enabled", True)
         ),
+        "favorite_visibility": favorite_visibility,
+        "profile_bio": str(getattr(user, "profile_bio", "") or "") or None,
+        "profile_icon_url": str(getattr(user, "profile_icon_url", "") or "") or None,
+        "profile_header_url": str(getattr(user, "profile_header_url", "") or "") or None,
+        "profile_website_url": str(getattr(user, "profile_website_url", "") or "") or None,
+        "profile_x_url": str(getattr(user, "profile_x_url", "") or "") or None,
     }
 
 
@@ -418,6 +440,10 @@ def invalidate_public_list_caches() -> None:
     redis_delete_pattern("cache:public:novels:*")
     redis_delete_pattern("cache:public:novels_recommended:*")
     redis_delete_pattern("cache:public:ranking:*")
+    redis_delete_pattern("cache:public:tags:*")
+    redis_delete_pattern("cache:public:tag_detail:*")
+    redis_delete_pattern("cache:public:tag_novels:*")
+    redis_delete_pattern("cache:public:tag_related:*")
     redis_delete_pattern("cache:public:user_profile:*")
     redis_delete_pattern("cache:public:user_novels:*")
     redis_delete_pattern("cache:public:user_favorites:*")
@@ -634,6 +660,18 @@ def ensure_users_table_columns():
             alters: list[str] = []
             if "email_notifications_enabled" not in existing:
                 alters.append("ADD COLUMN email_notifications_enabled TINYINT(1) NOT NULL DEFAULT 1")
+            if "favorite_visibility" not in existing:
+                alters.append("ADD COLUMN favorite_visibility VARCHAR(16) NOT NULL DEFAULT 'public'")
+            if "profile_bio" not in existing:
+                alters.append("ADD COLUMN profile_bio TEXT NULL")
+            if "profile_icon_url" not in existing:
+                alters.append("ADD COLUMN profile_icon_url VARCHAR(255) NULL")
+            if "profile_header_url" not in existing:
+                alters.append("ADD COLUMN profile_header_url VARCHAR(255) NULL")
+            if "profile_website_url" not in existing:
+                alters.append("ADD COLUMN profile_website_url VARCHAR(255) NULL")
+            if "profile_x_url" not in existing:
+                alters.append("ADD COLUMN profile_x_url VARCHAR(255) NULL")
             if "email_address_invalid" not in existing:
                 alters.append("ADD COLUMN email_address_invalid TINYINT(1) NOT NULL DEFAULT 0")
             if "email_2fa_skip_until" not in existing:
@@ -747,6 +785,18 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
             if "site_key" not in existing:
                 alters.append("ADD COLUMN site_key VARCHAR(32) NOT NULL DEFAULT 'main'")
+            if "fanfic_source_title" not in existing:
+                alters.append("ADD COLUMN fanfic_source_title VARCHAR(120) NULL")
+            if "fanfic_characters" not in existing:
+                alters.append("ADD COLUMN fanfic_characters TEXT NULL")
+            if "fanfic_coupling" not in existing:
+                alters.append("ADD COLUMN fanfic_coupling VARCHAR(120) NULL")
+            if "fanfic_notes" not in existing:
+                alters.append("ADD COLUMN fanfic_notes TEXT NULL")
+            if "series_name" not in existing:
+                alters.append("ADD COLUMN series_name VARCHAR(120) NULL")
+            if "series_order" not in existing:
+                alters.append("ADD COLUMN series_order INT NULL")
             if "body" in existing and existing["body"] != "longtext":
                 alters.append("MODIFY COLUMN body LONGTEXT NULL")
 
@@ -819,6 +869,18 @@ def ensure_novels_table_columns():
                 alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
             if "site_key" not in existing:
                 alters.append("ADD COLUMN site_key VARCHAR(32) NOT NULL DEFAULT 'main'")
+            if "fanfic_source_title" not in existing:
+                alters.append("ADD COLUMN fanfic_source_title VARCHAR(120) NULL")
+            if "fanfic_characters" not in existing:
+                alters.append("ADD COLUMN fanfic_characters TEXT NULL")
+            if "fanfic_coupling" not in existing:
+                alters.append("ADD COLUMN fanfic_coupling VARCHAR(120) NULL")
+            if "fanfic_notes" not in existing:
+                alters.append("ADD COLUMN fanfic_notes TEXT NULL")
+            if "series_name" not in existing:
+                alters.append("ADD COLUMN series_name VARCHAR(120) NULL")
+            if "series_order" not in existing:
+                alters.append("ADD COLUMN series_order INT NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE novels {clause}"))
@@ -1406,6 +1468,13 @@ AGE_RESTRICTION_DISABLED = os.getenv("AGE_RESTRICTION_DISABLED", "0") == "1"
 def _env_flag(name: str, default: str = "0") -> bool:
     return (os.getenv(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
 
+def _env_float(name: str, default: str) -> float:
+    raw = (os.getenv(name, default) or default).strip()
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
 
 STRIPE_USE_TEST = _env_flag("STRIPE_USE_TEST", "0")
 if STRIPE_USE_TEST:
@@ -1525,6 +1594,17 @@ AI_CHAT_MEMORY_ENABLED = (os.getenv("AI_CHAT_MEMORY_ENABLED", "1") or "1").strip
 AI_CHAT_MEMORY_TOPK = max(1, min(20, int(os.getenv("AI_CHAT_MEMORY_TOPK", "12") or 12)))
 AI_WEAVIATE_FEATURES_ENABLED = (os.getenv("AI_WEAVIATE_FEATURES_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AI_WEAVIATE_FEATURES_TOPK = max(1, min(12, int(os.getenv("AI_WEAVIATE_FEATURES_TOPK", "4") or 4)))
+
+# Recommended feed scoring
+RECOMMENDED_RECENT_VIEW_EXCLUDE_COUNT = max(
+    0, int(os.getenv("RECOMMENDED_RECENT_VIEW_EXCLUDE_COUNT", "200") or 200)
+)
+RECOMMENDED_FOLLOWED_AUTHOR_BOOST = _env_float("RECOMMENDED_FOLLOWED_AUTHOR_BOOST", "8.0")
+RECOMMENDED_CREATIVE_MATCH_BOOST = _env_float("RECOMMENDED_CREATIVE_MATCH_BOOST", "4.0")
+RECOMMENDED_CREATIVE_MISMATCH_PENALTY = _env_float("RECOMMENDED_CREATIVE_MISMATCH_PENALTY", "-1.0")
+RECOMMENDED_CREATIVE_PREFERENCE_THRESHOLD = max(
+    0.5, min(0.95, _env_float("RECOMMENDED_CREATIVE_PREFERENCE_THRESHOLD", "0.6"))
+)
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -2428,6 +2508,7 @@ def _background_notify_episode_published(novel_id: int, episode_id: int, site_ke
         if is_episode_draft(ep):
             return
         notify_favorited_users_episode_published(db, novel=novel, episode=ep)
+        notify_followers_author_new_episode(db, novel=novel, episode=ep)
         db.commit()
     except Exception as e:
         logger.warning(
@@ -2884,6 +2965,153 @@ def notify_favorited_users_episode_published(
             body=notif_body,
             link_url=link_url,
         )
+
+
+def notify_followers_author_new_novel(
+    db: Session,
+    *,
+    novel: models.Novel,
+) -> None:
+    if not getattr(novel, "is_public", True):
+        return
+    followers = (
+        db.query(models.User)
+        .join(models.UserFollow, models.UserFollow.follower_user_id == models.User.id)
+        .filter(
+            models.UserFollow.followed_user_id == novel.author_id,
+            models.User.id != novel.author_id,
+        )
+        .all()
+    )
+    if not followers:
+        return
+    author = db.query(models.User).get(int(novel.author_id))
+    author_name = str(getattr(author, "username", "") or "作者")
+    title = "フォロー中の作者が新作を公開しました"
+    notif_body = f"「{novel.title}」を公開しました"
+    link_url = f"/novels/{novel.id}"
+    sent = 0
+    for user in followers:
+        if not can_user_access_novel_age_limit(user, getattr(novel, "age_limit", "all")):
+            continue
+        create_notification(
+            db,
+            user_id=user.id,
+            notif_type="followed_author_new_novel",
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=novel.author_id,
+        )
+        sent += 1
+    if sent > 0:
+        db.commit()
+
+
+def notify_tag_followers_new_novel(
+    db: Session,
+    *,
+    novel: models.Novel,
+) -> None:
+    if not getattr(novel, "is_public", True):
+        return
+    tag_rows = (
+        db.query(models.Tag.id, models.Tag.name)
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .filter(models.NovelTag.novel_id == novel.id)
+        .all()
+    )
+    if not tag_rows:
+        return
+    tag_ids = [int(tag_id) for tag_id, _ in tag_rows if int(tag_id or 0) > 0]
+    if not tag_ids:
+        return
+    tag_names = [str(name or "") for _, name in tag_rows if str(name or "").strip()]
+    if not tag_names:
+        return
+
+    followers = (
+        db.query(models.User)
+        .join(models.TagFollow, models.TagFollow.user_id == models.User.id)
+        .filter(models.TagFollow.tag_id.in_(tag_ids))
+        .filter(models.User.id != novel.author_id)
+        .distinct()
+        .all()
+    )
+    if not followers:
+        return
+
+    if len(tag_names) == 1:
+        tag_part = f"「{tag_names[0]}」"
+    elif len(tag_names) == 2:
+        tag_part = f"「{tag_names[0]}」「{tag_names[1]}」"
+    else:
+        tag_part = f"「{tag_names[0]}」ほか"
+
+    title = "フォロー中タグの新着作品"
+    notif_body = f"フォロー中タグ{tag_part}で「{novel.title}」が公開されました"
+    link_url = f"/novels/{novel.id}"
+    sent = 0
+    for user in followers:
+        if not can_user_access_novel_age_limit(user, getattr(novel, "age_limit", "all")):
+            continue
+        create_notification(
+            db,
+            user_id=int(user.id),
+            notif_type="tag_follow_new",
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=novel.author_id,
+        )
+        sent += 1
+    if sent > 0:
+        db.commit()
+
+
+def notify_followers_author_new_episode(
+    db: Session,
+    *,
+    novel: models.Novel,
+    episode: models.Episode,
+) -> None:
+    if not getattr(novel, "is_public", True):
+        return
+    if is_episode_draft(episode):
+        return
+    followers = (
+        db.query(models.User)
+        .join(models.UserFollow, models.UserFollow.follower_user_id == models.User.id)
+        .filter(
+            models.UserFollow.followed_user_id == novel.author_id,
+            models.User.id != novel.author_id,
+        )
+        .all()
+    )
+    if not followers:
+        return
+    author = db.query(models.User).get(int(novel.author_id))
+    author_name = str(getattr(author, "username", "") or "作者")
+    episode_title = episode.title or f"EP#{episode.id}"
+    title = "フォロー中の作者がエピソードを公開しました"
+    notif_body = f"「{novel.title}」の「{episode_title}」を公開しました"
+    link_url = f"/episodes/{episode.id}"
+    sent = 0
+    for user in followers:
+        if not can_user_access_novel_age_limit(user, getattr(novel, "age_limit", "all")):
+            continue
+        create_notification(
+            db,
+            user_id=user.id,
+            notif_type="followed_author_new_episode",
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=novel.author_id,
+        )
+        sent += 1
+    if sent > 0:
+        db.commit()
 
 
 def can_user_access_novel_age_limit(user: models.User | None, age_limit: str | None) -> bool:
@@ -3674,6 +3902,36 @@ def get_user_by_username(db: Session, username: str):
     return user
 
 
+def get_follow_counts(db: Session, user_id: int) -> tuple[int, int]:
+    follower_count = (
+        db.query(func.count(models.UserFollow.id))
+        .filter(models.UserFollow.followed_user_id == user_id)
+        .scalar()
+        or 0
+    )
+    following_count = (
+        db.query(func.count(models.UserFollow.id))
+        .filter(models.UserFollow.follower_user_id == user_id)
+        .scalar()
+        or 0
+    )
+    return int(follower_count), int(following_count)
+
+
+def is_following_user(db: Session, follower_user_id: int, followed_user_id: int) -> bool:
+    if follower_user_id <= 0 or followed_user_id <= 0:
+        return False
+    if follower_user_id == followed_user_id:
+        return False
+    return (
+        db.query(models.UserFollow.id)
+        .filter(models.UserFollow.follower_user_id == follower_user_id)
+        .filter(models.UserFollow.followed_user_id == followed_user_id)
+        .first()
+        is not None
+    )
+
+
 def normalize_dm_pair(user_id: int, target_id: int) -> tuple[int, int]:
     if user_id == target_id:
         raise HTTPException(400, "自分自身にはDMできません")
@@ -3891,7 +4149,8 @@ def _find_accessible_ai_chat_character(
         owner_username=str(getattr(getattr(item, "user", None), "username", "") or "").strip() or None,
         db=db,
     )
-    if can_edit or bool(getattr(item, "is_public", False)):
+    is_demo_reader = _is_ai_chat_demo_bypass_user(viewer)
+    if can_edit or bool(getattr(item, "is_public", False)) or is_demo_reader:
         return item
     return None
 
@@ -3988,12 +4247,26 @@ def _record_ai_chat_tokens(
     if user is not None:
         user.ai_chat_tokens_used = int(getattr(user, "ai_chat_tokens_used", 0) or 0) + n
         db.add(user)
+        db.add(
+            models.AIChatTokenUsageLog(
+                user_id=int(getattr(user, "id", 0) or 0) or None,
+                guest_id=None,
+                tokens_used=n,
+            )
+        )
         db.commit()
         return
     if guest_usage is not None:
         guest_usage.tokens_used = int(getattr(guest_usage, "tokens_used", 0) or 0) + n
         guest_usage.last_used_at = datetime.utcnow()
         db.add(guest_usage)
+        db.add(
+            models.AIChatTokenUsageLog(
+                user_id=None,
+                guest_id=str(getattr(guest_usage, "guest_id", "") or "")[:64] or None,
+                tokens_used=n,
+            )
+        )
         db.commit()
 
 
@@ -4379,6 +4652,30 @@ class AdminUserListOut(BaseModel):
     users: List[AdminUserOut]
 
 
+class AdminAIChatTokenConsumerDayOut(BaseModel):
+    date: str
+    tokens_used: int
+    events: int
+
+
+class AdminAIChatTokenConsumerOut(BaseModel):
+    user_id: int
+    username: str
+    range_tokens_used: int
+    current_tokens_used: int
+    events: int
+    days: List[AdminAIChatTokenConsumerDayOut]
+
+
+class AdminAIChatTokenConsumersTimelineOut(BaseModel):
+    generated_at: str
+    start_date: str
+    end_date: str
+    days: int
+    total_range_tokens_used: int
+    consumers: List[AdminAIChatTokenConsumerOut]
+
+
 class AdminUserNovelOut(BaseModel):
     id: int
     title: str
@@ -4417,6 +4714,11 @@ class TagCandidatesOut(BaseModel):
     candidates: List[str]
     model: str | None = None
     used_tokens: int | None = None
+
+
+class SummaryCandidatesRequest(BaseModel):
+    text: str
+    suggestions_count: int = 4
 
 
 class TitleCandidateRequest(BaseModel):
@@ -5478,6 +5780,133 @@ def admin_list_users(
     return AdminUserListOut(total_users=total_users, users=users)
 
 
+@app.get("/api/admin/ai-chat/token-consumers/timeline", response_model=AdminAIChatTokenConsumersTimelineOut)
+def admin_ai_chat_token_consumers_timeline(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(20, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+
+    now = datetime.utcnow()
+    start_dt = datetime.combine((now - timedelta(days=days - 1)).date(), datetime.min.time())
+    end_dt = datetime.combine(now.date(), datetime.max.time())
+    date_keys = [(start_dt + timedelta(days=i)).date().isoformat() for i in range(days)]
+
+    rows = (
+        db.query(
+            models.AIChatTokenUsageLog.user_id.label("user_id"),
+            func.date(models.AIChatTokenUsageLog.created_at).label("day"),
+            func.sum(models.AIChatTokenUsageLog.tokens_used).label("tokens_used"),
+            func.count(models.AIChatTokenUsageLog.id).label("events"),
+        )
+        .filter(
+            models.AIChatTokenUsageLog.created_at >= start_dt,
+            models.AIChatTokenUsageLog.created_at <= end_dt,
+            models.AIChatTokenUsageLog.user_id.isnot(None),
+        )
+        .group_by(
+            models.AIChatTokenUsageLog.user_id,
+            func.date(models.AIChatTokenUsageLog.created_at),
+        )
+        .all()
+    )
+
+    by_user: dict[int, dict] = {}
+    for row in rows:
+        uid = int(getattr(row, "user_id", 0) or 0)
+        if uid <= 0:
+            continue
+        day_raw = getattr(row, "day", None)
+        day_key = day_raw.isoformat() if hasattr(day_raw, "isoformat") else str(day_raw or "")
+        if not day_key:
+            continue
+        tokens_used = max(0, int(getattr(row, "tokens_used", 0) or 0))
+        events = max(0, int(getattr(row, "events", 0) or 0))
+        item = by_user.setdefault(
+            uid,
+            {
+                "user_id": uid,
+                "range_tokens_used": 0,
+                "events": 0,
+                "days": {k: {"tokens_used": 0, "events": 0} for k in date_keys},
+            },
+        )
+        item["range_tokens_used"] += tokens_used
+        item["events"] += events
+        day_item = item["days"].setdefault(day_key, {"tokens_used": 0, "events": 0})
+        day_item["tokens_used"] += tokens_used
+        day_item["events"] += events
+
+    if not by_user:
+        return AdminAIChatTokenConsumersTimelineOut(
+            generated_at=now.isoformat(),
+            start_date=start_dt.date().isoformat(),
+            end_date=now.date().isoformat(),
+            days=days,
+            total_range_tokens_used=0,
+            consumers=[],
+        )
+
+    current_usage_rows = (
+        db.query(models.User.id, models.User.username, models.User.ai_chat_tokens_used)
+        .filter(models.User.id.in_(list(by_user.keys())))
+        .all()
+    )
+    username_map: dict[int, str] = {}
+    current_map: dict[int, int] = {}
+    for uid, username, used in current_usage_rows:
+        iid = int(uid or 0)
+        if iid <= 0:
+            continue
+        username_map[iid] = str(username or "")
+        current_map[iid] = max(0, int(used or 0))
+
+    ranked = sorted(
+        by_user.values(),
+        key=lambda x: (
+            -int(x.get("range_tokens_used", 0) or 0),
+            -int(current_map.get(int(x.get("user_id", 0) or 0), 0)),
+            int(x.get("user_id", 0) or 0),
+        ),
+    )[:limit]
+
+    consumers: list[AdminAIChatTokenConsumerOut] = []
+    total_range_tokens_used = 0
+    for item in ranked:
+        uid = int(item.get("user_id", 0) or 0)
+        range_tokens = max(0, int(item.get("range_tokens_used", 0) or 0))
+        total_range_tokens_used += range_tokens
+        day_list = [
+            AdminAIChatTokenConsumerDayOut(
+                date=day,
+                tokens_used=max(0, int(item["days"].get(day, {}).get("tokens_used", 0) or 0)),
+                events=max(0, int(item["days"].get(day, {}).get("events", 0) or 0)),
+            )
+            for day in date_keys
+        ]
+        consumers.append(
+            AdminAIChatTokenConsumerOut(
+                user_id=uid,
+                username=username_map.get(uid, f"user_{uid}"),
+                range_tokens_used=range_tokens,
+                current_tokens_used=max(0, int(current_map.get(uid, 0) or 0)),
+                events=max(0, int(item.get("events", 0) or 0)),
+                days=day_list,
+            )
+        )
+
+    return AdminAIChatTokenConsumersTimelineOut(
+        generated_at=now.isoformat(),
+        start_date=start_dt.date().isoformat(),
+        end_date=now.date().isoformat(),
+        days=days,
+        total_range_tokens_used=max(0, int(total_range_tokens_used)),
+        consumers=consumers,
+    )
+
+
 @app.post("/api/admin/email-test-all-users", response_model=AdminEmailTestAllOut)
 def admin_send_test_email_all_users(
     request: Request,
@@ -5638,6 +6067,11 @@ def admin_delete_user(
     db.execute(text("DELETE FROM episode_likes WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_likes WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM novel_favorites WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(
+        text("DELETE FROM user_follows WHERE follower_user_id = :uid OR followed_user_id = :uid"),
+        {"uid": user_id},
+    )
+    db.execute(text("DELETE FROM tag_follows WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_character_likes WHERE user_id = :uid"), {"uid": user_id})
     db.execute(text("DELETE FROM ai_chat_character_favorites WHERE user_id = :uid"), {"uid": user_id})
     db.execute(
@@ -5923,6 +6357,26 @@ async def generate_tag_candidates(
     source_text = text[:1000]
     candidates, tokens, model = await call_openai_tag_candidates(source_text)
     return TagCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
+
+
+@app.post("/api/ai/summary_candidates", response_model=NovelSummaryCandidatesOut)
+async def generate_summary_candidates(
+    payload: SummaryCandidatesRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    require_current_user(request, db)
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "本文が空です。")
+    source_text = text[:3000]
+    candidates, tokens, model = await call_openai_summary_candidates(source_text)
+    limit = max(1, min(8, int(getattr(payload, "suggestions_count", 4) or 4)))
+    return NovelSummaryCandidatesOut(
+        candidates=[str(c or "").strip() for c in (candidates or []) if str(c or "").strip()][:limit],
+        model=model,
+        used_tokens=tokens,
+    )
 
 
 @app.post("/api/ai/title_candidate", response_model=TitleCandidateOut)
@@ -7779,6 +8233,9 @@ class AIChatMessageResponse(BaseModel):
     mode: Literal["say", "do"]
     is_auto_dialogue: bool = False
     content: str
+    speaker_name: str | None = None
+    character_name: str | None = None
+    message_owner_username: str | None = None
     created_at: str | None = None
 
 
@@ -12677,35 +13134,48 @@ def list_ai_chat_messages(
     db: Session = Depends(get_db),
 ):
     user = require_current_user(request, db)
-    character = _find_editable_ai_chat_character(
+    character = _find_accessible_ai_chat_character(
         db=db,
         viewer=user,
         character_id=character_id,
     )
     if not character:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    if bool(getattr(character, "is_public", False)) and bool(getattr(character, "is_r18", False)):
+        if not can_user_access_novel_age_limit(user, "r18"):
+            raise HTTPException(status_code=403, detail="この公開チャットは18歳以上のみ閲覧できます。")
 
-    items = (
-        db.query(models.AIChatMessage)
+    is_demo_reader = _is_ai_chat_demo_bypass_user(user)
+    q = (
+        db.query(models.AIChatMessage, models.User.username)
+        .join(models.User, models.User.id == models.AIChatMessage.user_id)
         .filter(
-            models.AIChatMessage.user_id == user.id,
             models.AIChatMessage.character_id == character_id,
             models.AIChatMessage.is_deleted == False,
         )
-        .order_by(models.AIChatMessage.created_at.asc(), models.AIChatMessage.id.asc())
+    )
+    # demo02（AI_CHAT_DEMO_BYPASS_USERNAME）だけは同キャラの他ユーザー履歴も閲覧可能にする
+    if not is_demo_reader:
+        q = q.filter(models.AIChatMessage.user_id == user.id)
+
+    items = (
+        q.order_by(models.AIChatMessage.created_at.asc(), models.AIChatMessage.id.asc())
         .limit(200)
         .all()
     )
     return [
         AIChatMessageResponse(
-            id=int(item.id),
-            role="assistant" if item.role == "assistant" else "user",
-            mode="do" if item.mode == "do" else "say",
-            is_auto_dialogue=bool(getattr(item, "is_auto_dialogue", False)),
-            content=str(item.content or ""),
-            created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+            id=int(msg.id),
+            role="assistant" if msg.role == "assistant" else "user",
+            mode="do" if msg.mode == "do" else "say",
+            is_auto_dialogue=bool(getattr(msg, "is_auto_dialogue", False)),
+            content=str(msg.content or ""),
+            speaker_name=str(getattr(msg, "character_name_snapshot", "") or "").strip() or None,
+            character_name=str(getattr(msg, "character_name_snapshot", "") or str(getattr(character, "name", "") or "")).strip() or None,
+            message_owner_username=(str(owner_username or "").strip() or None) if is_demo_reader else None,
+            created_at=msg.created_at.isoformat() if getattr(msg, "created_at", None) else None,
         )
-        for item in items
+        for msg, owner_username in items
     ]
 
 
@@ -15691,6 +16161,13 @@ def create_novel(
     user = require_current_user(request, db)
     site_key = resolve_site_key(request)
     language = normalize_language(getattr(payload, "language", None))
+    fanfic_source_title = str(getattr(payload, "fanfic_source_title", "") or "").strip()[:120] or None
+    fanfic_characters = str(getattr(payload, "fanfic_characters", "") or "").strip()[:4000] or None
+    fanfic_coupling = str(getattr(payload, "fanfic_coupling", "") or "").strip()[:120] or None
+    fanfic_notes = str(getattr(payload, "fanfic_notes", "") or "").strip()[:4000] or None
+    series_name = str(getattr(payload, "series_name", "") or "").strip()[:120] or None
+    raw_series_order = getattr(payload, "series_order", None)
+    series_order = int(raw_series_order) if raw_series_order is not None else None
 
     novel = models.Novel(
         title=payload.title,
@@ -15703,6 +16180,12 @@ def create_novel(
         is_public=getattr(payload, "is_public", True),
         language=language,
         site_key=site_key,
+        fanfic_source_title=fanfic_source_title,
+        fanfic_characters=fanfic_characters,
+        fanfic_coupling=fanfic_coupling,
+        fanfic_notes=fanfic_notes,
+        series_name=series_name,
+        series_order=series_order,
     )
     db.add(novel)
     db.commit()
@@ -15743,6 +16226,8 @@ def create_novel(
 
     if bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
+        notify_followers_author_new_novel(db, novel=novel)
+        notify_tag_followers_new_novel(db, novel=novel)
     invalidate_public_list_caches()
     return novel
 
@@ -15786,6 +16271,12 @@ def list_novels(
             "age_limit": getattr(novel, "age_limit", "all"),
             "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
             "creative_type": getattr(novel, "creative_type", "original"),
+            "fanfic_source_title": getattr(novel, "fanfic_source_title", None),
+            "fanfic_characters": getattr(novel, "fanfic_characters", None),
+            "fanfic_coupling": getattr(novel, "fanfic_coupling", None),
+            "fanfic_notes": getattr(novel, "fanfic_notes", None),
+            "series_name": getattr(novel, "series_name", None),
+            "series_order": getattr(novel, "series_order", None),
             "is_public": bool(getattr(novel, "is_public", True)),
             "status": getattr(novel, "status", "public"),
             "tags": [
@@ -15842,6 +16333,18 @@ def update_novel(
         has_non_tag_change = True
     if payload.is_public is not None and payload.is_public != getattr(novel, "is_public", None):
         has_non_tag_change = True
+    if payload.fanfic_source_title is not None and payload.fanfic_source_title != getattr(novel, "fanfic_source_title", None):
+        has_non_tag_change = True
+    if payload.fanfic_characters is not None and payload.fanfic_characters != getattr(novel, "fanfic_characters", None):
+        has_non_tag_change = True
+    if payload.fanfic_coupling is not None and payload.fanfic_coupling != getattr(novel, "fanfic_coupling", None):
+        has_non_tag_change = True
+    if payload.fanfic_notes is not None and payload.fanfic_notes != getattr(novel, "fanfic_notes", None):
+        has_non_tag_change = True
+    if payload.series_name is not None and payload.series_name != getattr(novel, "series_name", None):
+        has_non_tag_change = True
+    if payload.series_order is not None and int(payload.series_order) != int(getattr(novel, "series_order", 0) or 0):
+        has_non_tag_change = True
 
     tag_only_update = payload.tag_names is not None and not has_non_tag_change
     # Draft/Public の公開制御: draft は作者以外には 404 扱い
@@ -15892,6 +16395,18 @@ def update_novel(
         novel.is_public = payload.is_public
     if is_author and payload.creative_type is not None:
         novel.creative_type = payload.creative_type
+    if is_author and payload.fanfic_source_title is not None:
+        novel.fanfic_source_title = str(payload.fanfic_source_title or "").strip()[:120] or None
+    if is_author and payload.fanfic_characters is not None:
+        novel.fanfic_characters = str(payload.fanfic_characters or "").strip()[:4000] or None
+    if is_author and payload.fanfic_coupling is not None:
+        novel.fanfic_coupling = str(payload.fanfic_coupling or "").strip()[:120] or None
+    if is_author and payload.fanfic_notes is not None:
+        novel.fanfic_notes = str(payload.fanfic_notes or "").strip()[:4000] or None
+    if is_author and payload.series_name is not None:
+        novel.series_name = str(payload.series_name or "").strip()[:120] or None
+    if is_author and payload.series_order is not None:
+        novel.series_order = int(payload.series_order)
 
     # ★ タグ差し替え
     updated_tag_names: list[str] | None = None
@@ -15936,6 +16451,8 @@ def update_novel(
     db.refresh(novel)
     if (not was_public) and bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
+        notify_followers_author_new_novel(db, novel=novel)
+        notify_tag_followers_new_novel(db, novel=novel)
     invalidate_public_list_caches()
     return novel
 
@@ -16241,17 +16758,19 @@ def post_comment(novel_id: int, payload: dict = Body(...), request: Request = No
     novel = get_novel_in_site_or_404(db, request, novel_id)
     c = models.NovelComment(novel_id=novel_id, user_id=user.id, body=body)
     db.add(c)
+    db.flush()
     if novel.author_id != user.id:
         title = "小説にコメントが届きました"
         snippet = _truncate_text(body, 120)
-        notif_body = f"{user.username}が「{novel.title}」にコメントしました: {snippet}"
+        notif_body = f"「{novel.title}」にコメント: {snippet}"
+        link_url = f"/novels/{novel.id}#comment-{int(c.id)}"
         create_notification(
             db,
             user_id=novel.author_id,
             notif_type="novel_comment",
             title=title,
             body=notif_body,
-            link_url=f"/novels/{novel.id}",
+            link_url=link_url,
             actor_user_id=user.id,
         )
     db.commit()
@@ -16262,7 +16781,7 @@ def post_comment(novel_id: int, payload: dict = Body(...), request: Request = No
             user_id=novel.author_id,
             title=title,
             body=notif_body,
-            link_url=f"/novels/{novel.id}",
+            link_url=link_url,
         )
     return {"ok": True, "id": c.id}
 
@@ -16302,19 +16821,21 @@ def post_episode_comment(
     episode = get_episode_in_site_or_404(db, request, episode_id)
     comment = models.EpisodeComment(episode_id=episode_id, user_id=user.id, body=body)
     db.add(comment)
+    db.flush()
     novel = get_novel_in_site_or_404(db, request, episode.novel_id) if episode.novel_id else None
     if novel and novel.author_id != user.id:
         title = "エピソードにコメントが届きました"
         snippet = _truncate_text(body, 120)
         episode_title = episode.title or f"EP#{episode_id}"
-        notif_body = f"{user.username}が「{episode_title}」にコメントしました: {snippet}"
+        notif_body = f"「{episode_title}」にコメント: {snippet}"
+        link_url = f"/episodes/{episode.id}#comment-{int(comment.id)}"
         create_notification(
             db,
             user_id=novel.author_id,
             notif_type="episode_comment",
             title=title,
             body=notif_body,
-            link_url=f"/episodes/{episode.id}",
+            link_url=link_url,
             actor_user_id=user.id,
         )
     db.commit()
@@ -16325,7 +16846,7 @@ def post_episode_comment(
             user_id=novel.author_id,
             title=title,
             body=notif_body,
-            link_url=f"/episodes/{episode.id}",
+            link_url=link_url,
         )
     return {"ok": True, "id": comment.id}
 
@@ -16458,6 +16979,12 @@ def get_novel_detail(
         "age_limit": novel.age_limit,
         "is_ai_generated": novel.is_ai_generated,
         "creative_type": getattr(novel, "creative_type", "original"),
+        "fanfic_source_title": getattr(novel, "fanfic_source_title", None),
+        "fanfic_characters": getattr(novel, "fanfic_characters", None),
+        "fanfic_coupling": getattr(novel, "fanfic_coupling", None),
+        "fanfic_notes": getattr(novel, "fanfic_notes", None),
+        "series_name": getattr(novel, "series_name", None),
+        "series_order": getattr(novel, "series_order", None),
         "is_public": bool(getattr(novel, "is_public", True)),
         "status": getattr(novel, "status", "public"),
         "can_edit_full": bool(user and novel.author_id == user.id),
@@ -16529,6 +17056,1352 @@ def _expand_public_search_aliases(term: str) -> list[str]:
     return [raw]
 
 
+def _resolve_public_viewer_age(request: Request, db: Session) -> tuple[models.User | None, int | None]:
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+    viewer_age = None
+    if viewer and getattr(viewer, "birth_date", None):
+        viewer_age = calc_age(viewer.birth_date)
+    return viewer, viewer_age
+
+
+def _apply_public_novel_age_filter(query, viewer_age: int | None):
+    if AGE_RESTRICTION_DISABLED:
+        return query
+    if viewer_age is None:
+        return query.filter(models.Novel.age_limit == "all")
+    if viewer_age < 15:
+        return query.filter(models.Novel.age_limit == "all")
+    if viewer_age < 18:
+        return query.filter(models.Novel.age_limit.in_(["all", "r15"]))
+    return query
+
+
+def _build_public_cover_map(db: Session, novel_ids: list[int], site_key: str) -> dict[int, str]:
+    if not novel_ids:
+        return {}
+    cover_rows = (
+        db.query(
+            models.Episode.novel_id,
+            models.Episode.cover_image_url,
+            models.Episode.episode_number,
+            models.Episode.id,
+        )
+        .filter(models.Episode.novel_id.in_(novel_ids))
+        .filter(models.Episode.site_key == site_key)
+        .filter(models.Episode.cover_image_url.isnot(None))
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True)
+        .order_by(
+            models.Episode.novel_id,
+            models.Episode.episode_number.is_(None),
+            models.Episode.episode_number,
+            models.Episode.id,
+        )
+        .all()
+    )
+    cover_map: dict[int, str] = {}
+    for novel_id, cover_url, _, __ in cover_rows:
+        if novel_id not in cover_map and cover_url:
+            cover_map[int(novel_id)] = str(cover_url)
+    return cover_map
+
+
+@app.get("/api/tags")
+def list_tags(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=300),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    cache_key = build_public_cache_key(
+        "tags",
+        {
+            "site_key": site_key,
+            "limit": int(limit),
+            "viewer_age": viewer_age if viewer_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    q = (
+        db.query(
+            models.Tag.id.label("tag_id"),
+            models.Tag.name.label("tag_name"),
+            func.count(func.distinct(models.Novel.id)).label("novel_count"),
+        )
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
+        .filter(models.Novel.site_key == site_key, models.Novel.is_public == True)
+    )
+    q = _apply_public_novel_age_filter(q, viewer_age)
+    rows = (
+        q.group_by(models.Tag.id, models.Tag.name)
+        .order_by(text("novel_count DESC"), models.Tag.name.asc())
+        .limit(limit)
+        .all()
+    )
+    payload = [
+        {
+            "id": int(getattr(row, "tag_id", 0) or 0),
+            "name": str(getattr(row, "tag_name", "") or ""),
+            "novel_count": int(getattr(row, "novel_count", 0) or 0),
+        }
+        for row in rows
+    ]
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload
+
+
+@app.get("/api/tags/{tag_name}")
+def read_tag_detail(
+    tag_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    normalized = (tag_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "タグが見つかりません")
+    cache_key = build_public_cache_key(
+        "tag_detail",
+        {
+            "site_key": site_key,
+            "tag_name": normalized.lower(),
+            "viewer_age": viewer_age if viewer_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
+    tag = (
+        db.query(models.Tag)
+        .filter(func.lower(models.Tag.name) == normalized.lower())
+        .first()
+    )
+    if not tag:
+        raise HTTPException(404, "タグが見つかりません")
+
+    count_q = (
+        db.query(func.count(func.distinct(models.Novel.id)))
+        .join(models.NovelTag, models.NovelTag.novel_id == models.Novel.id)
+        .filter(models.NovelTag.tag_id == tag.id)
+        .filter(models.Novel.site_key == site_key, models.Novel.is_public == True)
+    )
+    count_q = _apply_public_novel_age_filter(count_q, viewer_age)
+    novel_count = int((count_q.scalar() or 0))
+
+    fav_subq = (
+        db.query(
+            models.NovelFavorite.novel_id.label("novel_id"),
+            func.count(models.NovelFavorite.id).label("favorite_count"),
+        )
+        .group_by(models.NovelFavorite.novel_id)
+        .subquery()
+    )
+    top_q = (
+        db.query(
+            models.Novel,
+            func.coalesce(fav_subq.c.favorite_count, 0).label("favorite_count"),
+        )
+        .join(models.NovelTag, models.NovelTag.novel_id == models.Novel.id)
+        .outerjoin(fav_subq, fav_subq.c.novel_id == models.Novel.id)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.NovelTag.tag_id == tag.id)
+        .filter(models.Novel.site_key == site_key, models.Novel.is_public == True)
+    )
+    top_q = _apply_public_novel_age_filter(top_q, viewer_age)
+    top_rows = (
+        top_q.order_by(
+            (models.Novel.like_count * 3 + func.coalesce(fav_subq.c.favorite_count, 0) * 5).desc(),
+            models.Novel.id.desc(),
+        )
+        .limit(3)
+        .all()
+    )
+    top_novels = [
+        {
+            "id": int(novel.id),
+            "title": str(novel.title or ""),
+            "author_username": str(getattr(getattr(novel, "author", None), "username", "") or ""),
+            "like_count": int(getattr(novel, "like_count", 0) or 0),
+            "favorite_count": int(favorite_count or 0),
+            "tag_names": [
+                nt.tag.name
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+        }
+        for novel, favorite_count in top_rows
+    ]
+    follower_count = int(
+        db.query(func.count(models.TagFollow.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .scalar()
+        or 0
+    )
+    payload = {
+        "id": int(tag.id),
+        "name": str(tag.name or normalized),
+        "description": f"「{tag.name}」に関連する作品一覧です。",
+        "novel_count": novel_count,
+        "follower_count": follower_count,
+        "popular_novels": top_novels,
+    }
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload
+
+
+@app.get("/api/tags/{tag_name}/novels")
+def list_tag_novels(
+    tag_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    sort: str = Query("popular"),
+    limit: int = Query(60, ge=1, le=120),
+    offset: int = Query(0, ge=0),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    normalized = (tag_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "タグが見つかりません")
+    if sort not in ("popular", "new", "likes", "comments"):
+        raise HTTPException(400, "sort は popular/new/likes/comments のみ指定できます")
+
+    tag = (
+        db.query(models.Tag)
+        .filter(func.lower(models.Tag.name) == normalized.lower())
+        .first()
+    )
+    if not tag:
+        raise HTTPException(404, "タグが見つかりません")
+
+    cache_key = build_public_cache_key(
+        "tag_novels",
+        {
+            "site_key": site_key,
+            "tag_id": int(tag.id),
+            "sort": sort,
+            "limit": int(limit),
+            "offset": int(offset),
+            "viewer_age": viewer_age if viewer_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    fav_subq = (
+        db.query(
+            models.NovelFavorite.novel_id.label("novel_id"),
+            func.count(models.NovelFavorite.id).label("favorite_count"),
+        )
+        .group_by(models.NovelFavorite.novel_id)
+        .subquery()
+    )
+    comment_subq = (
+        db.query(
+            models.NovelComment.novel_id.label("novel_id"),
+            func.count(models.NovelComment.id).label("comment_count"),
+        )
+        .group_by(models.NovelComment.novel_id)
+        .subquery()
+    )
+
+    q = (
+        db.query(
+            models.Novel,
+            func.coalesce(fav_subq.c.favorite_count, 0).label("favorite_count"),
+            func.coalesce(comment_subq.c.comment_count, 0).label("comment_count"),
+        )
+        .join(models.NovelTag, models.NovelTag.novel_id == models.Novel.id)
+        .outerjoin(fav_subq, fav_subq.c.novel_id == models.Novel.id)
+        .outerjoin(comment_subq, comment_subq.c.novel_id == models.Novel.id)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.NovelTag.tag_id == tag.id)
+        .filter(models.Novel.site_key == site_key, models.Novel.is_public == True)
+    )
+    q = _apply_public_novel_age_filter(q, viewer_age)
+    if sort == "new":
+        q = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+    elif sort == "likes":
+        q = q.order_by(models.Novel.like_count.desc(), models.Novel.id.desc())
+    elif sort == "comments":
+        q = q.order_by(
+            func.coalesce(comment_subq.c.comment_count, 0).desc(),
+            models.Novel.id.desc(),
+        )
+    else:
+        q = q.order_by(
+            (models.Novel.like_count * 3 + func.coalesce(fav_subq.c.favorite_count, 0) * 5 + func.coalesce(comment_subq.c.comment_count, 0) * 2).desc(),
+            models.Novel.id.desc(),
+        )
+
+    rows = q.offset(offset).limit(limit).all()
+    novels = [novel for novel, _, __ in rows]
+    novel_ids = [int(novel.id) for novel in novels]
+    cover_map = _build_public_cover_map(db, novel_ids, site_key)
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+
+    payload = [
+        {
+            "id": int(novel.id),
+            "title": str(novel.title or ""),
+            "description": str(novel.description or ""),
+            "created_at": novel.created_at,
+            "author_id": int(getattr(novel, "author_id", 0) or 0),
+            "author_username": str(getattr(getattr(novel, "author", None), "username", "") or ""),
+            "tag_names": [
+                nt.tag.name
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+            "view_count": int(getattr(novel, "view_count", 0) or 0),
+            "like_count": int(getattr(novel, "like_count", 0) or 0),
+            "favorite_count": int(favorite_count or 0),
+            "comment_count": int(comment_count or 0),
+            "total_char_count": int(char_counts.get(int(novel.id), 0) or 0),
+            "age_limit": str(getattr(novel, "age_limit", "all") or "all"),
+            "creative_type": str(getattr(novel, "creative_type", "original") or "original"),
+            "cover_image_url": cover_map.get(int(novel.id)),
+        }
+        for novel, favorite_count, comment_count in rows
+    ]
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload
+
+
+@app.get("/api/tags/{tag_name}/related")
+def list_related_tags(
+    tag_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(12, ge=1, le=50),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    normalized = (tag_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "タグが見つかりません")
+    tag = (
+        db.query(models.Tag)
+        .filter(func.lower(models.Tag.name) == normalized.lower())
+        .first()
+    )
+    if not tag:
+        raise HTTPException(404, "タグが見つかりません")
+    cache_key = build_public_cache_key(
+        "tag_related",
+        {
+            "site_key": site_key,
+            "tag_id": int(tag.id),
+            "limit": int(limit),
+            "viewer_age": viewer_age if viewer_age is not None else -1,
+            "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
+        },
+    )
+    cached = redis_json_get(cache_key)
+    if isinstance(cached, list):
+        return cached
+
+    nt_base = aliased(models.NovelTag)
+    nt_rel = aliased(models.NovelTag)
+    rel_tag = aliased(models.Tag)
+    q = (
+        db.query(
+            rel_tag.id.label("id"),
+            rel_tag.name.label("name"),
+            func.count(func.distinct(nt_base.novel_id)).label("co_count"),
+        )
+        .join(nt_rel, nt_rel.novel_id == nt_base.novel_id)
+        .join(rel_tag, rel_tag.id == nt_rel.tag_id)
+        .join(models.Novel, models.Novel.id == nt_base.novel_id)
+        .filter(nt_base.tag_id == tag.id)
+        .filter(nt_rel.tag_id != tag.id)
+        .filter(models.Novel.site_key == site_key, models.Novel.is_public == True)
+    )
+    q = _apply_public_novel_age_filter(q, viewer_age)
+    rows = (
+        q.group_by(rel_tag.id, rel_tag.name)
+        .order_by(text("co_count DESC"), rel_tag.name.asc())
+        .limit(limit)
+        .all()
+    )
+    payload = [
+        {
+            "id": int(getattr(row, "id", 0) or 0),
+            "name": str(getattr(row, "name", "") or ""),
+            "co_occurrence_count": int(getattr(row, "co_count", 0) or 0),
+        }
+        for row in rows
+    ]
+    redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
+    return payload
+
+
+@app.post("/api/tags/{tag_name}/follow")
+def follow_tag(tag_name: str, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    normalized = (tag_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "タグが見つかりません")
+    tag = (
+        db.query(models.Tag)
+        .filter(func.lower(models.Tag.name) == normalized.lower())
+        .first()
+    )
+    if not tag:
+        raise HTTPException(404, "タグが見つかりません")
+
+    exists = (
+        db.query(models.TagFollow)
+        .filter(models.TagFollow.user_id == int(user.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .first()
+    )
+    if not exists:
+        try:
+            db.add(models.TagFollow(user_id=int(user.id), tag_id=int(tag.id)))
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+    follower_count = int(
+        db.query(func.count(models.TagFollow.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .scalar()
+        or 0
+    )
+    invalidate_public_list_caches()
+    return {
+        "ok": True,
+        "is_following": True,
+        "follower_count": follower_count,
+        "tag_id": int(tag.id),
+        "tag_name": str(tag.name or ""),
+    }
+
+
+@app.delete("/api/tags/{tag_name}/follow")
+def unfollow_tag(tag_name: str, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    normalized = (tag_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "タグが見つかりません")
+    tag = (
+        db.query(models.Tag)
+        .filter(func.lower(models.Tag.name) == normalized.lower())
+        .first()
+    )
+    if not tag:
+        raise HTTPException(404, "タグが見つかりません")
+    follow = (
+        db.query(models.TagFollow)
+        .filter(models.TagFollow.user_id == int(user.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .first()
+    )
+    if follow:
+        db.delete(follow)
+        db.commit()
+    follower_count = int(
+        db.query(func.count(models.TagFollow.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .scalar()
+        or 0
+    )
+    invalidate_public_list_caches()
+    return {
+        "ok": True,
+        "is_following": False,
+        "follower_count": follower_count,
+        "tag_id": int(tag.id),
+        "tag_name": str(tag.name or ""),
+    }
+
+
+@app.get("/api/tags/{tag_name}/follow-status")
+def read_tag_follow_status(tag_name: str, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    normalized = (tag_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "タグが見つかりません")
+    tag = (
+        db.query(models.Tag)
+        .filter(func.lower(models.Tag.name) == normalized.lower())
+        .first()
+    )
+    if not tag:
+        raise HTTPException(404, "タグが見つかりません")
+    is_following = (
+        db.query(models.TagFollow.id)
+        .filter(models.TagFollow.user_id == int(user.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .first()
+        is not None
+    )
+    follower_count = int(
+        db.query(func.count(models.TagFollow.id))
+        .filter(models.TagFollow.tag_id == int(tag.id))
+        .scalar()
+        or 0
+    )
+    return {
+        "is_following": bool(is_following),
+        "follower_count": follower_count,
+        "tag_id": int(tag.id),
+        "tag_name": str(tag.name or ""),
+    }
+
+
+@app.get("/api/me/tag-follows")
+def list_my_tag_follows(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=300),
+):
+    user = require_current_user(request, db)
+    rows = (
+        db.query(models.TagFollow, models.Tag)
+        .join(models.Tag, models.Tag.id == models.TagFollow.tag_id)
+        .filter(models.TagFollow.user_id == int(user.id))
+        .order_by(models.TagFollow.created_at.desc(), models.TagFollow.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "tag_id": int(getattr(tag, "id", 0) or 0),
+            "tag_name": str(getattr(tag, "name", "") or ""),
+            "followed_at": getattr(rel, "created_at", None),
+        }
+        for rel, tag in rows
+    ]
+
+
+@app.get("/api/series/{series_name}/novels")
+def list_series_novels(
+    series_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(60, ge=1, le=120),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    normalized = (series_name or "").strip()
+    if not normalized:
+        raise HTTPException(404, "シリーズが見つかりません")
+    q = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(func.lower(models.Novel.series_name) == normalized.lower())
+    )
+    q = _apply_public_novel_age_filter(q, viewer_age)
+    novels = (
+        q.order_by(
+            models.Novel.series_order.is_(None),
+            models.Novel.series_order.asc(),
+            models.Novel.created_at.asc(),
+            models.Novel.id.asc(),
+        )
+        .limit(limit)
+        .all()
+    )
+    novel_ids = [int(n.id) for n in novels]
+    cover_map = _build_public_cover_map(db, novel_ids, site_key)
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+    favorite_rows = (
+        db.query(models.NovelFavorite.novel_id, func.count(models.NovelFavorite.id))
+        .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+        .group_by(models.NovelFavorite.novel_id)
+        .all()
+    ) if novel_ids else []
+    favorite_counts = {int(nid): int(cnt or 0) for nid, cnt in favorite_rows}
+    return [
+        {
+            "id": int(n.id),
+            "title": str(n.title or ""),
+            "description": str(n.description or ""),
+            "author_id": int(getattr(n, "author_id", 0) or 0),
+            "author_username": str(getattr(getattr(n, "author", None), "username", "") or ""),
+            "created_at": n.created_at,
+            "series_name": str(getattr(n, "series_name", "") or ""),
+            "series_order": getattr(n, "series_order", None),
+            "view_count": int(getattr(n, "view_count", 0) or 0),
+            "like_count": int(getattr(n, "like_count", 0) or 0),
+            "favorite_count": int(favorite_counts.get(int(n.id), 0)),
+            "total_char_count": int(char_counts.get(int(n.id), 0) or 0),
+            "age_limit": str(getattr(n, "age_limit", "all") or "all"),
+            "creative_type": str(getattr(n, "creative_type", "original") or "original"),
+            "cover_image_url": cover_map.get(int(n.id)),
+            "tag_names": [
+                nt.tag.name
+                for nt in (getattr(n, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+        }
+        for n in novels
+    ]
+
+
+@app.get("/api/series")
+def list_series_overview(
+    request: Request,
+    db: Session = Depends(get_db),
+    q: str | None = Query(default=None),
+    limit: int = Query(30, ge=1, le=100),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    keyword = str(q or "").strip()
+
+    rows_q = (
+        db.query(
+            models.Novel.series_name.label("series_name"),
+            func.count(models.Novel.id).label("novel_count"),
+            func.max(models.Novel.created_at).label("latest_created_at"),
+        )
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.Novel.series_name.isnot(None))
+        .filter(func.length(func.trim(models.Novel.series_name)) > 0)
+    )
+    rows_q = _apply_public_novel_age_filter(rows_q, viewer_age)
+    if keyword:
+        rows_q = rows_q.filter(models.Novel.series_name.ilike(f"%{keyword}%"))
+    rows = (
+        rows_q.group_by(models.Novel.series_name)
+        .order_by(text("novel_count DESC"), text("latest_created_at DESC"), models.Novel.series_name.asc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "series_name": str(getattr(row, "series_name", "") or ""),
+            "novel_count": int(getattr(row, "novel_count", 0) or 0),
+            "latest_created_at": getattr(row, "latest_created_at", None),
+        }
+        for row in rows
+        if str(getattr(row, "series_name", "") or "").strip()
+    ]
+
+
+@app.get("/api/feed/following")
+def list_following_feed(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    followed_author_ids = [
+        int(uid)
+        for (uid,) in db.query(models.UserFollow.followed_user_id)
+        .filter(models.UserFollow.follower_user_id == user.id)
+        .all()
+        if int(uid or 0) > 0
+    ]
+    if not followed_author_ids:
+        return []
+
+    q = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.Novel.author_id.in_(followed_author_ids))
+    )
+    q = _apply_public_novel_age_filter(q, user_age)
+    novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).limit(limit).all()
+    if not novels:
+        return []
+    return _serialize_feed_novels_for_user(db, user=user, novels=novels, site_key=site_key)
+
+
+@app.get("/api/feed/following-tags")
+def list_following_tags_feed(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    followed_tag_ids = [
+        int(tag_id)
+        for (tag_id,) in db.query(models.TagFollow.tag_id)
+        .filter(models.TagFollow.user_id == int(user.id))
+        .all()
+        if int(tag_id or 0) > 0
+    ]
+    if not followed_tag_ids:
+        return []
+
+    id_rows = (
+        db.query(models.Novel.id, models.Novel.created_at)
+        .join(models.NovelTag, models.NovelTag.novel_id == models.Novel.id)
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.NovelTag.tag_id.in_(followed_tag_ids))
+    )
+    id_rows = _apply_public_novel_age_filter(id_rows, user_age)
+    id_rows = (
+        id_rows.order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+        .limit(max(limit * 4, limit))
+        .all()
+    )
+    ordered_ids: list[int] = []
+    seen_ids: set[int] = set()
+    for novel_id, _ in id_rows:
+        nid = int(novel_id or 0)
+        if nid <= 0 or nid in seen_ids:
+            continue
+        ordered_ids.append(nid)
+        seen_ids.add(nid)
+        if len(ordered_ids) >= int(limit):
+            break
+    if not ordered_ids:
+        return []
+
+    novels = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.id.in_(ordered_ids))
+        .all()
+    )
+    by_id = {int(n.id): n for n in novels}
+    ordered_novels = [by_id[nid] for nid in ordered_ids if nid in by_id]
+    if not ordered_novels:
+        return []
+    return _serialize_feed_novels_for_user(
+        db,
+        user=user,
+        novels=ordered_novels,
+        site_key=site_key,
+    )
+
+
+@app.get("/api/feed/history")
+def list_history_feed(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(12, ge=1, le=50),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    rows = (
+        db.query(models.UserViewHistory.target_id)
+        .filter(models.UserViewHistory.user_id == int(user.id))
+        .filter(models.UserViewHistory.target_type == "novel")
+        .filter(models.UserViewHistory.site_key == site_key)
+        .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+        .limit(max(int(limit) * 3, int(limit)))
+        .all()
+    )
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for (target_id,) in rows:
+        nid = int(target_id or 0)
+        if nid <= 0 or nid in seen:
+            continue
+        ordered_ids.append(nid)
+        seen.add(nid)
+        if len(ordered_ids) >= int(limit):
+            break
+    if not ordered_ids:
+        return []
+    q = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.id.in_(ordered_ids))
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+    )
+    q = _apply_public_novel_age_filter(q, user_age)
+    novels = q.all()
+    by_id = {int(n.id): n for n in novels}
+    ordered_novels = [by_id[nid] for nid in ordered_ids if nid in by_id]
+    return _serialize_feed_novels_for_user(db, user=user, novels=ordered_novels, site_key=site_key)
+
+
+@app.get("/api/feed/pickups")
+def list_pickups_feed(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(8, ge=1, le=30),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    since = date.today() - timedelta(days=30)
+    metric_subq = (
+        db.query(
+            models.NovelDailyMetric.novel_id.label("novel_id"),
+            func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0).label("views30"),
+            func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0).label("likes30"),
+            func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0).label("favorites30"),
+        )
+        .filter(models.NovelDailyMetric.date >= since)
+        .group_by(models.NovelDailyMetric.novel_id)
+        .subquery()
+    )
+    q = (
+        db.query(models.Novel)
+        .outerjoin(metric_subq, metric_subq.c.novel_id == models.Novel.id)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .order_by(
+            (
+                func.coalesce(metric_subq.c.likes30, 0) * 4
+                + func.coalesce(metric_subq.c.favorites30, 0) * 6
+                + func.coalesce(metric_subq.c.views30, 0)
+            ).desc(),
+            models.Novel.created_at.desc(),
+            models.Novel.id.desc(),
+        )
+        .limit(limit)
+    )
+    q = _apply_public_novel_age_filter(q, user_age)
+    novels = q.all()
+    return _serialize_feed_novels_for_user(db, user=user, novels=novels, site_key=site_key)
+
+
+@app.get("/api/trending-tags")
+def list_trending_tags(
+    request: Request,
+    db: Session = Depends(get_db),
+    days: int = Query(7, ge=1, le=31),
+    limit: int = Query(20, ge=1, le=100),
+):
+    site_key = resolve_site_key(request)
+    _, viewer_age = _resolve_public_viewer_age(request, db)
+    since = date.today() - timedelta(days=max(1, int(days) - 1))
+    metric_subq = (
+        db.query(
+            models.NovelDailyMetric.novel_id.label("novel_id"),
+            (
+                func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0) * 3
+                + func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0) * 5
+                + func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0)
+            ).label("score"),
+        )
+        .filter(models.NovelDailyMetric.date >= since)
+        .group_by(models.NovelDailyMetric.novel_id)
+        .subquery()
+    )
+    q = (
+        db.query(
+            models.Tag.id.label("tag_id"),
+            models.Tag.name.label("tag_name"),
+            func.coalesce(func.sum(metric_subq.c.score), 0).label("trend_score"),
+            func.count(func.distinct(models.Novel.id)).label("novel_count"),
+        )
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
+        .outerjoin(metric_subq, metric_subq.c.novel_id == models.Novel.id)
+        .filter(models.Novel.site_key == site_key, models.Novel.is_public == True)
+    )
+    q = _apply_public_novel_age_filter(q, viewer_age)
+    rows = (
+        q.group_by(models.Tag.id, models.Tag.name)
+        .order_by(text("trend_score DESC"), text("novel_count DESC"), models.Tag.name.asc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": int(getattr(row, "tag_id", 0) or 0),
+            "name": str(getattr(row, "tag_name", "") or ""),
+            "trend_score": int(getattr(row, "trend_score", 0) or 0),
+            "novel_count": int(getattr(row, "novel_count", 0) or 0),
+        }
+        for row in rows
+    ]
+
+
+def _serialize_feed_novels_for_user(
+    db: Session,
+    *,
+    user: models.User,
+    novels: list[models.Novel],
+    site_key: str,
+) -> list[dict]:
+    if not novels:
+        return []
+
+    novel_ids = [int(n.id) for n in novels]
+    cover_map = _build_public_cover_map(db, novel_ids, site_key)
+    char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
+    favorite_rows = (
+        db.query(models.NovelFavorite.novel_id, func.count(models.NovelFavorite.id))
+        .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+        .group_by(models.NovelFavorite.novel_id)
+        .all()
+    )
+    favorite_counts = {int(novel_id): int(count or 0) for novel_id, count in favorite_rows}
+    liked_ids = {
+        int(nid)
+        for (nid,) in db.query(models.NovelLike.novel_id)
+        .filter(
+            models.NovelLike.user_id == user.id,
+            models.NovelLike.novel_id.in_(novel_ids),
+        )
+        .all()
+    }
+    favorited_ids = {
+        int(nid)
+        for (nid,) in db.query(models.NovelFavorite.novel_id)
+        .filter(
+            models.NovelFavorite.user_id == user.id,
+            models.NovelFavorite.novel_id.in_(novel_ids),
+        )
+        .all()
+    }
+    return [
+        {
+            "id": int(novel.id),
+            "title": str(novel.title or ""),
+            "description": str(novel.description or ""),
+            "created_at": novel.created_at,
+            "author_id": int(novel.author_id),
+            "author_username": novel.author.username if novel.author else None,
+            "tag_names": [
+                nt.tag.name
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+            "view_count": int(getattr(novel, "view_count", 0) or 0),
+            "like_count": int(getattr(novel, "like_count", 0) or 0),
+            "favorite_count": int(favorite_counts.get(int(novel.id), 0)),
+            "total_char_count": int(char_counts.get(int(novel.id), 0) or 0),
+            "age_limit": str(getattr(novel, "age_limit", "all") or "all"),
+            "creative_type": str(getattr(novel, "creative_type", "original") or "original"),
+            "is_liked": int(novel.id) in liked_ids,
+            "is_favorited": int(novel.id) in favorited_ids,
+            "cover_image_url": cover_map.get(int(novel.id)),
+        }
+        for novel in novels
+    ]
+
+
+@app.get("/api/feed/new")
+def list_new_feed(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    q = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+    )
+    q = _apply_public_novel_age_filter(q, user_age)
+    novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).limit(limit).all()
+    return _serialize_feed_novels_for_user(db, user=user, novels=novels, site_key=site_key)
+
+
+@app.get("/api/feed/trending")
+def list_trending_feed(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    recent_from = date.today() - timedelta(days=7)
+    metric_subq = (
+        db.query(
+            models.NovelDailyMetric.novel_id.label("novel_id"),
+            func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0).label("views7"),
+            func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0).label("likes7"),
+            func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0).label("favorites7"),
+        )
+        .filter(models.NovelDailyMetric.date >= recent_from)
+        .group_by(models.NovelDailyMetric.novel_id)
+        .subquery()
+    )
+
+    q = (
+        db.query(models.Novel)
+        .outerjoin(metric_subq, metric_subq.c.novel_id == models.Novel.id)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+        )
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .order_by(
+            (
+                func.coalesce(metric_subq.c.likes7, 0) * 3
+                + func.coalesce(metric_subq.c.favorites7, 0) * 5
+                + func.coalesce(metric_subq.c.views7, 0)
+            ).desc(),
+            models.Novel.created_at.desc(),
+            models.Novel.id.desc(),
+        )
+    )
+    q = _apply_public_novel_age_filter(q, user_age)
+    novels = q.limit(limit).all()
+    return _serialize_feed_novels_for_user(db, user=user, novels=novels, site_key=site_key)
+
+
+@app.get("/api/feed/recommended")
+def list_recommended_feed(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    limit: int = Query(12, ge=1, le=50),
+    lang: str | None = None,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    site_key = resolve_site_key(request)
+    user_age = calc_age(getattr(user, "birth_date", None))
+    followed_author_ids = [
+        int(uid)
+        for (uid,) in db.query(models.UserFollow.followed_user_id)
+        .filter(models.UserFollow.follower_user_id == int(user.id))
+        .all()
+        if int(uid or 0) > 0
+    ]
+
+    liked_novel_ids = [
+        int(nid)
+        for (nid,) in db.query(models.NovelLike.novel_id)
+        .join(models.Novel, models.Novel.id == models.NovelLike.novel_id)
+        .filter(models.NovelLike.user_id == int(user.id))
+        .filter(models.Novel.site_key == site_key)
+        .limit(300)
+        .all()
+        if int(nid or 0) > 0
+    ]
+    favorited_novel_ids = [
+        int(nid)
+        for (nid,) in db.query(models.NovelFavorite.novel_id)
+        .join(models.Novel, models.Novel.id == models.NovelFavorite.novel_id)
+        .filter(models.NovelFavorite.user_id == int(user.id))
+        .filter(models.Novel.site_key == site_key)
+        .limit(300)
+        .all()
+        if int(nid or 0) > 0
+    ]
+    viewed_novel_ids = [
+        int(nid)
+        for (nid,) in db.query(models.UserViewHistory.target_id)
+        .filter(models.UserViewHistory.user_id == int(user.id))
+        .filter(models.UserViewHistory.target_type == "novel")
+        .filter(models.UserViewHistory.site_key == site_key)
+        .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+        .limit(500)
+        .all()
+        if int(nid or 0) > 0
+    ]
+    followed_tag_ids = [
+        int(tag_id)
+        for (tag_id,) in db.query(models.TagFollow.tag_id)
+        .filter(models.TagFollow.user_id == int(user.id))
+        .all()
+        if int(tag_id or 0) > 0
+    ]
+
+    tag_weights: dict[int, float] = {}
+
+    def _accumulate_tag_weights(novel_ids: list[int], weight: float, cap: int = 200) -> None:
+        if not novel_ids:
+            return
+        rows = (
+            db.query(models.NovelTag.tag_id, func.count(models.NovelTag.novel_id))
+            .filter(models.NovelTag.novel_id.in_(novel_ids[:cap]))
+            .group_by(models.NovelTag.tag_id)
+            .all()
+        )
+        for tag_id, cnt in rows:
+            tid = int(tag_id or 0)
+            if tid <= 0:
+                continue
+            tag_weights[tid] = tag_weights.get(tid, 0.0) + float(weight) * float(cnt or 0)
+
+    _accumulate_tag_weights(liked_novel_ids, weight=3.0)
+    _accumulate_tag_weights(favorited_novel_ids, weight=5.0)
+    _accumulate_tag_weights(viewed_novel_ids, weight=2.0, cap=300)
+
+    recent_view_rows = (
+        db.query(models.UserViewHistory.target_id)
+        .filter(models.UserViewHistory.user_id == int(user.id))
+        .filter(models.UserViewHistory.target_type == "novel")
+        .filter(models.UserViewHistory.site_key == site_key)
+        .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+        .limit(120)
+        .all()
+    )
+    recent_unique: list[int] = []
+    recent_seen: set[int] = set()
+    for (target_id,) in recent_view_rows:
+        nid = int(target_id or 0)
+        if nid <= 0 or nid in recent_seen:
+            continue
+        recent_seen.add(nid)
+        recent_unique.append(nid)
+    if recent_unique:
+        recent_decay_map: dict[int, float] = {}
+        for idx, nid in enumerate(recent_unique):
+            recent_decay_map[nid] = max(0.2, 1.0 - (idx * 0.015))
+        rows = (
+            db.query(models.NovelTag.novel_id, models.NovelTag.tag_id)
+            .filter(models.NovelTag.novel_id.in_(recent_unique))
+            .all()
+        )
+        for novel_id, tag_id in rows:
+            nid = int(novel_id or 0)
+            tid = int(tag_id or 0)
+            if tid <= 0 or nid <= 0:
+                continue
+            decay = float(recent_decay_map.get(nid, 0.2))
+            tag_weights[tid] = tag_weights.get(tid, 0.0) + (2.5 * decay)
+    for tag_id in followed_tag_ids:
+        tag_weights[int(tag_id)] = tag_weights.get(int(tag_id), 0.0) + 6.0
+
+    recent_viewed_ids = set(viewed_novel_ids[:RECOMMENDED_RECENT_VIEW_EXCLUDE_COUNT])
+    interacted_ids = set(liked_novel_ids) | set(favorited_novel_ids) | set(viewed_novel_ids)
+
+    creative_pref_score = {"original": 0.0, "fanfic": 0.0}
+    if liked_novel_ids:
+        liked_type_rows = (
+            db.query(models.Novel.creative_type, func.count(models.Novel.id))
+            .filter(models.Novel.id.in_(liked_novel_ids[:300]))
+            .group_by(models.Novel.creative_type)
+            .all()
+        )
+        for ctype, cnt in liked_type_rows:
+            key = str(ctype or "original")
+            if key in creative_pref_score:
+                creative_pref_score[key] += float(cnt or 0) * 3.0
+    if favorited_novel_ids:
+        fav_type_rows = (
+            db.query(models.Novel.creative_type, func.count(models.Novel.id))
+            .filter(models.Novel.id.in_(favorited_novel_ids[:300]))
+            .group_by(models.Novel.creative_type)
+            .all()
+        )
+        for ctype, cnt in fav_type_rows:
+            key = str(ctype or "original")
+            if key in creative_pref_score:
+                creative_pref_score[key] += float(cnt or 0) * 5.0
+    if viewed_novel_ids:
+        viewed_type_rows = (
+            db.query(models.Novel.creative_type, func.count(models.Novel.id))
+            .filter(models.Novel.id.in_(viewed_novel_ids[:500]))
+            .group_by(models.Novel.creative_type)
+            .all()
+        )
+        for ctype, cnt in viewed_type_rows:
+            key = str(ctype or "original")
+            if key in creative_pref_score:
+                creative_pref_score[key] += float(cnt or 0)
+    preferred_creative_type: str | None = None
+    pref_total = float(creative_pref_score["original"] + creative_pref_score["fanfic"])
+    if pref_total > 0:
+        if creative_pref_score["fanfic"] / pref_total >= RECOMMENDED_CREATIVE_PREFERENCE_THRESHOLD:
+            preferred_creative_type = "fanfic"
+        elif creative_pref_score["original"] / pref_total >= RECOMMENDED_CREATIVE_PREFERENCE_THRESHOLD:
+            preferred_creative_type = "original"
+
+    candidate_ids: list[int] = []
+    if tag_weights:
+        rows = (
+            db.query(models.NovelTag.novel_id)
+            .filter(models.NovelTag.tag_id.in_(list(tag_weights.keys())[:300]))
+            .limit(2000)
+            .all()
+        )
+        seen: set[int] = set()
+        for (novel_id,) in rows:
+            nid = int(novel_id or 0)
+            if nid <= 0 or nid in seen:
+                continue
+            seen.add(nid)
+            candidate_ids.append(nid)
+            if len(candidate_ids) >= 600:
+                break
+    if followed_author_ids and len(candidate_ids) < 600:
+        existing_candidate_ids = set(candidate_ids)
+        rows = (
+            db.query(models.Novel.id)
+            .filter(models.Novel.site_key == site_key)
+            .filter(models.Novel.is_public == True)
+            .filter(models.Novel.author_id.in_(followed_author_ids))
+            .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+            .limit(300)
+            .all()
+        )
+        for (novel_id,) in rows:
+            nid = int(novel_id or 0)
+            if nid <= 0 or nid in existing_candidate_ids:
+                continue
+            candidate_ids.append(nid)
+            existing_candidate_ids.add(nid)
+            if len(candidate_ids) >= 600:
+                break
+
+    novels: list[models.Novel] = []
+    if candidate_ids:
+        q = (
+            db.query(models.Novel)
+            .options(
+                selectinload(models.Novel.author),
+                selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            )
+            .filter(models.Novel.id.in_(candidate_ids))
+            .filter(models.Novel.site_key == site_key)
+            .filter(models.Novel.is_public == True)
+        )
+        q = _apply_public_novel_age_filter(q, user_age)
+        novels = q.all()
+
+    if novels:
+        favorite_rows = (
+            db.query(models.NovelFavorite.novel_id, func.count(models.NovelFavorite.id))
+            .filter(models.NovelFavorite.novel_id.in_([int(n.id) for n in novels]))
+            .group_by(models.NovelFavorite.novel_id)
+            .all()
+        )
+        favorite_counts = {int(nid): int(cnt or 0) for nid, cnt in favorite_rows}
+        scored: list[tuple[float, models.Novel, dict[str, float]]] = []
+        now = datetime.utcnow()
+        for novel in novels:
+            nid = int(novel.id)
+            if nid in interacted_ids:
+                continue
+            if nid in recent_viewed_ids:
+                continue
+            overlap = 0.0
+            overlap_recent = 0.0
+            for nt in (getattr(novel, "novel_tags", []) or []):
+                tag = getattr(nt, "tag", None)
+                tid = int(getattr(tag, "id", 0) or 0)
+                if tid <= 0:
+                    continue
+                weighted = float(tag_weights.get(tid, 0.0))
+                overlap += weighted
+                overlap_recent += min(2.5, weighted)
+            if overlap <= 0:
+                continue
+            created_at = getattr(novel, "created_at", None)
+            days_old = 365.0
+            if created_at:
+                days_old = max(0.0, (now - created_at).total_seconds() / 86400.0)
+            recency_boost = max(0.0, 14.0 - min(days_old, 14.0))
+            followed_author_boost = (
+                RECOMMENDED_FOLLOWED_AUTHOR_BOOST
+                if int(getattr(novel, "author_id", 0) or 0) in followed_author_ids
+                else 0.0
+            )
+            creative_boost = 0.0
+            if preferred_creative_type:
+                creative_boost = (
+                    RECOMMENDED_CREATIVE_MATCH_BOOST
+                    if str(getattr(novel, "creative_type", "original") or "original") == preferred_creative_type
+                    else RECOMMENDED_CREATIVE_MISMATCH_PENALTY
+                )
+            score = (
+                overlap
+                + float(getattr(novel, "like_count", 0) or 0) * 0.25
+                + float(favorite_counts.get(nid, 0)) * 0.5
+                + recency_boost
+                + followed_author_boost
+                + creative_boost
+            )
+            scored.append(
+                (
+                    score,
+                    novel,
+                    {
+                        "tag_overlap": round(overlap, 2),
+                        "recent_interest_overlap": round(overlap_recent, 2),
+                        "recency_boost": round(recency_boost, 2),
+                        "followed_author_boost": round(followed_author_boost, 2),
+                        "creative_boost": round(creative_boost, 2),
+                    },
+                )
+            )
+        scored.sort(
+            key=lambda x: (x[0], getattr(x[1], "created_at", datetime.min), int(getattr(x[1], "id", 0))),
+            reverse=True,
+        )
+        selected = [novel for _, novel, _ in scored[: int(limit)]]
+        if selected:
+            payload = _serialize_feed_novels_for_user(db, user=user, novels=selected, site_key=site_key)
+            reason_map = {
+                int(getattr(novel, "id", 0)): {
+                    "recommendation_score": float(score),
+                    "recommendation_reasons": [
+                        {"key": "tag_overlap", "value": float(reasons.get("tag_overlap", 0.0))},
+                        {"key": "recent_interest_overlap", "value": float(reasons.get("recent_interest_overlap", 0.0))},
+                        {"key": "recency_boost", "value": float(reasons.get("recency_boost", 0.0))},
+                        {"key": "followed_author_boost", "value": float(reasons.get("followed_author_boost", 0.0))},
+                        {"key": "creative_boost", "value": float(reasons.get("creative_boost", 0.0))},
+                    ],
+                }
+                for score, novel, reasons in scored[: int(limit)]
+            }
+            for item in payload:
+                extra = reason_map.get(int(item.get("id", 0) or 0))
+                if extra:
+                    item.update(extra)
+            return payload
+
+    return list_recommended_public_novels_service(
+        request=request,
+        background_tasks=background_tasks,
+        limit=limit,
+        lang=lang,
+        db=db,
+    )
+
+
 @app.get("/api/public/novels")
 def list_public_novels(
     request: Request,
@@ -16536,10 +18409,23 @@ def list_public_novels(
     q: str | None = None,
     exclude: str | None = None,
     tag: str | None = None,
+    sort: str = Query("new"),
+    age_limit: str | None = None,
+    creative_type: str | None = None,
     lang: str | None = None,
     db: Session = Depends(get_db),
 ):
     site_key = resolve_site_key(request)
+    normalized_sort = (sort or "new").strip().lower()
+    if normalized_sort not in ("new", "popular", "likes", "comments"):
+        raise HTTPException(400, "sort は new/popular/likes/comments のみ指定できます")
+    normalized_age_limit = (age_limit or "").strip().lower()
+    if normalized_age_limit and normalized_age_limit not in ("all", "r15", "r18"):
+        raise HTTPException(400, "age_limit は all/r15/r18 のみ指定できます")
+    normalized_creative_type = (creative_type or "").strip().lower()
+    if normalized_creative_type and normalized_creative_type not in ("original", "fanfic"):
+        raise HTTPException(400, "creative_type は original/fanfic のみ指定できます")
+
     target_language = None
     raw_lang = (lang or "").strip()
     if raw_lang:
@@ -16553,6 +18439,13 @@ def list_public_novels(
     except Exception:
         user = None
 
+    if normalized_sort in ("popular", "likes", "comments"):
+        if not user or not is_effective_premium_user(user):
+            raise HTTPException(
+                status_code=403,
+                detail="人気順/いいね順/コメント順はプレミアム限定です",
+            )
+
     # --- 年齢計算 ---
     user_age = None
     if user and user.birth_date:
@@ -16564,6 +18457,9 @@ def list_public_novels(
             "q": (q or "").strip(),
             "exclude": (exclude or "").strip(),
             "tag": (tag or "").strip(),
+            "sort": normalized_sort,
+            "age_limit": normalized_age_limit,
+            "creative_type": normalized_creative_type,
             "lang": target_language or "",
             "user_id": int(user.id) if user else 0,
             "user_age": user_age if user_age is not None else -1,
@@ -16586,6 +18482,10 @@ def list_public_novels(
     # --- 公開ステータス (Draft/Public) ---
     # status 列がある前提で、公開作品だけ一覧に出す
     query = query.filter(models.Novel.is_public == True)
+    if normalized_age_limit:
+        query = query.filter(models.Novel.age_limit == normalized_age_limit)
+    if normalized_creative_type:
+        query = query.filter(models.Novel.creative_type == normalized_creative_type)
 
     # --- 年齢フィルタリング ---
     if not AGE_RESTRICTION_DISABLED:
@@ -16722,7 +18622,123 @@ def list_public_novels(
             if tag_terms:
                 query = query.filter(or_(*[tag_match_exists(f"%{t}%") for t in tag_terms]))
 
-    novels = query.order_by(models.Novel.created_at.desc()).all()
+    fav_sort_subq = (
+        db.query(
+            models.NovelFavorite.novel_id.label("novel_id"),
+            func.count(models.NovelFavorite.id).label("favorite_count"),
+        )
+        .group_by(models.NovelFavorite.novel_id)
+        .subquery()
+    )
+    comment_sort_subq = (
+        db.query(
+            models.NovelComment.novel_id.label("novel_id"),
+            func.count(models.NovelComment.id).label("comment_count"),
+        )
+        .group_by(models.NovelComment.novel_id)
+        .subquery()
+    )
+    query = (
+        query.outerjoin(fav_sort_subq, fav_sort_subq.c.novel_id == models.Novel.id)
+        .outerjoin(comment_sort_subq, comment_sort_subq.c.novel_id == models.Novel.id)
+    )
+    if normalized_sort == "comments":
+        query = query.order_by(
+            func.coalesce(comment_sort_subq.c.comment_count, 0).desc(),
+            models.Novel.created_at.desc(),
+            models.Novel.id.desc(),
+        )
+    elif normalized_sort == "likes":
+        query = query.order_by(models.Novel.like_count.desc(), models.Novel.created_at.desc(), models.Novel.id.desc())
+    elif normalized_sort == "popular":
+        query = query.order_by(
+            (
+                models.Novel.like_count * 3
+                + func.coalesce(fav_sort_subq.c.favorite_count, 0) * 5
+                + func.coalesce(comment_sort_subq.c.comment_count, 0) * 2
+            ).desc(),
+            models.Novel.created_at.desc(),
+            models.Novel.id.desc(),
+        )
+    else:
+        query = query.order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+
+    novels = query.all()
+
+    if AI_WEAVIATE_FEATURES_ENABLED and q and novels:
+        try:
+            keyword = str(q or "").strip()
+            if keyword:
+                # Weaviate更新コストを抑えるため、先頭候補のみを対象に意味検索で再ランキングする
+                semantic_window = min(240, len(novels))
+                head_novels = novels[:semantic_window]
+                target_ids = [int(getattr(n, "id", 0) or 0) for n in head_novels if int(getattr(n, "id", 0) or 0) > 0]
+                docs: list[dict[str, Any]] = []
+                for novel in head_novels:
+                    novel_id = int(getattr(novel, "id", 0) or 0)
+                    if novel_id <= 0:
+                        continue
+                    tag_names = [
+                        str(getattr(getattr(nt, "tag", None), "name", "") or "").strip()
+                        for nt in (getattr(novel, "novel_tags", []) or [])
+                        if getattr(nt, "tag", None) is not None
+                    ]
+                    content = _compact_text(
+                        "\n".join(
+                            [
+                                f"タイトル: {str(getattr(novel, 'title', '') or '').strip()}",
+                                f"概要: {str(getattr(novel, 'description', '') or '').strip()}",
+                                f"タグ: {', '.join([name for name in tag_names if name][:20])}",
+                            ]
+                        ),
+                        3500,
+                    )
+                    if not content:
+                        continue
+                    docs.append(
+                        {
+                            "doc_id": f"public_novel_search:{novel_id}",
+                            "feature": "public_novel_search",
+                            "site_key": site_key,
+                            "target_id": novel_id,
+                            "target_type": "novel",
+                            "title": str(getattr(novel, "title", "") or ""),
+                            "content": content,
+                            "is_public": True,
+                            "is_r18": str(getattr(novel, "age_limit", "all") or "all").strip().lower() == "r18",
+                        }
+                    )
+                if docs and target_ids:
+                    upsert_feature_docs(docs)
+                    hits = semantic_search_feature_docs(
+                        keyword,
+                        feature="public_novel_search",
+                        site_key=site_key,
+                        limit=min(len(target_ids), 240),
+                        target_ids=target_ids,
+                        include_r18=True,
+                        public_only=True,
+                    )
+                    semantic_score_map: dict[int, float] = {}
+                    for hit in hits:
+                        try:
+                            semantic_score_map[int(hit.get("target_id"))] = _semantic_score_from_distance(hit.get("distance"))
+                        except Exception:
+                            continue
+                    if semantic_score_map:
+                        base_index_map = {
+                            int(getattr(n, "id", 0) or 0): idx for idx, n in enumerate(head_novels)
+                        }
+                        head_novels = sorted(
+                            head_novels,
+                            key=lambda n: (
+                                -float(semantic_score_map.get(int(getattr(n, "id", 0) or 0), 0.0)),
+                                int(base_index_map.get(int(getattr(n, "id", 0) or 0), 10**9)),
+                            ),
+                        )
+                        novels = head_novels + novels[semantic_window:]
+        except Exception as e:
+            logger.warning("public novel search weaviate rerank failed q=%s err=%r", str(q or "")[:100], e)
 
     novel_ids = [novel.id for novel in novels]
     cover_map = {}
@@ -16810,6 +18826,13 @@ def list_public_novels(
                 "favorite_count": favorite_counts.get(novel.id, 0),
                 "total_char_count": char_counts.get(novel.id, 0),
                 "age_limit": getattr(novel, "age_limit", "all") or "all",
+                "creative_type": getattr(novel, "creative_type", "original") or "original",
+                "fanfic_source_title": getattr(novel, "fanfic_source_title", None),
+                "fanfic_characters": getattr(novel, "fanfic_characters", None),
+                "fanfic_coupling": getattr(novel, "fanfic_coupling", None),
+                "fanfic_notes": getattr(novel, "fanfic_notes", None),
+                "series_name": getattr(novel, "series_name", None),
+                "series_order": getattr(novel, "series_order", None),
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
                 "cover_image_url": cover_map.get(novel.id),
@@ -16835,14 +18858,118 @@ def list_recommended_public_novels(
     )
 
 
+@app.get("/api/search/users")
+def search_public_users(
+    request: Request,
+    db: Session = Depends(get_db),
+    q: str = Query(..., min_length=1, max_length=50),
+    limit: int = Query(8, ge=1, le=20),
+):
+    site_key = resolve_site_key(request)
+    keyword = (q or "").strip()
+    if not keyword:
+        return []
+    lower_keyword = keyword.lower()
+
+    rows = (
+        db.query(
+            models.User.id.label("user_id"),
+            models.User.username.label("username"),
+            func.count(func.distinct(models.Novel.id)).label("novel_count"),
+        )
+        .join(models.Novel, models.Novel.author_id == models.User.id)
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.User.username.ilike(f"%{keyword}%"))
+        .group_by(models.User.id, models.User.username)
+        .order_by(
+            func.count(func.distinct(models.Novel.id)).desc(),
+            models.User.username.asc(),
+        )
+        .limit(max(int(limit) * 4, 20))
+        .all()
+    )
+    payload = [
+        {
+            "user_id": int(getattr(row, "user_id", 0) or 0),
+            "username": str(getattr(row, "username", "") or ""),
+            "novel_count": int(getattr(row, "novel_count", 0) or 0),
+        }
+        for row in rows
+        if str(getattr(row, "username", "") or "").strip()
+    ]
+    payload.sort(
+        key=lambda item: (
+            0 if str(item.get("username", "")).lower().startswith(lower_keyword) else 1,
+            -int(item.get("novel_count", 0) or 0),
+            str(item.get("username", "")).lower(),
+        )
+    )
+    return payload[: int(limit)]
+
+
+@app.get("/api/search/tags")
+def search_public_tags(
+    request: Request,
+    db: Session = Depends(get_db),
+    q: str = Query(..., min_length=1, max_length=50),
+    limit: int = Query(8, ge=1, le=20),
+):
+    site_key = resolve_site_key(request)
+    keyword = (q or "").strip()
+    if not keyword:
+        return []
+    lower_keyword = keyword.lower()
+
+    rows = (
+        db.query(
+            models.Tag.id.label("tag_id"),
+            models.Tag.name.label("tag_name"),
+            func.count(func.distinct(models.Novel.id)).label("novel_count"),
+        )
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.Tag.name.ilike(f"%{keyword}%"))
+        .group_by(models.Tag.id, models.Tag.name)
+        .order_by(
+            func.count(func.distinct(models.Novel.id)).desc(),
+            models.Tag.name.asc(),
+        )
+        .limit(max(int(limit) * 4, 20))
+        .all()
+    )
+    payload = [
+        {
+            "tag_id": int(getattr(row, "tag_id", 0) or 0),
+            "name": str(getattr(row, "tag_name", "") or ""),
+            "novel_count": int(getattr(row, "novel_count", 0) or 0),
+        }
+        for row in rows
+        if str(getattr(row, "tag_name", "") or "").strip()
+    ]
+    payload.sort(
+        key=lambda item: (
+            0 if str(item.get("name", "")).lower().startswith(lower_keyword) else 1,
+            -int(item.get("novel_count", 0) or 0),
+            str(item.get("name", "")).lower(),
+        )
+    )
+    return payload[: int(limit)]
+
+
 def list_public_novel_rankings(
     request: Request,
     background_tasks: BackgroundTasks,
     sort: str = Query("likes"),
+    period: str = Query("weekly"),
     limit: int = Query(10, ge=1, le=50),
     q: str | None = None,
     exclude: str | None = None,
     tag: str | None = None,
+    creative_type: str | None = None,
+    age_limit: str | None = None,
     lang: str | None = None,
     db: Session = Depends(get_db),
 ):
@@ -16854,8 +18981,18 @@ def list_public_novel_rankings(
             target_language = normalize_language(raw_lang)
         except Exception:
             target_language = None
-    if sort not in ("likes", "favorites", "views"):
-        raise HTTPException(400, "sort は likes / favorites / views のみ指定できます")
+    normalized_sort = (sort or "likes").strip().lower()
+    if normalized_sort not in ("likes", "favorites", "views", "comments", "score", "rising"):
+        raise HTTPException(400, "sort は likes/favorites/views/comments/score/rising のみ指定できます")
+    normalized_period = (period or "weekly").strip().lower()
+    if normalized_period not in ("daily", "weekly", "monthly"):
+        raise HTTPException(400, "period は daily/weekly/monthly のみ指定できます")
+    normalized_creative_type = (creative_type or "").strip().lower()
+    if normalized_creative_type and normalized_creative_type not in ("original", "fanfic"):
+        raise HTTPException(400, "creative_type は original/fanfic のみ指定できます")
+    normalized_age_limit = (age_limit or "").strip().lower()
+    if normalized_age_limit and normalized_age_limit not in ("all", "r15", "r18"):
+        raise HTTPException(400, "age_limit は all/r15/r18 のみ指定できます")
     user = None
     if FORCE_ALL_PREMIUM:
         try:
@@ -16874,11 +19011,14 @@ def list_public_novel_rankings(
         "ranking",
         {
             "site_key": site_key,
-            "sort": sort,
+            "sort": normalized_sort,
+            "period": normalized_period,
             "limit": int(limit),
             "q": (q or "").strip(),
             "exclude": (exclude or "").strip(),
             "tag": (tag or "").strip(),
+            "creative_type": normalized_creative_type,
+            "age_limit": normalized_age_limit,
             "lang": target_language or "",
             "user_id": int(user.id) if user else 0,
             "user_age": user_age if user_age is not None else -1,
@@ -16898,6 +19038,43 @@ def list_public_novel_rankings(
         )
         .join(models.User, models.Novel.author_id == models.User.id, isouter=True)
         .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
+    )
+    if normalized_creative_type:
+        query = query.filter(models.Novel.creative_type == normalized_creative_type)
+    if normalized_age_limit:
+        query = query.filter(models.Novel.age_limit == normalized_age_limit)
+
+    today = date.today()
+    if normalized_period == "daily":
+        period_start = today
+    elif normalized_period == "monthly":
+        period_start = today - timedelta(days=29)
+    else:
+        period_start = today - timedelta(days=6)
+    period_start_dt = datetime.combine(period_start, datetime.min.time())
+    metric_subq = (
+        db.query(
+            models.NovelDailyMetric.novel_id.label("novel_id"),
+            func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0).label("p_views"),
+            func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0).label("p_likes"),
+            func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0).label("p_favorites"),
+        )
+        .filter(models.NovelDailyMetric.date >= period_start)
+        .group_by(models.NovelDailyMetric.novel_id)
+        .subquery()
+    )
+    comment_subq = (
+        db.query(
+            models.NovelComment.novel_id.label("novel_id"),
+            func.count(models.NovelComment.id).label("comment_count"),
+        )
+        .filter(models.NovelComment.created_at >= period_start_dt)
+        .group_by(models.NovelComment.novel_id)
+        .subquery()
+    )
+    query = (
+        query.outerjoin(metric_subq, metric_subq.c.novel_id == models.Novel.id)
+        .outerjoin(comment_subq, comment_subq.c.novel_id == models.Novel.id)
     )
 
     def episode_match_exists(like: str):
@@ -17027,26 +19204,54 @@ def list_public_novel_rankings(
             if tag_terms:
                 query = query.filter(or_(*[tag_match_exists(f"%{t}%") for t in tag_terms]))
 
-    if sort == "favorites":
-        query = (
-            query.outerjoin(
-                models.NovelFavorite,
-                models.NovelFavorite.novel_id == models.Novel.id,
-            )
-            .group_by(models.Novel.id)
-            .order_by(
-                func.count(models.NovelFavorite.id).desc(),
-                models.Novel.id.desc(),
-            )
-        )
-    elif sort == "views":
+    recent_boost_expr = case(
+        (models.Novel.created_at >= datetime.utcnow() - timedelta(days=1), 12.0),
+        (models.Novel.created_at >= datetime.utcnow() - timedelta(days=3), 8.0),
+        (models.Novel.created_at >= datetime.utcnow() - timedelta(days=7), 4.0),
+        else_=0.0,
+    )
+    score_expr = (
+        func.coalesce(metric_subq.c.p_likes, 0) * 3
+        + func.coalesce(metric_subq.c.p_favorites, 0) * 5
+        + func.coalesce(comment_subq.c.comment_count, 0) * 2
+        + recent_boost_expr
+    )
+    rising_expr = (
+        func.coalesce(metric_subq.c.p_likes, 0) * 2
+        + func.coalesce(metric_subq.c.p_favorites, 0) * 3
+        + func.coalesce(comment_subq.c.comment_count, 0) * 2
+        + (func.coalesce(metric_subq.c.p_views, 0) * 0.1)
+        + (recent_boost_expr * 2)
+    )
+
+    if normalized_sort == "views":
         query = query.order_by(
-            models.Novel.view_count.desc(),
+            func.coalesce(metric_subq.c.p_views, 0).desc(),
+            models.Novel.id.desc(),
+        )
+    elif normalized_sort == "favorites":
+        query = query.order_by(
+            func.coalesce(metric_subq.c.p_favorites, 0).desc(),
+            models.Novel.id.desc(),
+        )
+    elif normalized_sort == "comments":
+        query = query.order_by(
+            func.coalesce(comment_subq.c.comment_count, 0).desc(),
+            models.Novel.id.desc(),
+        )
+    elif normalized_sort == "score":
+        query = query.order_by(
+            score_expr.desc(),
+            models.Novel.id.desc(),
+        )
+    elif normalized_sort == "rising":
+        query = query.order_by(
+            rising_expr.desc(),
             models.Novel.id.desc(),
         )
     else:
         query = query.order_by(
-            models.Novel.like_count.desc(),
+            func.coalesce(metric_subq.c.p_likes, 0).desc(),
             models.Novel.id.desc(),
         )
 
@@ -17090,6 +19295,39 @@ def list_public_novel_rankings(
             .all()
         )
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+    period_metric_map: dict[int, dict[str, int]] = {}
+    if novel_ids:
+        period_rows = (
+            db.query(
+                models.NovelDailyMetric.novel_id,
+                func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0),
+                func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0),
+                func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0),
+            )
+            .filter(models.NovelDailyMetric.novel_id.in_(novel_ids))
+            .filter(models.NovelDailyMetric.date >= period_start)
+            .group_by(models.NovelDailyMetric.novel_id)
+            .all()
+        )
+        for nid, p_views, p_likes, p_favorites in period_rows:
+            period_metric_map[int(nid)] = {
+                "views": int(p_views or 0),
+                "likes": int(p_likes or 0),
+                "favorites": int(p_favorites or 0),
+            }
+    period_comment_map: dict[int, int] = {}
+    if novel_ids:
+        period_comment_rows = (
+            db.query(
+                models.NovelComment.novel_id,
+                func.count(models.NovelComment.id),
+            )
+            .filter(models.NovelComment.novel_id.in_(novel_ids))
+            .filter(models.NovelComment.created_at >= period_start_dt)
+            .group_by(models.NovelComment.novel_id)
+            .all()
+        )
+        period_comment_map = {int(nid): int(count or 0) for nid, count in period_comment_rows}
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     translated_cards = _resolve_public_novel_card_translations(
         db,
@@ -17123,6 +19361,31 @@ def list_public_novel_rankings(
     result = []
     for idx, novel in enumerate(novels, start=1):
         translated = translated_cards.get(int(novel.id), {})
+        period_metrics = period_metric_map.get(int(novel.id), {"views": 0, "likes": 0, "favorites": 0})
+        period_comments = int(period_comment_map.get(int(novel.id), 0) or 0)
+        created_at_dt = getattr(novel, "created_at", None)
+        recent_boost = 0.0
+        if created_at_dt:
+            age_days = max(0, (datetime.utcnow() - created_at_dt).days)
+            if age_days <= 1:
+                recent_boost = 12.0
+            elif age_days <= 3:
+                recent_boost = 8.0
+            elif age_days <= 7:
+                recent_boost = 4.0
+        score_value = float(
+            (period_metrics["likes"] * 3)
+            + (period_metrics["favorites"] * 5)
+            + (period_comments * 2)
+            + recent_boost
+        )
+        rising_value = float(
+            (period_metrics["likes"] * 2)
+            + (period_metrics["favorites"] * 3)
+            + (period_comments * 2)
+            + (period_metrics["views"] * 0.1)
+            + (recent_boost * 2)
+        )
         result.append(
             {
                 "rank": idx,
@@ -17135,7 +19398,15 @@ def list_public_novel_rankings(
                 "view_count": getattr(novel, "view_count", 0) or 0,
                 "like_count": getattr(novel, "like_count", 0) or 0,
                 "favorite_count": favorite_counts.get(novel.id, 0),
+                "comment_count": period_comments,
                 "total_char_count": char_counts.get(novel.id, 0),
+                "age_limit": getattr(novel, "age_limit", "all") or "all",
+                "creative_type": getattr(novel, "creative_type", "original") or "original",
+                "period_views": int(period_metrics["views"] or 0),
+                "period_likes": int(period_metrics["likes"] or 0),
+                "period_favorites": int(period_metrics["favorites"] or 0),
+                "period_comments": period_comments,
+                "ranking_score": score_value if normalized_sort != "rising" else rising_value,
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
                 "cover_image_url": cover_map.get(novel.id),
@@ -17169,14 +19440,45 @@ def read_public_user(username: str, db: Session = Depends(get_db)):
     user = get_user_by_username(db, uname)
     if not user:
         raise HTTPException(404, "ユーザーが存在しません")
+    follower_count, following_count = get_follow_counts(db, int(user.id))
 
     payload = {
         "id": user.id,
         "username": user.username,
         "is_premium": is_effective_premium_user(user),
+        "follower_count": follower_count,
+        "following_count": following_count,
+        "favorite_visibility": (
+            str(getattr(user, "favorite_visibility", "public") or "public").strip().lower()
+            if str(getattr(user, "favorite_visibility", "public") or "public").strip().lower()
+            in ("public", "private")
+            else "public"
+        ),
+        "profile_bio": str(getattr(user, "profile_bio", "") or "") or None,
+        "profile_icon_url": str(getattr(user, "profile_icon_url", "") or "") or None,
+        "profile_header_url": str(getattr(user, "profile_header_url", "") or "") or None,
+        "profile_website_url": str(getattr(user, "profile_website_url", "") or "") or None,
+        "profile_x_url": str(getattr(user, "profile_x_url", "") or "") or None,
     }
     redis_json_set(cache_key, payload, REDIS_PUBLIC_USER_CACHE_TTL_SEC)
     return payload
+
+
+# =========================================
+# 公開: 作者ページ（ID指定）
+# - 既存の username ベース実装を再利用
+# =========================================
+@app.get("/api/authors/{author_id}")
+def read_public_author(
+    author_id: int,
+    db: Session = Depends(get_db),
+):
+    if author_id <= 0:
+        raise HTTPException(400, "author_id が不正です")
+    author = db.query(models.User).get(author_id)
+    if not author:
+        raise HTTPException(404, "ユーザーが存在しません")
+    return read_public_user(str(author.username or ""), db)
 
 
 # =========================================
@@ -17188,6 +19490,7 @@ def list_public_user_novels(
     username: str,
     request: Request,
     db: Session = Depends(get_db),
+    sort: str = Query("latest"),
 ):
     site_key = resolve_site_key(request)
     uname = (username or "").strip()
@@ -17219,6 +19522,10 @@ def list_public_user_novels(
     if isinstance(cached, list):
         return cached
 
+    normalized_sort = (sort or "latest").strip().lower()
+    if normalized_sort not in ("latest", "popular"):
+        raise HTTPException(400, "sort は latest/popular のみ指定できます")
+
     q = (
         db.query(models.Novel)
         .filter(models.Novel.author_id == author.id)
@@ -17240,7 +19547,16 @@ def list_public_user_novels(
             elif viewer_age < 18:
                 q = q.filter(models.Novel.age_limit.in_(["all", "r15"]))
 
-    novels = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc()).all()
+    if normalized_sort == "popular":
+        q = q.order_by(
+            models.Novel.like_count.desc(),
+            models.Novel.view_count.desc(),
+            models.Novel.created_at.desc(),
+            models.Novel.id.desc(),
+        )
+    else:
+        q = q.order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+    novels = q.all()
     novel_ids = [novel.id for novel in novels]
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     cover_map = {}
@@ -17300,6 +19616,30 @@ def list_public_user_novels(
 
 
 # =========================================
+# 公開: 作者ページ（公開中の小説一覧 / ID指定）
+# - 既存の username ベース実装を再利用
+# =========================================
+@app.get("/api/authors/{author_id}/novels")
+def list_public_author_novels(
+    author_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    sort: str = Query("latest"),
+):
+    if author_id <= 0:
+        raise HTTPException(400, "author_id が不正です")
+    author = db.query(models.User).get(author_id)
+    if not author:
+        raise HTTPException(404, "ユーザーが存在しません")
+    return list_public_user_novels(
+        username=str(author.username or ""),
+        request=request,
+        db=db,
+        sort=sort,
+    )
+
+
+# =========================================
 # 公開: ユーザーページ（お気に入り一覧）
 # - ログインしていれば年齢制限を考慮して表示
 # =========================================
@@ -17326,12 +19666,21 @@ def list_public_user_favorites(
     viewer_age = None
     if viewer and getattr(viewer, "birth_date", None):
         viewer_age = calc_age(viewer.birth_date)
+
+    favorite_visibility = str(getattr(user, "favorite_visibility", "public") or "public").strip().lower()
+    if favorite_visibility not in ("public", "private"):
+        favorite_visibility = "public"
+    is_owner_view = bool(viewer and int(getattr(viewer, "id", 0) or 0) == int(user.id))
+    if favorite_visibility != "public" and not is_owner_view:
+        return []
+
     cache_key = build_public_cache_key(
         "user_favorites",
         {
             "site_key": site_key,
             "username": uname.lower(),
             "viewer_age": viewer_age if viewer_age is not None else -1,
+            "viewer_user_id": int(getattr(viewer, "id", 0) or 0),
             "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
         },
     )
@@ -17420,6 +19769,105 @@ def list_public_user_favorites(
     ]
     redis_json_set(cache_key, payload, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
     return payload
+
+
+@app.get("/api/authors/{author_id}/stats")
+def get_author_stats(
+    author_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    site_key = resolve_site_key(request)
+    author = db.query(models.User).get(author_id)
+    if not author:
+        raise HTTPException(404, "ユーザーが存在しません")
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+    viewer_age = None
+    if viewer and getattr(viewer, "birth_date", None):
+        viewer_age = calc_age(viewer.birth_date)
+
+    novels_q = (
+        db.query(models.Novel.id, models.Novel.view_count, models.Novel.like_count)
+        .filter(models.Novel.author_id == author_id)
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+    )
+    novels_q = _apply_public_novel_age_filter(novels_q, viewer_age)
+    rows = novels_q.all()
+    novel_ids = [int(row[0]) for row in rows]
+    total_views = sum(int(row[1] or 0) for row in rows)
+    total_likes = sum(int(row[2] or 0) for row in rows)
+
+    total_favorites = 0
+    if novel_ids:
+        total_favorites = int(
+            (
+                db.query(func.count(models.NovelFavorite.id))
+                .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+                .scalar()
+                or 0
+            )
+        )
+
+    follower_count, following_count = get_follow_counts(db, author_id)
+    return {
+        "author_id": int(author_id),
+        "novels": int(len(novel_ids)),
+        "views": int(total_views),
+        "likes": int(total_likes),
+        "favorites": int(total_favorites),
+        "followers": int(follower_count),
+        "following": int(following_count),
+    }
+
+
+@app.get("/api/authors/{author_id}/favorite-tags")
+def get_author_favorite_tags(
+    author_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(12, ge=1, le=50),
+):
+    site_key = resolve_site_key(request)
+    author = db.query(models.User).get(author_id)
+    if not author:
+        raise HTTPException(404, "ユーザーが存在しません")
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+    viewer_age = None
+    if viewer and getattr(viewer, "birth_date", None):
+        viewer_age = calc_age(viewer.birth_date)
+
+    novels_subq = (
+        db.query(models.Novel.id)
+        .filter(models.Novel.author_id == author_id)
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+    )
+    novels_subq = _apply_public_novel_age_filter(novels_subq, viewer_age)
+    novels_subq = novels_subq.subquery()
+
+    rows = (
+        db.query(models.Tag.name, func.count(models.NovelTag.novel_id).label("count"))
+        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
+        .join(novels_subq, novels_subq.c.id == models.NovelTag.novel_id)
+        .group_by(models.Tag.name)
+        .order_by(text("count DESC"), models.Tag.name.asc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "name": str(name or ""),
+            "count": int(count or 0),
+        }
+        for name, count in rows
+    ]
 
 
 # =========================================
@@ -19881,7 +22329,7 @@ def like_novel(novel_id: int, request: Request, db: Session = Depends(get_db)):
 
     if novel.author_id != user.id:
         title = "小説にいいねが付きました"
-        notif_body = f"{user.username}が「{novel.title}」にいいねしました"
+        notif_body = f"「{novel.title}」にいいねしました"
         create_notification(
             db,
             user_id=novel.author_id,
@@ -20023,7 +22471,7 @@ def like_episode(episode_id: int, request: Request, db: Session = Depends(get_db
 
     if novel and novel.author_id != user.id:
         title = "エピソードにいいねが付きました"
-        notif_body = f"{user.username}が「{ep.title}」にいいねしました"
+        notif_body = f"「{ep.title or f'EP#{episode_id}'}」にいいねしました"
         create_notification(
             db,
             user_id=novel.author_id,
@@ -20658,6 +23106,16 @@ def update_profile(
 ):
     user = require_current_user(request, db)
     old_username = str(user.username or "")
+    def _normalize_profile_url(value: str | None) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if len(raw) > 255:
+            raw = raw[:255]
+        lowered = raw.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            return raw
+        return f"https://{raw}"
 
     if payload.username is not None:
         new_username = payload.username.strip()
@@ -20686,6 +23144,21 @@ def update_profile(
 
     if payload.email_notifications_enabled is not None:
         user.email_notifications_enabled = payload.email_notifications_enabled
+    if payload.favorite_visibility is not None:
+        normalized_visibility = str(payload.favorite_visibility or "").strip().lower()
+        if normalized_visibility not in ("public", "private"):
+            raise HTTPException(400, "favorite_visibility は public/private のみ指定できます")
+        user.favorite_visibility = normalized_visibility
+    if payload.profile_bio is not None:
+        user.profile_bio = str(payload.profile_bio or "").strip()[:4000] or None
+    if payload.profile_icon_url is not None:
+        user.profile_icon_url = _normalize_profile_url(payload.profile_icon_url)
+    if payload.profile_header_url is not None:
+        user.profile_header_url = _normalize_profile_url(payload.profile_header_url)
+    if payload.profile_website_url is not None:
+        user.profile_website_url = _normalize_profile_url(payload.profile_website_url)
+    if payload.profile_x_url is not None:
+        user.profile_x_url = _normalize_profile_url(payload.profile_x_url)
 
     db.add(user)
     db.commit()
@@ -20696,6 +23169,225 @@ def update_profile(
         old_username=old_username if old_username != user.username else None,
     )
     return cache_user_payload(user)
+
+
+# ============================
+# フォロー API
+# ============================
+@app.post("/api/users/{user_id}/follow")
+def follow_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    if user_id <= 0:
+        raise HTTPException(400, "user_id が不正です")
+    if user.id == user_id:
+        raise HTTPException(400, "自分自身はフォローできません")
+
+    target = db.query(models.User).get(user_id)
+    if not target:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    exists = (
+        db.query(models.UserFollow)
+        .filter(models.UserFollow.follower_user_id == user.id)
+        .filter(models.UserFollow.followed_user_id == user_id)
+        .first()
+    )
+    if exists:
+        follower_count, following_count = get_follow_counts(db, user_id)
+        return {
+            "ok": True,
+            "is_following": True,
+            "follower_count": follower_count,
+            "following_count": following_count,
+        }
+
+    try:
+        db.add(models.UserFollow(follower_user_id=user.id, followed_user_id=user_id))
+        title = "フォローされました"
+        notif_body = "あなたをフォローしました"
+        create_notification(
+            db,
+            user_id=user_id,
+            notif_type="user_follow",
+            title=title,
+            body=notif_body,
+            link_url=f"/users/{quote(user.username)}",
+            actor_user_id=user.id,
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    invalidate_public_list_caches()
+
+    try:
+        send_web_push_to_user(
+            db,
+            user_id=user_id,
+            title="フォローされました",
+                body="あなたをフォローしました",
+            link_url=f"/users/{quote(user.username)}",
+            tag="user_follow",
+        )
+    except Exception as e:
+        print(f"[webpush] user_follow send failed user_id={user_id} err={e!r}")
+
+    follower_count, following_count = get_follow_counts(db, user_id)
+    return {
+        "ok": True,
+        "is_following": True,
+        "follower_count": follower_count,
+        "following_count": following_count,
+    }
+
+
+@app.delete("/api/users/{user_id}/follow")
+def unfollow_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    if user_id <= 0:
+        raise HTTPException(400, "user_id が不正です")
+    if user.id == user_id:
+        raise HTTPException(400, "自分自身は解除できません")
+
+    link = (
+        db.query(models.UserFollow)
+        .filter(models.UserFollow.follower_user_id == user.id)
+        .filter(models.UserFollow.followed_user_id == user_id)
+        .first()
+    )
+    if link:
+        db.delete(link)
+        db.commit()
+        invalidate_public_list_caches()
+
+    follower_count, following_count = get_follow_counts(db, user_id)
+    return {
+        "ok": True,
+        "is_following": False,
+        "follower_count": follower_count,
+        "following_count": following_count,
+    }
+
+
+@app.get("/api/users/{user_id}/follow-status")
+def get_follow_status(user_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_current_user(request, db)
+    if user_id <= 0:
+        raise HTTPException(400, "user_id が不正です")
+    target = db.query(models.User).get(user_id)
+    if not target:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    follower_count, following_count = get_follow_counts(db, user_id)
+    return {
+        "user_id": int(user_id),
+        "is_following": is_following_user(db, int(user.id), int(user_id)),
+        "follower_count": follower_count,
+        "following_count": following_count,
+    }
+
+
+@app.get("/api/users/{user_id}/followers")
+def list_followers(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+    target = db.query(models.User).get(user_id)
+    if not target:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    rows = (
+        db.query(models.UserFollow, models.User)
+        .join(models.User, models.User.id == models.UserFollow.follower_user_id)
+        .filter(models.UserFollow.followed_user_id == user_id)
+        .order_by(models.UserFollow.created_at.desc(), models.UserFollow.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    viewer_following_ids: set[int] = set()
+    if viewer and rows:
+        ids = [int(u.id) for _, u in rows if int(getattr(u, "id", 0) or 0) > 0]
+        if ids:
+            viewer_following_ids = {
+                int(fid)
+                for (fid,) in (
+                    db.query(models.UserFollow.followed_user_id)
+                    .filter(models.UserFollow.follower_user_id == int(viewer.id))
+                    .filter(models.UserFollow.followed_user_id.in_(ids))
+                    .all()
+                )
+                if int(fid or 0) > 0
+            }
+
+    return [
+        {
+            "user_id": u.id,
+            "username": u.username,
+            "is_premium": is_effective_premium_user(u),
+            "followed_at": rel.created_at,
+            "is_following": bool(int(u.id) in viewer_following_ids) if viewer else False,
+        }
+        for rel, u in rows
+    ]
+
+
+@app.get("/api/users/{user_id}/following")
+def list_following(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    try:
+        viewer = require_current_user(request, db)
+    except Exception:
+        viewer = None
+    target = db.query(models.User).get(user_id)
+    if not target:
+        raise HTTPException(404, "ユーザーが存在しません")
+
+    rows = (
+        db.query(models.UserFollow, models.User)
+        .join(models.User, models.User.id == models.UserFollow.followed_user_id)
+        .filter(models.UserFollow.follower_user_id == user_id)
+        .order_by(models.UserFollow.created_at.desc(), models.UserFollow.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    viewer_following_ids: set[int] = set()
+    if viewer and rows:
+        ids = [int(u.id) for _, u in rows if int(getattr(u, "id", 0) or 0) > 0]
+        if ids:
+            viewer_following_ids = {
+                int(fid)
+                for (fid,) in (
+                    db.query(models.UserFollow.followed_user_id)
+                    .filter(models.UserFollow.follower_user_id == int(viewer.id))
+                    .filter(models.UserFollow.followed_user_id.in_(ids))
+                    .all()
+                )
+                if int(fid or 0) > 0
+            }
+
+    return [
+        {
+            "user_id": u.id,
+            "username": u.username,
+            "is_premium": is_effective_premium_user(u),
+            "followed_at": rel.created_at,
+            "is_following": bool(int(u.id) in viewer_following_ids) if viewer else False,
+        }
+        for rel, u in rows
+    ]
 
 
 # ============================
@@ -20729,6 +23421,55 @@ class MobilePushRegisterPayload(BaseModel):
 
 class MobilePushUnregisterPayload(BaseModel):
     token: str
+
+
+REACTION_NOTIFICATION_TYPES = {
+    "novel_like",
+    "episode_like",
+    "novel_favorite",
+    "novel_comment",
+    "episode_comment",
+    "comment_reply",
+}
+FOLLOW_NOTIFICATION_TYPES = {
+    "user_follow",
+}
+UPDATE_NOTIFICATION_TYPES = {
+    "followed_author_new_novel",
+    "followed_author_new_episode",
+    "tag_follow_new",
+    "favorite_update",
+    "recommended_novel_new",
+}
+
+
+def classify_notification_group(notif_type: str | None) -> str:
+    key = str(notif_type or "").strip()
+    if key in REACTION_NOTIFICATION_TYPES:
+        return "reaction"
+    if key in FOLLOW_NOTIFICATION_TYPES:
+        return "follow"
+    if key in UPDATE_NOTIFICATION_TYPES:
+        return "update"
+    return "system"
+
+
+def apply_notification_group_filter(query, group: str):
+    normalized = str(group or "all").strip().lower()
+    if normalized == "all":
+        return query
+    if normalized == "reaction":
+        return query.filter(models.Notification.type.in_(sorted(REACTION_NOTIFICATION_TYPES)))
+    if normalized == "follow":
+        return query.filter(models.Notification.type.in_(sorted(FOLLOW_NOTIFICATION_TYPES)))
+    if normalized == "update":
+        return query.filter(models.Notification.type.in_(sorted(UPDATE_NOTIFICATION_TYPES)))
+    if normalized == "system":
+        known_types = sorted(
+            REACTION_NOTIFICATION_TYPES | FOLLOW_NOTIFICATION_TYPES | UPDATE_NOTIFICATION_TYPES
+        )
+        return query.filter(~models.Notification.type.in_(known_types))
+    raise HTTPException(400, "group は all/reaction/follow/update/system のみ指定できます")
 
 
 @app.get("/api/push/public_key")
@@ -20884,6 +23625,8 @@ def list_notifications(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     unread_only: bool = Query(False),
+    group: str = Query("all"),
+    notif_type: str | None = Query(None),
 ):
     user = require_current_user(request, db)
     query = (
@@ -20892,6 +23635,9 @@ def list_notifications(
         .options(selectinload(models.Notification.actor))
         .order_by(models.Notification.created_at.desc(), models.Notification.id.desc())
     )
+    query = apply_notification_group_filter(query, group)
+    if (notif_type or "").strip():
+        query = query.filter(models.Notification.type == (notif_type or "").strip())
     if unread_only:
         query = query.filter(models.Notification.is_read == False)
     items = query.offset(offset).limit(limit).all()
@@ -20913,17 +23659,50 @@ def list_notifications(
 
 
 @app.get("/api/notifications/unread_count")
-def unread_notification_count(request: Request, db: Session = Depends(get_db)):
+def unread_notification_count(
+    request: Request,
+    db: Session = Depends(get_db),
+    group: str = Query("all"),
+):
     user = require_current_user(request, db)
-    count = (
+    query = (
         db.query(models.Notification)
         .filter(
             models.Notification.user_id == user.id,
             models.Notification.is_read == False,
         )
-        .count()
     )
+    query = apply_notification_group_filter(query, group)
+    count = query.count()
     return {"count": count}
+
+
+@app.get("/api/notifications/counts")
+def notification_counts(
+    request: Request,
+    db: Session = Depends(get_db),
+    unread_only: bool = Query(False),
+):
+    user = require_current_user(request, db)
+    query = db.query(models.Notification.type, func.count(models.Notification.id)).filter(
+        models.Notification.user_id == user.id
+    )
+    if unread_only:
+        query = query.filter(models.Notification.is_read == False)
+    rows = query.group_by(models.Notification.type).all()
+    counts = {
+        "all": 0,
+        "reaction": 0,
+        "follow": 0,
+        "update": 0,
+        "system": 0,
+    }
+    for notif_type_value, count in rows:
+        group_key = classify_notification_group(str(notif_type_value or ""))
+        numeric = int(count or 0)
+        counts["all"] += numeric
+        counts[group_key] += numeric
+    return counts
 
 
 @app.post("/api/notifications/{notification_id}/read")
@@ -21001,7 +23780,7 @@ def favorite_novel(novel_id: int, request: Request, db: Session = Depends(get_db
     apply_novel_daily_metric(db, novel.id, favorite_delta=1)
     if novel.author_id and novel.author_id != user.id:
         title = "小説がブックマークされました"
-        notif_body = f"{user.username}が「{novel.title}」をブックマークしました"
+        notif_body = f"「{novel.title}」をブックマークしました"
         create_notification(
             db,
             user_id=novel.author_id,

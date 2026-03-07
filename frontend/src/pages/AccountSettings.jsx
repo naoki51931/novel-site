@@ -11,6 +11,12 @@ export default function AccountSettings() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
+  const [favoriteVisibility, setFavoriteVisibility] = useState("public");
+  const [profileBio, setProfileBio] = useState("");
+  const [profileIconUrl, setProfileIconUrl] = useState("");
+  const [profileHeaderUrl, setProfileHeaderUrl] = useState("");
+  const [profileWebsiteUrl, setProfileWebsiteUrl] = useState("");
+  const [profileXUrl, setProfileXUrl] = useState("");
   const [theme, setThemeState] = useState(() => {
     try {
       return getSavedTheme();
@@ -58,6 +64,14 @@ export default function AccountSettings() {
         setUsername(data.username || "");
         setEmail(data.email || "");
         setBirthDate(data.birth_date || "");
+        setFavoriteVisibility(
+          data.favorite_visibility === "private" ? "private" : "public"
+        );
+        setProfileBio(data.profile_bio || "");
+        setProfileIconUrl(data.profile_icon_url || "");
+        setProfileHeaderUrl(data.profile_header_url || "");
+        setProfileWebsiteUrl(data.profile_website_url || "");
+        setProfileXUrl(data.profile_x_url || "");
       })
       .catch((e) =>
         setError(e.message || t({ ja: "プロフィール取得に失敗しました", en: "Failed to load profile." }))
@@ -93,6 +107,12 @@ export default function AccountSettings() {
           username,
           email,
           birth_date: birthDate,
+          favorite_visibility: favoriteVisibility,
+          profile_bio: profileBio,
+          profile_icon_url: profileIconUrl,
+          profile_header_url: profileHeaderUrl,
+          profile_website_url: profileWebsiteUrl,
+          profile_x_url: profileXUrl,
         }),
       });
 
@@ -207,6 +227,80 @@ export default function AccountSettings() {
               type="email"
               value={email}
               onChange={(e)=>setEmail(e.target.value)}
+              style={{ width:"100%", padding:4 }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            {t({ ja: "ブックマーク公開設定", en: "Bookmark visibility" })}<br />
+            <select
+              value={favoriteVisibility}
+              onChange={(e) => setFavoriteVisibility(e.target.value === "private" ? "private" : "public")}
+              style={{ width: "100%", padding: 4 }}
+            >
+              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
+              <option value="private">{t({ ja: "非公開", en: "Private" })}</option>
+            </select>
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            {t({ ja: "プロフィール文", en: "Profile bio" })}<br />
+            <textarea
+              value={profileBio}
+              onChange={(e)=>setProfileBio(e.target.value)}
+              rows={4}
+              style={{ width: "100%", padding: 4 }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            {t({ ja: "アイコン画像URL", en: "Icon image URL" })}<br />
+            <input
+              type="url"
+              value={profileIconUrl}
+              onChange={(e)=>setProfileIconUrl(e.target.value)}
+              style={{ width:"100%", padding:4 }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            {t({ ja: "ヘッダー画像URL", en: "Header image URL" })}<br />
+            <input
+              type="url"
+              value={profileHeaderUrl}
+              onChange={(e)=>setProfileHeaderUrl(e.target.value)}
+              style={{ width:"100%", padding:4 }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            {t({ ja: "WebサイトURL", en: "Website URL" })}<br />
+            <input
+              type="url"
+              value={profileWebsiteUrl}
+              onChange={(e)=>setProfileWebsiteUrl(e.target.value)}
+              style={{ width:"100%", padding:4 }}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
+            {t({ ja: "X(Twitter) URL", en: "X (Twitter) URL" })}<br />
+            <input
+              type="url"
+              value={profileXUrl}
+              onChange={(e)=>setProfileXUrl(e.target.value)}
               style={{ width:"100%", padding:4 }}
             />
           </label>

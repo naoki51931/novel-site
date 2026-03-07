@@ -9,6 +9,7 @@ const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
 const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
+const FAVORITE_SUMMARY_MAX_CHARS = 500;
 
 export default function Mypage() {
   const { t } = useI18n();
@@ -62,6 +63,11 @@ export default function Mypage() {
     if (typeof detail === "string" && detail.trim()) return detail;
     if (detail) return JSON.stringify(detail);
     return fallback;
+  };
+  const truncateFavoriteSummary = (text) => {
+    const value = String(text || "");
+    if (value.length <= FAVORITE_SUMMARY_MAX_CHARS) return value;
+    return `${value.slice(0, FAVORITE_SUMMARY_MAX_CHARS)}...`;
   };
 
   useEffect(() => {
@@ -1295,7 +1301,7 @@ export default function Mypage() {
                 </div>
 
                 <p style={{ fontSize: 14, whiteSpace: "pre-wrap", margin: 0 }}>
-                  {novel.description || ""}
+                  {truncateFavoriteSummary(novel.description)}
                 </p>
               </div>
             ))}

@@ -19,6 +19,13 @@ class User(Base):
     birth_date = Column(Date, nullable=True)
     # 通知センター用: メール通知の送信可否
     email_notifications_enabled = Column(Boolean, nullable=False, server_default="1")
+    # ブックマーク公開設定（public/private）
+    favorite_visibility = Column(String(16), nullable=False, server_default="public")
+    profile_bio = Column(Text, nullable=True)
+    profile_icon_url = Column(String(255), nullable=True)
+    profile_header_url = Column(String(255), nullable=True)
+    profile_website_url = Column(String(255), nullable=True)
+    profile_x_url = Column(String(255), nullable=True)
     # 課金フラグ（Stripe 用）
     is_premium = Column(Boolean, nullable=False, server_default="0")
     # プレミアム状態の再確認（ログイン時などで更新）
@@ -72,6 +79,23 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+
+
+class UserFollow(Base):
+    __tablename__ = "user_follows"
+    __table_args__ = (
+        UniqueConstraint("follower_user_id", "followed_user_id", name="uniq_follow"),
+        Index("idx_followed_user_id", "followed_user_id"),
+        Index("idx_follower_user_id", "follower_user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    follower_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    followed_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    follower = relationship("User", foreign_keys=[follower_user_id])
+    followed = relationship("User", foreign_keys=[followed_user_id])
 
 
 class PasswordResetToken(Base):
@@ -184,6 +208,12 @@ class Novel(Base):
     age_limit = Column(age_limit_enum, nullable=False, server_default="all")
     is_ai_generated = Column(Boolean, nullable=False, server_default="0")
     creative_type = Column(creative_type_enum, nullable=False, server_default="original")
+    fanfic_source_title = Column(String(120), nullable=True)
+    fanfic_characters = Column(Text, nullable=True)
+    fanfic_coupling = Column(String(120), nullable=True)
+    fanfic_notes = Column(Text, nullable=True)
+    series_name = Column(String(120), nullable=True, index=True)
+    series_order = Column(Integer, nullable=True)
 
     author = relationship("User", back_populates="novels")
     episodes = relationship(
@@ -371,6 +401,28 @@ class Tag(Base):
         back_populates="tag",
         cascade="all, delete-orphan",
     )
+    follows = relationship(
+        "TagFollow",
+        back_populates="tag",
+        cascade="all, delete-orphan",
+    )
+
+
+class TagFollow(Base):
+    __tablename__ = "tag_follows"
+    __table_args__ = (
+        UniqueConstraint("user_id", "tag_id", name="uniq_user_tag_follow"),
+        Index("idx_tag_follows_user_id", "user_id"),
+        Index("idx_tag_follows_tag_id", "tag_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    tag_id = Column(Integer, ForeignKey("tags.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    user = relationship("User")
+    tag = relationship("Tag", back_populates="follows")
 
 
 class NovelTag(Base):
@@ -1025,6 +1077,18 @@ class AIChatGuestUsage(Base):
     tokens_used = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+
+
+class AIChatTokenUsageLog(Base):
+    __tablename__ = "ai_chat_token_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    guest_id = Column(String(64), nullable=True, index=True)
+    tokens_used = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+    user = relationship("User")
 
 
 class AIChatAddonPurchase(Base):

@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-03-01T02:13:46.139Z",
+  "generated_at": "2026-03-06T22:54:16.982Z",
   "api_base": "http://127.0.0.1:8000",
-  "total_files": 58,
-  "total_ui_entries": 1227,
-  "ja_source_count": 1222,
-  "en_only_source_count": 5,
+  "total_files": 63,
+  "total_ui_entries": 1513,
+  "ja_source_count": 1505,
+  "en_only_source_count": 8,
   "by_lang": {
     "zh-cn": {
-      "translated_count": 1227,
-      "backcheck_target_count": 1222,
+      "translated_count": 1513,
+      "backcheck_target_count": 1505,
       "flagged_count": 0,
       "flagged_examples": []
     },
     "zh-tw": {
-      "translated_count": 1227,
-      "backcheck_target_count": 1222,
+      "translated_count": 1513,
+      "backcheck_target_count": 1505,
       "flagged_count": 0,
       "flagged_examples": []
     },
     "ko": {
-      "translated_count": 1227,
-      "backcheck_target_count": 1222,
+      "translated_count": 1513,
+      "backcheck_target_count": 1505,
       "flagged_count": 0,
       "flagged_examples": []
     }

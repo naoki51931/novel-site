@@ -14,6 +14,7 @@ import {
 const API_BASE = getApiBase();
 const TRANSLATABLE_LANGS = new Set(["en", "zh-cn", "zh-tw", "ko"]);
 const GUIDE_CREATED_NOVEL_ID_KEY = "onboarding_created_novel_id_v1";
+const NOVEL_SUMMARY_MAX_CHARS = 500;
 
 export default function NovelDetail() {
   const { id } = useParams(); // novel_id
@@ -33,10 +34,24 @@ export default function NovelDetail() {
   const [error, setError] = useState("");
   const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
   const [expandedBubble, setExpandedBubble] = useState("");
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
+
+  useEffect(() => {
+    setIsSummaryExpanded(false);
+  }, [id, novel?.description]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || comments.length === 0) return;
+    const match = String(window.location.hash || "").match(/^#comment-(\d+)$/);
+    if (!match) return;
+    const el = document.getElementById(`comment-${match[1]}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [comments]);
 
 
   const formatDateTime = (isoString) => {
@@ -701,6 +716,18 @@ export default function NovelDetail() {
             {t({ ja: "AI創作", en: "AI-generated" })}
           </span>
         )}
+        {novel.creative_type === "fanfic" && novel.fanfic_source_title && (
+          <span
+            style={{
+              display: "inline-block",
+              padding: "2px 8px",
+              borderRadius: 999,
+              border: "1px solid #888",
+            }}
+          >
+            {t({ ja: "原作", en: "Source" })}: {novel.fanfic_source_title}
+          </span>
+        )}
       </div>
 
       {/* 著者 / 日付 / 閲覧数 / いいね */}
@@ -736,6 +763,15 @@ export default function NovelDetail() {
         {typeof novel.total_char_count === "number" && (
           <span>{t({ ja: "総文字数", en: "Total chars" })}: {novel.total_char_count}</span>
         )}
+        {novel.series_name ? (
+          <span>
+            {t({ ja: "シリーズ", en: "Series" })}:{" "}
+            <Link to={`/series/${encodeURIComponent(novel.series_name)}`}>
+              {novel.series_name}
+            </Link>
+            {novel.series_order != null ? ` #${novel.series_order}` : ""}
+          </span>
+        ) : null}
         {/* お気に入りボタン */}
         <button
           type="button"
@@ -791,6 +827,18 @@ export default function NovelDetail() {
         </div>
       )}
 
+      {novel.creative_type === "fanfic" && (
+        <section style={{ marginBottom: 12 }}>
+          <h4 style={{ margin: "6px 0" }}>{t({ ja: "二次創作情報", en: "Fanfic details" })}</h4>
+          <div style={{ display: "grid", gap: 4, color: "var(--muted-text)" }}>
+            {novel.fanfic_source_title ? <div>{t({ ja: "原作", en: "Source" })}: {novel.fanfic_source_title}</div> : null}
+            {novel.fanfic_characters ? <div>{t({ ja: "キャラ", en: "Characters" })}: {novel.fanfic_characters}</div> : null}
+            {novel.fanfic_coupling ? <div>{t({ ja: "カップリング", en: "Pairing" })}: {novel.fanfic_coupling}</div> : null}
+            {novel.fanfic_notes ? <div>{t({ ja: "注意事項", en: "Notes" })}: {novel.fanfic_notes}</div> : null}
+          </div>
+        </section>
+      )}
+
       {/* 説明文 */}
       {novel.description && (
         <div
@@ -801,7 +849,22 @@ export default function NovelDetail() {
             lineHeight: 1.6,
           }}
         >
-          {novel.description}
+          {isSummaryExpanded || novel.description.length <= NOVEL_SUMMARY_MAX_CHARS
+            ? novel.description
+            : `${novel.description.slice(0, NOVEL_SUMMARY_MAX_CHARS)}...`}
+          {novel.description.length > NOVEL_SUMMARY_MAX_CHARS && (
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={() => setIsSummaryExpanded((prev) => !prev)}
+              >
+                {isSummaryExpanded
+                  ? t({ ja: "閉じる", en: "Close" })
+                  : t({ ja: "続きを読む", en: "Read more" })}
+              </button>
+            </div>
+          )}
         </div>
       )}
       <div style={{ fontSize: "0.85rem", color: "#777", marginBottom: 8 }}>
@@ -948,6 +1011,7 @@ export default function NovelDetail() {
             {comments.map((c) => (
               <div
                 key={c.id}
+                id={`comment-${c.id}`}
                 style={{
                   borderBottom: "1px solid #ddd",
                   padding: "6px 0",

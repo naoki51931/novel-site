@@ -18,6 +18,12 @@ export default function EditNovel() {
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [creativeType, setCreativeType] = useState("original"); // オリジナル / 二次創作
+  const [fanficSourceTitle, setFanficSourceTitle] = useState("");
+  const [fanficCharacters, setFanficCharacters] = useState("");
+  const [fanficCoupling, setFanficCoupling] = useState("");
+  const [fanficNotes, setFanficNotes] = useState("");
+  const [seriesName, setSeriesName] = useState("");
+  const [seriesOrder, setSeriesOrder] = useState("");
   const [status, setStatus] = useState("public");            // "public" / "draft"
   const [canEditFull, setCanEditFull] = useState(true);
   const [autoSummaryLoading, setAutoSummaryLoading] = useState(false);
@@ -80,6 +86,16 @@ export default function EditNovel() {
           setAgeLimit(data.age_limit || "all");
           setIsAIGenerated(!!data.is_ai_generated);
           setCreativeType(data.creative_type || "original");
+          setFanficSourceTitle(data.fanfic_source_title || "");
+          setFanficCharacters(data.fanfic_characters || "");
+          setFanficCoupling(data.fanfic_coupling || "");
+          setFanficNotes(data.fanfic_notes || "");
+          setSeriesName(data.series_name || "");
+          setSeriesOrder(
+            data.series_order === null || typeof data.series_order === "undefined"
+              ? ""
+              : String(data.series_order)
+          );
 
           // ★ tags（配列）→ "A, B" にしてセット
           if (Array.isArray(data.tags)) {
@@ -123,6 +139,12 @@ export default function EditNovel() {
       if (typeof draft.isAIGenerated === "boolean") setIsAIGenerated(draft.isAIGenerated);
       if (draft.status) setStatus(draft.status);
       if (draft.creativeType) setCreativeType(draft.creativeType);
+      if (typeof draft.fanficSourceTitle === "string") setFanficSourceTitle(draft.fanficSourceTitle);
+      if (typeof draft.fanficCharacters === "string") setFanficCharacters(draft.fanficCharacters);
+      if (typeof draft.fanficCoupling === "string") setFanficCoupling(draft.fanficCoupling);
+      if (typeof draft.fanficNotes === "string") setFanficNotes(draft.fanficNotes);
+      if (typeof draft.seriesName === "string") setSeriesName(draft.seriesName);
+      if (typeof draft.seriesOrder === "string") setSeriesOrder(draft.seriesOrder);
 
       // ★ draft の tagsInput
       if (typeof draft.tagsInput === "string") setTagsInput(draft.tagsInput);
@@ -141,6 +163,12 @@ export default function EditNovel() {
         status,
         isAIGenerated,
         creativeType,
+        fanficSourceTitle,
+        fanficCharacters,
+        fanficCoupling,
+        fanficNotes,
+        seriesName,
+        seriesOrder,
         tagsInput, // ★ 追加
         saved_at: new Date().toISOString(),
       };
@@ -152,7 +180,22 @@ export default function EditNovel() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [novelDraftKey, title, description, ageLimit, status, isAIGenerated, tagsInput]);
+  }, [
+    novelDraftKey,
+    title,
+    description,
+    ageLimit,
+    status,
+    isAIGenerated,
+    creativeType,
+    fanficSourceTitle,
+    fanficCharacters,
+    fanficCoupling,
+    fanficNotes,
+    seriesName,
+    seriesOrder,
+    tagsInput,
+  ]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -190,6 +233,12 @@ export default function EditNovel() {
                 age_limit: ageLimit,
                 is_ai_generated: isAIGenerated,
                 creative_type: creativeType,
+                fanfic_source_title: creativeType === "fanfic" ? fanficSourceTitle : "",
+                fanfic_characters: creativeType === "fanfic" ? fanficCharacters : "",
+                fanfic_coupling: creativeType === "fanfic" ? fanficCoupling : "",
+                fanfic_notes: creativeType === "fanfic" ? fanficNotes : "",
+                series_name: seriesName,
+                series_order: seriesOrder === "" ? null : Number(seriesOrder),
                 status,
                 is_public: status === "public",
 
@@ -618,6 +667,103 @@ export default function EditNovel() {
                 </div>
               </label>
             </div>
+
+            {creativeType === "fanfic" && (
+              <section
+                style={{
+                  marginBottom: 10,
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  padding: 10,
+                }}
+              >
+                <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+                  {t({ ja: "二次創作向け入力", en: "Fanfic fields" })}
+                </h3>
+                <div style={{ marginBottom: 8 }}>
+                  <label>
+                    {t({ ja: "原作名", en: "Source title" })}<br />
+                    <input
+                      type="text"
+                      value={fanficSourceTitle}
+                      onChange={(e) => setFanficSourceTitle(e.target.value)}
+                      style={{ width: "100%", padding: 4 }}
+                    />
+                  </label>
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <label>
+                    {t({ ja: "キャラ", en: "Characters" })}<br />
+                    <input
+                      type="text"
+                      value={fanficCharacters}
+                      onChange={(e) => setFanficCharacters(e.target.value)}
+                      style={{ width: "100%", padding: 4 }}
+                      placeholder={t({ ja: "例: A, B, C", en: "e.g., A, B, C" })}
+                    />
+                  </label>
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <label>
+                    {t({ ja: "カップリング", en: "Pairing" })}<br />
+                    <input
+                      type="text"
+                      value={fanficCoupling}
+                      onChange={(e) => setFanficCoupling(e.target.value)}
+                      style={{ width: "100%", padding: 4 }}
+                      placeholder={t({ ja: "例: A×B", en: "e.g., A x B" })}
+                    />
+                  </label>
+                </div>
+                <div style={{ marginBottom: 0 }}>
+                  <label>
+                    {t({ ja: "注意事項", en: "Notes / warnings" })}<br />
+                    <textarea
+                      rows={3}
+                      value={fanficNotes}
+                      onChange={(e) => setFanficNotes(e.target.value)}
+                      style={{ width: "100%", padding: 4 }}
+                    />
+                  </label>
+                </div>
+              </section>
+            )}
+
+            <section
+              style={{
+                marginBottom: 10,
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                padding: 10,
+              }}
+            >
+              <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+                {t({ ja: "シリーズ設定（任意）", en: "Series (optional)" })}
+              </h3>
+              <div style={{ marginBottom: 8 }}>
+                <label>
+                  {t({ ja: "シリーズ名", en: "Series name" })}<br />
+                  <input
+                    type="text"
+                    value={seriesName}
+                    onChange={(e) => setSeriesName(e.target.value)}
+                    style={{ width: "100%", padding: 4 }}
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: 0 }}>
+                <label>
+                  {t({ ja: "シリーズ順", en: "Series order" })}<br />
+                  <input
+                    type="number"
+                    min="1"
+                    value={seriesOrder}
+                    onChange={(e) => setSeriesOrder(e.target.value)}
+                    style={{ width: "100%", padding: 4 }}
+                  />
+                </label>
+              </div>
+            </section>
 
             <div style={{ marginBottom: 8 }}>
               <label>
