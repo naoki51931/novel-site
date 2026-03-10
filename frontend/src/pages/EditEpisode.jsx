@@ -959,7 +959,15 @@ export default function EditEpisode() {
               border: "1px solid #ddd",
             }}
           >
-            <h3 style={{ marginTop: 0 }}>{t({ ja: "押絵", en: "Illustrations" })}</h3>
+            <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>{t({ ja: "押絵", en: "Illustrations" })}</span>
+              <span style={{ fontSize: 12, color: "#666", fontWeight: 400 }}>
+                {t({
+                  ja: "挿絵を挿入するには、タグを本文中に入れます",
+                  en: "To insert illustrations, place tags in the body text.",
+                })}
+              </span>
+            </h3>
 
             {illusts.length > 0 ? (
               <div

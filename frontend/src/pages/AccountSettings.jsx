@@ -4,10 +4,52 @@ import { getSavedTheme, setTheme } from "../theme";
 import { useI18n } from "../lib/i18n";
 
 const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
+const BIRTH_YEAR_MIN = 1900;
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const formatBirthDate = (year, month, day) => `${year}-${pad2(month)}-${pad2(day)}`;
+const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const formatApiErrorDetail = (detail, fallback, t) => {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const birthDateIssue = detail.find((item) => {
+      const loc = Array.isArray(item?.loc) ? item.loc : [];
+      return loc.includes("birth_date");
+    });
+    if (birthDateIssue) {
+      return t({ ja: "生年月日は必須です。", en: "Birth date is required." });
+    }
+    const firstMsg = detail.find((item) => typeof item?.msg === "string" && item.msg.trim());
+    if (firstMsg) return firstMsg.msg;
+  }
+  if (detail && typeof detail === "object") {
+    if (typeof detail.message === "string" && detail.message.trim()) return detail.message;
+    if (typeof detail.msg === "string" && detail.msg.trim()) return detail.msg;
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+};
+
+const parseBirthDate = (value, maxYear) => {
+  const m = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const year = clamp(Number(m[1]), BIRTH_YEAR_MIN, maxYear);
+  const month = clamp(Number(m[2]), 1, 12);
+  const maxDay = daysInMonth(year, month);
+  const day = clamp(Number(m[3]), 1, maxDay);
+  return { year, month, day };
+};
 
 export default function AccountSettings() {
   const navigate = useNavigate();
   const { t } = useI18n();
+  const today = new Date();
+  const birthYearMax = today.getFullYear();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
@@ -36,6 +78,26 @@ export default function AccountSettings() {
       return false;
     }
   });
+  const [showBirthSlider, setShowBirthSlider] = useState(false);
+  const birthParts =
+    parseBirthDate(birthDate, birthYearMax) || { year: 2000, month: 1, day: 1 };
+
+  const updateBirthDateBySlider = (part, rawValue) => {
+    const base = parseBirthDate(birthDate, birthYearMax) || { year: 2000, month: 1, day: 1 };
+    let nextYear = base.year;
+    let nextMonth = base.month;
+    let nextDay = base.day;
+    const value = Number(rawValue);
+
+    if (part === "year") nextYear = clamp(value, BIRTH_YEAR_MIN, birthYearMax);
+    if (part === "month") nextMonth = clamp(value, 1, 12);
+
+    const maxDay = daysInMonth(nextYear, nextMonth);
+    if (part === "day") nextDay = clamp(value, 1, maxDay);
+    else nextDay = clamp(nextDay, 1, maxDay);
+
+    setBirthDate(formatBirthDate(nextYear, nextMonth, nextDay));
+  };
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -94,6 +156,10 @@ export default function AccountSettings() {
     setError("");
 
     try {
+      if (!birthDate) {
+        throw new Error(t({ ja: "生年月日は必須です。", en: "Birth date is required." }));
+      }
+
       const token = localStorage.getItem("token");
       if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
 
@@ -125,7 +191,14 @@ export default function AccountSettings() {
       if (!res.ok) {
         try {
           const d = await res.json();
-          if (d && d.detail) msg = d.detail;
+          msg = formatApiErrorDetail(
+            d?.detail,
+            t(
+              { ja: "保存に失敗しました (HTTP {{status}})", en: "Failed to save (HTTP {{status}})" },
+              { status: res.status }
+            ),
+            t
+          );
         } catch (_) {
           msg = t(
             { ja: "保存に失敗しました (HTTP {{status}})", en: "Failed to save (HTTP {{status}})" },
@@ -316,6 +389,60 @@ export default function AccountSettings() {
               style={{ width:"100%", padding:4 }}
             />
           </label>
+          <div style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={() => setShowBirthSlider((prev) => !prev)}
+            >
+              {showBirthSlider
+                ? t({ ja: "スライダー入力を閉じる", en: "Hide slider input" })
+                : t({ ja: "スライダーで入力する", en: "Use slider input" })}
+            </button>
+          </div>
+          {showBirthSlider && (
+            <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span>
+                  {t({ ja: "年", en: "Year" })}: {birthParts.year}
+                </span>
+                <input
+                  type="range"
+                  min={BIRTH_YEAR_MIN}
+                  max={birthYearMax}
+                  value={birthParts.year}
+                  onChange={(e) => updateBirthDateBySlider("year", e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span>
+                  {t({ ja: "月", en: "Month" })}: {birthParts.month}
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={12}
+                  value={birthParts.month}
+                  onChange={(e) => updateBirthDateBySlider("month", e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span>
+                  {t({ ja: "日", en: "Day" })}: {birthParts.day}
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={daysInMonth(birthParts.year, birthParts.month)}
+                  value={birthParts.day}
+                  onChange={(e) => updateBirthDateBySlider("day", e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </label>
+            </div>
+          )}
         </div>
 
         {error && <p style={{ color:"red" }}>{error}</p>}

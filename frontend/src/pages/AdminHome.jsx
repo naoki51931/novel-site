@@ -21,6 +21,11 @@ export default function AdminHome() {
   });
   const [indexingInspectionError, setIndexingInspectionError] = useState("");
   const [indexingResult, setIndexingResult] = useState(null);
+  const [indexingDailyLimit, setIndexingDailyLimit] = useState(199);
+  const [indexingCarryoverCount, setIndexingCarryoverCount] = useState(0);
+  const [indexingCarryoverUpdatedAt, setIndexingCarryoverUpdatedAt] = useState("");
+  const [indexingCarryoverUrls, setIndexingCarryoverUrls] = useState([]);
+  const [indexingCarryoverClearing, setIndexingCarryoverClearing] = useState(false);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -41,6 +46,17 @@ export default function AdminHome() {
         );
       } finally {
         setContactLoading(false);
+      }
+      try {
+        const carry = await apiFetch("/api/admin/indexing/carryover", {
+          credentials: "include",
+        });
+        setIndexingDailyLimit(Number(carry?.daily_limit) || 199);
+        setIndexingCarryoverCount(Number(carry?.carryover_count) || 0);
+        setIndexingCarryoverUpdatedAt(String(carry?.carryover_updated_at || ""));
+        setIndexingCarryoverUrls(Array.isArray(carry?.carryover_urls) ? carry.carryover_urls : []);
+      } catch {
+        // ignore
       }
     };
     checkAuth();
@@ -77,6 +93,10 @@ export default function AdminHome() {
         unindexed: Number(data?.unindexed_count) || 0,
         unknown: Number(data?.unknown_count) || 0,
       });
+      setIndexingDailyLimit(Number(data?.daily_limit) || 199);
+      setIndexingCarryoverCount(Number(data?.carryover_count) || 0);
+      setIndexingCarryoverUpdatedAt(String(data?.carryover_updated_at || ""));
+      setIndexingCarryoverUrls(Array.isArray(data?.carryover_urls) ? data.carryover_urls : []);
       if (data?.inspection_error) {
         setIndexingInspectionError(String(data.inspection_error));
       }
@@ -112,6 +132,10 @@ export default function AdminHome() {
         credentials: "include",
       });
       setIndexingResult(data || null);
+      setIndexingDailyLimit(Number(data?.daily_limit) || 199);
+      setIndexingCarryoverCount(Number(data?.carryover_count) || 0);
+      setIndexingCarryoverUpdatedAt(String(data?.carryover_updated_at || ""));
+      setIndexingCarryoverUrls(Array.isArray(data?.carryover_urls) ? data.carryover_urls : []);
       if (!indexingTotal && Number(data?.submitted) > 0) {
         setIndexingTotal(Number(data.submitted));
       }
@@ -121,6 +145,27 @@ export default function AdminHome() {
       );
     } finally {
       setIndexingSubmitting(false);
+    }
+  };
+
+  const handleClearIndexingCarryover = async () => {
+    try {
+      setIndexingCarryoverClearing(true);
+      setIndexingError("");
+      const data = await apiFetch("/api/admin/indexing/carryover", {
+        method: "DELETE",
+        credentials: "include",
+      });
+      setIndexingDailyLimit(Number(data?.daily_limit) || 199);
+      setIndexingCarryoverCount(Number(data?.carryover_count) || 0);
+      setIndexingCarryoverUpdatedAt(String(data?.carryover_updated_at || ""));
+      setIndexingCarryoverUrls(Array.isArray(data?.carryover_urls) ? data.carryover_urls : []);
+    } catch (e) {
+      setIndexingError(
+        e.message || t({ ja: "繰越キューの削除に失敗しました。", en: "Failed to clear carryover queue." })
+      );
+    } finally {
+      setIndexingCarryoverClearing(false);
     }
   };
 
@@ -223,10 +268,61 @@ export default function AdminHome() {
         </button>
         <div style={{ marginTop: 10, fontSize: 13, color: "var(--muted-text)" }}>
           {t(
+            { ja: "1日あたり送信上限: {{count}}", en: "Daily submit limit: {{count}}" },
+            { count: indexingDailyLimit || 199 }
+          )}
+        </div>
+        <div style={{ marginTop: 6, fontSize: 13, color: "var(--muted-text)" }}>
+          {t(
             { ja: "対象URL数: {{count}}", en: "Target URLs: {{count}}" },
             { count: indexingTotal || indexingUrlItems.length || 0 }
           )}
         </div>
+        <div style={{ marginTop: 6, fontSize: 13, color: "var(--muted-text)" }}>
+          {t(
+            { ja: "繰越キュー: {{count}} 件", en: "Carryover queue: {{count}}" },
+            { count: indexingCarryoverCount || 0 }
+          )}
+          {indexingCarryoverUpdatedAt ? (
+            <span style={{ marginLeft: 8 }}>
+              {t(
+                { ja: "更新: {{time}}", en: "Updated: {{time}}" },
+                {
+                  time: new Date(indexingCarryoverUpdatedAt).toLocaleString(
+                    lang === "en" ? "en-US" : "ja-JP",
+                    { timeZone: "Asia/Tokyo" }
+                  ),
+                }
+              )}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={handleClearIndexingCarryover}
+            disabled={indexingCarryoverClearing || !indexingCarryoverCount}
+            style={{ marginLeft: 8 }}
+          >
+            {indexingCarryoverClearing
+              ? t({ ja: "削除中...", en: "Clearing..." })
+              : t({ ja: "繰越を削除", en: "Clear carryover" })}
+          </button>
+        </div>
+        {indexingCarryoverUrls.length > 0 && (
+          <div style={{ marginTop: 6, maxHeight: 100, overflowY: "auto", fontSize: 12, color: "var(--muted-text)" }}>
+            {indexingCarryoverUrls.slice(0, 20).map((url) => (
+              <div key={url}>{url}</div>
+            ))}
+            {indexingCarryoverUrls.length > 20 && (
+              <div>
+                {t(
+                  { ja: "…他 {{count}} 件", en: "...and {{count}} more" },
+                  { count: indexingCarryoverUrls.length - 20 }
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {indexingUrlItems.length > 0 && (
           <div style={{ marginTop: 6, fontSize: 13, color: "var(--muted-text)" }}>
             {t(
@@ -288,6 +384,18 @@ export default function AdminHome() {
                   submitted: indexingResult.submitted || 0,
                   success: indexingResult.success || 0,
                   failed: indexingResult.failed || 0,
+                }
+              )}
+            </div>
+            <div style={{ marginTop: 4, color: "var(--muted-text)" }}>
+              {t(
+                {
+                  ja: "今回送信試行 {{attempted}} 件 / 繰越 {{carryover}} 件",
+                  en: "Attempted {{attempted}} / Carryover {{carryover}}",
+                },
+                {
+                  attempted: Number(indexingResult.attempted || 0),
+                  carryover: Number(indexingResult.carryover_count || 0),
                 }
               )}
             </div>

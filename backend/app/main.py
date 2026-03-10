@@ -258,9 +258,17 @@ REDIS_PUBLIC_LIST_CACHE_TTL_SEC = max(
 REDIS_RANKING_CACHE_TTL_SEC = max(
     10, int(os.getenv("REDIS_RANKING_CACHE_TTL_SEC", "30") or "30")
 )
+COMMENT_COUNT_AGG_VERSION = 2
 REDIS_PUBLIC_USER_CACHE_TTL_SEC = max(
     60, int(os.getenv("REDIS_PUBLIC_USER_CACHE_TTL_SEC", "600") or "600")
 )
+GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT = max(
+    1, min(5000, int(os.getenv("GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT", "199") or "199"))
+)
+GOOGLE_INDEXING_CARRYOVER_TTL_SEC = max(
+    86400, int(os.getenv("GOOGLE_INDEXING_CARRYOVER_TTL_SEC", str(60 * 60 * 24 * 30)) or str(60 * 60 * 24 * 30))
+)
+GOOGLE_INDEXING_CARRYOVER_KEY = "queue:admin:indexing:carryover:v1"
 RECAPTCHA_SECRET_KEY = (os.getenv("RECAPTCHA_SECRET_KEY", "") or "").strip()
 RECAPTCHA_ENABLED = ((os.getenv("RECAPTCHA_ENABLED", "1") or "1").strip() == "1") and bool(
     RECAPTCHA_SECRET_KEY
@@ -269,6 +277,8 @@ RECAPTCHA_ENABLED = ((os.getenv("RECAPTCHA_ENABLED", "1") or "1").strip() == "1"
 _redis_client = None
 _redis_metrics_flusher_started = False
 _redis_metrics_flusher_lock = threading.Lock()
+_indexing_carryover_fallback_urls: list[str] = []
+_indexing_carryover_fallback_updated_at: str | None = None
 
 
 def verify_recaptcha_token(token: str, remote_ip: str | None = None) -> bool:
@@ -4775,6 +4785,10 @@ class AdminIndexingUrlsOut(BaseModel):
     unindexed_count: int = 0
     unknown_count: int = 0
     inspection_error: str | None = None
+    daily_limit: int = GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT
+    carryover_count: int = 0
+    carryover_updated_at: str | None = None
+    carryover_urls: List[str] = []
     items: List[AdminIndexingUrlItem] = []
 
 
@@ -4794,7 +4808,19 @@ class AdminIndexingSubmitOut(BaseModel):
     submitted: int
     success: int
     failed: int
+    attempted: int = 0
+    daily_limit: int = GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT
+    carryover_count: int = 0
+    carryover_updated_at: str | None = None
+    carryover_urls: List[str] = []
     items: List[AdminIndexingSubmitItem]
+
+
+class AdminIndexingCarryoverOut(BaseModel):
+    daily_limit: int = GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT
+    carryover_count: int = 0
+    carryover_updated_at: str | None = None
+    carryover_urls: List[str] = []
 
 
 # =========================================
@@ -17109,6 +17135,87 @@ def _build_public_cover_map(db: Session, novel_ids: list[int], site_key: str) ->
     return cover_map
 
 
+def _build_public_comment_count_map(
+    db: Session,
+    novel_ids: list[int],
+    site_key: str,
+) -> dict[int, int]:
+    if not novel_ids:
+        return {}
+
+    comment_count_map: dict[int, int] = {}
+    novel_comment_rows = (
+        db.query(
+            models.NovelComment.novel_id,
+            func.count(models.NovelComment.id),
+        )
+        .filter(models.NovelComment.novel_id.in_(novel_ids))
+        .group_by(models.NovelComment.novel_id)
+        .all()
+    )
+    for novel_id, count in novel_comment_rows:
+        nid = int(novel_id or 0)
+        if nid <= 0:
+            continue
+        comment_count_map[nid] = comment_count_map.get(nid, 0) + int(count or 0)
+
+    episode_comment_rows = (
+        db.query(
+            models.Episode.novel_id,
+            func.count(models.EpisodeComment.id),
+        )
+        .join(models.EpisodeComment, models.EpisodeComment.episode_id == models.Episode.id)
+        .filter(models.Episode.novel_id.in_(novel_ids))
+        .filter(models.Episode.site_key == site_key)
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True)
+        .group_by(models.Episode.novel_id)
+        .all()
+    )
+    for novel_id, count in episode_comment_rows:
+        nid = int(novel_id or 0)
+        if nid <= 0:
+            continue
+        comment_count_map[nid] = comment_count_map.get(nid, 0) + int(count or 0)
+
+    return comment_count_map
+
+
+def _build_novel_comment_count_subquery(
+    db: Session,
+    *,
+    period_start_dt: datetime | None = None,
+):
+    q = db.query(
+        models.NovelComment.novel_id.label("novel_id"),
+        func.count(models.NovelComment.id).label("comment_count"),
+    )
+    if period_start_dt is not None:
+        q = q.filter(models.NovelComment.created_at >= period_start_dt)
+    return q.group_by(models.NovelComment.novel_id).subquery()
+
+
+def _build_episode_comment_count_subquery(
+    db: Session,
+    *,
+    site_key: str,
+    period_start_dt: datetime | None = None,
+):
+    q = (
+        db.query(
+            models.Episode.novel_id.label("novel_id"),
+            func.count(models.EpisodeComment.id).label("comment_count"),
+        )
+        .join(models.EpisodeComment, models.EpisodeComment.episode_id == models.Episode.id)
+        .filter(models.Episode.site_key == site_key)
+        .filter(models.Episode.status == "public")
+        .filter(models.Episode.is_public == True)
+    )
+    if period_start_dt is not None:
+        q = q.filter(models.EpisodeComment.created_at >= period_start_dt)
+    return q.group_by(models.Episode.novel_id).subquery()
+
+
 @app.get("/api/tags")
 def list_tags(
     request: Request,
@@ -17297,6 +17404,7 @@ def list_tag_novels(
             "sort": sort,
             "limit": int(limit),
             "offset": int(offset),
+            "comment_agg_v": COMMENT_COUNT_AGG_VERSION,
             "viewer_age": viewer_age if viewer_age is not None else -1,
             "age_restriction_disabled": int(AGE_RESTRICTION_DISABLED),
         },
@@ -17313,24 +17421,23 @@ def list_tag_novels(
         .group_by(models.NovelFavorite.novel_id)
         .subquery()
     )
-    comment_subq = (
-        db.query(
-            models.NovelComment.novel_id.label("novel_id"),
-            func.count(models.NovelComment.id).label("comment_count"),
-        )
-        .group_by(models.NovelComment.novel_id)
-        .subquery()
+    novel_comment_subq = _build_novel_comment_count_subquery(db)
+    episode_comment_subq = _build_episode_comment_count_subquery(db, site_key=site_key)
+    total_comment_expr = (
+        func.coalesce(novel_comment_subq.c.comment_count, 0)
+        + func.coalesce(episode_comment_subq.c.comment_count, 0)
     )
 
     q = (
         db.query(
             models.Novel,
             func.coalesce(fav_subq.c.favorite_count, 0).label("favorite_count"),
-            func.coalesce(comment_subq.c.comment_count, 0).label("comment_count"),
+            total_comment_expr.label("comment_count"),
         )
         .join(models.NovelTag, models.NovelTag.novel_id == models.Novel.id)
         .outerjoin(fav_subq, fav_subq.c.novel_id == models.Novel.id)
-        .outerjoin(comment_subq, comment_subq.c.novel_id == models.Novel.id)
+        .outerjoin(novel_comment_subq, novel_comment_subq.c.novel_id == models.Novel.id)
+        .outerjoin(episode_comment_subq, episode_comment_subq.c.novel_id == models.Novel.id)
         .options(
             selectinload(models.Novel.author),
             selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
@@ -17345,12 +17452,12 @@ def list_tag_novels(
         q = q.order_by(models.Novel.like_count.desc(), models.Novel.id.desc())
     elif sort == "comments":
         q = q.order_by(
-            func.coalesce(comment_subq.c.comment_count, 0).desc(),
+            total_comment_expr.desc(),
             models.Novel.id.desc(),
         )
     else:
         q = q.order_by(
-            (models.Novel.like_count * 3 + func.coalesce(fav_subq.c.favorite_count, 0) * 5 + func.coalesce(comment_subq.c.comment_count, 0) * 2).desc(),
+            (models.Novel.like_count * 3 + func.coalesce(fav_subq.c.favorite_count, 0) * 5 + total_comment_expr * 2).desc(),
             models.Novel.id.desc(),
         )
 
@@ -17967,6 +18074,7 @@ def _serialize_feed_novels_for_user(
 
     novel_ids = [int(n.id) for n in novels]
     cover_map = _build_public_cover_map(db, novel_ids, site_key)
+    comment_count_map = _build_public_comment_count_map(db, novel_ids, site_key)
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     favorite_rows = (
         db.query(models.NovelFavorite.novel_id, func.count(models.NovelFavorite.id))
@@ -18009,6 +18117,7 @@ def _serialize_feed_novels_for_user(
             "view_count": int(getattr(novel, "view_count", 0) or 0),
             "like_count": int(getattr(novel, "like_count", 0) or 0),
             "favorite_count": int(favorite_counts.get(int(novel.id), 0)),
+            "comment_count": int(comment_count_map.get(int(novel.id), 0) or 0),
             "total_char_count": int(char_counts.get(int(novel.id), 0) or 0),
             "age_limit": str(getattr(novel, "age_limit", "all") or "all"),
             "creative_type": str(getattr(novel, "creative_type", "original") or "original"),
@@ -18460,6 +18569,7 @@ def list_public_novels(
             "sort": normalized_sort,
             "age_limit": normalized_age_limit,
             "creative_type": normalized_creative_type,
+            "comment_agg_v": COMMENT_COUNT_AGG_VERSION,
             "lang": target_language or "",
             "user_id": int(user.id) if user else 0,
             "user_age": user_age if user_age is not None else -1,
@@ -18630,21 +18740,20 @@ def list_public_novels(
         .group_by(models.NovelFavorite.novel_id)
         .subquery()
     )
-    comment_sort_subq = (
-        db.query(
-            models.NovelComment.novel_id.label("novel_id"),
-            func.count(models.NovelComment.id).label("comment_count"),
-        )
-        .group_by(models.NovelComment.novel_id)
-        .subquery()
+    novel_comment_sort_subq = _build_novel_comment_count_subquery(db)
+    episode_comment_sort_subq = _build_episode_comment_count_subquery(db, site_key=site_key)
+    total_comment_sort_expr = (
+        func.coalesce(novel_comment_sort_subq.c.comment_count, 0)
+        + func.coalesce(episode_comment_sort_subq.c.comment_count, 0)
     )
     query = (
         query.outerjoin(fav_sort_subq, fav_sort_subq.c.novel_id == models.Novel.id)
-        .outerjoin(comment_sort_subq, comment_sort_subq.c.novel_id == models.Novel.id)
+        .outerjoin(novel_comment_sort_subq, novel_comment_sort_subq.c.novel_id == models.Novel.id)
+        .outerjoin(episode_comment_sort_subq, episode_comment_sort_subq.c.novel_id == models.Novel.id)
     )
     if normalized_sort == "comments":
         query = query.order_by(
-            func.coalesce(comment_sort_subq.c.comment_count, 0).desc(),
+            total_comment_sort_expr.desc(),
             models.Novel.created_at.desc(),
             models.Novel.id.desc(),
         )
@@ -18655,7 +18764,7 @@ def list_public_novels(
             (
                 models.Novel.like_count * 3
                 + func.coalesce(fav_sort_subq.c.favorite_count, 0) * 5
-                + func.coalesce(comment_sort_subq.c.comment_count, 0) * 2
+                + total_comment_sort_expr * 2
             ).desc(),
             models.Novel.created_at.desc(),
             models.Novel.id.desc(),
@@ -18778,6 +18887,11 @@ def list_public_novels(
             .all()
         )
         favorite_counts = {row[0]: int(row[1]) for row in favorite_rows}
+    comment_count_map = _build_public_comment_count_map(
+        db,
+        [int(nid) for nid in novel_ids],
+        site_key,
+    )
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     translated_cards = _resolve_public_novel_card_translations(
         db,
@@ -18824,6 +18938,7 @@ def list_public_novels(
                 "view_count": getattr(novel, "view_count", 0) or 0,
                 "like_count": getattr(novel, "like_count", 0) or 0,
                 "favorite_count": favorite_counts.get(novel.id, 0),
+                "comment_count": int(comment_count_map.get(int(novel.id), 0) or 0),
                 "total_char_count": char_counts.get(novel.id, 0),
                 "age_limit": getattr(novel, "age_limit", "all") or "all",
                 "creative_type": getattr(novel, "creative_type", "original") or "original",
@@ -19019,6 +19134,7 @@ def list_public_novel_rankings(
             "tag": (tag or "").strip(),
             "creative_type": normalized_creative_type,
             "age_limit": normalized_age_limit,
+            "comment_agg_v": COMMENT_COUNT_AGG_VERSION,
             "lang": target_language or "",
             "user_id": int(user.id) if user else 0,
             "user_age": user_age if user_age is not None else -1,
@@ -19063,18 +19179,23 @@ def list_public_novel_rankings(
         .group_by(models.NovelDailyMetric.novel_id)
         .subquery()
     )
-    comment_subq = (
-        db.query(
-            models.NovelComment.novel_id.label("novel_id"),
-            func.count(models.NovelComment.id).label("comment_count"),
-        )
-        .filter(models.NovelComment.created_at >= period_start_dt)
-        .group_by(models.NovelComment.novel_id)
-        .subquery()
+    novel_comment_subq = _build_novel_comment_count_subquery(
+        db,
+        period_start_dt=period_start_dt,
+    )
+    episode_comment_subq = _build_episode_comment_count_subquery(
+        db,
+        site_key=site_key,
+        period_start_dt=period_start_dt,
+    )
+    total_period_comment_expr = (
+        func.coalesce(novel_comment_subq.c.comment_count, 0)
+        + func.coalesce(episode_comment_subq.c.comment_count, 0)
     )
     query = (
         query.outerjoin(metric_subq, metric_subq.c.novel_id == models.Novel.id)
-        .outerjoin(comment_subq, comment_subq.c.novel_id == models.Novel.id)
+        .outerjoin(novel_comment_subq, novel_comment_subq.c.novel_id == models.Novel.id)
+        .outerjoin(episode_comment_subq, episode_comment_subq.c.novel_id == models.Novel.id)
     )
 
     def episode_match_exists(like: str):
@@ -19213,13 +19334,13 @@ def list_public_novel_rankings(
     score_expr = (
         func.coalesce(metric_subq.c.p_likes, 0) * 3
         + func.coalesce(metric_subq.c.p_favorites, 0) * 5
-        + func.coalesce(comment_subq.c.comment_count, 0) * 2
+        + total_period_comment_expr * 2
         + recent_boost_expr
     )
     rising_expr = (
         func.coalesce(metric_subq.c.p_likes, 0) * 2
         + func.coalesce(metric_subq.c.p_favorites, 0) * 3
-        + func.coalesce(comment_subq.c.comment_count, 0) * 2
+        + total_period_comment_expr * 2
         + (func.coalesce(metric_subq.c.p_views, 0) * 0.1)
         + (recent_boost_expr * 2)
     )
@@ -19236,7 +19357,7 @@ def list_public_novel_rankings(
         )
     elif normalized_sort == "comments":
         query = query.order_by(
-            func.coalesce(comment_subq.c.comment_count, 0).desc(),
+            total_period_comment_expr.desc(),
             models.Novel.id.desc(),
         )
     elif normalized_sort == "score":
@@ -19317,7 +19438,7 @@ def list_public_novel_rankings(
             }
     period_comment_map: dict[int, int] = {}
     if novel_ids:
-        period_comment_rows = (
+        novel_period_comment_rows = (
             db.query(
                 models.NovelComment.novel_id,
                 func.count(models.NovelComment.id),
@@ -19327,7 +19448,30 @@ def list_public_novel_rankings(
             .group_by(models.NovelComment.novel_id)
             .all()
         )
-        period_comment_map = {int(nid): int(count or 0) for nid, count in period_comment_rows}
+        for nid, count in novel_period_comment_rows:
+            key = int(nid or 0)
+            if key <= 0:
+                continue
+            period_comment_map[key] = period_comment_map.get(key, 0) + int(count or 0)
+        episode_period_comment_rows = (
+            db.query(
+                models.Episode.novel_id,
+                func.count(models.EpisodeComment.id),
+            )
+            .join(models.EpisodeComment, models.EpisodeComment.episode_id == models.Episode.id)
+            .filter(models.Episode.novel_id.in_(novel_ids))
+            .filter(models.Episode.site_key == site_key)
+            .filter(models.Episode.status == "public")
+            .filter(models.Episode.is_public == True)
+            .filter(models.EpisodeComment.created_at >= period_start_dt)
+            .group_by(models.Episode.novel_id)
+            .all()
+        )
+        for nid, count in episode_period_comment_rows:
+            key = int(nid or 0)
+            if key <= 0:
+                continue
+            period_comment_map[key] = period_comment_map.get(key, 0) + int(count or 0)
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     translated_cards = _resolve_public_novel_card_translations(
         db,
@@ -21355,6 +21499,60 @@ def _classify_indexing_page_type(path: str) -> str:
     return "other"
 
 
+def _dedupe_urls_keep_order(urls: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in urls:
+        cleaned = str(raw or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+    return out
+
+
+def _get_indexing_carryover_payload() -> dict[str, Any]:
+    global _indexing_carryover_fallback_urls, _indexing_carryover_fallback_updated_at
+    payload = redis_json_get(GOOGLE_INDEXING_CARRYOVER_KEY)
+    if isinstance(payload, dict):
+        urls = _dedupe_urls_keep_order(
+            [str(v or "").strip() for v in (payload.get("urls") or []) if str(v or "").strip()]
+        )
+        updated_at = str(payload.get("updated_at") or "").strip() or None
+        return {"urls": urls, "updated_at": updated_at}
+    return {
+        "urls": _dedupe_urls_keep_order(list(_indexing_carryover_fallback_urls or [])),
+        "updated_at": _indexing_carryover_fallback_updated_at,
+    }
+
+
+def _get_indexing_carryover_urls() -> list[str]:
+    payload = _get_indexing_carryover_payload()
+    return list(payload.get("urls") or [])
+
+
+def _set_indexing_carryover_urls(urls: list[str]) -> None:
+    global _indexing_carryover_fallback_urls, _indexing_carryover_fallback_updated_at
+    cleaned = _dedupe_urls_keep_order(urls)
+    updated_at = datetime.utcnow().isoformat()
+    payload = {"urls": cleaned, "updated_at": updated_at}
+    if get_redis_client():
+        if cleaned:
+            redis_json_set(
+                GOOGLE_INDEXING_CARRYOVER_KEY,
+                payload,
+                GOOGLE_INDEXING_CARRYOVER_TTL_SEC,
+            )
+        else:
+            redis_delete(GOOGLE_INDEXING_CARRYOVER_KEY)
+    _indexing_carryover_fallback_urls = list(cleaned)
+    _indexing_carryover_fallback_updated_at = updated_at if cleaned else None
+
+
+def _clear_indexing_carryover_urls() -> None:
+    _set_indexing_carryover_urls([])
+
+
 def _indexing_importance_weight(page_type: str) -> float:
     if page_type == "episode":
         return 1.00
@@ -21824,6 +22022,9 @@ def admin_indexing_urls(
     db: Session = Depends(get_db),
 ):
     require_admin(request)
+    carryover_payload = _get_indexing_carryover_payload()
+    carryover_urls = list(carryover_payload.get("urls") or [])
+    carryover_updated_at = carryover_payload.get("updated_at")
     all_page_items = _build_indexing_target_items(db, request)
     selected_page_items = all_page_items[:limit]
     all_urls = [item["url"] for item in all_page_items]
@@ -21897,6 +22098,10 @@ def admin_indexing_urls(
         unindexed_count=unindexed_count,
         unknown_count=unknown_count,
         inspection_error=inspection_error,
+        daily_limit=GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT,
+        carryover_count=len(carryover_urls),
+        carryover_updated_at=carryover_updated_at,
+        carryover_urls=carryover_urls[:100],
         items=items,
     )
 
@@ -21908,6 +22113,8 @@ def admin_indexing_submit(
     db: Session = Depends(get_db),
 ):
     require_admin(request)
+    carryover_payload = _get_indexing_carryover_payload()
+    queued_urls = list(carryover_payload.get("urls") or [])
     if payload.all_pages or not payload.urls:
         scored_items = _build_indexing_target_items(db, request)
         scored_items.sort(
@@ -21920,15 +22127,9 @@ def admin_indexing_submit(
         )
         target_urls = [item["url"] for item in scored_items]
     else:
-        # 順序維持で重複除去
-        seen = set()
-        target_urls = []
-        for raw in payload.urls:
-            cleaned = (raw or "").strip()
-            if not cleaned or cleaned in seen:
-                continue
-            seen.add(cleaned)
-            target_urls.append(cleaned)
+        target_urls = _dedupe_urls_keep_order(payload.urls)
+
+    target_urls = _dedupe_urls_keep_order(queued_urls + target_urls)
 
     invalid_urls = [url for url in target_urls if not _is_frontend_origin_url(url)]
     if invalid_urls:
@@ -21938,18 +22139,45 @@ def admin_indexing_submit(
         )
 
     if not target_urls:
-        return AdminIndexingSubmitOut(submitted=0, success=0, failed=0, items=[])
+        carryover_payload = _get_indexing_carryover_payload()
+        carryover_urls = list(carryover_payload.get("urls") or [])
+        return AdminIndexingSubmitOut(
+            submitted=0,
+            success=0,
+            failed=0,
+            attempted=0,
+            daily_limit=GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT,
+            carryover_count=len(carryover_urls),
+            carryover_updated_at=carryover_payload.get("updated_at"),
+            carryover_urls=carryover_urls[:100],
+            items=[],
+        )
+
+    send_urls = target_urls[:GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT]
+    carryover_urls = target_urls[GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT:]
 
     access_token = _build_google_indexing_access_token()
     items: list[AdminIndexingSubmitItem] = []
     success = 0
     failed = 0
-    for url in target_urls:
+    for idx, url in enumerate(send_urls):
         ok, status_code, error = _publish_google_indexing_url(url, access_token)
         if ok:
             success += 1
         else:
             failed += 1
+            # Google 側の日次クォータ到達時は、未送信分と当該URLを繰越キューに戻す
+            if int(status_code or 0) == 429:
+                carryover_urls = _dedupe_urls_keep_order([url] + send_urls[idx + 1 :] + carryover_urls)
+                items.append(
+                    AdminIndexingSubmitItem(
+                        url=url,
+                        ok=ok,
+                        status_code=status_code,
+                        error=error,
+                    )
+                )
+                break
         items.append(
             AdminIndexingSubmitItem(
                 url=url,
@@ -21959,11 +22187,45 @@ def admin_indexing_submit(
             )
         )
 
+    _set_indexing_carryover_urls(carryover_urls)
+    carryover_payload = _get_indexing_carryover_payload()
+    latest_carryover_urls = list(carryover_payload.get("urls") or [])
+
     return AdminIndexingSubmitOut(
         submitted=len(target_urls),
         success=success,
         failed=failed,
+        attempted=len(items),
+        daily_limit=GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT,
+        carryover_count=len(latest_carryover_urls),
+        carryover_updated_at=carryover_payload.get("updated_at"),
+        carryover_urls=latest_carryover_urls[:100],
         items=items,
+    )
+
+
+@app.get("/api/admin/indexing/carryover", response_model=AdminIndexingCarryoverOut)
+def admin_indexing_carryover(request: Request):
+    require_admin(request)
+    payload = _get_indexing_carryover_payload()
+    urls = list(payload.get("urls") or [])
+    return AdminIndexingCarryoverOut(
+        daily_limit=GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT,
+        carryover_count=len(urls),
+        carryover_updated_at=payload.get("updated_at"),
+        carryover_urls=urls[:200],
+    )
+
+
+@app.delete("/api/admin/indexing/carryover", response_model=AdminIndexingCarryoverOut)
+def admin_indexing_carryover_clear(request: Request):
+    require_admin(request)
+    _clear_indexing_carryover_urls()
+    return AdminIndexingCarryoverOut(
+        daily_limit=GOOGLE_INDEXING_DAILY_SUBMIT_LIMIT,
+        carryover_count=0,
+        carryover_updated_at=None,
+        carryover_urls=[],
     )
 
 

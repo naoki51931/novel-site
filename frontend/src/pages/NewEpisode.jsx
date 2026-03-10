@@ -769,8 +769,14 @@ export default function NewEpisode() {
             border: "1px solid #ddd",
           }}
         >
-          <h3 style={{ marginTop: 0 }}>
-            {t({ ja: "押絵（任意・複数）", en: "Illustrations (optional, multiple)" })}
+          <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{t({ ja: "押絵（任意・複数）", en: "Illustrations (optional, multiple)" })}</span>
+            <span style={{ fontSize: 12, color: "#666", fontWeight: 400 }}>
+              {t({
+                ja: "挿絵を挿入するには、タグを本文中に入れます",
+                en: "To insert illustrations, place tags in the body text.",
+              })}
+            </span>
           </h3>
 
           <input
