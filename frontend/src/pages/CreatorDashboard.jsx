@@ -1,10 +1,26 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
 import AuthorBalanceCard from "../components/AuthorBalanceCard.jsx";
 import PayoutProfileForm from "../components/PayoutProfileForm.jsx";
 import { useI18n } from "../lib/i18n";
+import { getApiBase } from "../lib/apiBase";
+
+const API_BASE = getApiBase();
 
 export default function CreatorDashboard() {
   const { t } = useI18n();
+  const [isPremium, setIsPremium] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    fetch(`${API_BASE}/api/users/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setIsPremium(!!data?.is_premium))
+      .catch(() => {});
+  }, []);
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
@@ -20,6 +36,33 @@ export default function CreatorDashboard() {
       <div style={{ display: "grid", gap: 16 }}>
         <AuthorBalanceCard />
         <PayoutProfileForm />
+        <section
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: 10,
+            padding: 16,
+            background: "#fff",
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>{t({ ja: "投稿と分析", en: "Publishing & Analytics" })}</h3>
+          {isPremium ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <Link className="btn btn-border" to="/author/dashboard">
+                {t({ ja: "作品分析ダッシュボード", en: "Open analytics dashboard" })}
+              </Link>
+              <Link className="btn btn-border" to="/me/scheduled-episodes">
+                {t({ ja: "予約投稿一覧", en: "Scheduled episodes" })}
+              </Link>
+            </div>
+          ) : (
+            <p style={{ marginTop: 8, color: "#666" }}>
+              {t({
+                ja: "作品分析ダッシュボードと投稿予約はプレミアム会員限定です。",
+                en: "Analytics dashboard and scheduled publishing are premium-only features.",
+              })}
+            </p>
+          )}
+        </section>
         <section
           style={{
             border: "1px solid #ddd",

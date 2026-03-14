@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import NovelCard from "../components/NovelCard.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
 
@@ -25,6 +26,7 @@ const SORT_OPTIONS = [
 export default function TagPage() {
   const { slug } = useParams();
   const { t, lang } = useI18n();
+  const showR18 = useShowR18ByDisplaySetting();
   const tagName = useMemo(() => safeDecode(slug).trim(), [slug]);
   const isTagIndex = !tagName;
 
@@ -170,6 +172,8 @@ export default function TagPage() {
 
   const canFollowTag =
     typeof window !== "undefined" && !!localStorage.getItem("token") && !isTagIndex;
+  const popularNovelsVisible = filterR18Novels(tagDetail?.popular_novels, showR18);
+  const novelsVisible = filterR18Novels(novels, showR18);
 
   const handleToggleTagFollow = async () => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -295,11 +299,11 @@ export default function TagPage() {
       </div>
       {tagFollowError && <p style={{ color: "red", marginTop: 0 }}>{tagFollowError}</p>}
 
-      {Array.isArray(tagDetail?.popular_novels) && tagDetail.popular_novels.length > 0 && (
+      {popularNovelsVisible.length > 0 && (
         <section style={{ marginBottom: 20 }}>
           <h3>{t({ ja: "人気作品", en: "Top Works" })}</h3>
           <div className="novel-grid">
-            {tagDetail.popular_novels.map((novel) => (
+            {popularNovelsVisible.map((novel) => (
               <NovelCard
                 key={`tag-top-${novel.id}`}
                 novel={novel}
@@ -353,11 +357,11 @@ export default function TagPage() {
           ))}
         </div>
 
-        {novels.length === 0 ? (
+        {novelsVisible.length === 0 ? (
           <p>{t({ ja: "作品がありません。", en: "No novels found." })}</p>
         ) : (
           <div className="novel-grid">
-            {novels.map((novel) => (
+            {novelsVisible.map((novel) => (
               <NovelCard
                 key={`tag-novel-${novel.id}`}
                 novel={novel}

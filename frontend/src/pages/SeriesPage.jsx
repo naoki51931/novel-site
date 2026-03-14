@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
 
@@ -18,6 +19,7 @@ const safeDecode = (value) => {
 export default function SeriesPage() {
   const { slug } = useParams();
   const { t } = useI18n();
+  const showR18 = useShowR18ByDisplaySetting();
   const seriesName = useMemo(() => safeDecode(slug).trim(), [slug]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -52,17 +54,18 @@ export default function SeriesPage() {
 
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
   if (error) return <p style={{ color: "red" }}>{error}</p>;
+  const novelsVisible = filterR18Novels(novels, showR18);
 
   return (
     <div>
       <h1 style={{ marginBottom: 10 }}>
         {t({ ja: "シリーズ", en: "Series" })}: {seriesName}
       </h1>
-      {novels.length === 0 ? (
+      {novelsVisible.length === 0 ? (
         <p>{t({ ja: "このシリーズの作品はありません。", en: "No novels in this series." })}</p>
       ) : (
         <div style={{ display: "grid", gap: 12 }}>
-          {novels.map((novel) => (
+          {novelsVisible.map((novel) => (
             <article key={novel.id} className="novel-card" style={{ padding: 12 }}>
               <h4 style={{ margin: "0 0 6px" }}>
                 <Link to={`/novels/${novel.id}`}>{novel.title}</Link>

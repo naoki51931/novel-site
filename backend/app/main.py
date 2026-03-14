@@ -15,13 +15,23 @@ import json
 import html
 import io
 import unicodedata
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Optional, List, Callable, Awaitable, Literal, Any
 
 import jwt
 import stripe
 import httpx
+try:
+    from google.cloud import recaptchaenterprise_v1  # type: ignore
+    from google.cloud.recaptchaenterprise_v1 import Assessment as RecaptchaAssessment  # type: ignore
+    from google.oauth2 import service_account as google_service_account  # type: ignore
+    RECAPTCHA_ENTERPRISE_AVAILABLE = True
+except Exception:
+    recaptchaenterprise_v1 = None  # type: ignore
+    RecaptchaAssessment = None  # type: ignore
+    google_service_account = None  # type: ignore
+    RECAPTCHA_ENTERPRISE_AVAILABLE = False
 try:
     import redis  # type: ignore
 except Exception:
@@ -95,6 +105,8 @@ AI_CHAT_MESSAGE_IMAGE_DIR = os.getenv(
     "AI_CHAT_MESSAGE_IMAGE_DIR",
     str(STATIC_DIR / "ai_chat_message_images"),
 )
+COVER_UPLOAD_DIR = os.getenv("COVER_UPLOAD_DIR", "/app/uploads/covers")
+UPLOADS_DIR = Path(COVER_UPLOAD_DIR).resolve().parent
 from fastapi import UploadFile, File
 from fastapi import Form
 
@@ -270,6 +282,22 @@ GOOGLE_INDEXING_CARRYOVER_TTL_SEC = max(
 )
 GOOGLE_INDEXING_CARRYOVER_KEY = "queue:admin:indexing:carryover:v1"
 RECAPTCHA_SECRET_KEY = (os.getenv("RECAPTCHA_SECRET_KEY", "") or "").strip()
+RECAPTCHA_SITE_KEY = (
+    os.getenv("RECAPTCHA_SITE_KEY", "")
+    or os.getenv("VITE_RECAPTCHA_SITE_KEY", "")
+).strip()
+RECAPTCHA_PROJECT_ID = (
+    os.getenv("RECAPTCHA_PROJECT_ID", "")
+    or os.getenv("GOOGLE_CLOUD_PROJECT", "")
+).strip()
+RECAPTCHA_SERVICE_ACCOUNT_JSON = (os.getenv("RECAPTCHA_SERVICE_ACCOUNT_JSON", "") or "").strip()
+RECAPTCHA_MIN_SCORE = float((os.getenv("RECAPTCHA_MIN_SCORE", "0.3") or "0.3").strip() or "0.3")
+RECAPTCHA_ENTERPRISE_ENABLED = (
+    (os.getenv("RECAPTCHA_ENTERPRISE_ENABLED", "1") or "1").strip() == "1"
+    and RECAPTCHA_ENTERPRISE_AVAILABLE
+    and bool(RECAPTCHA_SITE_KEY)
+    and bool(RECAPTCHA_PROJECT_ID)
+)
 RECAPTCHA_ENABLED = ((os.getenv("RECAPTCHA_ENABLED", "1") or "1").strip() == "1") and bool(
     RECAPTCHA_SECRET_KEY
 )
@@ -281,12 +309,77 @@ _indexing_carryover_fallback_urls: list[str] = []
 _indexing_carryover_fallback_updated_at: str | None = None
 
 
-def verify_recaptcha_token(token: str, remote_ip: str | None = None) -> bool:
-    if not RECAPTCHA_ENABLED:
+@lru_cache(maxsize=1)
+def _get_recaptcha_enterprise_client():
+    if not RECAPTCHA_ENTERPRISE_ENABLED or recaptchaenterprise_v1 is None:
+        return None
+
+    cred_json = (
+        RECAPTCHA_SERVICE_ACCOUNT_JSON
+        or (os.getenv("GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON", "") or "").strip()
+        or (os.getenv("GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_JSON", "") or "").strip()
+        or (os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "") or "").strip()
+    )
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    try:
+        if cred_json and google_service_account is not None:
+            info = json.loads(cred_json)
+            creds = google_service_account.Credentials.from_service_account_info(info, scopes=scopes)
+            return recaptchaenterprise_v1.RecaptchaEnterpriseServiceClient(credentials=creds)
+        return recaptchaenterprise_v1.RecaptchaEnterpriseServiceClient()
+    except Exception:
+        return None
+
+
+def verify_recaptcha_token(
+    token: str,
+    remote_ip: str | None = None,
+    expected_action: str | None = None,
+) -> bool:
+    if not RECAPTCHA_ENABLED and not RECAPTCHA_ENTERPRISE_ENABLED:
         return True
     recaptcha_token = (token or "").strip()
     if not recaptcha_token:
         return False
+
+    # Prefer reCAPTCHA Enterprise CreateAssessment when configured.
+    if RECAPTCHA_ENTERPRISE_ENABLED and recaptchaenterprise_v1 is not None and RecaptchaAssessment is not None:
+        try:
+            client = _get_recaptcha_enterprise_client()
+            if client is None:
+                raise RuntimeError("recaptcha enterprise client unavailable")
+            event = recaptchaenterprise_v1.Event()
+            event.site_key = RECAPTCHA_SITE_KEY
+            event.token = recaptcha_token
+
+            assessment = recaptchaenterprise_v1.Assessment()
+            assessment.event = event
+
+            request = recaptchaenterprise_v1.CreateAssessmentRequest(
+                parent=f"projects/{RECAPTCHA_PROJECT_ID}",
+                assessment=assessment,
+            )
+            response = client.create_assessment(request=request)
+
+            token_props = getattr(response, "token_properties", None)
+            if not token_props or not bool(getattr(token_props, "valid", False)):
+                return False
+
+            actual_action = str(getattr(token_props, "action", "") or "").strip()
+            if expected_action and actual_action != expected_action:
+                return False
+
+            risk = getattr(response, "risk_analysis", None)
+            score = getattr(risk, "score", None) if risk is not None else None
+            if score is None:
+                return False
+            if float(score) < RECAPTCHA_MIN_SCORE:
+                return False
+            return True
+        except Exception:
+            # Fallback to legacy siteverify when enterprise call fails.
+            pass
 
     payload: dict[str, str] = {
         "secret": RECAPTCHA_SECRET_KEY,
@@ -304,7 +397,19 @@ def verify_recaptcha_token(token: str, remote_ip: str | None = None) -> bool:
         if res.status_code != 200:
             return False
         data = res.json()
-        return bool(data.get("success"))
+        if not bool(data.get("success")):
+            return False
+        action = str(data.get("action") or "").strip()
+        if expected_action and action and action != expected_action:
+            return False
+        score_raw = data.get("score")
+        if score_raw is not None:
+            try:
+                if float(score_raw) < RECAPTCHA_MIN_SCORE:
+                    return False
+            except Exception:
+                return False
+        return True
     except Exception:
         return False
 
@@ -700,6 +805,10 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN ai_novel_paid_generations INT NOT NULL DEFAULT 0")
             if "ai_chat_tokens_used" not in existing:
                 alters.append("ADD COLUMN ai_chat_tokens_used INT NOT NULL DEFAULT 0")
+            if "ai_chat_tokens_total_used" not in existing:
+                alters.append("ADD COLUMN ai_chat_tokens_total_used INT NOT NULL DEFAULT 0")
+            if "ai_chat_tokens_month_key" not in existing:
+                alters.append("ADD COLUMN ai_chat_tokens_month_key INT NOT NULL DEFAULT 0")
             if "ai_chat_paid_blocks" not in existing:
                 alters.append("ADD COLUMN ai_chat_paid_blocks INT NOT NULL DEFAULT 0")
 
@@ -807,6 +916,10 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN series_name VARCHAR(120) NULL")
             if "series_order" not in existing:
                 alters.append("ADD COLUMN series_order INT NULL")
+            if "scheduled_publish_at" not in existing:
+                alters.append("ADD COLUMN scheduled_publish_at DATETIME NULL")
+            if "published_at" not in existing:
+                alters.append("ADD COLUMN published_at DATETIME NULL")
             if "body" in existing and existing["body"] != "longtext":
                 alters.append("MODIFY COLUMN body LONGTEXT NULL")
 
@@ -827,6 +940,37 @@ def ensure_episodes_table_columns():
 
 
 ensure_episodes_table_columns()
+
+
+def ensure_novel_daily_metrics_table() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS novel_daily_metrics (
+                      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                      novel_id BIGINT NOT NULL,
+                      `date` DATE NOT NULL,
+                      view_count INT NOT NULL DEFAULT 0,
+                      like_count INT NOT NULL DEFAULT 0,
+                      favorite_count INT NOT NULL DEFAULT 0,
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                      UNIQUE KEY uq_novel_daily_metrics_novel_date (novel_id, `date`),
+                      INDEX idx_novel_daily_metrics_date (`date`),
+                      CONSTRAINT fk_novel_daily_metrics_novel
+                        FOREIGN KEY (novel_id) REFERENCES novels(id)
+                        ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+    except Exception as e:
+        print("[db] ensure_novel_daily_metrics_table failed:", repr(e))
+
+
+ensure_novel_daily_metrics_table()
 
 
 def ensure_episode_translations_table_columns():
@@ -891,6 +1035,8 @@ def ensure_novels_table_columns():
                 alters.append("ADD COLUMN series_name VARCHAR(120) NULL")
             if "series_order" not in existing:
                 alters.append("ADD COLUMN series_order INT NULL")
+            if "cover_image_path" not in existing:
+                alters.append("ADD COLUMN cover_image_path VARCHAR(500) NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE novels {clause}"))
@@ -899,6 +1045,46 @@ def ensure_novels_table_columns():
 
 
 ensure_novels_table_columns()
+
+
+def ensure_cover_generations_table() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS cover_generations (
+                      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                      user_id BIGINT NOT NULL,
+                      novel_id BIGINT NULL,
+                      prompt TEXT NOT NULL,
+                      genre VARCHAR(100) NULL,
+                      mood VARCHAR(100) NULL,
+                      color_theme VARCHAR(100) NULL,
+                      character_count INT NULL,
+                      provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+                      model VARCHAR(100) NOT NULL,
+                      status VARCHAR(30) NOT NULL,
+                      image_path VARCHAR(500) NULL,
+                      error_message TEXT NULL,
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      INDEX idx_cover_generations_user_created (user_id, created_at),
+                      INDEX idx_cover_generations_novel_created (novel_id, created_at),
+                      CONSTRAINT fk_cover_generations_user
+                        FOREIGN KEY (user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                      CONSTRAINT fk_cover_generations_novel
+                        FOREIGN KEY (novel_id) REFERENCES novels(id)
+                        ON DELETE SET NULL
+                    )
+                    """
+                )
+            )
+    except Exception as e:
+        print("[db] ensure_cover_generations_table failed:", repr(e))
+
+
+ensure_cover_generations_table()
 
 
 def ensure_board_posts_table_columns():
@@ -917,13 +1103,31 @@ def ensure_board_posts_table_columns():
             existing = {r[0]: r[1] for r in rows}
 
             alters: list[str] = []
+            if "site_key" not in existing:
+                alters.append("ADD COLUMN site_key VARCHAR(32) NOT NULL DEFAULT 'main'")
             if "guest_name" not in existing:
                 alters.append("ADD COLUMN guest_name VARCHAR(40) NULL")
+            if "parent_post_id" not in existing:
+                alters.append("ADD COLUMN parent_post_id INT NULL")
             if existing.get("user_id") == "NO":
                 alters.append("MODIFY COLUMN user_id INT NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE board_posts {clause}"))
+
+            idx_rows = conn.execute(
+                text(
+                    """
+                    SELECT INDEX_NAME
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'board_posts'
+                    """
+                )
+            ).fetchall()
+            idx_names = {r[0] for r in idx_rows}
+            if "idx_board_posts_parent_post_id" not in idx_names:
+                conn.execute(text("CREATE INDEX idx_board_posts_parent_post_id ON board_posts(parent_post_id)"))
     except Exception as e:
         print("[db] ensure_board_posts_table_columns failed:", repr(e))
 
@@ -1421,6 +1625,7 @@ app = FastAPI(
 )
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR), check_dir=False), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1438,6 +1643,7 @@ def on_startup() -> None:
     os.makedirs(EPISODE_IMAGE_DIR, exist_ok=True)
     os.makedirs(AI_CHAT_CHARACTER_IMAGE_DIR, exist_ok=True)
     os.makedirs(AI_CHAT_MESSAGE_IMAGE_DIR, exist_ok=True)
+    os.makedirs(COVER_UPLOAD_DIR, exist_ok=True)
     get_redis_client()
     _start_redis_metrics_flusher_if_enabled()
     _start_daily_translation_bot_if_enabled()
@@ -3618,6 +3824,11 @@ def is_effective_premium_user(user: models.User | None) -> bool:
     return bool(getattr(user, "is_premium", False))
 
 
+def assert_premium_user(user: models.User, detail: str = "この機能はプレミアム会員限定です") -> None:
+    if not is_effective_premium_user(user):
+        raise HTTPException(status_code=403, detail=detail)
+
+
 def revalidate_premium_on_login(user: models.User, db: Session) -> None:
     """
     ログイン時にプレミアム状態を一定期間ごとに再確認する。
@@ -4197,9 +4408,45 @@ def _ai_chat_allowed_tokens(user: models.User) -> int:
     return max(0, AI_CHAT_FREE_TOKENS) + total_blocks * max(1, AI_CHAT_BLOCK_TOKENS)
 
 
-def _ensure_ai_chat_access(user: models.User) -> None:
+def _current_ai_chat_month_key_utc(now: datetime | None = None) -> int:
+    ref = now or datetime.utcnow()
+    return int(ref.year * 100 + ref.month)
+
+
+def _sync_user_ai_chat_monthly_usage(user: models.User) -> bool:
+    """
+    ai_chat_tokens_used を「当月使用量」として維持し、月跨ぎ時に 0 へリセットする。
+    累計は ai_chat_tokens_total_used に保持する。
+    初回導入時（月キー未設定）は既存 used を累計へ移して当月は 0 開始にする。
+    """
+    month_key = _current_ai_chat_month_key_utc()
+    stored_key = int(getattr(user, "ai_chat_tokens_month_key", 0) or 0)
+    month_used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
+    total_used = max(0, int(getattr(user, "ai_chat_tokens_total_used", 0) or 0))
+
+    # 既存運用値（生涯累計）からの移行: 累計へ退避し、当月は0から開始
+    if stored_key <= 0:
+        user.ai_chat_tokens_total_used = total_used + month_used
+        user.ai_chat_tokens_used = 0
+        user.ai_chat_tokens_month_key = month_key
+        return True
+
+    # 月が変わったら当月カウンタのみリセット
+    if stored_key != month_key:
+        user.ai_chat_tokens_used = 0
+        user.ai_chat_tokens_month_key = month_key
+        return True
+
+    return False
+
+
+def _ensure_ai_chat_access(user: models.User, db: Session | None = None) -> None:
     if _is_ai_chat_demo_bypass_user(user):
         return
+    rotated = _sync_user_ai_chat_monthly_usage(user)
+    if db is not None and rotated:
+        db.add(user)
+        db.commit()
 
     is_premium = is_effective_premium_user(user)
     used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
@@ -4255,7 +4502,9 @@ def _record_ai_chat_tokens(
     if n <= 0:
         return
     if user is not None:
+        _sync_user_ai_chat_monthly_usage(user)
         user.ai_chat_tokens_used = int(getattr(user, "ai_chat_tokens_used", 0) or 0) + n
+        user.ai_chat_tokens_total_used = int(getattr(user, "ai_chat_tokens_total_used", 0) or 0) + n
         db.add(user)
         db.add(
             models.AIChatTokenUsageLog(
@@ -4298,6 +4547,14 @@ def get_optional_current_user(request: Request, db: Session) -> models.User | No
     if not user:
         raise HTTPException(401, "ユーザーが存在しません")
     return user
+
+
+def get_optional_current_user_soft(request: Request, db: Session) -> models.User | None:
+    """Return current user when valid; otherwise degrade to guest (no 401)."""
+    try:
+        return get_optional_current_user(request, db)
+    except HTTPException:
+        return None
 
 
 def _get_client_ip_for_guest(request: Request) -> str:
@@ -6752,6 +7009,9 @@ def get_ai_chat_access_status(
             premium_included_blocks=0,
         )
 
+    if _sync_user_ai_chat_monthly_usage(user):
+        db.add(user)
+        db.commit()
     used = max(0, int(getattr(user, "ai_chat_tokens_used", 0) or 0))
     paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
     allowed = _ai_chat_allowed_tokens(user)
@@ -11086,7 +11346,7 @@ async def backfill_ai_memory_from_logs(
         raise HTTPException(status_code=400, detail="AIメモリ機能が無効です。")
 
     user = require_current_user(request, db)
-    _ensure_ai_chat_access(user)
+    _ensure_ai_chat_access(user, db)
 
     targets: list[models.AIChatCharacter] = []
     if payload.character_id is not None:
@@ -11189,7 +11449,7 @@ async def ai_chat_next_user_lines(
     guest_usage: models.AIChatGuestUsage | None = None
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
-        _ensure_ai_chat_access(viewer)
+        _ensure_ai_chat_access(viewer, db)
     else:
         guest_id = get_or_set_ai_guest_id(request, response)
         guest_usage = get_ai_chat_guest_usage(db, guest_id)
@@ -11322,7 +11582,7 @@ async def ai_chat_generate_image(
     viewer = get_optional_current_user(request, db)
     character: models.AIChatCharacter | None = None
     if viewer is not None:
-        _ensure_ai_chat_access(viewer)
+        _ensure_ai_chat_access(viewer, db)
         if req.character_id is not None:
             character = _find_editable_ai_chat_character(
                 db=db,
@@ -11821,7 +12081,7 @@ async def ai_chat(
     guest_usage: models.AIChatGuestUsage | None = None
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
-        _ensure_ai_chat_access(viewer)
+        _ensure_ai_chat_access(viewer, db)
     else:
         guest_id = get_or_set_ai_guest_id(request, response)
         guest_usage = get_ai_chat_guest_usage(db, guest_id)
@@ -12164,7 +12424,7 @@ async def ai_chat_auto_continue(
     guest_usage: models.AIChatGuestUsage | None = None
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
-        _ensure_ai_chat_access(viewer)
+        _ensure_ai_chat_access(viewer, db)
     else:
         guest_id = get_or_set_ai_guest_id(request, response)
         guest_usage = get_ai_chat_guest_usage(db, guest_id)
@@ -16264,6 +16524,7 @@ def list_novels(
     db: Session = Depends(get_db),
 ):
     site_key = resolve_site_key(request)
+    publish_scheduled_episodes(db, site_key=site_key)
     q = db.query(models.Novel).filter(models.Novel.site_key == site_key)
 
     if mine:
@@ -16293,6 +16554,7 @@ def list_novels(
             "view_count": getattr(novel, "view_count", 0) or 0,
             "like_count": getattr(novel, "like_count", 0) or 0,
             "favorite_count": len(getattr(novel, "favorite_links", []) or []),
+            "cover_image_url": getattr(novel, "cover_image_path", None),
             "total_char_count": char_counts.get(novel.id, 0),
             "age_limit": getattr(novel, "age_limit", "all"),
             "is_ai_generated": bool(getattr(novel, "is_ai_generated", False)),
@@ -16591,7 +16853,7 @@ def delete_novel(
 @app.get("/api/board/posts")
 def list_board_posts(
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=1000, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     site_key = resolve_site_key(request)
@@ -16606,6 +16868,7 @@ def list_board_posts(
     return [
         {
             "id": p.id,
+            "parent_post_id": p.parent_post_id,
             "title": p.title,
             "body": p.body,
             "user_id": p.user_id,
@@ -16627,11 +16890,28 @@ def create_board_post(
     db: Session = Depends(get_db),
 ):
     site_key = resolve_site_key(request)
+    current_count = (
+        db.query(func.count(models.BoardPost.id))
+        .filter(models.BoardPost.site_key == site_key)
+        .scalar()
+    )
+    if int(current_count or 0) >= 1000:
+        raise HTTPException(400, "掲示板の投稿上限（1000件）に達しています")
     user = get_optional_current_user(request, db)
     title = str(payload.get("title") or "").strip()
     body = str(payload.get("body") or "").strip()
     guest_name = str(payload.get("guest_name") or "").strip()
     recaptcha_token = str(payload.get("recaptcha_token") or "").strip()
+    recaptcha_action = str(payload.get("recaptcha_action") or "BOARD_POST").strip() or "BOARD_POST"
+    parent_post_id_raw = payload.get("parent_post_id")
+    parent_post_id = None
+    if parent_post_id_raw not in (None, ""):
+        try:
+            parent_post_id = int(parent_post_id_raw)
+        except Exception:
+            raise HTTPException(400, "親スレッドIDが不正です")
+        if parent_post_id <= 0:
+            raise HTTPException(400, "親スレッドIDが不正です")
     if not title:
         raise HTTPException(400, "タイトルが空です")
     if not body:
@@ -16646,8 +16926,27 @@ def create_board_post(
         if len(guest_name) > 40:
             raise HTTPException(400, "名前は40文字以内で入力してください")
         remote_ip = request.client.host if request.client else None
-        if not verify_recaptcha_token(recaptcha_token, remote_ip=remote_ip):
+        if not verify_recaptcha_token(
+            recaptcha_token,
+            remote_ip=remote_ip,
+            expected_action=recaptcha_action,
+        ):
             raise HTTPException(400, "reCAPTCHA認証に失敗しました")
+
+    parent_post = None
+    if parent_post_id is not None:
+        parent_post = (
+            db.query(models.BoardPost)
+            .filter(
+                models.BoardPost.id == parent_post_id,
+                models.BoardPost.site_key == site_key,
+            )
+            .first()
+        )
+        if not parent_post:
+            raise HTTPException(404, "親スレッドが見つかりません")
+        if parent_post.parent_post_id is not None:
+            raise HTTPException(400, "メインスレッドを選択してください")
 
     # 直前投稿者（同一サイトの最新投稿）を取得して、後続投稿通知に使う
     previous_post = (
@@ -16660,6 +16959,7 @@ def create_board_post(
     post = models.BoardPost(
         site_key=site_key,
         user_id=user.id if user else None,
+        parent_post_id=parent_post_id,
         guest_name=None if user else guest_name,
         title=title,
         body=body,
@@ -16758,6 +17058,10 @@ def admin_delete_board_post(
     )
     if not post:
         raise HTTPException(404, "投稿が見つかりません")
+    db.query(models.BoardPost).filter(
+        models.BoardPost.parent_post_id == post.id,
+        models.BoardPost.site_key == site_key,
+    ).delete(synchronize_session=False)
     db.delete(post)
     db.commit()
     return {"ok": True}
@@ -17013,6 +17317,8 @@ def get_novel_detail(
         "series_order": getattr(novel, "series_order", None),
         "is_public": bool(getattr(novel, "is_public", True)),
         "status": getattr(novel, "status", "public"),
+        "cover_image_url": getattr(novel, "cover_image_path", None)
+        or (episodes[0].cover_image_url if episodes and getattr(episodes[0], "cover_image_url", None) else None),
         "can_edit_full": bool(user and novel.author_id == user.id),
         "age_confirmation_required": AGE_RESTRICTION_DISABLED and novel.age_limit == "r18",
         "total_char_count": total_char_count,
@@ -17108,6 +17414,15 @@ def _apply_public_novel_age_filter(query, viewer_age: int | None):
 def _build_public_cover_map(db: Session, novel_ids: list[int], site_key: str) -> dict[int, str]:
     if not novel_ids:
         return {}
+    novel_cover_rows = (
+        db.query(models.Novel.id, models.Novel.cover_image_path)
+        .filter(models.Novel.id.in_(novel_ids))
+        .all()
+    )
+    cover_map: dict[int, str] = {}
+    for novel_id, cover_path in novel_cover_rows:
+        if cover_path:
+            cover_map[int(novel_id)] = str(cover_path)
     cover_rows = (
         db.query(
             models.Episode.novel_id,
@@ -17128,7 +17443,6 @@ def _build_public_cover_map(db: Session, novel_ids: list[int], site_key: str) ->
         )
         .all()
     )
-    cover_map: dict[int, str] = {}
     for novel_id, cover_url, _, __ in cover_rows:
         if novel_id not in cover_map and cover_url:
             cover_map[int(novel_id)] = str(cover_url)
@@ -18065,7 +18379,7 @@ def list_trending_tags(
 def _serialize_feed_novels_for_user(
     db: Session,
     *,
-    user: models.User,
+    user: models.User | None,
     novels: list[models.Novel],
     site_key: str,
 ) -> list[dict]:
@@ -18083,24 +18397,27 @@ def _serialize_feed_novels_for_user(
         .all()
     )
     favorite_counts = {int(novel_id): int(count or 0) for novel_id, count in favorite_rows}
-    liked_ids = {
-        int(nid)
-        for (nid,) in db.query(models.NovelLike.novel_id)
-        .filter(
-            models.NovelLike.user_id == user.id,
-            models.NovelLike.novel_id.in_(novel_ids),
-        )
-        .all()
-    }
-    favorited_ids = {
-        int(nid)
-        for (nid,) in db.query(models.NovelFavorite.novel_id)
-        .filter(
-            models.NovelFavorite.user_id == user.id,
-            models.NovelFavorite.novel_id.in_(novel_ids),
-        )
-        .all()
-    }
+    liked_ids: set[int] = set()
+    favorited_ids: set[int] = set()
+    if user:
+        liked_ids = {
+            int(nid)
+            for (nid,) in db.query(models.NovelLike.novel_id)
+            .filter(
+                models.NovelLike.user_id == user.id,
+                models.NovelLike.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+        favorited_ids = {
+            int(nid)
+            for (nid,) in db.query(models.NovelFavorite.novel_id)
+            .filter(
+                models.NovelFavorite.user_id == user.id,
+                models.NovelFavorite.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
     return [
         {
             "id": int(novel.id),
@@ -18135,9 +18452,9 @@ def list_new_feed(
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
 ):
-    user = require_current_user(request, db)
+    user = get_optional_current_user_soft(request, db)
     site_key = resolve_site_key(request)
-    user_age = calc_age(getattr(user, "birth_date", None))
+    user_age = calc_age(getattr(user, "birth_date", None)) if user else None
     q = (
         db.query(models.Novel)
         .options(
@@ -18158,9 +18475,9 @@ def list_trending_feed(
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
 ):
-    user = require_current_user(request, db)
+    user = get_optional_current_user_soft(request, db)
     site_key = resolve_site_key(request)
-    user_age = calc_age(getattr(user, "birth_date", None))
+    user_age = calc_age(getattr(user, "birth_date", None)) if user else None
     recent_from = date.today() - timedelta(days=7)
     metric_subq = (
         db.query(
@@ -18206,7 +18523,15 @@ def list_recommended_feed(
     lang: str | None = None,
     db: Session = Depends(get_db),
 ):
-    user = require_current_user(request, db)
+    user = get_optional_current_user_soft(request, db)
+    if not user:
+        return list_recommended_public_novels_service(
+            request=request,
+            background_tasks=background_tasks,
+            limit=limit,
+            lang=lang,
+            db=db,
+        )
     site_key = resolve_site_key(request)
     user_age = calc_age(getattr(user, "birth_date", None))
     followed_author_ids = [
@@ -18850,31 +19175,7 @@ def list_public_novels(
             logger.warning("public novel search weaviate rerank failed q=%s err=%r", str(q or "")[:100], e)
 
     novel_ids = [novel.id for novel in novels]
-    cover_map = {}
-    if novel_ids:
-        cover_rows = (
-            db.query(
-                models.Episode.novel_id,
-                models.Episode.cover_image_url,
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .filter(models.Episode.novel_id.in_(novel_ids))
-            .filter(models.Episode.site_key == site_key)
-            .filter(models.Episode.cover_image_url.isnot(None))
-            .filter(models.Episode.status == "public")
-            .filter(models.Episode.is_public == True)
-            .order_by(
-                models.Episode.novel_id,
-                models.Episode.episode_number.is_(None),
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .all()
-        )
-        for novel_id, cover_url, _, __ in cover_rows:
-            if novel_id not in cover_map and cover_url:
-                cover_map[novel_id] = cover_url
+    cover_map = _build_public_cover_map(db, [int(nid) for nid in novel_ids], site_key)
     favorite_counts = {}
     if novel_ids:
         favorite_rows = (
@@ -19378,31 +19679,7 @@ def list_public_novel_rankings(
 
     novels = query.limit(limit).all()
     novel_ids = [novel.id for novel in novels]
-    cover_map = {}
-    if novel_ids:
-        cover_rows = (
-            db.query(
-                models.Episode.novel_id,
-                models.Episode.cover_image_url,
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .filter(models.Episode.novel_id.in_(novel_ids))
-            .filter(models.Episode.site_key == site_key)
-            .filter(models.Episode.cover_image_url.isnot(None))
-            .filter(models.Episode.status == "public")
-            .filter(models.Episode.is_public == True)
-            .order_by(
-                models.Episode.novel_id,
-                models.Episode.episode_number.is_(None),
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .all()
-        )
-        for novel_id, cover_url, _, __ in cover_rows:
-            if novel_id not in cover_map and cover_url:
-                cover_map[novel_id] = cover_url
+    cover_map = _build_public_cover_map(db, [int(nid) for nid in novel_ids], site_key)
 
     favorite_counts = {}
     if novel_ids:
@@ -19703,31 +19980,7 @@ def list_public_user_novels(
     novels = q.all()
     novel_ids = [novel.id for novel in novels]
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
-    cover_map = {}
-    if novel_ids:
-        cover_rows = (
-            db.query(
-                models.Episode.novel_id,
-                models.Episode.cover_image_url,
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .filter(models.Episode.novel_id.in_(novel_ids))
-            .filter(models.Episode.site_key == site_key)
-            .filter(models.Episode.cover_image_url.isnot(None))
-            .filter(models.Episode.status == "public")
-            .filter(models.Episode.is_public == True)
-            .order_by(
-                models.Episode.novel_id,
-                models.Episode.episode_number.is_(None),
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .all()
-        )
-        for novel_id, cover_url, _, __ in cover_rows:
-            if novel_id not in cover_map and cover_url:
-                cover_map[novel_id] = cover_url
+    cover_map = _build_public_cover_map(db, [int(nid) for nid in novel_ids], site_key)
 
     payload = [
         {
@@ -19859,31 +20112,7 @@ def list_public_user_favorites(
     favorites = q.all()
     novel_ids = [n.id for n in favorites]
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
-    cover_map = {}
-    if novel_ids:
-        cover_rows = (
-            db.query(
-                models.Episode.novel_id,
-                models.Episode.cover_image_url,
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .filter(models.Episode.novel_id.in_(novel_ids))
-            .filter(models.Episode.site_key == site_key)
-            .filter(models.Episode.cover_image_url.isnot(None))
-            .filter(models.Episode.status == "public")
-            .filter(models.Episode.is_public == True)
-            .order_by(
-                models.Episode.novel_id,
-                models.Episode.episode_number.is_(None),
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .all()
-        )
-        for novel_id, cover_url, _, __ in cover_rows:
-            if novel_id not in cover_map and cover_url:
-                cover_map[novel_id] = cover_url
+    cover_map = _build_public_cover_map(db, [int(nid) for nid in novel_ids], site_key)
 
     payload = [
         {
@@ -20248,17 +20477,123 @@ def normalize_episode_status(
 ) -> tuple[str, bool]:
     if status_value is not None:
         normalized = str(status_value).strip().lower()
-        if normalized not in ("public", "draft"):
-            raise HTTPException(400, "status は public / draft のみ指定できます")
+        if normalized not in ("public", "draft", "scheduled"):
+            raise HTTPException(400, "status は public / draft / scheduled のみ指定できます")
+        if normalized == "scheduled":
+            return "scheduled", False
         return normalized, normalized == "public"
     if is_public_value is not None:
         return ("public" if is_public_value else "draft"), bool(is_public_value)
     return "public", True
 
 
+def normalize_episode_publish_mode(mode: str | None) -> str | None:
+    if mode is None:
+        return None
+    normalized = str(mode).strip().lower()
+    if normalized not in ("draft", "public", "scheduled"):
+        raise HTTPException(400, "publish_mode は draft/public/scheduled のみ指定できます")
+    return normalized
+
+
+def normalize_optional_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(400, "日時形式が不正です")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def resolve_episode_publish_mode(
+    payload_publish_mode: Any,
+    payload_status: Any,
+    payload_is_public: Any,
+    default_mode: str | None = None,
+) -> str | None:
+    explicit_mode = normalize_episode_publish_mode(payload_publish_mode)
+    if explicit_mode is not None:
+        return explicit_mode
+    if payload_status is not None:
+        status_value, _ = normalize_episode_status(str(payload_status), None)
+        return status_value
+    if payload_is_public is not None:
+        return "public" if bool(payload_is_public) else "draft"
+    return default_mode
+
+
+def apply_episode_publish_mode(
+    ep: models.Episode,
+    publish_mode: str,
+    scheduled_publish_at: datetime | None,
+) -> None:
+    now = datetime.utcnow()
+    if publish_mode == "scheduled":
+        if scheduled_publish_at is None:
+            raise HTTPException(400, "scheduled の場合は scheduled_publish_at が必須です")
+        if scheduled_publish_at <= now:
+            raise HTTPException(400, "scheduled_publish_at は未来日時を指定してください")
+        ep.status = "scheduled"
+        ep.is_public = False
+        ep.scheduled_publish_at = scheduled_publish_at
+        ep.published_at = None
+        return
+
+    if publish_mode == "draft":
+        ep.status = "draft"
+        ep.is_public = False
+        ep.scheduled_publish_at = None
+        return
+
+    ep.status = "public"
+    ep.is_public = True
+    ep.scheduled_publish_at = None
+    if getattr(ep, "published_at", None) is None:
+        ep.published_at = now
+
+
+def publish_scheduled_episodes(db: Session, site_key: str | None = None) -> int:
+    where_site = ""
+    params: dict[str, Any] = {}
+    if site_key:
+        where_site = " AND e.site_key = :site_key "
+        params["site_key"] = site_key
+    result = db.execute(
+        text(
+            """
+            UPDATE episodes e
+            SET
+              e.status = 'public',
+              e.is_public = 1,
+              e.published_at = COALESCE(e.published_at, e.scheduled_publish_at, NOW())
+            WHERE
+              e.status = 'scheduled'
+              AND e.is_public = 0
+              AND e.scheduled_publish_at IS NOT NULL
+              AND e.scheduled_publish_at <= NOW()
+            """
+            + where_site
+        ),
+        params,
+    )
+    changed = int(getattr(result, "rowcount", 0) or 0)
+    if changed > 0:
+        db.commit()
+    return changed
+
+
 def is_episode_draft(ep: models.Episode) -> bool:
     status_value = getattr(ep, "status", "public") or "public"
-    if status_value == "draft":
+    if status_value in ("draft", "scheduled"):
         return True
     return not bool(getattr(ep, "is_public", True))
 
@@ -20298,8 +20633,18 @@ def create_episode(
         )
         raise HTTPException(403, "追加権限がありません")
 
-    status_value, is_public = normalize_episode_status(
-        getattr(payload, "status", None), None
+    publish_mode = resolve_episode_publish_mode(
+        getattr(payload, "publish_mode", None),
+        getattr(payload, "status", None),
+        None,
+        default_mode="public",
+    )
+    if publish_mode is None:
+        publish_mode = "public"
+    if publish_mode == "scheduled":
+        assert_premium_user(user, "投稿予約はプレミアム会員限定です")
+    scheduled_publish_at = normalize_optional_datetime(
+        getattr(payload, "scheduled_publish_at", None)
     )
     language = normalize_language(
         getattr(payload, "language", None) or getattr(novel, "language", None)
@@ -20311,10 +20656,15 @@ def create_episode(
         title=payload.title,
         body=payload.body,
         episode_number=payload.episode_number,
-        status=status_value,
-        is_public=is_public,
+        status="draft",
+        is_public=False,
         language=language,
         site_key=site_key,
+    )
+    apply_episode_publish_mode(
+        ep,
+        publish_mode=publish_mode,
+        scheduled_publish_at=scheduled_publish_at,
     )
     db.add(ep)
     db.flush()  # assign ep.id
@@ -20366,7 +20716,7 @@ def create_episode(
             db.commit()
         else:
             background_tasks.add_task(_background_upsert_episode_and_novel_translation, ep.id)
-    if is_public:
+    if publish_mode == "public":
         background_tasks.add_task(_background_notify_episode_published, novel_id, ep.id, site_key)
     return ep
 
@@ -20385,6 +20735,21 @@ def update_episode(
     ep = get_episode_in_site_or_404(db, request, episode_id)
     was_public = not is_episode_draft(ep)
 
+    payload_publish_mode = payload.get("publish_mode")
+    payload_status = payload.get("status")
+    payload_is_public = payload.get("is_public")
+    payload_scheduled_publish_at_raw = (
+        payload["scheduled_publish_at"] if "scheduled_publish_at" in payload else None
+    )
+    payload_scheduled_publish_at = normalize_optional_datetime(payload_scheduled_publish_at_raw)
+
+    next_publish_mode = resolve_episode_publish_mode(
+        payload_publish_mode,
+        payload_status,
+        payload_is_public,
+        default_mode=None,
+    )
+
     has_non_tag_change = False
     if payload.get("language") is not None and normalize_language(
         payload.get("language")
@@ -20398,18 +20763,13 @@ def update_episode(
         has_non_tag_change = True
     if payload.get("body") is not None and payload.get("body") != ep.body:
         has_non_tag_change = True
-    if payload.get("status") is not None:
-        status_value, is_public = normalize_episode_status(payload.get("status"), None)
-        if status_value != getattr(ep, "status", None) or is_public != getattr(
-            ep, "is_public", None
-        ):
-            has_non_tag_change = True
-    elif payload.get("is_public") is not None:
-        status_value, is_public = normalize_episode_status(None, payload.get("is_public"))
-        if status_value != getattr(ep, "status", None) or is_public != getattr(
-            ep, "is_public", None
-        ):
-            has_non_tag_change = True
+    if (
+        payload_publish_mode is not None
+        or payload_status is not None
+        or payload_is_public is not None
+        or "scheduled_publish_at" in payload
+    ):
+        has_non_tag_change = True
 
     tag_only_update = payload.get("tag_names") is not None and not has_non_tag_change
 
@@ -20444,14 +20804,19 @@ def update_episode(
         ep.body = payload["body"]
         needs_translation = True
 
-    if is_author and "status" in payload and payload["status"] is not None:
-        status_value, is_public = normalize_episode_status(payload["status"], None)
-        ep.status = status_value
-        ep.is_public = is_public
-    elif is_author and "is_public" in payload and payload["is_public"] is not None:
-        status_value, is_public = normalize_episode_status(None, payload["is_public"])
-        ep.status = status_value
-        ep.is_public = is_public
+    if is_author and (
+        next_publish_mode is not None or "scheduled_publish_at" in payload
+    ):
+        if next_publish_mode is None and payload_scheduled_publish_at is not None:
+            next_publish_mode = "scheduled"
+        if next_publish_mode == "scheduled":
+            assert_premium_user(user, "投稿予約はプレミアム会員限定です")
+        if next_publish_mode is not None:
+            apply_episode_publish_mode(
+                ep,
+                publish_mode=next_publish_mode,
+                scheduled_publish_at=payload_scheduled_publish_at,
+            )
 
     # タグ更新（差し替え）
     tag_names = payload.get("tag_names")
@@ -20499,6 +20864,64 @@ def update_episode(
     if publishing_now:
         background_tasks.add_task(_background_notify_episode_published, novel.id, ep.id, ep.site_key)
     return ep
+
+
+@app.get("/api/me/scheduled-episodes")
+def list_my_scheduled_episodes(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    assert_premium_user(user, "予約投稿一覧はプレミアム会員限定です")
+    site_key = resolve_site_key(request)
+    rows = (
+        db.query(models.Episode, models.Novel.title)
+        .join(models.Novel, models.Novel.id == models.Episode.novel_id)
+        .filter(models.Novel.author_id == user.id, models.Novel.site_key == site_key)
+        .filter(models.Episode.status == "scheduled", models.Episode.is_public == False)
+        .order_by(models.Episode.scheduled_publish_at.asc(), models.Episode.id.asc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "episode_id": int(ep.id),
+                "novel_id": int(ep.novel_id),
+                "novel_title": str(novel_title or ""),
+                "episode_title": str(ep.title or ""),
+                "scheduled_publish_at": ep.scheduled_publish_at.isoformat()
+                if isinstance(ep.scheduled_publish_at, datetime)
+                else None,
+                "status": str(ep.status or "scheduled"),
+            }
+            for ep, novel_title in rows
+        ]
+    }
+
+
+@app.post("/api/episodes/{episode_id}/unschedule")
+def unschedule_episode(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    assert_premium_user(user, "予約投稿の操作はプレミアム会員限定です")
+    ep = get_episode_in_site_or_404(db, request, episode_id)
+    novel = get_novel_in_site_or_404(db, request, ep.novel_id)
+    if not novel or novel.author_id != user.id:
+        raise HTTPException(403, "このエピソードを変更する権限がありません")
+    ep.status = "draft"
+    ep.is_public = False
+    ep.scheduled_publish_at = None
+    db.commit()
+    db.refresh(ep)
+    return {
+        "episode_id": int(ep.id),
+        "status": str(ep.status or "draft"),
+        "is_public": bool(ep.is_public),
+        "scheduled_publish_at": None,
+    }
 
 @app.delete("/api/episodes/{episode_id}")
 def delete_episode(
@@ -20577,6 +21000,7 @@ def list_episodes(
     db: Session = Depends(get_db),
 ):
     site_key = resolve_site_key(request)
+    publish_scheduled_episodes(db, site_key=site_key)
     novel = (
         db.query(models.Novel)
         .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
@@ -21087,6 +21511,8 @@ def get_episode_for_edit(
         "is_liked": is_liked,
         "status": getattr(ep, "status", "public"),
         "is_public": bool(getattr(ep, "is_public", True)),
+        "scheduled_publish_at": ep.scheduled_publish_at,
+        "published_at": ep.published_at,
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
         "illusts": [
             {
@@ -21107,6 +21533,7 @@ def get_episode_for_edit(
 @app.get("/api/episodes/{episode_id}", response_model=None)
 def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)):
     site_key = resolve_site_key(request)
+    publish_scheduled_episodes(db, site_key=site_key)
     ep = (
         db.query(models.Episode)
         .options(
@@ -22845,31 +23272,7 @@ def list_my_favorites(request: Request, db: Session = Depends(get_db)):
     )
     novel_ids = [n.id for n in favorites]
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
-    cover_map = {}
-    if novel_ids:
-        cover_rows = (
-            db.query(
-                models.Episode.novel_id,
-                models.Episode.cover_image_url,
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .filter(models.Episode.novel_id.in_(novel_ids))
-            .filter(models.Episode.site_key == site_key)
-            .filter(models.Episode.cover_image_url.isnot(None))
-            .filter(models.Episode.status == "public")
-            .filter(models.Episode.is_public == True)
-            .order_by(
-                models.Episode.novel_id,
-                models.Episode.episode_number.is_(None),
-                models.Episode.episode_number,
-                models.Episode.id,
-            )
-            .all()
-        )
-        for novel_id, cover_url, _, __ in cover_rows:
-            if novel_id not in cover_map and cover_url:
-                cover_map[novel_id] = cover_url
+    cover_map = _build_public_cover_map(db, [int(nid) for nid in novel_ids], site_key)
 
     return [
         {
@@ -23335,6 +23738,235 @@ def read_my_novel_analytics(
             "favorites": total_favorites,
         },
         "days": days,
+    }
+
+
+def _table_has_column(db: Session, table_name: str, column_name: str) -> bool:
+    row = db.execute(
+        text(
+            """
+            SELECT 1
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND COLUMN_NAME = :column_name
+            LIMIT 1
+            """
+        ),
+        {"table_name": table_name, "column_name": column_name},
+    ).first()
+    return row is not None
+
+
+def _collect_author_dashboard_rows(db: Session, user_id: int, site_key: str) -> list[dict[str, Any]]:
+    novels = (
+        db.query(models.Novel)
+        .filter(models.Novel.author_id == user_id, models.Novel.site_key == site_key)
+        .order_by(models.Novel.created_at.desc(), models.Novel.id.desc())
+        .all()
+    )
+    novel_ids = [int(n.id) for n in novels]
+    if not novel_ids:
+        return []
+
+    episode_rows = (
+        db.query(models.Episode.novel_id, func.count(models.Episode.id))
+        .filter(models.Episode.novel_id.in_(novel_ids))
+        .group_by(models.Episode.novel_id)
+        .all()
+    )
+    episode_map = {int(row[0]): int(row[1] or 0) for row in episode_rows}
+
+    like_rows = (
+        db.query(models.NovelLike.novel_id, func.count(models.NovelLike.id))
+        .filter(models.NovelLike.novel_id.in_(novel_ids))
+        .group_by(models.NovelLike.novel_id)
+        .all()
+    )
+    like_map = {int(row[0]): int(row[1] or 0) for row in like_rows}
+
+    favorite_rows = (
+        db.query(models.NovelFavorite.novel_id, func.count(models.NovelFavorite.id))
+        .filter(models.NovelFavorite.novel_id.in_(novel_ids))
+        .group_by(models.NovelFavorite.novel_id)
+        .all()
+    )
+    favorite_map = {int(row[0]): int(row[1] or 0) for row in favorite_rows}
+
+    metric_rows = (
+        db.query(
+            models.NovelDailyMetric.novel_id,
+            func.coalesce(func.sum(models.NovelDailyMetric.view_count), 0),
+            func.coalesce(func.sum(models.NovelDailyMetric.like_count), 0),
+            func.coalesce(func.sum(models.NovelDailyMetric.favorite_count), 0),
+        )
+        .filter(models.NovelDailyMetric.novel_id.in_(novel_ids))
+        .group_by(models.NovelDailyMetric.novel_id)
+        .all()
+    )
+    metric_map = {
+        int(row[0]): {
+            "views": int(row[1] or 0),
+            "likes": int(row[2] or 0),
+            "favorites": int(row[3] or 0),
+        }
+        for row in metric_rows
+    }
+
+    has_novel_view_count = _table_has_column(db, "novels", "view_count")
+    has_novel_like_count = _table_has_column(db, "novels", "like_count")
+    rows: list[dict[str, Any]] = []
+    for novel in novels:
+        novel_id = int(novel.id)
+        metric_counts = metric_map.get(novel_id) or {"views": 0, "likes": 0, "favorites": 0}
+        view_count = int(getattr(novel, "view_count", 0) or 0) if has_novel_view_count else metric_counts["views"]
+        like_count = int(getattr(novel, "like_count", 0) or 0) if has_novel_like_count else like_map.get(novel_id, metric_counts["likes"])
+        favorite_count = favorite_map.get(novel_id, metric_counts["favorites"])
+        updated_at = getattr(novel, "updated_at", None) or getattr(novel, "created_at", None)
+        rows.append(
+            {
+                "novel_id": novel_id,
+                "title": str(getattr(novel, "title", "") or ""),
+                "status": str(getattr(novel, "status", "public") or "public"),
+                "episode_count": int(episode_map.get(novel_id, 0)),
+                "view_count": int(view_count or 0),
+                "like_count": int(like_count or 0),
+                "favorite_count": int(favorite_count or 0),
+                "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else None,
+            }
+        )
+    return rows
+
+
+@app.get("/api/author/dashboard")
+def get_author_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    assert_premium_user(user, "作者ダッシュボードはプレミアム会員限定です")
+    site_key = resolve_site_key(request)
+    novel_rows = _collect_author_dashboard_rows(db, user_id=user.id, site_key=site_key)
+
+    summary = {
+        "novel_count": len(novel_rows),
+        "total_views": sum(int(row["view_count"]) for row in novel_rows),
+        "total_likes": sum(int(row["like_count"]) for row in novel_rows),
+        "total_favorites": sum(int(row["favorite_count"]) for row in novel_rows),
+        "total_episodes": sum(int(row["episode_count"]) for row in novel_rows),
+    }
+    novel_rows.sort(
+        key=lambda row: (
+            -int(row["view_count"]),
+            -int(row["like_count"]),
+            -int(row["favorite_count"]),
+            row["title"],
+        )
+    )
+    return {"summary": summary, "novels": novel_rows}
+
+
+@app.get("/api/author/dashboard/novels/{novel_id}/daily")
+def get_author_novel_daily_metrics(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    user = require_current_user(request, db)
+    assert_premium_user(user, "作者ダッシュボードはプレミアム会員限定です")
+    site_key = resolve_site_key(request)
+    novel = (
+        db.query(models.Novel)
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
+    if not novel:
+        raise HTTPException(404, "小説が存在しません")
+    if int(getattr(novel, "author_id", 0) or 0) != int(user.id):
+        raise HTTPException(403, "この小説の分析を参照する権限がありません")
+
+    today = date.today()
+    start_day = today - timedelta(days=max(days - 1, 0))
+    rows = (
+        db.query(
+            models.NovelDailyMetric.date,
+            func.coalesce(models.NovelDailyMetric.view_count, 0),
+            func.coalesce(models.NovelDailyMetric.like_count, 0),
+            func.coalesce(models.NovelDailyMetric.favorite_count, 0),
+        )
+        .filter(models.NovelDailyMetric.novel_id == novel_id)
+        .filter(models.NovelDailyMetric.date >= start_day)
+        .filter(models.NovelDailyMetric.date <= today)
+        .all()
+    )
+    day_map = {
+        row[0]: {
+            "views": int(row[1] or 0),
+            "likes": int(row[2] or 0),
+            "favorites": int(row[3] or 0),
+        }
+        for row in rows
+    }
+
+    series: list[dict[str, Any]] = []
+    cursor = start_day
+    while cursor <= today:
+        values = day_map.get(cursor) or {"views": 0, "likes": 0, "favorites": 0}
+        series.append(
+            {
+                "date": str(cursor),
+                "views": int(values["views"]),
+                "likes": int(values["likes"]),
+                "favorites": int(values["favorites"]),
+            }
+        )
+        cursor += timedelta(days=1)
+
+    return {
+        "novel_id": int(novel.id),
+        "title": str(getattr(novel, "title", "") or ""),
+        "days": int(days),
+        "series": series,
+    }
+
+
+@app.get("/api/author/dashboard/top-novels")
+def get_author_top_novels(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=10, ge=1, le=100),
+    sort: str = Query(default="views"),
+):
+    user = require_current_user(request, db)
+    assert_premium_user(user, "作者ダッシュボードはプレミアム会員限定です")
+    site_key = resolve_site_key(request)
+    sort_key = str(sort or "views").strip().lower()
+    if sort_key not in ("views", "likes", "favorites", "updated_at"):
+        raise HTTPException(400, "sort は views/likes/favorites/updated_at のみ指定できます")
+
+    rows = _collect_author_dashboard_rows(db, user_id=user.id, site_key=site_key)
+    if sort_key == "views":
+        rows.sort(key=lambda r: (-int(r["view_count"]), -int(r["like_count"]), -int(r["favorite_count"]), r["title"]))
+    elif sort_key == "likes":
+        rows.sort(key=lambda r: (-int(r["like_count"]), -int(r["view_count"]), -int(r["favorite_count"]), r["title"]))
+    elif sort_key == "favorites":
+        rows.sort(key=lambda r: (-int(r["favorite_count"]), -int(r["view_count"]), -int(r["like_count"]), r["title"]))
+    else:
+        rows.sort(key=lambda r: (str(r.get("updated_at") or ""), r["title"]), reverse=True)
+
+    return {
+        "items": [
+            {
+                "novel_id": int(row["novel_id"]),
+                "title": row["title"],
+                "view_count": int(row["view_count"]),
+                "like_count": int(row["like_count"]),
+                "favorite_count": int(row["favorite_count"]),
+                "episode_count": int(row["episode_count"]),
+            }
+            for row in rows[:limit]
+        ]
     }
 
 # ============================

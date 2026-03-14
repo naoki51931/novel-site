@@ -742,8 +742,14 @@ button.nav-toggle.btn.btn-border:hover {
 
 .search-query-wrap {
   position: relative;
+  z-index: 10;
   flex: 1 1 220px;
   min-width: 200px;
+}
+
+.episode-cover-wrap {
+  position: relative;
+  z-index: 10;
 }
 
 .search-query-wrap .search-input {
@@ -983,6 +989,37 @@ button.nav-toggle.btn.btn-border:hover {
   padding: 6px 8px;
   flex: 1 1 140px;         /* grow:1 shrink:1 basis:140px 相当 */
   min-width: 0;            /* はみ出し防止 */
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  opacity: 1 !important;
+}
+
+.search-bar > .search-input,
+.search-bar > .search-input ~ * {
+  position: relative;
+  z-index: 10;
+}
+
+.ai-chat-search-input,
+.ai-chat-message-input {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  opacity: 1 !important;
+}
+
+.ai-chat-page input:not([type]),
+.ai-chat-page input[type="text"],
+.ai-chat-page input[type="search"],
+.ai-chat-page input[type="password"],
+.ai-chat-page input[type="email"],
+.ai-chat-page textarea,
+.ai-chat-page select {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  opacity: 1 !important;
 }
 
 /* ボタン（flex-shrink:0 相当 & 折り返し防止） */
@@ -1391,6 +1428,7 @@ button.nav-toggle.btn.btn-border:hover {
     width: 100%;
     min-width: 0;
     flex: 0 0 auto;
+    z-index: 10;
   }
 
   .episode-cover-wrap {

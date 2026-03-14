@@ -75,6 +75,7 @@ export default function NovelCard({
           <span>{t({ ja: "コメント", en: "Comments" })}: {novel.comment_count ?? 0}</span>
           <span>{t({ ja: "お気に入り", en: "Favorites" })}: {novel.favorite_count ?? 0}</span>
           <span>{t({ ja: "閲覧", en: "Views" })}: {novel.view_count ?? 0}</span>
+          <span>{t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}</span>
         </div>
 
         {tagNames.length > 0 ? (

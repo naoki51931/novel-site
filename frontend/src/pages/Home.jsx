@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import NovelCard from "../components/NovelCard.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
 
@@ -20,6 +21,7 @@ export default function Home({
   const location = useLocation();
   const navigate = useNavigate();
   const { t, lang } = useI18n();
+  const showR18 = useShowR18ByDisplaySetting();
   const [novels, setNovels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -520,15 +522,7 @@ export default function Home({
     const fetchNewAndTrendingFeed = async () => {
       const token =
         localStorage.getItem("token") || localStorage.getItem("access_token");
-      if (!token) {
-        setNewFeedNovels([]);
-        setTrendingFeedNovels([]);
-        setNewFeedLoading(false);
-        setTrendingFeedLoading(false);
-        setNewFeedError("");
-        setTrendingFeedError("");
-        return;
-      }
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
       const params = new URLSearchParams(location.search);
       const urlQuery = (params.get("q") ?? "").trim();
@@ -567,23 +561,14 @@ export default function Home({
         setTrendingFeedError("");
         const [resNew, resTrending] = await Promise.all([
           fetch(`${API_BASE}/api/feed/new?limit=8`, {
-            headers: { Authorization: `Bearer ${token}` },
+            headers,
             cache: "no-store",
           }),
           fetch(`${API_BASE}/api/feed/trending?limit=8`, {
-            headers: { Authorization: `Bearer ${token}` },
+            headers,
             cache: "no-store",
           }),
         ]);
-        if (resNew.status === 401 || resTrending.status === 401) {
-          setNewFeedNovels([]);
-          setTrendingFeedNovels([]);
-          setNewFeedError("");
-          setTrendingFeedError("");
-          setNewFeedLoading(false);
-          setTrendingFeedLoading(false);
-          return;
-        }
         if (resNew.ok) {
           const newData = await resNew.json().catch(() => []);
           setNewFeedNovels(Array.isArray(newData) ? newData : []);
@@ -745,12 +730,7 @@ export default function Home({
     const fetchRecommended = async () => {
       const token =
         localStorage.getItem("token") || localStorage.getItem("access_token");
-      if (!token) {
-        setRecommendedNovels([]);
-        setRecommendedLoading(false);
-        setRecommendedError("");
-        return;
-      }
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
       const params = new URLSearchParams(location.search);
       const urlQuery = (params.get("q") ?? "").trim();
@@ -786,14 +766,9 @@ export default function Home({
         recParams.set("limit", "8");
         if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) recParams.set("lang", lang);
         const res = await fetch(`${API_BASE}/api/feed/recommended?${recParams.toString()}`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers,
           cache: "no-store",
         });
-        if (res.status === 401) {
-          setRecommendedNovels([]);
-          setRecommendedLoading(false);
-          return;
-        }
         if (!res.ok) {
           throw new Error(
             t({ ja: "おすすめの取得に失敗しました", en: "Failed to load recommendations." })
@@ -855,7 +830,7 @@ export default function Home({
       <span style={{ marginLeft: 8 }}>{renderNovelBadges(novel)}</span>
     </div>
   );
-  const renderNovelStats = (novel, { withChars = false } = {}) => (
+  const renderNovelStats = (novel, { withChars = true } = {}) => (
     <div
       style={{
         display: "flex",
@@ -873,7 +848,9 @@ export default function Home({
         <span>{t({ ja: "コメント", en: "Comments" })}: {novel.comment_count ?? 0}</span>
       ) : null}
       {withChars ? (
-        <span>{t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}</span>
+        <span>
+          {t({ ja: "文字数", en: "Chars" })}: {novel.total_char_count ?? 0}
+        </span>
       ) : null}
     </div>
   );
@@ -902,15 +879,24 @@ export default function Home({
   const hasAuthToken = !!(
     localStorage.getItem("token") || localStorage.getItem("access_token")
   );
-  const showRecommendedSection =
+  const showFeedHubSection =
     !rankingOnly &&
-    hasAuthToken &&
     !currentEffectiveTag &&
     !currentEffectiveQuery &&
     !currentEffectiveExclude &&
     !currentEffectiveAgeLimit &&
     !currentEffectiveCreativeType &&
     currentEffectiveSort === "new";
+  const showPersonalizedFeedSections = showFeedHubSection && hasAuthToken;
+  const novelsVisible = filterR18Novels(novels, showR18);
+  const rankingVisible = filterR18Novels(ranking, showR18);
+  const recommendedNovelsVisible = filterR18Novels(recommendedNovels, showR18);
+  const followingFeedNovelsVisible = filterR18Novels(followingFeedNovels, showR18);
+  const followingTagsFeedNovelsVisible = filterR18Novels(followingTagsFeedNovels, showR18);
+  const newFeedNovelsVisible = filterR18Novels(newFeedNovels, showR18);
+  const trendingFeedNovelsVisible = filterR18Novels(trendingFeedNovels, showR18);
+  const historyFeedNovelsVisible = filterR18Novels(historyFeedNovels, showR18);
+  const pickupFeedNovelsVisible = filterR18Novels(pickupFeedNovels, showR18);
   const renderSectionHeader = (title, moreTo) => (
     <div className="section-heading-row">
       <h3 className="section-heading-title">{title}</h3>
@@ -1527,13 +1513,13 @@ export default function Home({
                 <p style={{ marginTop: 10 }}>
                   {t({ ja: "ランキングを読み込み中...", en: "Loading ranking..." })}
                 </p>
-              ) : ranking.length === 0 ? (
+              ) : rankingVisible.length === 0 ? (
                 <p style={{ marginTop: 10 }}>
                   {t({ ja: "ランキングデータがありません。", en: "No ranking data available." })}
                 </p>
               ) : (
                 <ol style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
-                  {ranking.map((novel) => (
+                  {rankingVisible.map((novel) => (
                     <li
                       key={novel.id}
                       style={{
@@ -1667,7 +1653,115 @@ export default function Home({
         </section>
       )}
 
-      {showRecommendedSection && (
+      {showFeedHubSection && (
+      <section style={{ marginBottom: 24 }}>
+        {renderSectionHeader(
+          t({ ja: "あなたへのおすすめ", en: "Recommended for You" }),
+          "/discover?mode=recommended"
+        )}
+        {recommendedError && (
+          <p style={{ color: "red", marginTop: 8 }}>{recommendedError}</p>
+        )}
+        {recommendedLoading ? (
+          <p style={{ marginTop: 10 }}>
+            {t({ ja: "おすすめを読み込み中...", en: "Loading recommendations..." })}
+          </p>
+        ) : recommendedNovelsVisible.length === 0 ? (
+          <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
+            {t({
+              ja: "ログイン中のブックマーク傾向に基づくおすすめはまだありません。",
+              en: "No bookmark-based recommendations yet.",
+            })}
+          </p>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+              gap: "16px",
+              marginTop: 12,
+            }}
+          >
+            {recommendedNovelsVisible.map((novel) => (
+              <div
+                key={`recommended-${novel.id}`}
+                style={{
+                  border: "1px solid var(--novel-card-border)",
+                  borderRadius: 8,
+                  padding: 12,
+                  boxShadow: "0 2px 4px var(--shadow)",
+                  backgroundColor: "var(--novel-card-bg)",
+                  color: "var(--text)",
+                }}
+              >
+                {novel.cover_image_url && (
+                  <img
+                    src={
+                      novel.cover_image_url.startsWith("http")
+                        ? novel.cover_image_url
+                        : API_BASE + novel.cover_image_url
+                    }
+                    alt={t({ ja: "表紙画像", en: "Cover image" })}
+                    style={{
+                      width: "100%",
+                      maxHeight: 220,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      boxShadow: "0 1px 4px var(--shadow)",
+                      marginBottom: 10,
+                    }}
+                  />
+                )}
+                <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
+                  <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
+                </h3>
+                {renderNovelAuthorMeta(novel)}
+                <p
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontSize: 14,
+                    color: "var(--novel-card-desc)",
+                    marginBottom: 8,
+                    minHeight: "3.5em",
+                  }}
+                >
+                  {shorten(novel.description, 120) ||
+                    t({ ja: "説明がありません。", en: "No description." })}
+                </p>
+                {renderNovelStats(novel)}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => toggleLike(novel)}
+                  >
+                    {novel.is_liked
+                      ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
+                      : t({ ja: "♡ いいね", en: "♡ Like" })}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => toggleFavorite(novel)}
+                  >
+                    {novel.is_favorited
+                      ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
+                      : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
+                  </button>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <Link to={`/novels/${novel.id}`} className="btn btn-border">
+                    {t({ ja: "続きを読む", en: "Read more" })}
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      )}
+
+      {showFeedHubSection && (
       <section style={{ marginBottom: 24 }}>
         {renderSectionHeader(
           t({ ja: "急上昇作品", en: "Trending Works" }),
@@ -1680,13 +1774,13 @@ export default function Home({
           <p style={{ marginTop: 10 }}>
             {t({ ja: "急上昇を読み込み中...", en: "Loading trending works..." })}
           </p>
-        ) : trendingFeedNovels.length === 0 ? (
+        ) : trendingFeedNovelsVisible.length === 0 ? (
           <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
             {t({ ja: "急上昇作品はまだありません。", en: "No trending works yet." })}
           </p>
         ) : (
           <div className="novel-grid" style={{ marginTop: 12 }}>
-            {trendingFeedNovels.map((novel) => (
+            {trendingFeedNovelsVisible.map((novel) => (
               <NovelCard
                 key={`feed-trending-${novel.id}`}
                 novel={novel}
@@ -1707,7 +1801,7 @@ export default function Home({
       </section>
       )}
 
-      {showRecommendedSection && (
+      {showFeedHubSection && (
       <section style={{ marginBottom: 24 }}>
         {renderSectionHeader(t({ ja: "フォロー中タグの新着", en: "New from Followed Tags" }), "/tags")}
         {followingTagsFeedError && (
@@ -1717,12 +1811,17 @@ export default function Home({
           <p style={{ marginTop: 10 }}>
             {t({ ja: "タグフィードを読み込み中...", en: "Loading followed tags feed..." })}
           </p>
-        ) : followingTagsFeedNovels.length === 0 ? (
+        ) : followingTagsFeedNovelsVisible.length === 0 ? (
           <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
-            {t({
-              ja: "フォロー中タグの新着作品はまだありません。",
-              en: "No new works from followed tags yet.",
-            })}
+            {hasAuthToken
+              ? t({
+                  ja: "フォロー中タグの新着作品はまだありません。",
+                  en: "No new works from followed tags yet.",
+                })
+              : t({
+                  ja: "ログインするとフォロー中タグの新着が表示されます。",
+                  en: "Log in to see new works from followed tags.",
+                })}
           </p>
         ) : (
           <div
@@ -1733,7 +1832,7 @@ export default function Home({
               marginTop: 12,
             }}
           >
-            {followingTagsFeedNovels.map((novel) => (
+            {followingTagsFeedNovelsVisible.map((novel) => (
               <div
                 key={`following-tags-${novel.id}`}
                 style={{
@@ -1775,44 +1874,8 @@ export default function Home({
       </section>
       )}
 
-      {showRecommendedSection && (
-      <section style={{ marginBottom: 24 }}>
-        {renderSectionHeader(t({ ja: "新着作品", en: "New Works" }), "/?sort=new")}
-        {newFeedError && (
-          <p style={{ color: "red", marginTop: 8 }}>{newFeedError}</p>
-        )}
-        {newFeedLoading ? (
-          <p style={{ marginTop: 10 }}>
-            {t({ ja: "新着を読み込み中...", en: "Loading new works..." })}
-          </p>
-        ) : newFeedNovels.length === 0 ? (
-          <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
-            {t({ ja: "新着作品はまだありません。", en: "No new works yet." })}
-          </p>
-        ) : (
-          <div className="novel-grid" style={{ marginTop: 12 }}>
-            {newFeedNovels.map((novel) => (
-              <NovelCard
-                key={`feed-new-${novel.id}`}
-                novel={novel}
-                t={t}
-                apiBase={API_BASE}
-                descriptionMax={90}
-                onLike={toggleLike}
-                onFavorite={toggleFavorite}
-                footer={
-                  <Link to={`/novels/${novel.id}`} className="btn btn-border">
-                    {t({ ja: "続きを読む", en: "Read more" })}
-                  </Link>
-                }
-              />
-            ))}
-          </div>
-        )}
-      </section>
-      )}
 
-      {showRecommendedSection && (
+      {showFeedHubSection && (
       <section style={{ marginBottom: 24 }}>
         {renderSectionHeader(t({ ja: "トレンドタグ", en: "Trending Tags" }), "/tags")}
         {trendingTagsError && <p style={{ color: "red", marginTop: 8 }}>{trendingTagsError}</p>}
@@ -1834,7 +1897,7 @@ export default function Home({
       </section>
       )}
 
-      {showRecommendedSection && (
+      {showPersonalizedFeedSections && (
       <section style={{ marginBottom: 24 }}>
         {renderSectionHeader(t({ ja: "フォロー中の新着", en: "New from Following" }), "/mypage")}
         {followingFeedError && (
@@ -1844,12 +1907,17 @@ export default function Home({
           <p style={{ marginTop: 10 }}>
             {t({ ja: "フォロー中フィードを読み込み中...", en: "Loading following feed..." })}
           </p>
-        ) : followingFeedNovels.length === 0 ? (
+        ) : followingFeedNovelsVisible.length === 0 ? (
           <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
-            {t({
-              ja: "フォロー中の作者の公開作品はまだありません。",
-              en: "No new public works from followed authors yet.",
-            })}
+            {hasAuthToken
+              ? t({
+                  ja: "フォロー中の作者の公開作品はまだありません。",
+                  en: "No new public works from followed authors yet.",
+                })
+              : t({
+                  ja: "ログインするとフォロー中の新着が表示されます。",
+                  en: "Log in to see new works from followed authors.",
+                })}
           </p>
         ) : (
           <div
@@ -1860,7 +1928,7 @@ export default function Home({
               marginTop: 12,
             }}
           >
-            {followingFeedNovels.map((novel) => (
+            {followingFeedNovelsVisible.map((novel) => (
               <div
                 key={`following-${novel.id}`}
                 style={{
@@ -1956,19 +2024,19 @@ export default function Home({
       </section>
       )}
 
-      {showRecommendedSection && (
+      {showPersonalizedFeedSections && (
       <section style={{ marginBottom: 24 }}>
         {renderSectionHeader(t({ ja: "あなたの閲覧履歴", en: "Your View History" }), "/mypage")}
         {historyFeedError && <p style={{ color: "red", marginTop: 8 }}>{historyFeedError}</p>}
         {historyFeedLoading ? (
           <p style={{ marginTop: 10 }}>{t({ ja: "履歴を読み込み中...", en: "Loading history..." })}</p>
-        ) : historyFeedNovels.length === 0 ? (
+        ) : historyFeedNovelsVisible.length === 0 ? (
           <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
             {t({ ja: "閲覧履歴はまだありません。", en: "No view history yet." })}
           </p>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginTop: 12 }}>
-            {historyFeedNovels.map((novel) => (
+            {historyFeedNovelsVisible.map((novel) => (
               <article key={`history-${novel.id}`} className="novel-card" style={{ padding: 10 }}>
                 <h4 style={{ margin: "0 0 6px" }}>
                   <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
@@ -1986,19 +2054,19 @@ export default function Home({
       </section>
       )}
 
-      {showRecommendedSection && (
+      {showPersonalizedFeedSections && (
       <section style={{ marginBottom: 24 }}>
         {renderSectionHeader(t({ ja: "ピックアップ特集", en: "Pickups" }), "/discover?mode=pickups")}
         {pickupFeedError && <p style={{ color: "red", marginTop: 8 }}>{pickupFeedError}</p>}
         {pickupFeedLoading ? (
           <p style={{ marginTop: 10 }}>{t({ ja: "ピックアップを読み込み中...", en: "Loading pickups..." })}</p>
-        ) : pickupFeedNovels.length === 0 ? (
+        ) : pickupFeedNovelsVisible.length === 0 ? (
           <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
             {t({ ja: "ピックアップはまだありません。", en: "No pickups yet." })}
           </p>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16, marginTop: 12 }}>
-            {pickupFeedNovels.map((novel) => (
+            {pickupFeedNovelsVisible.map((novel) => (
               <div key={`pickup-${novel.id}`} className="novel-card" style={{ padding: 12 }}>
                 <h4 style={{ margin: "0 0 6px" }}>
                   <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
@@ -2019,137 +2087,32 @@ export default function Home({
       </section>
       )}
 
-      {showRecommendedSection && (
-      <section style={{ marginBottom: 24 }}>
-        {renderSectionHeader(
-          t({ ja: "あなたへのおすすめ", en: "Recommended for You" }),
-          "/discover?mode=recommended"
-        )}
-        {recommendedError && (
-          <p style={{ color: "red", marginTop: 8 }}>{recommendedError}</p>
-        )}
-        {recommendedLoading ? (
-          <p style={{ marginTop: 10 }}>
-            {t({ ja: "おすすめを読み込み中...", en: "Loading recommendations..." })}
-          </p>
-        ) : recommendedNovels.length === 0 ? (
-          <p style={{ marginTop: 10, color: "var(--muted-text)" }}>
-            {t({
-              ja: "ログイン中のブックマーク傾向に基づくおすすめはまだありません。",
-              en: "No bookmark-based recommendations yet.",
-            })}
-          </p>
-        ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-              gap: "16px",
-              marginTop: 12,
-            }}
-          >
-            {recommendedNovels.map((novel) => (
-              <div
-                key={`recommended-${novel.id}`}
-                style={{
-                  border: "1px solid var(--novel-card-border)",
-                  borderRadius: 8,
-                  padding: 12,
-                  boxShadow: "0 2px 4px var(--shadow)",
-                  backgroundColor: "var(--novel-card-bg)",
-                  color: "var(--text)",
-                }}
-              >
-                {novel.cover_image_url && (
-                  <img
-                    src={
-                      novel.cover_image_url.startsWith("http")
-                        ? novel.cover_image_url
-                        : API_BASE + novel.cover_image_url
-                    }
-                    alt={t({ ja: "表紙画像", en: "Cover image" })}
-                    style={{
-                      width: "100%",
-                      maxHeight: 220,
-                      objectFit: "cover",
-                      borderRadius: 6,
-                      boxShadow: "0 1px 4px var(--shadow)",
-                      marginBottom: 10,
-                    }}
-                  />
-                )}
-                <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
-                  <Link to={`/novels/${novel.id}`}>{novel.title}</Link>
-                </h3>
-                {renderNovelAuthorMeta(novel)}
-                <p
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    fontSize: 14,
-                    color: "var(--novel-card-desc)",
-                    marginBottom: 8,
-                    minHeight: "3.5em",
-                  }}
-                >
-                  {shorten(novel.description, 120) ||
-                    t({ ja: "説明がありません。", en: "No description." })}
-                </p>
-                {renderNovelStats(novel)}
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-                  <button
-                    type="button"
-                    className="btn btn-border"
-                    onClick={() => toggleLike(novel)}
-                  >
-                    {novel.is_liked
-                      ? t({ ja: "♥ いいね済み", en: "♥ Liked" })
-                      : t({ ja: "♡ いいね", en: "♡ Like" })}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-border"
-                    onClick={() => toggleFavorite(novel)}
-                  >
-                    {novel.is_favorited
-                      ? t({ ja: "★ ブックマーク済み", en: "★ Bookmarked" })
-                      : t({ ja: "☆ ブックマーク", en: "☆ Bookmark" })}
-                  </button>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <Link to={`/novels/${novel.id}`} className="btn btn-border">
-                    {t({ ja: "続きを読む", en: "Read more" })}
-                  </Link>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-      )}
-
-      {!rankingOnly && novels.length === 0 && (
+      {!rankingOnly && novelsVisible.length === 0 && (
         <p>{t({ ja: "小説が見つかりません。", en: "No novels found." })}</p>
       )}
 
       {!rankingOnly && (
-      <div className="novel-grid">
-        {novels.map((novel) => (
-          <NovelCard
-            key={novel.id}
-            novel={novel}
-            t={t}
-            apiBase={API_BASE}
-            showCreatedAt
-            onLike={toggleLike}
-            onFavorite={toggleFavorite}
-            footer={
-              <Link to={`/novels/${novel.id}`} className="btn btn-border">
-                {t({ ja: "続きを読む", en: "Read more" })}
-              </Link>
-            }
-          />
-        ))}
-      </div>
+        <section style={{ marginBottom: 24 }}>
+          <h3 className="section-heading-title">{t({ ja: "新着作品", en: "New Works" })}</h3>
+          <div className="novel-grid">
+            {novelsVisible.map((novel) => (
+              <NovelCard
+                key={novel.id}
+                novel={novel}
+                t={t}
+                apiBase={API_BASE}
+                showCreatedAt
+                onLike={toggleLike}
+                onFavorite={toggleFavorite}
+                footer={
+                  <Link to={`/novels/${novel.id}`} className="btn btn-border">
+                    {t({ ja: "続きを読む", en: "Read more" })}
+                  </Link>
+                }
+              />
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );

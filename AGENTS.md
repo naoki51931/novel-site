@@ -66,3 +66,21 @@ Codex で作業するときの要点と入口をまとめます。
 - AIチャットのキャラ削除は物理削除ではなく論理削除（`ai_chat_characters.is_deleted/deleted_at`）。取得系は削除済み除外を前提に実装する。
 - AIチャットの同名キャラは別レコードで作成可能。`AIChatCharacterResponse` の `is_name_duplicate` と `name_duplicate_index` で表示上の識別（例: `キャラ名 #2`）を行う。
 - AIチャット学習キー（`character_profile_key`）は同名キャラ間で学習継続するよう、実装上 `キャラ名 + speech_gender` ベースで算出している。性格文の差分で学習を分断しない。
+
+## 最近の実装差分（要点）
+
+- フィード（`/api/feed/*`）:
+  - `new`, `trending`, `recommended` はゲスト利用可能。
+  - トークンが壊れている/期限切れでも、これら3つは `401` にせずゲストにフォールバックする。
+  - 推薦フィードは未ログイン時に公開推薦ロジックへフォールバック。
+- ホーム（`frontend/src/pages/Home.jsx`）:
+  - ホーム条件（`sort=new` + フィルタなし）で「おすすめ」「急上昇作品」を表示（ログイン不要）。
+  - 「フォロー中の新着」「フォロー中タグの新着」は未ログイン時もセクションを表示し、ログイン案内文を出す。
+- AIチャット（`frontend/src/pages/AiChatPage.jsx`）:
+  - キャラ画像がある場合、背景を `position: fixed` で表示（スクロール追従）。
+
+## 反映時のハマりどころ
+
+- `docker compose build backend` はイメージ更新のみ。稼働中コンテナへは未反映。
+- 反映には必ず `docker compose up --build -d backend`（または recreate）を実行する。
+- フロント修正後は `frontend/dist` へビルドし、`docker compose restart nginx` で配信反映。

@@ -264,6 +264,25 @@ function isNetworkFetchError(error) {
   return msg === "failed to fetch";
 }
 
+function resolveImageUrl(rawUrl) {
+  const src = String(rawUrl || "").trim();
+  if (!src) return "";
+  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:image/")) {
+    return src;
+  }
+  if (src.startsWith("/")) return src;
+  return `/${src}`;
+}
+
+function calcChatMessagesBytes(messages) {
+  try {
+    const text = JSON.stringify(Array.isArray(messages) ? messages : []);
+    return new TextEncoder().encode(String(text || "")).length;
+  } catch {
+    return 0;
+  }
+}
+
 async function fetchWithSingleRetry(url, options, retryDelayMs = 350) {
   try {
     return await fetch(url, options);
@@ -1692,10 +1711,35 @@ export default function AiChatPage() {
     () => visibleSavedCharacters.find((c) => c.id === selectedCharacterId) || null,
     [visibleSavedCharacters, selectedCharacterId]
   );
+  const isDemo02User = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return String(localStorage.getItem("username") || "").trim().toLowerCase() === "demo02";
+  }, [authToken]);
+  const selectedCharacterMessageBytes = useMemo(() => calcChatMessagesBytes(messages), [messages]);
+  const selectedCharacterMessageKb = useMemo(
+    () => (selectedCharacterMessageBytes / 1024).toFixed(1),
+    [selectedCharacterMessageBytes]
+  );
+  const readableSelectedCharacterId = selectedCharacterId ? String(selectedCharacterId) : "";
+  const characterMessageBytesMap = useMemo(() => {
+    if (!isDemo02User) return {};
+    const out = {};
+    visibleSavedCharacters.forEach((c) => {
+      const cid = String(c?.id || "").trim();
+      if (!cid) return;
+      if (cid === readableSelectedCharacterId) {
+        out[cid] = selectedCharacterMessageBytes;
+        return;
+      }
+      const draft = loadCharacterChatDraft(cid);
+      const raw = Array.isArray(draft?.messages) ? draft.messages : [];
+      out[cid] = calcChatMessagesBytes(raw);
+    });
+    return out;
+  }, [isDemo02User, visibleSavedCharacters, readableSelectedCharacterId, selectedCharacterMessageBytes]);
   const selectedCharacterReadonly =
     !!selectedCharacter?.is_readonly
     && String(selectedCharacter?.owner_username || "").trim().toLowerCase() !== "demo02";
-  const readableSelectedCharacterId = selectedCharacterId ? String(selectedCharacterId) : "";
   const writableSelectedCharacterId =
     selectedCharacterId && !selectedCharacterReadonly ? selectedCharacterId : "";
   const engagementMetricRows = useMemo(() => {
@@ -4099,9 +4143,40 @@ export default function AiChatPage() {
         padding: "11px 8px",
       }
     : undefined;
+  const characterBackgroundImageUrl = resolveImageUrl(selectedCharacter?.image_url);
 
   return (
-    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+    <>
+      {characterBackgroundImageUrl && (
+        <>
+          <img
+            aria-hidden="true"
+            src={characterBackgroundImageUrl}
+            alt=""
+            style={{
+              position: "fixed",
+              inset: 0,
+              width: "100vw",
+              height: "100vh",
+              objectFit: "cover",
+              pointerEvents: "none",
+              zIndex: 0,
+              opacity: 0.62,
+            }}
+          />
+          <div
+            aria-hidden="true"
+            style={{
+              position: "fixed",
+              inset: 0,
+              pointerEvents: "none",
+              zIndex: 0,
+              background: "linear-gradient(to bottom, rgba(255,255,255,0.2), rgba(255,255,255,0.28))",
+            }}
+          />
+        </>
+      )}
+    <div className="ai-chat-page" style={{ maxWidth: 960, margin: "0 auto", position: "relative", zIndex: 1 }}>
       <div style={topNavRowStyle}>
         <Link to="/" className="btn btn-border" style={topNavButtonStyle}>{t({ ja: "トップへ", en: "Home" })}</Link>
         <Link to="/ai_chat/lp" className="btn btn-border" style={topNavButtonStyle}>
@@ -4376,7 +4451,7 @@ export default function AiChatPage() {
               </option>
               {visibleSavedCharacters.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {`${c.is_recommended ? "★" : ""}${formatCharacterNameWithIndex(c)}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}`}
+                  {`${c.is_recommended ? "★" : ""}${formatCharacterNameWithIndex(c)}${c.owner_username ? ` @${c.owner_username}` : ""}${c.is_recommended ? ` (${t({ ja: "おすすめ", en: "Recommended" })} ${Number(c.recommendation_score || 0).toFixed(2)})` : ""}${c.is_readonly ? ` (${t({ ja: "閲覧専用", en: "Read only" })})` : ""}${isDemo02User ? ` [${((Number(characterMessageBytesMap[String(c.id)] || 0)) / 1024).toFixed(1)} kB]` : ""}`}
                 </option>
               ))}
             </select>
@@ -4421,6 +4496,14 @@ export default function AiChatPage() {
               {selectedCharacter?.is_public
                 ? t({ ja: "このキャラのチャットは公開中です。", en: "This character's chat is public." })
                 : t({ ja: "このキャラのチャットは非公開です。", en: "This character's chat is private." })}
+            </div>
+          )}
+          {isDemo02User && (
+            <div style={{ marginTop: 4, fontSize: "0.86rem", color: "var(--muted-text)" }}>
+              {t(
+                { ja: "選択中キャラの会話履歴サイズ: {{kb}} kB（{{bytes}} bytes）", en: "Selected character history size: {{kb}} kB ({{bytes}} bytes)" },
+                { kb: selectedCharacterMessageKb, bytes: selectedCharacterMessageBytes.toLocaleString() }
+              )}
             </div>
           )}
           {saveNameConflict && (
@@ -4827,7 +4910,7 @@ export default function AiChatPage() {
           {selectedCharacter?.image_url && (
             <div style={{ marginTop: 6, marginBottom: 6 }}>
               <img
-                src={selectedCharacter.image_url}
+                src={resolveImageUrl(selectedCharacter.image_url)}
                 alt={t({ ja: "キャラ参照画像", en: "Character reference image" })}
                 style={{ width: "100%", maxWidth: 220, borderRadius: 8, border: "1px solid #d8dce6", display: "block" }}
               />
@@ -4883,18 +4966,18 @@ export default function AiChatPage() {
         </label>
       </div>
 
-	      <div
-	        style={{
-	          border: "1px solid var(--border)",
-	          background: "var(--surface)",
-	          color: "var(--text)",
-	          borderRadius: 8,
-	          padding: 10,
-	          minHeight: 260,
-	          marginBottom: 10,
-	        }}
-	      >
-	        {messagesLoading && (
+		      <div
+		        style={{
+		          border: "1px solid var(--border)",
+		          background: characterBackgroundImageUrl ? "rgba(255,255,255,0.18)" : "var(--surface)",
+		          color: "var(--text)",
+		          borderRadius: 8,
+		          padding: 10,
+		          minHeight: 260,
+		          marginBottom: 10,
+		        }}
+		      >
+		        {messagesLoading && (
 	          <p style={{ color: "var(--muted-text)" }}>
 	            {t({ ja: "履歴を読み込み中...", en: "Loading history..." })}
 	          </p>
@@ -5073,12 +5156,12 @@ export default function AiChatPage() {
                 </div>
               </div>
             )}
-          </div>
-        ))}
-      </div>
-      {selectedMessageIndex !== null && (
-        <div style={{ marginTop: -2, marginBottom: 10, display: "flex", justifyContent: "flex-end" }}>
-          <button
+		          </div>
+		        ))}
+		      </div>
+	      {selectedMessageIndex !== null && (
+	        <div style={{ marginTop: -2, marginBottom: 10, display: "flex", justifyContent: "flex-end" }}>
+	          <button
             type="button"
             className="btn btn-border"
             onClick={deleteFromSelectedMessage}
@@ -5353,6 +5436,7 @@ export default function AiChatPage() {
 
       <div style={{ display: "flex", gap: 8 }}>
         <input
+          className="ai-chat-message-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -5362,7 +5446,13 @@ export default function AiChatPage() {
             }
           }}
           placeholder={t({ ja: "メッセージを入力", en: "Type a message" })}
-          style={{ flex: 1 }}
+          style={{
+            flex: 1,
+            background: "var(--surface)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            opacity: 1,
+          }}
           disabled={loading}
         />
         <button type="button" className="btn btn-border" onClick={() => submitChat()} disabled={loading || !input.trim()}>
@@ -5607,5 +5697,6 @@ export default function AiChatPage() {
         </span>
       </div>
     </div>
+    </>
   );
 }

@@ -3,12 +3,16 @@ import { Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import {
+  MYPAGE_SHOW_R18_STORAGE_KEY,
+  R18_DISPLAY_CHANGE_EVENT,
+  readShowR18Setting,
+} from "../lib/r18Display";
 
 const API_BASE = getApiBase();
 const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
-const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 const FAVORITE_SUMMARY_MAX_CHARS = 500;
 
 export default function Mypage() {
@@ -41,12 +45,7 @@ export default function Mypage() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("username") || "";
   });
-  const [showR18, setShowR18] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const v = localStorage.getItem(MYPAGE_SHOW_R18_STORAGE_KEY);
-    if (v === null) return true; // default: show
-    return v === "1" || v === "true";
-  });
+  const [showR18, setShowR18] = useState(() => readShowR18Setting());
   const [androidAppReady, setAndroidAppReady] = useState(false);
   const [iphoneAppReady, setIphoneAppReady] = useState(false);
   const [emailAddressInvalid, setEmailAddressInvalid] = useState(false);
@@ -167,8 +166,10 @@ export default function Mypage() {
   }, [hideAppDownloads]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") return undefined;
     localStorage.setItem(MYPAGE_SHOW_R18_STORAGE_KEY, showR18 ? "1" : "0");
+    window.dispatchEvent(new Event(R18_DISPLAY_CHANGE_EVENT));
+    return undefined;
   }, [showR18]);
 
   const isR18Novel = (novel) => String(novel?.age_limit || "all").toLowerCase() === "r18";
@@ -797,6 +798,27 @@ export default function Mypage() {
             {t({ ja: "作者ダッシュボードを開く", en: "Open creator dashboard" })}
           </Link>
         </div>
+        {isPremium ? (
+          <>
+            <div style={{ marginTop: 8 }}>
+              <Link className="btn btn-border" to="/author/dashboard">
+                {t({ ja: "作品分析ダッシュボード", en: "Open analytics dashboard" })}
+              </Link>
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <Link className="btn btn-border" to="/me/scheduled-episodes">
+                {t({ ja: "予約投稿一覧", en: "Scheduled episodes" })}
+              </Link>
+            </div>
+          </>
+        ) : (
+          <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
+            {t({
+              ja: "作品分析ダッシュボードと投稿予約はプレミアム会員限定です。",
+              en: "Analytics dashboard and scheduled publishing are premium-only features.",
+            })}
+          </p>
+        )}
         <div style={{ marginTop: 8 }}>
           <Link className="btn btn-border" to="/me/support-plans">
             {t({ ja: "月額支援プラン管理", en: "Manage monthly plans" })}

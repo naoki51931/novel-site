@@ -20,6 +20,8 @@ import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.LinearLayout
@@ -117,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         MobilePushRegistrar.ensureFirebaseApp(this)
 
         setupWebView()
+        clearWebViewCacheForFreshAssets()
         setupDownloadBehavior()
         setupPullToRefresh()
         setupBottomNav()
@@ -245,6 +248,7 @@ class MainActivity : AppCompatActivity() {
             mediaPlaybackRequiresUserGesture = false
             setSupportMultipleWindows(true)
             userAgentString = "$userAgentString $APP_UA_MARKER"
+            cacheMode = WebSettings.LOAD_NO_CACHE
         }
 
         val cookieManager = CookieManager.getInstance()
@@ -286,6 +290,14 @@ class MainActivity : AppCompatActivity() {
                 filePickerLauncher.launch("*/*")
                 return true
             }
+        }
+    }
+
+    private fun clearWebViewCacheForFreshAssets() {
+        runCatching {
+            webView.clearCache(true)
+            webView.clearHistory()
+            WebStorage.getInstance().deleteAllData()
         }
     }
 

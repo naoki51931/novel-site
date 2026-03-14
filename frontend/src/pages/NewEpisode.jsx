@@ -50,7 +50,9 @@ export default function NewEpisode() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");          // タグ用 state
-  const [status, setStatus] = useState("public"); // "public" / "draft"
+  const [publishMode, setPublishMode] = useState("public"); // "public" / "draft" / "scheduled"
+  const [scheduledPublishAt, setScheduledPublishAt] = useState("");
+  const [isPremium, setIsPremium] = useState(false);
 
   // ★ 表紙・押絵（NewEpisode 用）
   const [coverFile, setCoverFile] = useState(null);
@@ -91,7 +93,11 @@ export default function NewEpisode() {
       if (draft.title) setTitle(draft.title);
       if (draft.body) setBody(draft.body);
       if (typeof draft.tags === "string") setTags(draft.tags);
-      if (draft.status) setStatus(draft.status);
+      if (draft.publishMode) setPublishMode(draft.publishMode);
+      else if (draft.status) setPublishMode(draft.status);
+      if (typeof draft.scheduledPublishAt === "string") {
+        setScheduledPublishAt(draft.scheduledPublishAt);
+      }
     } catch (e) {
       console.error("failed to load episode draft", e);
     }
@@ -105,7 +111,8 @@ export default function NewEpisode() {
         title,
         body,
         tags,
-        status,
+        publishMode,
+        scheduledPublishAt,
         saved_at: new Date().toISOString(),
       };
       try {
@@ -116,7 +123,7 @@ export default function NewEpisode() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [draftKey, episodeNumber, title, body, tags, status]);
+  }, [draftKey, episodeNumber, title, body, tags, publishMode, scheduledPublishAt]);
   // === auto-save episode draft end ===
 
   useEffect(() => {
@@ -136,13 +143,43 @@ export default function NewEpisode() {
     if (typeof prefill.body === "string") {
       setBody(prefill.body);
     }
-    if (prefill.status === "draft" || prefill.status === "public") {
-      setStatus(prefill.status);
+    if (
+      prefill.publish_mode === "draft" ||
+      prefill.publish_mode === "public" ||
+      prefill.publish_mode === "scheduled"
+    ) {
+      setPublishMode(prefill.publish_mode);
+    } else if (prefill.status === "draft" || prefill.status === "public") {
+      setPublishMode(prefill.status);
     } else {
-      setStatus("draft");
+      setPublishMode("draft");
+    }
+    if (typeof prefill.scheduled_publish_at === "string") {
+      setScheduledPublishAt(prefill.scheduled_publish_at.slice(0, 16));
     }
     setAiPrefillApplied(true);
   }, [aiPrefillApplied, location?.state]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    fetch(`${API_BASE}/api/users/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const premium = !!data?.is_premium;
+        setIsPremium(premium);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isPremium && publishMode === "scheduled") {
+      setPublishMode("draft");
+      setScheduledPublishAt("");
+    }
+  }, [isPremium, publishMode]);
 
 
   // =========================
@@ -535,12 +572,28 @@ export default function NewEpisode() {
       return;
     }
 
+    if (publishMode === "scheduled" && !scheduledPublishAt) {
+      setError(t({ ja: "予約公開日時を入力してください。", en: "Please set scheduled publish datetime." }));
+      return;
+    }
+    if (publishMode === "scheduled" && !isPremium) {
+      setError(
+        t({
+          ja: "投稿予約はプレミアム会員限定です。",
+          en: "Scheduled publishing is available for premium members only.",
+        })
+      );
+      return;
+    }
+
     const payload = {
       episode_number: Number(episodeNumber),
       title,
       body,
-      status,
-      is_public: status === "public",
+      publish_mode: publishMode,
+      status: publishMode,
+      is_public: publishMode === "public",
+      scheduled_publish_at: publishMode === "scheduled" ? scheduledPublishAt : null,
       tag_names: tags
         .split(",")
         .map((s) => s.trim())
@@ -718,17 +771,59 @@ export default function NewEpisode() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            {t({ ja: "公開ステータス", en: "Visibility" })}
+            {t({ ja: "公開設定", en: "Publish mode" })}
             <br />
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              style={{ width: "100%", padding: 4 }}
-            >
-              <option value="public">{t({ ja: "公開", en: "Public" })}</option>
-              <option value="draft">{t({ ja: "下書き", en: "Draft" })}</option>
-            </select>
+            <label style={{ marginRight: 12 }}>
+              <input
+                type="radio"
+                name="publish_mode"
+                value="draft"
+                checked={publishMode === "draft"}
+                onChange={(e) => setPublishMode(e.target.value)}
+              />{" "}
+              {t({ ja: "下書き保存", en: "Save as draft" })}
+            </label>
+            <label style={{ marginRight: 12 }}>
+              <input
+                type="radio"
+                name="publish_mode"
+                value="public"
+                checked={publishMode === "public"}
+                onChange={(e) => setPublishMode(e.target.value)}
+              />{" "}
+              {t({ ja: "すぐ公開", en: "Publish now" })}
+            </label>
+            {isPremium && (
+              <label>
+                <input
+                  type="radio"
+                  name="publish_mode"
+                  value="scheduled"
+                  checked={publishMode === "scheduled"}
+                  onChange={(e) => setPublishMode(e.target.value)}
+                />{" "}
+                {t({ ja: "日時指定で公開", en: "Schedule publish" })}
+              </label>
+            )}
           </label>
+          {!isPremium && (
+            <div style={{ marginTop: 6, color: "#666", fontSize: 13 }}>
+              {t({
+                ja: "投稿予約はプレミアム会員限定です。",
+                en: "Scheduled publishing is a premium-only feature.",
+              })}
+            </div>
+          )}
+          {publishMode === "scheduled" && (
+            <div style={{ marginTop: 8 }}>
+              <input
+                type="datetime-local"
+                value={scheduledPublishAt}
+                onChange={(e) => setScheduledPublishAt(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              />
+            </div>
+          )}
         </div>
 
         {/* タグ入力欄 */}

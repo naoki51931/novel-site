@@ -241,6 +241,7 @@ export default function SearchBar({
     <form className="search-bar" onSubmit={handleSubmit}>
       <div className="search-query-wrap">
         <input
+          name="query"
           type="text"
           placeholder={t({
             ja: "検索: タイトル/本文/概要/タグ(空白・カンマ)/@ユーザー",
@@ -301,6 +302,7 @@ export default function SearchBar({
         ) : null}
       </div>
       <input
+        name="exclude_query"
         type="text"
         placeholder={t({
           ja: "除外: タイトル/本文/概要/タグ(空白・カンマ)/@ユーザー",
@@ -311,6 +313,7 @@ export default function SearchBar({
         className="search-input"
       />
       <select
+        name="sort"
         value={sort}
         onChange={(e) => onChangeSort && onChangeSort(e.target.value)}
         className="search-input"
@@ -322,6 +325,7 @@ export default function SearchBar({
         <option value="comments">{t({ ja: "コメント順（プレミアム限定）", en: "Comments (Premium only)" })}</option>
       </select>
       <select
+        name="age_limit"
         value={ageLimit}
         onChange={(e) => onChangeAgeLimit && onChangeAgeLimit(e.target.value)}
         className="search-input"
@@ -333,6 +337,7 @@ export default function SearchBar({
         <option value="r18">r18</option>
       </select>
       <select
+        name="creative_type"
         value={creativeType}
         onChange={(e) => onChangeCreativeType && onChangeCreativeType(e.target.value)}
         className="search-input"

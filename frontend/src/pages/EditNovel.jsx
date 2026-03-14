@@ -25,6 +25,8 @@ export default function EditNovel() {
   const [seriesName, setSeriesName] = useState("");
   const [seriesOrder, setSeriesOrder] = useState("");
   const [status, setStatus] = useState("public");            // "public" / "draft"
+  const [novelCoverImageUrl, setNovelCoverImageUrl] = useState("");
+  const [isPremium, setIsPremium] = useState(false);
   const [canEditFull, setCanEditFull] = useState(true);
   const [autoSummaryLoading, setAutoSummaryLoading] = useState(false);
   const [autoSummaryError, setAutoSummaryError] = useState("");
@@ -37,6 +39,18 @@ export default function EditNovel() {
   const [tagSuggestError, setTagSuggestError] = useState("");
   const [tagCandidates, setTagCandidates] = useState([]);
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
+  const [showCoverModal, setShowCoverModal] = useState(false);
+  const [coverGenerating, setCoverGenerating] = useState(false);
+  const [coverSaving, setCoverSaving] = useState(false);
+  const [coverError, setCoverError] = useState("");
+  const [coverHistory, setCoverHistory] = useState([]);
+  const [coverForm, setCoverForm] = useState({
+    genre: "",
+    mood: "",
+    color_theme: "",
+    character_count: 1,
+    extra_prompt: "",
+  });
 
   // ★ タグ（カンマ区切り入力）
   const [tagsInput, setTagsInput] = useState("");
@@ -111,6 +125,7 @@ export default function EditNovel() {
           } else {
             setStatus("public");
           }
+          setNovelCoverImageUrl(data.cover_image_url || "");
         }
       } catch (err) {
         console.error(err);
@@ -124,6 +139,17 @@ export default function EditNovel() {
 
     fetchNovel();
   }, [id, navigate]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    fetch(`${API_BASE}/api/users/me`, {
+      headers: { Authorization: "Bearer " + token },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setIsPremium(!!data?.is_premium))
+      .catch(() => {});
+  }, []);
 
   // マウント時に編集下書きを読み込む（あればサーバ値の上から上書き）
   useEffect(() => {
@@ -273,6 +299,110 @@ export default function EditNovel() {
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const loadCoverHistory = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    const res = await fetch(`${API_BASE}/api/covers/history?novel_id=${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => []);
+    if (!res.ok) {
+      throw new Error(data.detail || t({ ja: "表紙履歴の取得に失敗しました", en: "Failed to load cover history." }));
+    }
+    setCoverHistory(Array.isArray(data) ? data : []);
+  };
+
+  const openCoverModal = async () => {
+    if (!isPremium) {
+      setCoverError(t({ ja: "AI表紙生成はプレミアム会員限定です。", en: "AI cover generation is premium-only." }));
+      return;
+    }
+    setCoverError("");
+    setShowCoverModal(true);
+    try {
+      await loadCoverHistory();
+    } catch (e) {
+      setCoverError(e.message || t({ ja: "表紙履歴の取得に失敗しました", en: "Failed to load cover history." }));
+    }
+  };
+
+  const handleGenerateCover = async () => {
+    if (!isPremium) {
+      setCoverError(t({ ja: "AI表紙生成はプレミアム会員限定です。", en: "AI cover generation is premium-only." }));
+      return;
+    }
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+    try {
+      setCoverError("");
+      setCoverGenerating(true);
+      const payload = {
+        novel_id: Number(id),
+        title: title || "",
+        catch_copy: (description || "").slice(0, 200),
+        genre: coverForm.genre,
+        mood: coverForm.mood,
+        color_theme: coverForm.color_theme,
+        character_count: Number(coverForm.character_count || 0),
+        extra_prompt: coverForm.extra_prompt,
+      };
+      const res = await fetch(`${API_BASE}/api/covers/generate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || t({ ja: "表紙生成に失敗しました", en: "Failed to generate cover." }));
+      }
+      await loadCoverHistory();
+    } catch (e) {
+      setCoverError(e.message || t({ ja: "表紙生成に失敗しました", en: "Failed to generate cover." }));
+    } finally {
+      setCoverGenerating(false);
+    }
+  };
+
+  const handleAdoptCover = async (imagePath) => {
+    if (!isPremium) {
+      setCoverError(t({ ja: "AI表紙生成はプレミアム会員限定です。", en: "AI cover generation is premium-only." }));
+      return;
+    }
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+    try {
+      setCoverSaving(true);
+      setCoverError("");
+      const res = await fetch(`${API_BASE}/api/novels/${id}/cover`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ image_path: imagePath }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || t({ ja: "表紙設定に失敗しました", en: "Failed to set novel cover." }));
+      }
+      setNovelCoverImageUrl(data.cover_image_path || imagePath);
+      setShowCoverModal(false);
+    } catch (e) {
+      setCoverError(e.message || t({ ja: "表紙設定に失敗しました", en: "Failed to set novel cover." }));
+    } finally {
+      setCoverSaving(false);
     }
   };
 
@@ -525,6 +655,46 @@ export default function EditNovel() {
 
         {canEditFull && (
           <>
+            <section
+              style={{
+                marginBottom: 16,
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                padding: 12,
+                background: "#fff",
+              }}
+            >
+              <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+                {t({ ja: "AI表紙生成", en: "AI Cover Generator" })}
+              </h3>
+              <p style={{ marginTop: 0, color: "#666", fontSize: 14 }}>
+                {t({
+                  ja: "AIが背景イラストを生成します。表紙に入る文字は後から重ねます。",
+                  en: "AI generates a background illustration. Title/author text will be overlaid later.",
+                })}
+              </p>
+              {novelCoverImageUrl && (
+                <div style={{ marginBottom: 8 }}>
+                  <img
+                    src={`${API_BASE}${novelCoverImageUrl}`}
+                    alt={t({ ja: "現在の表紙", en: "Current cover" })}
+                    style={{ width: 180, borderRadius: 8, border: "1px solid #ddd" }}
+                  />
+                </div>
+              )}
+              <button type="button" className="btn btn-border" onClick={openCoverModal}>
+                {t({ ja: "AI表紙を生成・選択", en: "Generate / Select AI cover" })}
+              </button>
+              {!isPremium && (
+                <p style={{ marginTop: 8, color: "#666", fontSize: 13 }}>
+                  {t({
+                    ja: "AI表紙生成はプレミアム会員限定です。",
+                    en: "AI cover generation is available for premium members only.",
+                  })}
+                </p>
+              )}
+            </section>
+
             <div style={{ marginBottom: 8 }}>
               <label>
                 {t({ ja: "タイトル", en: "Title" })}
@@ -825,6 +995,121 @@ export default function EditNovel() {
           </button>
         </div>
       </form>
+
+      {showCoverModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000,
+          }}
+          onClick={() => setShowCoverModal(false)}
+        >
+          <div
+            style={{
+              width: "min(960px, 96vw)",
+              maxHeight: "90vh",
+              overflow: "auto",
+              background: "#fff",
+              borderRadius: 10,
+              padding: 16,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>{t({ ja: "AI表紙生成", en: "AI Cover Generator" })}</h3>
+            <p style={{ marginTop: 0, color: "#666", fontSize: 14 }}>
+              {t({
+                ja: "生成には数秒かかることがあります。表紙に入る文字は後から重ねます。",
+                en: "Generation may take several seconds. Text will be overlaid later.",
+              })}
+            </p>
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                type="text"
+                value={coverForm.genre}
+                onChange={(e) => setCoverForm((prev) => ({ ...prev, genre: e.target.value }))}
+                placeholder={t({ ja: "ジャンル (例: SF百合)", en: "Genre (e.g. sci-fi yuri)" })}
+              />
+              <input
+                type="text"
+                value={coverForm.mood}
+                onChange={(e) => setCoverForm((prev) => ({ ...prev, mood: e.target.value }))}
+                placeholder={t({ ja: "雰囲気 (例: 切ない、近未来)", en: "Mood" })}
+              />
+              <input
+                type="text"
+                value={coverForm.color_theme}
+                onChange={(e) => setCoverForm((prev) => ({ ...prev, color_theme: e.target.value }))}
+                placeholder={t({ ja: "色味 (例: 青紫、銀)", en: "Color theme" })}
+              />
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={coverForm.character_count}
+                onChange={(e) => setCoverForm((prev) => ({ ...prev, character_count: e.target.value }))}
+                placeholder={t({ ja: "人数", en: "Character count" })}
+              />
+              <textarea
+                rows={3}
+                value={coverForm.extra_prompt}
+                onChange={(e) => setCoverForm((prev) => ({ ...prev, extra_prompt: e.target.value }))}
+                placeholder={t({ ja: "補足指示 (舞台・構図など)", en: "Additional direction" })}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="btn btn-border" type="button" onClick={handleGenerateCover} disabled={coverGenerating || coverSaving}>
+                {coverGenerating ? t({ ja: "生成中...", en: "Generating..." }) : t({ ja: "1枚生成", en: "Generate one image" })}
+              </button>
+              <button className="btn btn-border" type="button" onClick={() => setShowCoverModal(false)} disabled={coverGenerating || coverSaving}>
+                {t({ ja: "閉じる", en: "Close" })}
+              </button>
+            </div>
+            {coverError && <p style={{ color: "red", marginTop: 8 }}>{coverError}</p>}
+
+            <div style={{ marginTop: 16 }}>
+              <h4 style={{ marginBottom: 8 }}>{t({ ja: "生成履歴", en: "History" })}</h4>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 10 }}>
+                {coverHistory.map((item) => (
+                  <div key={item.id} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 8 }}>
+                    {(item.image_url || item.image_path) ? (
+                      <img
+                        src={item.image_url || `${API_BASE}${item.image_path}`}
+                        alt={`cover-${item.id}`}
+                        style={{ width: "100%", aspectRatio: "2 / 3", objectFit: "cover", borderRadius: 6 }}
+                      />
+                    ) : (
+                      <div style={{ width: "100%", aspectRatio: "2 / 3", background: "#f3f4f6", borderRadius: 6 }} />
+                    )}
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
+                      {new Date(item.created_at).toLocaleString()}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 12 }}>
+                      {item.status === "failed" ? t({ ja: "失敗", en: "Failed" }) : item.status}
+                    </div>
+                    {item.image_path && item.status === "succeeded" && (
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        style={{ marginTop: 8, width: "100%" }}
+                        onClick={() => handleAdoptCover(item.image_path)}
+                        disabled={coverSaving || coverGenerating}
+                      >
+                        {t({ ja: "この画像を表紙に設定", en: "Use this image as cover" })}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

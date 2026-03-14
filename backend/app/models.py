@@ -39,7 +39,12 @@ class User(Base):
     ai_novel_draft_json = Column(LONGTEXT, nullable=True)
     ai_novel_draft_updated_at = Column(DateTime, nullable=True)
     ai_novel_paid_generations = Column(Integer, nullable=False, server_default="0")
+    # AIチャット当月使用量
     ai_chat_tokens_used = Column(Integer, nullable=False, server_default="0")
+    # AIチャット累計使用量
+    ai_chat_tokens_total_used = Column(Integer, nullable=False, server_default="0")
+    # 月次リセット判定キー (YYYYMM, UTC)
+    ai_chat_tokens_month_key = Column(Integer, nullable=False, server_default="0")
     ai_chat_paid_blocks = Column(Integer, nullable=False, server_default="0")
 
     # リレーション
@@ -204,6 +209,7 @@ class Novel(Base):
     created_at = Column(DateTime, server_default=func.now())
     view_count = Column(Integer, nullable=False, server_default="0")
     like_count = Column(Integer, nullable=False, default=0)
+    cover_image_path = Column(String(500), nullable=True)
 
     age_limit = Column(age_limit_enum, nullable=False, server_default="all")
     is_ai_generated = Column(Boolean, nullable=False, server_default="0")
@@ -297,6 +303,8 @@ class Episode(Base):
     cover_image_url = Column(String(255))
     status = Column(String(16), nullable=False, server_default="public")
     is_public = Column(Boolean, nullable=False, default=True)
+    scheduled_publish_at = Column(DateTime, nullable=True, index=True)
+    published_at = Column(DateTime, nullable=True, index=True)
     view_count = Column(Integer, nullable=False, server_default="0")
     like_count = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
@@ -657,6 +665,28 @@ class NovelFavorite(Base):
     novel = relationship("Novel", back_populates="favorite_links")
 
 
+class CoverGeneration(Base):
+    __tablename__ = "cover_generations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=True, index=True)
+    prompt = Column(Text, nullable=False)
+    genre = Column(String(100), nullable=True)
+    mood = Column(String(100), nullable=True)
+    color_theme = Column(String(100), nullable=True)
+    character_count = Column(Integer, nullable=True)
+    provider = Column(String(50), nullable=False, server_default="openai")
+    model = Column(String(100), nullable=False)
+    status = Column(String(30), nullable=False)
+    image_path = Column(String(500), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    user = relationship("User")
+    novel = relationship("Novel")
+
+
 class NovelComment(Base):
     __tablename__ = "novel_comments"
 
@@ -689,6 +719,7 @@ class BoardPost(Base):
     id = Column(Integer, primary_key=True, index=True)
     site_key = Column(String(32), nullable=False, server_default="main", index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    parent_post_id = Column(Integer, ForeignKey("board_posts.id"), nullable=True, index=True)
     guest_name = Column(String(40), nullable=True)
     title = Column(String(120), nullable=False)
     body = Column(Text, nullable=False)

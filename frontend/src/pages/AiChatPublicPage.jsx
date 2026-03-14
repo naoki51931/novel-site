@@ -320,13 +320,20 @@ export default function AiChatPublicPage() {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
+          className="ai-chat-search-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") search({ query: q, syncUrl: true });
           }}
           placeholder={t({ ja: "キャラ名 / 性格で検索", en: "Search by character name / personality" })}
-          style={{ flex: 1 }}
+          style={{
+            flex: 1,
+            background: "var(--surface)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            opacity: 1,
+          }}
         />
         <button type="button" className="btn btn-border" onClick={() => search({ query: q, syncUrl: true })} disabled={loading}>
           {loading ? t({ ja: "検索中...", en: "Searching..." }) : t({ ja: "検索", en: "Search" })}

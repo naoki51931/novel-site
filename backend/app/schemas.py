@@ -96,7 +96,9 @@ class EpisodeBase(BaseModel):
     body: Optional[str] = None
     language: Optional[str] = "ja"
     episode_number: Optional[int] = None
-    status: Literal["public", "draft"] = "public"
+    status: Literal["public", "draft", "scheduled"] = "public"
+    publish_mode: Optional[Literal["public", "draft", "scheduled"]] = None
+    scheduled_publish_at: Optional[datetime] = None
 
 
 class EpisodeIllustCreate(BaseModel):
@@ -120,8 +122,10 @@ class EpisodeUpdate(BaseModel):
     language: Optional[str] = None
     episode_number: Optional[int] = None
     tag_names: Optional[List[str]] = None
-    status: Optional[Literal["public", "draft"]] = None
+    status: Optional[Literal["public", "draft", "scheduled"]] = None
     is_public: Optional[bool] = None
+    publish_mode: Optional[Literal["public", "draft", "scheduled"]] = None
+    scheduled_publish_at: Optional[datetime] = None
 
 
 class Episode(BaseModel):
@@ -131,8 +135,10 @@ class Episode(BaseModel):
     language: Optional[str] = None
     episode_number: Optional[int]
     created_at: datetime
-    status: Literal["public", "draft"] = "public"
+    status: Literal["public", "draft", "scheduled"] = "public"
     is_public: bool = True
+    scheduled_publish_at: Optional[datetime] = None
+    published_at: Optional[datetime] = None
 
     # エピソード詳細で返すタグ一覧
     tags: List[TagRead] = []

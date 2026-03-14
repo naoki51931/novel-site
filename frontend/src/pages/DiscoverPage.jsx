@@ -3,12 +3,14 @@ import { Link, useLocation } from "react-router-dom";
 import NovelCard from "../components/NovelCard.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
 
 export default function DiscoverPage() {
   const location = useLocation();
   const { t, lang } = useI18n();
+  const showR18 = useShowR18ByDisplaySetting();
   const mode = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return String(params.get("mode") || "").trim().toLowerCase();
@@ -118,6 +120,8 @@ export default function DiscoverPage() {
   const showPickups = mode === "" || mode === "pickups";
   const showSeries = mode === "" || mode === "series";
   const showRecommended = mode === "recommended";
+  const pickupsVisible = filterR18Novels(pickups, showR18);
+  const recommendedVisible = filterR18Novels(recommended, showR18);
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -146,7 +150,7 @@ export default function DiscoverPage() {
                 <h3 className="section-heading-title">{t({ ja: "あなたへのおすすめ", en: "Recommended for You" })}</h3>
                 <Link to="/" className="section-heading-more">{t({ ja: "ホームへ", en: "Back to Home" })}</Link>
               </div>
-              {recommended.length === 0 ? (
+              {recommendedVisible.length === 0 ? (
                 <p style={{ color: "var(--muted-text)" }}>
                   {t({
                     ja: "おすすめはまだありません。ログイン後に閲覧・いいね・ブックマークを増やすと精度が上がります。",
@@ -155,7 +159,7 @@ export default function DiscoverPage() {
                 </p>
               ) : (
                 <div className="novel-grid">
-                  {recommended.map((novel) => (
+                  {recommendedVisible.map((novel) => (
                     <NovelCard
                       key={`discover-recommended-${novel.id}`}
                       novel={novel}
@@ -201,7 +205,7 @@ export default function DiscoverPage() {
               <div className="section-heading-row">
                 <h3 className="section-heading-title">{t({ ja: "ピックアップ特集", en: "Pickups" })}</h3>
               </div>
-              {pickups.length === 0 ? (
+              {pickupsVisible.length === 0 ? (
                 <p style={{ color: "var(--muted-text)" }}>
                   {t({
                     ja: "ログインすると、あなた向けのピックアップが表示されます。",
@@ -210,7 +214,7 @@ export default function DiscoverPage() {
                 </p>
               ) : (
                 <div className="novel-grid">
-                  {pickups.map((novel) => (
+                  {pickupsVisible.map((novel) => (
                     <NovelCard
                       key={`discover-pickup-${novel.id}`}
                       novel={novel}

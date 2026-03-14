@@ -4,6 +4,7 @@ import TagChipLink from "../components/TagChipLink.jsx";
 import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
 const FAVORITE_SUMMARY_MAX_CHARS = 500;
@@ -12,6 +13,7 @@ export default function UserPage() {
   const { username: usernameParam } = useParams();
   const username = useMemo(() => (usernameParam ?? "").trim(), [usernameParam]);
   const { t } = useI18n();
+  const showR18 = useShowR18ByDisplaySetting();
 
   const [profile, setProfile] = useState(null);
   const [novels, setNovels] = useState([]);
@@ -391,12 +393,13 @@ export default function UserPage() {
   };
 
   const renderNovelList = ({ items, emptyText, truncateDescription = true }) => {
-    if (!Array.isArray(items) || items.length === 0) {
+    const visibleItems = filterR18Novels(items, showR18);
+    if (visibleItems.length === 0) {
       return <p style={{ marginTop: 10 }}>{emptyText}</p>;
     }
     return (
       <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
-        {items.map((novel) => (
+        {visibleItems.map((novel) => (
           <div
             key={novel.id}
             style={{

@@ -25,6 +25,8 @@ import AiChatLPPage from "./pages/AiChatLPPage";
 import DirectMessageThread from "./pages/DirectMessageThread";
 import ResetPassword from "./pages/ResetPassword";
 import CreatorDashboard from "./pages/CreatorDashboard";
+import AuthorDashboard from "./pages/AuthorDashboard";
+import ScheduledEpisodes from "./pages/ScheduledEpisodes";
 import AdminHome from "./pages/AdminHome";
 import AdminPayouts from "./pages/AdminPayouts";
 import AdminLogin from "./pages/AdminLogin";
@@ -906,6 +908,8 @@ export default function App() {
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
+          <Route path="/author/dashboard" element={<AuthorDashboard />} />
+          <Route path="/me/scheduled-episodes" element={<ScheduledEpisodes />} />
           <Route path="/me/support-plans" element={<SupportPlans />} />
           <Route path="/me/support-plans/manual" element={<StripePriceIdManual />} />
           <Route path="/admin" element={<AdminHome />} />

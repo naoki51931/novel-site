@@ -13,6 +13,7 @@ from .ai_novel_job_routes import router as ai_novel_job_router
 from .ai_chat_public_interactions_routes import router as ai_chat_public_interactions_router
 from .novels_routes import router as novels_router
 from .public_novels_ranking_routes import router as public_novels_ranking_router
+from .covers_routes import router as covers_router
 
 
 def include_feature_routers(app: FastAPI) -> None:
@@ -22,6 +23,7 @@ def include_feature_routers(app: FastAPI) -> None:
     app.include_router(ai_novel_job_router)
     app.include_router(public_novel_recommended_router)
     app.include_router(public_novels_ranking_router)
+    app.include_router(covers_router)
     app.include_router(novels_router)
     app.include_router(ai_chat_public_characters_router)
     app.include_router(ai_chat_public_interactions_router)
