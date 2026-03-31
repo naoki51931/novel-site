@@ -97,6 +97,7 @@ class EpisodeBase(BaseModel):
     language: Optional[str] = "ja"
     episode_number: Optional[int] = None
     status: Literal["public", "draft", "scheduled"] = "public"
+    is_free_public: bool = False
     publish_mode: Optional[Literal["public", "draft", "scheduled"]] = None
     scheduled_publish_at: Optional[datetime] = None
 
@@ -124,6 +125,7 @@ class EpisodeUpdate(BaseModel):
     tag_names: Optional[List[str]] = None
     status: Optional[Literal["public", "draft", "scheduled"]] = None
     is_public: Optional[bool] = None
+    is_free_public: Optional[bool] = None
     publish_mode: Optional[Literal["public", "draft", "scheduled"]] = None
     scheduled_publish_at: Optional[datetime] = None
 
@@ -137,6 +139,7 @@ class Episode(BaseModel):
     created_at: datetime
     status: Literal["public", "draft", "scheduled"] = "public"
     is_public: bool = True
+    is_free_public: bool = False
     scheduled_publish_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
 

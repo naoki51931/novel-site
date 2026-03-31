@@ -23,6 +23,7 @@ export default function NewNovel() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tagNamesInput, setTagNamesInput] = useState("");
+  const [characterNamesInput, setCharacterNamesInput] = useState("");
 
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
@@ -45,6 +46,11 @@ export default function NewNovel() {
   const [summarySuggestLoading, setSummarySuggestLoading] = useState(false);
   const [summarySuggestError, setSummarySuggestError] = useState("");
   const [summaryCandidates, setSummaryCandidates] = useState([]);
+  const [characterSuggestLoading, setCharacterSuggestLoading] = useState(false);
+  const [characterSuggestError, setCharacterSuggestError] = useState("");
+  const [fanficAutoFillLoading, setFanficAutoFillLoading] = useState(false);
+  const [fanficAutoFillError, setFanficAutoFillError] = useState("");
+  const [fanficSourceTitleCandidates, setFanficSourceTitleCandidates] = useState([]);
   const [dismissedBubbles, setDismissedBubbles] = useState(() => getDismissedGuideBubbles());
   const [expandedBubble, setExpandedBubble] = useState("");
 
@@ -68,7 +74,7 @@ export default function NewNovel() {
 
   // 🔹 AI小説生成ページへ移動
   const handleOpenAINovel = () => {
-    navigate("/ai-novel");
+    navigate("/ai-novel?mode=new_novel");
   };
 
   const handleSuggestTags = async () => {
@@ -264,6 +270,131 @@ export default function NewNovel() {
     setSelectedTagCandidates(new Set());
   };
 
+  const handleAutoFillFanficFields = async () => {
+    setCreativeType("fanfic");
+    setFanficAutoFillError("");
+    setFanficSourceTitleCandidates([]);
+    const source = (fanficSourceTitle || "").trim() || (title || "").trim();
+    const rawTags = (tagNamesInput || "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const fallbackChars = rawTags.slice(0, 3).join(", ");
+    const nextCharacters = (fanficCharacters || "").trim() || fallbackChars || "主人公, 相手役";
+    const charTokens = nextCharacters
+      .split(/[,\u3001]/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const nextPairing =
+      (fanficCoupling || "").trim() ||
+      (charTokens.length >= 2 ? `${charTokens[0]}×${charTokens[1]}` : "");
+    const nextNotes =
+      (fanficNotes || "").trim() ||
+      "二次創作です。原作・公式とは関係ありません。解釈違いを含む可能性があります。";
+
+    const charQuery =
+      (fanficCharacters || "").trim() ||
+      (characterNamesInput || "").trim() ||
+      fallbackChars;
+    let inferredSourceTitle = source;
+    if (charQuery) {
+      try {
+        setFanficAutoFillLoading(true);
+        const res = await fetch(`${API_BASE}/api/ai/novels/auto-fill`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: (title || "").trim() || undefined,
+            characters: charQuery,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data?.detail ||
+              t({ ja: "タイトル推測に失敗しました。", en: "Failed to infer source title." })
+          );
+        }
+        const candidates = Array.isArray(data?.source_title_candidates)
+          ? data.source_title_candidates.map((v) => String(v || "").trim()).filter(Boolean)
+          : [];
+        const topCandidates = candidates.slice(0, 5);
+        setFanficSourceTitleCandidates(topCandidates);
+        inferredSourceTitle =
+          String(data?.inferred_source_title || "").trim() || topCandidates[0] || inferredSourceTitle;
+      } catch (e) {
+        console.error(e);
+        setFanficAutoFillError(
+          e.message ||
+            t({
+              ja: "Google検索でのタイトル推測に失敗したため、ローカル補完のみ行いました。",
+              en: "Google title inference failed. Applied local autofill only.",
+            })
+        );
+      } finally {
+        setFanficAutoFillLoading(false);
+      }
+    }
+
+    if (!fanficSourceTitle.trim()) setFanficSourceTitle(inferredSourceTitle);
+    if (!fanficCharacters.trim()) {
+      setFanficCharacters((characterNamesInput || "").trim() || nextCharacters);
+    }
+    if (!fanficCoupling.trim()) setFanficCoupling(nextPairing);
+    if (!fanficNotes.trim()) setFanficNotes(nextNotes);
+  };
+
+  const handleSuggestCharacterNames = async () => {
+    setCharacterSuggestError("");
+    const sourceText = [title, description, tagNamesInput].filter(Boolean).join("\n");
+    if (!sourceText.trim()) {
+      setCharacterSuggestError(
+        t({
+          ja: "タイトル/説明/タグが空のためキャラ名を抽出できません。",
+          en: "No title/description/tags to extract character names.",
+        })
+      );
+      return;
+    }
+    try {
+      setCharacterSuggestLoading(true);
+      const res = await fetch(`${API_BASE}/api/ai/character_terms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description,
+          tags: tagNamesInput,
+          limit: 8,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t({ ja: "キャラ名の抽出に失敗しました。", en: "Failed to extract character names." })
+        );
+      }
+      const terms = Array.isArray(data?.terms)
+        ? data.terms.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (!terms.length) {
+        throw new Error(
+          t({ ja: "キャラ名候補を抽出できませんでした。", en: "No character name candidates found." })
+        );
+      }
+      setCharacterNamesInput(terms.slice(0, 5).join(", "));
+    } catch (e) {
+      console.error(e);
+      setCharacterSuggestError(
+        e.message ||
+          t({ ja: "キャラ名の抽出中にエラーが発生しました。", en: "Failed while extracting character names." })
+      );
+    } finally {
+      setCharacterSuggestLoading(false);
+    }
+  };
+
   // === auto-save draft start ===
   // マウント時に下書きを読み込む
   useEffect(() => {
@@ -274,6 +405,7 @@ export default function NewNovel() {
       if (draft.title) setTitle(draft.title);
       if (draft.description) setDescription(draft.description);
       if (draft.tagNamesInput) setTagNamesInput(draft.tagNamesInput);
+      if (draft.characterNamesInput) setCharacterNamesInput(draft.characterNamesInput);
       if (draft.creativeType) setCreativeType(draft.creativeType);
       if (draft.fanficSourceTitle) setFanficSourceTitle(draft.fanficSourceTitle);
       if (draft.fanficCharacters) setFanficCharacters(draft.fanficCharacters);
@@ -293,6 +425,7 @@ export default function NewNovel() {
         title,
         description,
         tagNamesInput,
+        characterNamesInput,
         creativeType,
         fanficSourceTitle,
         fanficCharacters,
@@ -314,6 +447,7 @@ export default function NewNovel() {
     title,
     description,
     tagNamesInput,
+    characterNamesInput,
     creativeType,
     fanficSourceTitle,
     fanficCharacters,
@@ -352,7 +486,10 @@ export default function NewNovel() {
           .filter(Boolean),
         creative_type: creativeType,
         fanfic_source_title: creativeType === "fanfic" ? fanficSourceTitle : "",
-        fanfic_characters: creativeType === "fanfic" ? fanficCharacters : "",
+        fanfic_characters:
+          creativeType === "fanfic"
+            ? (fanficCharacters || "").trim() || (characterNamesInput || "").trim()
+            : "",
         fanfic_coupling: creativeType === "fanfic" ? fanficCoupling : "",
         fanfic_notes: creativeType === "fanfic" ? fanficNotes : "",
         series_name: seriesName,
@@ -736,6 +873,35 @@ export default function NewNovel() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
+            {t({ ja: "キャラ名（検索・補助用）", en: "Character names (for search/autofill)" })}
+            <br />
+            <input
+              type="text"
+              value={characterNamesInput}
+              onChange={(e) => setCharacterNamesInput(e.target.value)}
+              style={{ width: "100%", padding: 4 }}
+              placeholder={t({ ja: "例: 五条 悟, 夏油 傑", en: "e.g., Gojo Satoru, Geto Suguru" })}
+            />
+          </label>
+          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleSuggestCharacterNames}
+              disabled={characterSuggestLoading}
+            >
+              {characterSuggestLoading
+                ? t({ ja: "抽出中...", en: "Extracting..." })
+                : t({ ja: "キャラ名を自動入力", en: "Auto-fill character names" })}
+            </button>
+          </div>
+          {characterSuggestError && (
+            <div style={{ marginTop: 6, color: "red" }}>{characterSuggestError}</div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label>
             {t({ ja: "作品種別", en: "Work type" })}
             <br />
             <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
@@ -778,6 +944,19 @@ export default function NewNovel() {
               {t({ ja: "二次創作向け入力", en: "Fanfic fields" })}
             </h3>
             <div style={{ marginBottom: 8 }}>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={handleAutoFillFanficFields}
+                disabled={fanficAutoFillLoading}
+              >
+                {fanficAutoFillLoading
+                  ? t({ ja: "推測中...", en: "Inferring..." })
+                  : t({ ja: "二次創作向け入力を自動で埋める", en: "Auto-fill fanfic fields" })}
+              </button>
+            </div>
+            {fanficAutoFillError && <div style={{ marginBottom: 8, color: "red" }}>{fanficAutoFillError}</div>}
+            <div style={{ marginBottom: 8 }}>
               <label>
                 {t({ ja: "原作名", en: "Source title" })}<br />
                 <input
@@ -787,6 +966,29 @@ export default function NewNovel() {
                   style={{ width: "100%", padding: 4 }}
                 />
               </label>
+              {fanficSourceTitleCandidates.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: "0.85rem", color: "#666", marginBottom: 6 }}>
+                    {t({ ja: "カスタム検索候補（最大5件）", en: "Custom search candidates (up to 5)" })}
+                  </div>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {fanficSourceTitleCandidates.map((candidate, idx) => (
+                      <button
+                        key={`fanfic-source-${idx}-${candidate}`}
+                        type="button"
+                        className="btn btn-border"
+                        onClick={() => setFanficSourceTitle(candidate)}
+                        style={{
+                          textAlign: "left",
+                          borderColor: fanficSourceTitle === candidate ? "var(--primary)" : undefined,
+                        }}
+                      >
+                        {candidate}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <div style={{ marginBottom: 8 }}>
               <label>

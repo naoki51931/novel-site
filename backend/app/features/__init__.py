@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from .ai_episode_assist_routes import router as ai_episode_assist_router
 from .ai_novel_generate_routes import router as ai_novel_generate_router
+from .ai_novel_revision_target_routes import router as ai_novel_revision_target_router
 from .public_novel_recommended_routes import router as public_novel_recommended_router
 from .ai_chat_public_characters_routes import router as ai_chat_public_characters_router
 from .ai_memory_items_list_routes import router as ai_memory_items_list_router
@@ -20,6 +21,7 @@ def include_feature_routers(app: FastAPI) -> None:
     app.include_router(auth_router)
     app.include_router(ai_episode_assist_router)
     app.include_router(ai_novel_generate_router)
+    app.include_router(ai_novel_revision_target_router)
     app.include_router(ai_novel_job_router)
     app.include_router(public_novel_recommended_router)
     app.include_router(public_novels_ranking_router)

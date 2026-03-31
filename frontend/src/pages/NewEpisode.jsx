@@ -51,6 +51,7 @@ export default function NewEpisode() {
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");          // タグ用 state
   const [publishMode, setPublishMode] = useState("public"); // "public" / "draft" / "scheduled"
+  const [isFreePublic, setIsFreePublic] = useState(false);
   const [scheduledPublishAt, setScheduledPublishAt] = useState("");
   const [isPremium, setIsPremium] = useState(false);
 
@@ -95,6 +96,7 @@ export default function NewEpisode() {
       if (typeof draft.tags === "string") setTags(draft.tags);
       if (draft.publishMode) setPublishMode(draft.publishMode);
       else if (draft.status) setPublishMode(draft.status);
+      if (typeof draft.isFreePublic === "boolean") setIsFreePublic(draft.isFreePublic);
       if (typeof draft.scheduledPublishAt === "string") {
         setScheduledPublishAt(draft.scheduledPublishAt);
       }
@@ -112,6 +114,7 @@ export default function NewEpisode() {
         body,
         tags,
         publishMode,
+        isFreePublic,
         scheduledPublishAt,
         saved_at: new Date().toISOString(),
       };
@@ -123,7 +126,7 @@ export default function NewEpisode() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [draftKey, episodeNumber, title, body, tags, publishMode, scheduledPublishAt]);
+  }, [draftKey, episodeNumber, title, body, tags, publishMode, isFreePublic, scheduledPublishAt]);
   // === auto-save episode draft end ===
 
   useEffect(() => {
@@ -156,6 +159,9 @@ export default function NewEpisode() {
     }
     if (typeof prefill.scheduled_publish_at === "string") {
       setScheduledPublishAt(prefill.scheduled_publish_at.slice(0, 16));
+    }
+    if (typeof prefill.is_free_public === "boolean") {
+      setIsFreePublic(prefill.is_free_public);
     }
     setAiPrefillApplied(true);
   }, [aiPrefillApplied, location?.state]);
@@ -593,6 +599,7 @@ export default function NewEpisode() {
       publish_mode: publishMode,
       status: publishMode,
       is_public: publishMode === "public",
+      is_free_public: isFreePublic,
       scheduled_publish_at: publishMode === "scheduled" ? scheduledPublishAt : null,
       tag_names: tags
         .split(",")
@@ -824,6 +831,19 @@ export default function NewEpisode() {
               />
             </div>
           )}
+          <div style={{ marginTop: 8 }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={isFreePublic}
+                onChange={(e) => setIsFreePublic(e.target.checked)}
+              />{" "}
+              {t({
+                ja: "無料公開する（プレミアム会員でなくても全文を読める）",
+                en: "Free public (full text visible without premium)",
+              })}
+            </label>
+          </div>
         </div>
 
         {/* タグ入力欄 */}

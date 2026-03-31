@@ -1,4 +1,4 @@
-import {useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
@@ -61,6 +61,7 @@ export default function EditEpisode() {
   const [body, setBody] = useState("");
   const [tags, setTags] = useState(""); // ★ タグ state
   const [publishMode, setPublishMode] = useState("public"); // "public" / "draft" / "scheduled"
+  const [isFreePublic, setIsFreePublic] = useState(false);
   const [scheduledPublishAt, setScheduledPublishAt] = useState("");
   const [isPremium, setIsPremium] = useState(false);
 
@@ -84,59 +85,51 @@ export default function EditEpisode() {
   const [isExtractingTitle, setIsExtractingTitle] = useState(false);
   const [titleSuggestError, setTitleSuggestError] = useState("");
   const [titleCandidates, setTitleCandidates] = useState([]);
+  const [isReloadingPosted, setIsReloadingPosted] = useState(false);
 
   const countChars = (value) => (value || "").length;
 
-  // draft を読んだかどうかのフラグ
-  const hasDraftRef = useRef(false);
+  const applyEpisodeDataToForm = (data) => {
+    setNovelId(data.novel_id);
+    const canEdit = data.can_edit_full !== false;
+    setCanEditFull(canEdit);
 
-  // === auto-save edit episode draft start ===
-  useEffect(() => {
-    if (!id) return;
-    const key = `${EDIT_EPISODE_DRAFT_PREFIX}_${id}`;
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) return;
-      const draft = JSON.parse(raw);
-      hasDraftRef.current = true;
-      if (draft.episodeNumber !== undefined && draft.episodeNumber !== null) {
-        setEpisodeNumber(String(draft.episodeNumber));
-      }
-      if (draft.title) setTitle(draft.title);
-      if (draft.body) setBody(draft.body);
-      if (typeof draft.tags === "string") setTags(draft.tags);
-      if (draft.publishMode) setPublishMode(draft.publishMode);
-      else if (draft.status) setPublishMode(draft.status);
-      if (typeof draft.scheduledPublishAt === "string") {
-        setScheduledPublishAt(draft.scheduledPublishAt);
-      }
-    } catch (e) {
-      console.error("failed to load edit episode draft", e);
+    if (canEdit) {
+      setEpisodeNumber(
+        String(
+          data.number != null
+            ? data.number
+            : data.episode_number != null
+            ? data.episode_number
+            : ""
+        )
+      );
+      setTitle(data.title || "");
+      setBody(data.body || "");
+    } else {
+      setTitle(data.title || "");
     }
-  }, [id]);
-
-  useEffect(() => {
-    if (!id) return;
-    const key = `${EDIT_EPISODE_DRAFT_PREFIX}_${id}`;
-    const timer = setTimeout(() => {
-      const payload = {
-        episodeNumber,
-        title,
-        body,
-        tags,
-        publishMode,
-        scheduledPublishAt,
-        saved_at: new Date().toISOString(),
-      };
-      try {
-        localStorage.setItem(key, JSON.stringify(payload));
-      } catch (e) {
-        console.error("failed to save edit episode draft", e);
+    if (Array.isArray(data.tags)) {
+      setTags(data.tags.map((t) => t.name).join(", "));
+    } else {
+      setTags("");
+    }
+    if (canEdit) {
+      if (data.status === "scheduled") {
+        setPublishMode("scheduled");
+      } else if (data.status === "draft" || data.is_public === false) {
+        setPublishMode("draft");
+      } else {
+        setPublishMode("public");
       }
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [id, episodeNumber, title, body, tags, publishMode, scheduledPublishAt]);
-  // === auto-save edit episode draft end ===
+      setScheduledPublishAt(
+        data.scheduled_publish_at ? String(data.scheduled_publish_at).slice(0, 16) : ""
+      );
+      setIsFreePublic(!!data.is_free_public);
+      setCoverImageUrl(data.cover_image_url || "");
+      setIllusts(Array.isArray(data.illusts) ? data.illusts : []);
+    }
+  };
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -170,52 +163,7 @@ export default function EditEpisode() {
         }
 
         const data = await res.json();
-        setNovelId(data.novel_id);
-        const canEdit = data.can_edit_full !== false;
-        setCanEditFull(canEdit);
-
-        // draft を読み込んでいない場合だけ API の内容で上書き
-        if (!hasDraftRef.current) {
-          if (canEdit) {
-            setEpisodeNumber(
-              String(
-                data.number != null
-                  ? data.number
-                  : data.episode_number != null
-                  ? data.episode_number
-                  : ""
-              )
-            );
-            setTitle(data.title || "");
-            setBody(data.body || "");
-          } else {
-            setTitle(data.title || "");
-          }
-          if (Array.isArray(data.tags)) {
-            setTags(data.tags.map((t) => t.name).join(", "));
-          } else {
-            setTags("");
-          }
-          if (canEdit) {
-            if (data.status === "scheduled") {
-              setPublishMode("scheduled");
-            } else if (data.status === "draft" || data.is_public === false) {
-              setPublishMode("draft");
-            } else {
-              setPublishMode("public");
-            }
-            setScheduledPublishAt(
-              data.scheduled_publish_at ? String(data.scheduled_publish_at).slice(0, 16) : ""
-            );
-          }
-        }
-
-
-        // ★ 表紙・押絵も state に取り込む
-        if (canEdit) {
-          setCoverImageUrl(data.cover_image_url || "");
-          setIllusts(Array.isArray(data.illusts) ? data.illusts : []);
-        }
+        applyEpisodeDataToForm(data);
       } catch (err) {
         console.error(err);
         setError(
@@ -228,6 +176,55 @@ export default function EditEpisode() {
 
     fetchEpisode();
   }, [id, navigate]);
+
+  const handleReloadPostedEpisode = async () => {
+    if (
+      !window.confirm(
+        t({
+          ja: "投稿済みの内容で現在の入力を上書きします。よろしいですか？",
+          en: "Reload posted content and overwrite current inputs?",
+        })
+      )
+    ) {
+      return;
+    }
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+    try {
+      setIsReloadingPosted(true);
+      setError("");
+      const res = await fetch(`${API_BASE}/api/episodes/${id}/edit`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401) {
+        try {
+          localStorage.removeItem("token");
+        } catch {}
+        navigate("/login");
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(
+          t(
+            { ja: "エピソード情報の再取得に失敗しました ({{status}})", en: "Failed to reload episode info ({{status}})" },
+            { status: res.status }
+          )
+        );
+      }
+      const data = await res.json();
+      applyEpisodeDataToForm(data);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err.message || t({ ja: "投稿済み内容の再読み込みに失敗しました。", en: "Failed to reload posted content." })
+      );
+    } finally {
+      setIsReloadingPosted(false);
+    }
+  };
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -309,6 +306,7 @@ export default function EditEpisode() {
                 publish_mode: publishMode,
                 status: publishMode,
                 is_public: publishMode === "public",
+                is_free_public: isFreePublic,
                 scheduled_publish_at:
                   publishMode === "scheduled" ? scheduledPublishAt : null,
                 // ★ 編集時も tag_names を送る
@@ -728,6 +726,16 @@ export default function EditEpisode() {
           <Link to={`/ai-novel?episode_id=${id}`} className="btn btn-border">
             {t({ ja: "AIで続きを生成", en: "Generate continuation with AI" })}
           </Link>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={handleReloadPostedEpisode}
+            disabled={isReloadingPosted}
+          >
+            {isReloadingPosted
+              ? t({ ja: "再読み込み中...", en: "Reloading..." })
+              : t({ ja: "投稿済み本文を読み込む", en: "Reload posted content" })}
+          </button>
         </div>
       )}
       {!canEditFull && (
@@ -926,17 +934,30 @@ export default function EditEpisode() {
                 })}
               </div>
             )}
-            {publishMode === "scheduled" && (
-              <div style={{ marginTop: 8 }}>
-                <input
+          {publishMode === "scheduled" && (
+            <div style={{ marginTop: 8 }}>
+              <input
                   type="datetime-local"
                   value={scheduledPublishAt}
                   onChange={(e) => setScheduledPublishAt(e.target.value)}
                   style={{ width: "100%", padding: 4 }}
                 />
-              </div>
-            )}
+            </div>
+          )}
+          <div style={{ marginTop: 8 }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={isFreePublic}
+                onChange={(e) => setIsFreePublic(e.target.checked)}
+              />{" "}
+              {t({
+                ja: "無料公開する（プレミアム会員でなくても全文を読める）",
+                en: "Free public (full text visible without premium)",
+              })}
+            </label>
           </div>
+        </div>
         )}
 
         {canEditFull && (

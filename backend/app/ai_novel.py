@@ -1,6 +1,7 @@
 # backend/app/ai_novel.py
 
 import os
+import re
 import json
 import asyncio
 from textwrap import dedent
@@ -25,6 +26,22 @@ except Exception as e:
 
 # デフォルトモデル（env に無ければ gpt-4.1-mini を使う）
 OPENAI_MODEL_TEXT = os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+
+
+def _read_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)) or default)
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+OPENROUTER_NOVEL_MAX_TOKENS = _read_int_env(
+    "OPENROUTER_NOVEL_MAX_TOKENS",
+    2048,
+    512,
+    4096,
+)
 
 
 def _read_secret_from_env_or_file(env_name: str, file_env_name: str) -> str | None:
@@ -152,6 +169,8 @@ class AINovelResponse(BaseModel):
     prompt_used: str | None = None
     guest_remaining: int | None = None
     user_remaining: int | None = None
+    retry_attempts: int | None = None
+    retry_max: int | None = None
 
 
 # ===== プロンプト組み立て =====
@@ -460,6 +479,49 @@ def _log_ai_raw_response(raw: str, label: str) -> None:
     print(f"[DEBUG] {label} raw response (len={len(text)}):\n{clipped}")
 
 
+def _is_openrouter_credit_error(err: Exception) -> bool:
+    text = repr(err).lower()
+    return (
+        "error code: 402" in text
+        or "'code': 402" in text
+        or '"code": 402' in text
+        or "requires more credits" in text
+        or "can only afford" in text
+    )
+
+
+def _is_ai_credit_exhausted_error(err: Exception) -> bool:
+    text = repr(err).lower()
+    return (
+        _is_openrouter_credit_error(err)
+        or "insufficient_quota" in text
+        or "quota exceeded" in text
+        or "exceeded your current quota" in text
+        or "check your plan and billing details" in text
+        or "credit balance is too low" in text
+        or "payment required" in text
+    )
+
+
+def _raise_ai_api_call_error(api_name: str, err: Exception) -> None:
+    if _is_ai_credit_exhausted_error(err):
+        raise HTTPException(
+            status_code=402,
+            detail="AIクレジットが不足しているため、この機能は現在利用できません。クレジット追加後に再試行してください。",
+        )
+    raise HTTPException(status_code=502, detail=f"{api_name} 呼び出しに失敗しました。しばらくしてから再試行してください。")
+
+
+def _extract_openrouter_affordable_tokens(err: Exception) -> int | None:
+    m = re.search(r"can only afford\s+(\d+)", repr(err), flags=re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
 async def call_ai_json(
     prompt: str,
     *,
@@ -684,7 +746,7 @@ async def call_openai_novel_api(
         )
     except Exception as e:
         print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        raise HTTPException(status_code=502, detail=f"AI 小説生成 API 呼び出しに失敗しました: {e!r}")
+        _raise_ai_api_call_error("AI 小説生成 API", e)
 
     # ---- テキスト部分を抽出 ----
     raw = ""
@@ -753,7 +815,7 @@ async def call_openai_summary_candidates(text: str, model: str | None = None) ->
         )
     except Exception as e:
         print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        raise HTTPException(status_code=502, detail=f"AI 要約 API 呼び出しに失敗しました: {e!r}")
+        _raise_ai_api_call_error("AI 要約 API", e)
 
     raw = ""
     try:
@@ -828,7 +890,7 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
         )
     except Exception as e:
         print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        raise HTTPException(status_code=502, detail=f"AI タグ生成 API 呼び出しに失敗しました: {e!r}")
+        _raise_ai_api_call_error("AI タグ生成 API", e)
 
     raw = ""
     try:
@@ -906,7 +968,7 @@ async def call_openai_title_candidate(text: str, model: str | None = None) -> tu
         )
     except Exception as e:
         print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        raise HTTPException(status_code=502, detail=f"AI タイトル生成 API 呼び出しに失敗しました: {e!r}")
+        _raise_ai_api_call_error("AI タイトル生成 API", e)
 
     raw = ""
     try:
@@ -977,7 +1039,7 @@ async def call_openai_title_candidates(
         )
     except Exception as e:
         print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        raise HTTPException(status_code=502, detail=f"AI タイトル生成 API 呼び出しに失敗しました: {e!r}")
+        _raise_ai_api_call_error("AI タイトル生成 API", e)
 
     raw = ""
     try:
@@ -1043,27 +1105,59 @@ async def call_openrouter_novel_api(
         raise HTTPException(status_code=400, detail="モデルが指定されていません。")
     assert_openrouter_model_allowed_for_pricing(effective_model)
 
-    try:
-        resp = await asyncio.to_thread(
-            openrouter_client.chat.completions.create,
-            model=effective_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "あなたは日本語ライトノベル作家です。"
-                        "与えられた条件に基づいて短編小説を生成してください。"
-                        "出力は必ず JSON 1個のみ（前後に説明文を付けない / ``` で囲まない）。"
-                        '例: {"title": "タイトル", "body": "本文"}'
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=2048,
-        )
-    except Exception as e:
-        print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
-        raise HTTPException(status_code=502, detail=f"AI 小説生成 API 呼び出しに失敗しました: {e!r}")
+    base_max_tokens = OPENROUTER_NOVEL_MAX_TOKENS
+    token_candidates = [base_max_tokens, 1536, 1400, 1200, 1000, 800, 640, 512]
+    seen_tokens: set[int] = set()
+    max_tokens_attempts: list[int] = []
+    for value in token_candidates:
+        v = max(512, min(base_max_tokens, int(value)))
+        if v in seen_tokens:
+            continue
+        seen_tokens.add(v)
+        max_tokens_attempts.append(v)
+
+    resp = None
+    last_error: Exception | None = None
+    for max_tokens in max_tokens_attempts:
+        try:
+            resp = await asyncio.to_thread(
+                openrouter_client.chat.completions.create,
+                model=effective_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "あなたは日本語ライトノベル作家です。"
+                            "与えられた条件に基づいて短編小説を生成してください。"
+                            "出力は必ず JSON 1個のみ（前後に説明文を付けない / ``` で囲まない）。"
+                            '例: {"title": "タイトル", "body": "本文"}'
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+            )
+            break
+        except Exception as e:
+            last_error = e
+            if not _is_openrouter_credit_error(e):
+                print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
+                _raise_ai_api_call_error("AI 小説生成 API", e)
+
+            affordable = _extract_openrouter_affordable_tokens(e)
+            if affordable is not None:
+                # limit を少し下げて余裕を作る
+                emergency_tokens = max(512, min(base_max_tokens, affordable - 64))
+                if emergency_tokens not in seen_tokens:
+                    seen_tokens.add(emergency_tokens)
+                    max_tokens_attempts.append(emergency_tokens)
+            continue
+
+    if resp is None:
+        print("[ERROR] OpenRouter API 呼び出し失敗:", repr(last_error))
+        if last_error is None:
+            raise HTTPException(status_code=502, detail="AI 小説生成 API 呼び出しに失敗しました。")
+        _raise_ai_api_call_error("AI 小説生成 API", last_error)
 
     raw = ""
     try:

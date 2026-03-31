@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import json
 import os
 import re
+import time
 
 
 async def generate_episode_assist_candidates_service(payload, request, db):
@@ -144,6 +146,319 @@ async def generate_episode_assist_candidates_service(payload, request, db):
     return legacy.EpisodeAssistCandidatesOut(candidates=candidates, model=model_used, used_tokens=tokens)
 
 
+def _split_revision_chunks(text: str, chunk_size: int = 1200, overlap: int = 220) -> list[dict]:
+    source = str(text or "")
+    n = len(source)
+    if n <= 0:
+        return []
+    chunks: list[dict] = []
+    start = 0
+    idx = 1
+    while start < n:
+        end = min(n, start + max(400, int(chunk_size)))
+        chunk_text = source[start:end]
+        if str(chunk_text).strip():
+            chunks.append(
+                {
+                    "target_id": idx,
+                    "start": start,
+                    "end": end,
+                    "text": chunk_text,
+                }
+            )
+            idx += 1
+        if end >= n:
+            break
+        start = max(start + 1, end - max(80, int(overlap)))
+    return chunks
+
+
+async def locate_ai_novel_revision_target_service(payload, request, db):
+    from .. import main as legacy
+
+    source_text = str(getattr(payload, "body", "") or "")
+    if not source_text.strip():
+        raise legacy.HTTPException(400, "本文が空です。")
+
+    comments = [
+        str(item or "").strip()
+        for item in (getattr(payload, "comments", None) or [])
+        if str(item or "").strip()
+    ][:20]
+    scope = str(getattr(payload, "scope", "full") or "full").strip().lower()
+    is_r18 = bool(getattr(payload, "r18", False))
+    site_key = legacy.resolve_site_key(request)
+
+    # 短文は分割せずそのまま返す
+    if len(source_text) <= 1400:
+        return {
+            "target_text": source_text,
+            "start": 0,
+            "end": len(source_text),
+            "used_weaviate": False,
+            "attempted_weaviate": False,
+            "fallback_reason": "short_text",
+            "candidate_count": 0,
+        }
+
+    chunks = _split_revision_chunks(source_text, chunk_size=1200, overlap=220)
+    if not chunks:
+        return {
+            "target_text": source_text,
+            "start": 0,
+            "end": len(source_text),
+            "used_weaviate": False,
+            "attempted_weaviate": False,
+            "fallback_reason": "empty_chunks",
+            "candidate_count": 0,
+        }
+
+    # Weaviate が無効 or クエリ不足なら互換動作（全文）
+    if not legacy.AI_WEAVIATE_FEATURES_ENABLED or not comments:
+        return {
+            "target_text": source_text,
+            "start": 0,
+            "end": len(source_text),
+            "used_weaviate": False,
+            "attempted_weaviate": False,
+            "fallback_reason": "weaviate_disabled_or_no_comments",
+            "candidate_count": 0,
+        }
+
+    body_head = legacy._compact_text(source_text[:260], 260)
+    body_tail = legacy._compact_text(source_text[-260:], 260)
+    query_text = legacy._compact_text(" / ".join([*comments[-8:], body_head, body_tail]), 1400)
+    if not query_text:
+        return {
+            "target_text": source_text,
+            "start": 0,
+            "end": len(source_text),
+            "used_weaviate": False,
+            "attempted_weaviate": False,
+            "fallback_reason": "empty_query",
+            "candidate_count": 0,
+        }
+
+    docs = []
+    feature_name = "ainovelrevisiontarget"
+    feature_candidates = [feature_name, "ai_novel_revision_target"]
+    digest = hashlib.sha1(
+        f"{site_key}|{scope}|{query_text[:300]}|{len(source_text)}".encode("utf-8", errors="ignore")
+    ).hexdigest()[:16]
+    for chunk in chunks[:160]:
+        docs.append(
+            {
+                "doc_id": f"revision_target:{site_key}:{digest}:{int(chunk['target_id'])}",
+                "feature": feature_name,
+                "site_key": site_key,
+                "target_id": int(chunk["target_id"]),
+                "target_type": "revision_chunk",
+                "title": f"{scope}:{int(chunk['target_id'])}",
+                "content": legacy._compact_text(str(chunk["text"] or ""), 3500),
+                "is_public": False,
+                "is_r18": is_r18,
+            }
+        )
+
+    try:
+        legacy.upsert_feature_docs(docs)
+
+        def run_search(q: str, with_target_ids: bool) -> list[dict]:
+            merged: list[dict] = []
+            seen: set[str] = set()
+            search_plans = [
+                {"feature": feature, "site_key": site_key}
+                for feature in feature_candidates
+            ] + [
+                {"feature": None, "site_key": site_key},
+                {"feature": None, "site_key": None},
+            ]
+            for plan in search_plans:
+                part = legacy.semantic_search_feature_docs(
+                    q,
+                    feature=plan["feature"],
+                    site_key=plan["site_key"],
+                    limit=min(14, legacy.AI_WEAVIATE_FEATURES_TOPK + 8),
+                    target_ids=[int(doc["target_id"]) for doc in docs] if with_target_ids else None,
+                    include_r18=is_r18,
+                    public_only=False,
+                )
+                for h in part:
+                    key = str(h.get("doc_id") or "")
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    merged.append(h)
+                if merged:
+                    break
+            if not merged:
+                for plan in search_plans:
+                    part = legacy.bm25_search_feature_docs(
+                        q,
+                        feature=plan["feature"],
+                        site_key=plan["site_key"],
+                        limit=min(14, legacy.AI_WEAVIATE_FEATURES_TOPK + 8),
+                        target_ids=[int(doc["target_id"]) for doc in docs] if with_target_ids else None,
+                        include_r18=is_r18,
+                        public_only=False,
+                    )
+                    for h in part:
+                        key = str(h.get("doc_id") or "")
+                        if not key or key in seen:
+                            continue
+                        seen.add(key)
+                        merged.append(h)
+                    if merged:
+                        break
+            def _rank_key(item: dict) -> tuple:
+                if "distance" in item:
+                    return (0, float(item.get("distance", 1.0)))
+                return (1, -float(item.get("score", 0.0)))
+            merged.sort(key=_rank_key)
+            return merged
+
+        hits: list[dict] = []
+        # 1) strict: current request target_ids
+        for _ in range(3):
+            hits = run_search(query_text, with_target_ids=True)
+            if hits:
+                break
+            time.sleep(0.08)
+
+        # 2) broad: same feature/site without target_id filter
+        if not hits:
+            hits = run_search(query_text, with_target_ids=False)
+
+        # 3) per-comment queries to increase recall
+        if not hits:
+            merged: list[dict] = []
+            seen_doc_ids: set[str] = set()
+            for q in comments[-8:]:
+                part_hits = run_search(legacy._compact_text(q, 300), with_target_ids=True)
+                for h in part_hits:
+                    key = str(h.get("doc_id") or "")
+                    if not key or key in seen_doc_ids:
+                        continue
+                    seen_doc_ids.add(key)
+                    merged.append(h)
+                if len(merged) >= 8:
+                    break
+            hits = merged
+
+        if hits:
+            best = hits[0]
+            best_id = int(best.get("target_id") or 0)
+            selected = next((c for c in chunks if int(c["target_id"]) == best_id), None)
+            if selected and int(selected["end"]) > int(selected["start"]):
+                return {
+                    "target_text": str(selected["text"] or ""),
+                    "start": int(selected["start"]),
+                    "end": int(selected["end"]),
+                    "used_weaviate": True,
+                    "attempted_weaviate": True,
+                    "fallback_reason": None,
+                    "candidate_count": len(hits),
+                }
+        # 4) Weaviate object scan fallback (検索API無ヒット時でもWeaviate保存内容から選ぶ)
+        scanned: list[dict] = []
+        seen_scan: set[str] = set()
+        for feature in feature_candidates:
+            part = legacy.scan_feature_docs(
+                feature=feature,
+                site_key=site_key,
+                limit=500,
+                target_ids=[int(doc["target_id"]) for doc in docs],
+                include_r18=is_r18,
+                public_only=False,
+            )
+            for h in part:
+                key = str(h.get("doc_id") or "")
+                if not key or key in seen_scan:
+                    continue
+                seen_scan.add(key)
+                scanned.append(h)
+        if scanned:
+            best_id = int(scanned[0].get("target_id") or 0)
+            selected = next((c for c in chunks if int(c["target_id"]) == best_id), None)
+            if selected and int(selected["end"]) > int(selected["start"]):
+                return {
+                    "target_text": str(selected["text"] or ""),
+                    "start": int(selected["start"]),
+                    "end": int(selected["end"]),
+                    "used_weaviate": True,
+                    "attempted_weaviate": True,
+                    "fallback_reason": "weaviate_scan_fallback",
+                    "candidate_count": len(scanned),
+                }
+        # 5) lexical fallback: comments を単純一致スコア化して最適チャンクを選ぶ
+        words: list[str] = []
+        bigrams: list[str] = []
+        for c in comments:
+            for w in re.split(r"[\s\u3000,、。.!?！？:：;；/／（）()「」『』【】]+", str(c or "")):
+                token = w.strip()
+                if token and len(token) >= 2:
+                    words.append(token)
+            compact = re.sub(r"[\s\u3000,、。.!?！？:：;；/／（）()「」『』【】]+", "", str(c or ""))
+            if len(compact) >= 2:
+                for i in range(len(compact) - 1):
+                    bg = compact[i : i + 2]
+                    if bg.strip():
+                        bigrams.append(bg)
+        if words:
+            best_chunk = None
+            best_score = -1
+            for ch in chunks:
+                text = str(ch.get("text") or "")
+                score = 0
+                for w in words:
+                    if w in text:
+                        score += 1
+                if score <= 0 and bigrams:
+                    # 日本語コメント向け: 2-gram 重なりで関連度を拾う
+                    for bg in bigrams:
+                        if bg in text:
+                            score += 0.05
+                if score > best_score:
+                    best_score = score
+                    best_chunk = ch
+            if best_chunk and best_score > 0:
+                return {
+                    "target_text": str(best_chunk["text"] or ""),
+                    "start": int(best_chunk["start"]),
+                    "end": int(best_chunk["end"]),
+                    "used_weaviate": False,
+                    "attempted_weaviate": True,
+                    "fallback_reason": "keyword_fallback",
+                    "candidate_count": 0,
+                }
+        return {
+            "target_text": source_text,
+            "start": 0,
+            "end": len(source_text),
+            "used_weaviate": False,
+            "attempted_weaviate": True,
+            "fallback_reason": "no_hits",
+            "candidate_count": 0,
+        }
+    except Exception as e:
+        legacy.logger.warning(
+            "ai novel revision target weaviate failed scope=%s len=%s err=%r",
+            scope,
+            len(source_text),
+            e,
+        )
+
+    return {
+        "target_text": source_text,
+        "start": 0,
+        "end": len(source_text),
+        "used_weaviate": False,
+        "attempted_weaviate": True,
+        "fallback_reason": "weaviate_error",
+        "candidate_count": 0,
+    }
+
+
 async def generate_ai_novel_service(req, request, response, db):
     from .. import main as legacy
 
@@ -218,12 +533,42 @@ async def generate_ai_novel_service(req, request, response, db):
         provider = legacy.provider_from_request(req_for_ai)
         if getattr(req_for_ai, "provider", None) is None and provider == "openai":
             provider = legacy.provider_from_model(getattr(req_for_ai, "model", None))
-        if provider == "deepseek":
+        retry_enabled = bool(getattr(req_for_ai, "retry_mode", False))
+        retry_max = int(getattr(req_for_ai, "retry_max", 0) or 0)
+        retry_attempts = 0
+        async def record_retry_attempts(attempts: int) -> None:
+            nonlocal retry_attempts
+            retry_attempts = int(attempts or 0)
+        if retry_max < 0:
+            retry_max = 0
+        if retry_enabled and retry_max > 0:
+            try:
+                resp = await legacy._call_ai_with_retry(
+                    req_for_ai,
+                    provider,
+                    retry_max,
+                    on_retry=record_retry_attempts,
+                )
+            except legacy.HTTPException as e:
+                retry_headers = {
+                    "X-Retry-Attempts": str(int(retry_attempts or 0)),
+                    "X-Retry-Max": str(int(retry_max or 0)),
+                }
+                if isinstance(getattr(e, "headers", None), dict):
+                    retry_headers.update(e.headers or {})
+                raise legacy.HTTPException(
+                    status_code=e.status_code,
+                    detail=e.detail,
+                    headers=retry_headers,
+                ) from e
+        elif provider == "deepseek":
             resp = await legacy.call_deepseek_novel_api(req_for_ai)
         elif provider == "openrouter":
             resp = await legacy.call_openrouter_novel_api(req_for_ai)
         else:
             resp = await legacy.call_openai_novel_api(req_for_ai)
+        resp.retry_attempts = retry_attempts
+        resp.retry_max = retry_max if retry_enabled else 0
 
         usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
         usage.last_used_at = legacy.datetime.utcnow()
@@ -239,12 +584,42 @@ async def generate_ai_novel_service(req, request, response, db):
     provider = legacy.provider_from_request(req_for_ai)
     if getattr(req_for_ai, "provider", None) is None and provider == "openai":
         provider = legacy.provider_from_model(getattr(req_for_ai, "model", None))
-    if provider == "deepseek":
+    retry_enabled = bool(getattr(req_for_ai, "retry_mode", False))
+    retry_max = int(getattr(req_for_ai, "retry_max", 0) or 0)
+    retry_attempts = 0
+    async def record_retry_attempts(attempts: int) -> None:
+        nonlocal retry_attempts
+        retry_attempts = int(attempts or 0)
+    if retry_max < 0:
+        retry_max = 0
+    if retry_enabled and retry_max > 0:
+        try:
+            resp = await legacy._call_ai_with_retry(
+                req_for_ai,
+                provider,
+                retry_max,
+                on_retry=record_retry_attempts,
+            )
+        except legacy.HTTPException as e:
+            retry_headers = {
+                "X-Retry-Attempts": str(int(retry_attempts or 0)),
+                "X-Retry-Max": str(int(retry_max or 0)),
+            }
+            if isinstance(getattr(e, "headers", None), dict):
+                retry_headers.update(e.headers or {})
+            raise legacy.HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers=retry_headers,
+            ) from e
+    elif provider == "deepseek":
         resp = await legacy.call_deepseek_novel_api(req_for_ai)
     elif provider == "openrouter":
         resp = await legacy.call_openrouter_novel_api(req_for_ai)
     else:
         resp = await legacy.call_openai_novel_api(req_for_ai)
+    resp.retry_attempts = retry_attempts
+    resp.retry_max = retry_max if retry_enabled else 0
 
     parts = [req.title_hint, req.genre, req.characters, req.tone]
     prompt_summary = " / ".join([p for p in parts if p])[:200] if any(parts) else None

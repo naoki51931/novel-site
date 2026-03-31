@@ -117,6 +117,7 @@ npm run dev
 - Mail: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 - Push: `WEBPUSH_VAPID_PUBLIC_KEY`, `WEBPUSH_VAPID_PRIVATE_KEY`, `WEBPUSH_VAPID_SUBJECT`
 - AI: `OPENAI_API_KEY`, `OPENAI_MODEL_TEXT`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`
+- SEO/IndexNow: `INDEXNOW_ENABLED`, `INDEXNOW_KEY`, `INDEXNOW_HOST`, `INDEXNOW_ENDPOINT`
 
 ## 運用・開発時の注意点
 
@@ -183,3 +184,7 @@ npm test
 ```
 
 必要に応じて API の手動確認手順をPRや作業メモに記載してください。
+
+## SEO / インデックス運用
+
+- `docs/seo_indexing_ops.md` を参照してください。

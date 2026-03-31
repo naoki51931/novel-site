@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import TagChipLink from "./TagChipLink.jsx";
+import { hasRecentEpisodeActivity } from "../lib/freshness";
 
 function resolveCoverUrl(apiBase, url) {
   if (!url) return "";
@@ -36,6 +37,7 @@ export default function NovelCard({
   const shortDescription =
     description.length > descriptionMax ? `${description.slice(0, descriptionMax)}...` : description;
   const coverUrl = resolveCoverUrl(apiBase, novel?.cover_image_url);
+  const showFreshBadge = hasRecentEpisodeActivity(novel, 7);
 
   return (
     <article className="novel-card-ui">
@@ -61,6 +63,7 @@ export default function NovelCard({
           )}
           {novel.age_limit === "r18" ? <span className="age-chip age-chip-r18">R18</span> : null}
           {novel.age_limit === "r15" ? <span className="age-chip">R15</span> : null}
+          {showFreshBadge ? <span className="age-chip novel-fresh-chip">{t({ ja: "新着", en: "New" })}</span> : null}
           <span className="age-chip novel-type-chip">{novel.creative_type === "fanfic" ? "fanfic" : "original"}</span>
         </div>
 

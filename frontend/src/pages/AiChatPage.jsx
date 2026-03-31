@@ -93,6 +93,12 @@ const AI_MODELS = [
   { value: "gpt-5-mini", labelJa: "GPT-5 mini（OpenAI）", labelEn: "GPT-5 mini (OpenAI)" },
   { value: "gpt-4.1-mini", labelJa: "GPT-4.1 mini（OpenAI）", labelEn: "GPT-4.1 mini (OpenAI)" },
   { value: "openai/chatgpt-4o-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
+  { value: "x-ai/grok-4", labelJa: "Grok 4（OpenRouter）", labelEn: "Grok 4 (OpenRouter)" },
+  { value: "x-ai/grok-4.1-fast", labelJa: "Grok 4.1 Fast（OpenRouter）", labelEn: "Grok 4.1 Fast (OpenRouter)" },
+  { value: "x-ai/grok-4-fast", labelJa: "Grok 4 Fast（OpenRouter）", labelEn: "Grok 4 Fast (OpenRouter)" },
+  { value: "x-ai/grok-3", labelJa: "Grok 3（OpenRouter）", labelEn: "Grok 3 (OpenRouter)" },
+  { value: "x-ai/grok-3-mini", labelJa: "Grok 3 Mini（OpenRouter）", labelEn: "Grok 3 Mini (OpenRouter)" },
+  { value: "x-ai/grok-code-fast-1", labelJa: "Grok Code Fast 1（OpenRouter）", labelEn: "Grok Code Fast 1 (OpenRouter)" },
   { value: "google/gemini-3-pro-preview", labelJa: "Gemini 3 Pro Preview（OpenRouter）", labelEn: "Gemini 3 Pro Preview (OpenRouter)" },
   { value: "google/gemini-3-flash-preview", labelJa: "Gemini 3 Flash Preview（OpenRouter）", labelEn: "Gemini 3 Flash Preview (OpenRouter)" },
   { value: "google/gemini-2.5-pro", labelJa: "Gemini 2.5 Pro（OpenRouter）", labelEn: "Gemini 2.5 Pro (OpenRouter)" },
@@ -3322,16 +3328,20 @@ export default function AiChatPage() {
     });
   };
 
-  const loadLatestPromptPreview = async () => {
+  const loadLatestPromptPreview = async ({ silent = false } = {}) => {
     if (!writableSelectedCharacterId || previewLoading) return;
     const token = getStoredAuthToken();
     if (!token) {
-      setError(t({ ja: "ログインが必要です。", en: "Login required." }));
+      if (!silent) {
+        setError(t({ ja: "ログインが必要です。", en: "Login required." }));
+      }
       return;
     }
 
-    setPreviewLoading(true);
-    setError("");
+    if (!silent) {
+      setPreviewLoading(true);
+      setError("");
+    }
     try {
       const previewParams = new URLSearchParams();
       if (r18Mode) previewParams.set("r18", "1");
@@ -3348,12 +3358,16 @@ export default function AiChatPage() {
       }
       setLatestPromptPreview(data);
     } catch (e) {
-      setError(
-        e?.message ||
-          t({ ja: "最新ログの可視化中にエラーが発生しました。", en: "Failed to visualize latest logs." })
-      );
+      if (!silent) {
+        setError(
+          e?.message ||
+            t({ ja: "最新ログの可視化中にエラーが発生しました。", en: "Failed to visualize latest logs." })
+        );
+      }
     } finally {
-      setPreviewLoading(false);
+      if (!silent) {
+        setPreviewLoading(false);
+      }
     }
   };
 
@@ -4009,6 +4023,19 @@ export default function AiChatPage() {
   useEffect(() => {
     setSelectedGeneratedImageKey("");
   }, [selectedCharacterId]);
+
+  useEffect(() => {
+    if (!latestPromptPreview) return;
+    if (!writableSelectedCharacterId) return;
+    if (loading || previewLoading) return;
+    if (!Array.isArray(messages) || messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    const timer = setTimeout(() => {
+      loadLatestPromptPreview({ silent: true });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [messages, latestPromptPreview, writableSelectedCharacterId, loading, previewLoading]);
 
   useEffect(() => {
     const fallback = [
@@ -5292,6 +5319,25 @@ export default function AiChatPage() {
             {t({ ja: "モード", en: "Mode" })}: {latestPromptPreview.mode} / ID: {latestPromptPreview.source_message_id}
             {latestPromptPreview.language_style ? ` / Style: ${latestPromptPreview.language_style}` : ""}
           </div>
+          <div style={{ fontSize: "0.9rem", marginBottom: 8 }}>
+            {t({ ja: "キャラ", en: "Character" })}: {latestPromptPreview.character_name}
+          </div>
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+              {t({ ja: "送信メッセージ", en: "Sent message" })}
+            </summary>
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 6, background: "#f3f5f9", borderRadius: 6, padding: 8 }}>
+              {latestPromptPreview.message}
+            </pre>
+          </details>
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+              {t({ ja: "キャラ設定（性格）", en: "Character personality" })}
+            </summary>
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 6, background: "#f3f5f9", borderRadius: 6, padding: 8 }}>
+              {latestPromptPreview.personality}
+            </pre>
+          </details>
           <details open>
             <summary style={{ cursor: "pointer", fontWeight: 600 }}>
               {t({ ja: "送信プロンプト", en: "Prompt sent" })}

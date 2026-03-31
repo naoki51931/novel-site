@@ -5,6 +5,7 @@ import NovelCard from "../components/NovelCard.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
 import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
+import { hasRecentEpisodeActivity } from "../lib/freshness";
 
 const API_BASE = getApiBase();
 
@@ -803,6 +804,7 @@ export default function Home({
     <>
       {novel.age_limit === "r18" && <span className="age-chip age-chip-r18">R18</span>}
       {novel.age_limit === "r15" && <span className="age-chip">R15</span>}
+      {hasRecentEpisodeActivity(novel, 7) && <span className="age-chip novel-fresh-chip">{t({ ja: "新着", en: "New" })}</span>}
       <span
         className="age-chip"
         style={{

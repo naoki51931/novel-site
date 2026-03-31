@@ -58,7 +58,7 @@ from pydantic import BaseModel, EmailStr, Field
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import text, or_, func, case
+from sqlalchemy import text, or_, func, case, bindparam
 from sqlalchemy.orm import selectinload
 from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
@@ -150,7 +150,9 @@ from .ai.memory_schemas import (
 )
 from .ai.weaviate_client import ensure_schema as ensure_weaviate_schema
 from .ai.weaviate_features import (
+    bm25_search_feature_docs,
     ensure_feature_schema as ensure_weaviate_feature_schema,
+    scan_feature_docs,
     semantic_search_feature_docs,
     upsert_feature_docs,
 )
@@ -900,6 +902,8 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'public'")
             if "is_public" not in existing:
                 alters.append("ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 1")
+            if "is_free_public" not in existing:
+                alters.append("ADD COLUMN is_free_public TINYINT(1) NOT NULL DEFAULT 0")
             if "language" not in existing:
                 alters.append("ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ja'")
             if "site_key" not in existing:
@@ -1504,6 +1508,54 @@ def _split_character_terms(text: str) -> list[str]:
     ordered = person_terms + sahen_terms + other_terms
     return ordered[:15]
 
+
+def _split_character_fullname_terms(text: str) -> list[str]:
+    if not text:
+        return []
+    chunks = re.split(r"[,/、\n]+", str(text))
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def push(candidate: str) -> None:
+        c = str(candidate or "").strip()
+        if len(c) < 2 or c in seen:
+            return
+        seen.add(c)
+        out.append(c)
+
+    for chunk in chunks:
+        raw = re.sub(r'\s+', " ", (chunk or "").strip())
+        if not raw:
+            continue
+        cleaned = raw.replace('"', "").replace("“", "").replace("”", "").strip()
+        if not cleaned:
+            continue
+        # Keep the original phrase as-is first.
+        push(cleaned)
+        tokens = [t for t in re.split(r"\s+", cleaned) if t]
+        if len(tokens) >= 2:
+            # If user entered multiple full names with spaces only
+            # (e.g. "五条 悟 夏油 傑"), split into 2-token pairs.
+            if len(tokens) >= 4 and len(tokens) % 2 == 0:
+                for i in range(0, len(tokens), 2):
+                    pair_spaced = f"{tokens[i]} {tokens[i + 1]}".strip()
+                    pair_compact = f"{tokens[i]}{tokens[i + 1]}".strip()
+                    push(pair_spaced)
+                    push(pair_compact)
+            # Add adjacent token pairs as additional candidates.
+            for i in range(0, len(tokens) - 1):
+                pair_spaced = f"{tokens[i]} {tokens[i + 1]}".strip()
+                pair_compact = f"{tokens[i]}{tokens[i + 1]}".strip()
+                push(pair_spaced)
+                push(pair_compact)
+            # Keep a compact all-token variant for co-occurrence query.
+            push("".join(tokens))
+        else:
+            push(cleaned)
+        if len(out) >= 10:
+            break
+    return out
+
 ILLUST_TAG_RE = re.compile(r"^illust:\d{8}$")
 ILLUST_TAG_BRACKET_RE = re.compile(r"^\[\[illust:(\d{8})\]\]$")
 ALLOWED_META_TAGS = {
@@ -1710,6 +1762,12 @@ ADMIN_JWT_EXPIRES_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRES_MINUTES", "120"))
 ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "1") == "1"
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
+INDEXNOW_ENABLED = (os.getenv("INDEXNOW_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+INDEXNOW_KEY = (os.getenv("INDEXNOW_KEY", "") or "").strip()
+INDEXNOW_HOST = (os.getenv("INDEXNOW_HOST", "") or "").strip().lower()
+INDEXNOW_ENDPOINT = (
+    os.getenv("INDEXNOW_ENDPOINT", "https://api.indexnow.org/indexnow") or "https://api.indexnow.org/indexnow"
+).strip()
 SITE_KEY_DEFAULT = (os.getenv("SITE_KEY_DEFAULT", "main") or "main").strip().lower()
 SITE_KEY_ALLOWED = {
     s.strip().lower()
@@ -5080,6 +5138,28 @@ class AdminIndexingCarryoverOut(BaseModel):
     carryover_urls: List[str] = []
 
 
+class AdminIndexNowSubmitRequest(BaseModel):
+    urls: List[str] = []
+    event: Literal["urlUpdated", "urlDeleted"] = "urlUpdated"
+
+
+class AdminIndexNowSubmitItem(BaseModel):
+    url: str
+    ok: bool
+    status_code: int | None = None
+    error: str | None = None
+
+
+class AdminIndexNowSubmitOut(BaseModel):
+    submitted: int
+    success: int
+    failed: int
+    host: str
+    endpoint: str
+    key_location: str
+    items: List[AdminIndexNowSubmitItem]
+
+
 # =========================================
 # 認証 API（通常ログイン）
 # =========================================
@@ -8363,6 +8443,13 @@ class AINovelAutoFillRequest(BaseModel):
     characters: str | None = None
 
 
+class AICharacterTermExtractRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    tags: str | None = None
+    limit: int = 8
+
+
 class AIJobListItem(BaseModel):
     id: int
     user_id: int | None = None
@@ -8838,14 +8925,28 @@ def _kill_expired_ai_jobs(db: Session, user_id: int | None = None) -> int:
 
 
 def _should_retry_ai_error(err: Exception) -> bool:
-    if not isinstance(err, HTTPException):
-        return False
-    detail = str(getattr(err, "detail", "") or "")
-    return (
-        "AI からの応答が空でした" in detail
-        or "AI 応答の JSON 解析に失敗しました" in detail
-        or "AI 応答の形式が不正です" in detail
-    )
+    if isinstance(err, HTTPException):
+        status = int(getattr(err, "status_code", 0) or 0)
+        detail = str(getattr(err, "detail", "") or "")
+        # 4xx は基本再試行しない（ただし JSON 破損系は再試行対象）
+        if status and 400 <= status < 500:
+            return (
+                "AI からの応答が空でした" in detail
+                or "AI 応答の JSON 解析に失敗しました" in detail
+                or "AI 応答の形式が不正です" in detail
+            )
+        # 5xx / upstream失敗は再試行対象
+        if status >= 500:
+            return True
+        return (
+            "AI からの応答が空でした" in detail
+            or "AI 応答の JSON 解析に失敗しました" in detail
+            or "AI 応答の形式が不正です" in detail
+            or "AI 小説生成 API 呼び出しに失敗しました" in detail
+            or "AI 翻訳 API 呼び出しに失敗しました" in detail
+        )
+    # ネットワーク断やSDK例外など
+    return True
 
 
 async def _call_ai_with_retry(
@@ -8876,6 +8977,14 @@ async def _call_ai_with_retry(
             raise
         except Exception as e:
             last_error = e
+            if _should_retry_ai_error(e) and attempts < max_retries:
+                attempts += 1
+                if on_retry:
+                    try:
+                        await on_retry(attempts)
+                    except Exception:
+                        pass
+                continue
             raise
     if last_error:
         raise last_error
@@ -8910,6 +9019,14 @@ async def _call_ai_with_retry_prompt(
             raise
         except Exception as e:
             last_error = e
+            if _should_retry_ai_error(e) and attempts < max_retries:
+                attempts += 1
+                if on_retry:
+                    try:
+                        await on_retry(attempts)
+                    except Exception:
+                        pass
+                continue
             raise
     if last_error:
         raise last_error
@@ -14427,6 +14544,19 @@ async def _auto_fill_ai_novel_inputs_impl(query: str | None = None, characters: 
     if q:
         terms.extend(_split_search_terms(q))
     if c:
+        fullname_terms = _split_character_fullname_terms(c)
+        if fullname_terms:
+            # Full-name first: improves title inference when surname+given-name are provided.
+            for name in fullname_terms[:6]:
+                safe_name = name.replace('"', "").strip()
+                if safe_name:
+                    terms.append(f'"{safe_name}"')
+            # Multi-character query for better co-occurrence matches.
+            if len(fullname_terms) >= 2:
+                safe_names = [n.replace('"', "").strip() for n in fullname_terms[:3] if n.strip()]
+                joined = " ".join(f'"{name}"' for name in safe_names if name)
+                if joined:
+                    terms.append(joined)
         terms.extend(_split_character_terms(c))
     if not terms:
         raise HTTPException(400, "検索キーワードが空です。")
@@ -14438,7 +14568,7 @@ async def _auto_fill_ai_novel_inputs_impl(query: str | None = None, characters: 
             continue
         seen.add(term)
         merged_terms.append(term)
-    terms = merged_terms[:5]
+    terms = merged_terms[:10]
 
     aggregated_items: list[dict] = []
     pick_count = 15
@@ -14476,6 +14606,23 @@ async def _auto_fill_ai_novel_inputs_impl(query: str | None = None, characters: 
     preferred = [i for i in aggregated_items if _is_preferred_cse_host(i.get("link"))]
     picked = preferred[:pick_count] if preferred else aggregated_items[:pick_count]
     genre_append, characters_append = _build_auto_fill_snippets(picked)
+    primary_character = ""
+    if c:
+        full_terms_for_title = _split_character_fullname_terms(c)
+        if full_terms_for_title:
+            primary_character = full_terms_for_title[0]
+        else:
+            char_terms_for_title = _split_character_terms(c)
+            if char_terms_for_title:
+                primary_character = char_terms_for_title[0]
+    if not primary_character:
+        primary_character = q
+    source_title_candidates = _extract_title_candidates_from_source_titles(
+        character_name=primary_character,
+        sources=picked,
+        limit=8,
+    )
+    inferred_source_title = source_title_candidates[0] if source_title_candidates else ""
 
     return {
         "query": q,
@@ -14483,6 +14630,8 @@ async def _auto_fill_ai_novel_inputs_impl(query: str | None = None, characters: 
         "terms": terms,
         "genre_append": genre_append,
         "characters_append": characters_append,
+        "inferred_source_title": inferred_source_title,
+        "source_title_candidates": source_title_candidates,
         "sources": [
             {
                 "title": (i.get("title") or "").strip(),
@@ -14503,6 +14652,34 @@ async def auto_fill_ai_novel_inputs_post(payload: AINovelAutoFillRequest):
         query=payload.query,
         characters=payload.characters,
     )
+
+
+@app.post("/api/ai/character_terms")
+async def extract_ai_character_terms(payload: AICharacterTermExtractRequest):
+    source = "\n".join(
+        [
+            str(payload.title or "").strip(),
+            str(payload.description or "").strip(),
+            str(payload.tags or "").strip(),
+        ]
+    ).strip()
+    if not source:
+        return {"terms": []}
+
+    limit = max(1, min(20, int(payload.limit or 8)))
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    for item in _split_character_fullname_terms(source) + _split_character_terms(source):
+        term = str(item or "").strip()
+        if len(term) < 2 or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+
+    return {"terms": terms}
 
 @app.post("/api/ai/episodes/{episode_id}/continue")
 async def generate_ai_episode_continue(
@@ -16514,6 +16691,14 @@ def create_novel(
         notify_recommended_users_new_novel(db, novel=novel)
         notify_followers_author_new_novel(db, novel=novel)
         notify_tag_followers_new_novel(db, novel=novel)
+    if _is_novel_indexable_for_search(novel):
+        base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlUpdated",
+            urls=[f"{base_origin.rstrip('/')}/novels/{novel.id}"],
+        )
     invalidate_public_list_caches()
     return novel
 
@@ -16600,6 +16785,7 @@ def update_novel(
     if not novel:
         raise HTTPException(404, "小説が存在しません")
     was_public = bool(getattr(novel, "is_public", True))
+    was_indexable = _is_novel_indexable_for_search(novel)
     has_non_tag_change = False
     if payload.language is not None and normalize_language(payload.language) != normalize_language(
         getattr(novel, "language", None)
@@ -16698,7 +16884,7 @@ def update_novel(
 
     # ★ タグ差し替え
     updated_tag_names: list[str] | None = None
-    if tag_only_update:
+    if payload.tag_names is not None and (is_author or tag_only_update):
         db.query(models.NovelTag).filter(
             models.NovelTag.novel_id == novel_id
         ).delete()
@@ -16737,6 +16923,31 @@ def update_novel(
             background_tasks.add_task(_background_upsert_novel_translation, novel.id)
     db.commit()
     db.refresh(novel)
+    is_indexable = _is_novel_indexable_for_search(novel)
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    novel_url = f"{base_origin.rstrip('/')}/novels/{novel.id}"
+    should_notify_indexnow_update = bool(has_non_tag_change or payload.tag_names is not None)
+    if not was_indexable and is_indexable:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlUpdated",
+            urls=[novel_url],
+        )
+    elif was_indexable and not is_indexable:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlDeleted",
+            urls=[novel_url],
+        )
+    elif was_indexable and is_indexable and should_notify_indexnow_update:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlUpdated",
+            urls=[novel_url],
+        )
     if (not was_public) and bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
         notify_followers_author_new_novel(db, novel=novel)
@@ -16748,6 +16959,7 @@ def update_novel(
 @app.delete("/api/novels/{novel_id}")
 def delete_novel(
     novel_id: int,
+    background_tasks: BackgroundTasks,
     request: Request,
     db: Session = Depends(get_db),
 ):
@@ -16786,6 +16998,9 @@ def delete_novel(
             locals().get("episode_id", None),
         )
         raise HTTPException(403, "削除権限がありません")
+    should_indexnow_delete = _is_novel_indexable_for_search(novel)
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    novel_url = f"{base_origin.rstrip('/')}/novels/{novel_id}"
 
     # Episodes 配下の子テーブルを先に削除（FK 制約回避）
     db.execute(
@@ -16845,6 +17060,13 @@ def delete_novel(
         {"nid": novel_id, "site_key": site_key},
     )
     db.commit()
+    if should_indexnow_delete:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlDeleted",
+            urls=[novel_url],
+        )
     invalidate_public_list_caches()
     return {"ok": True}
 
@@ -17287,6 +17509,25 @@ def get_novel_detail(
             .order_by(models.Episode.episode_number)
             .all()
         )
+    episode_updated_map: dict[int, datetime] = {}
+    episode_ids = [int(ep.id) for ep in episodes if int(getattr(ep, "id", 0) or 0) > 0]
+    if episode_ids and _table_has_column(db, "episodes", "updated_at"):
+        updated_rows = db.execute(
+            text(
+                """
+                SELECT id, updated_at
+                FROM episodes
+                WHERE id IN :episode_ids
+                """
+            ).bindparams(bindparam("episode_ids", expanding=True)),
+            {"episode_ids": episode_ids},
+        ).fetchall()
+        for row in updated_rows:
+            mapping = getattr(row, "_mapping", {})
+            eid = int(mapping.get("id") or 0)
+            updated_at = mapping.get("updated_at")
+            if eid > 0 and isinstance(updated_at, datetime):
+                episode_updated_map[eid] = updated_at
 
     tags = [{"id": nt.tag.id, "name": nt.tag.name} for nt in novel.novel_tags]
     public_only = not (user and novel.author_id == user.id)
@@ -17329,8 +17570,15 @@ def get_novel_detail(
                 "title": ep.title,
                 "cover_image_url": ep.cover_image_url,
                 "number": get_episode_number(ep),
-                "body": ep.body if can_read_full else truncate_for_free(ep.body or ""),
+                "is_free_public": bool(getattr(ep, "is_free_public", False)),
+                "body": ep.body
+                if (
+                    bool(getattr(ep, "is_free_public", False))
+                    or can_read_full
+                )
+                else truncate_for_free(ep.body or ""),
                 "created_at": ep.created_at,
+                "updated_at": episode_updated_map.get(int(ep.id)),
                 "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
             }
             for ep in episodes
@@ -17447,6 +17695,42 @@ def _build_public_cover_map(db: Session, novel_ids: list[int], site_key: str) ->
         if novel_id not in cover_map and cover_url:
             cover_map[int(novel_id)] = str(cover_url)
     return cover_map
+
+
+def _build_public_latest_episode_activity_map(
+    db: Session,
+    novel_ids: list[int],
+    site_key: str,
+) -> dict[int, datetime]:
+    if not novel_ids:
+        return {}
+    has_updated_at = _table_has_column(db, "episodes", "updated_at")
+    activity_expr = "COALESCE(e.updated_at, e.created_at)" if has_updated_at else "e.created_at"
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+              e.novel_id AS novel_id,
+              MAX({activity_expr}) AS last_activity_at
+            FROM episodes e
+            WHERE
+              e.novel_id IN :novel_ids
+              AND e.site_key = :site_key
+              AND e.status = 'public'
+              AND e.is_public = 1
+            GROUP BY e.novel_id
+            """
+        ).bindparams(bindparam("novel_ids", expanding=True)),
+        {"novel_ids": [int(nid) for nid in novel_ids], "site_key": site_key},
+    ).fetchall()
+    result: dict[int, datetime] = {}
+    for row in rows:
+        mapping = getattr(row, "_mapping", {})
+        nid = int(mapping.get("novel_id") or 0)
+        last_activity = mapping.get("last_activity_at")
+        if nid > 0 and isinstance(last_activity, datetime):
+            result[nid] = last_activity
+    return result
 
 
 def _build_public_comment_count_map(
@@ -17779,6 +18063,7 @@ def list_tag_novels(
     novels = [novel for novel, _, __ in rows]
     novel_ids = [int(novel.id) for novel in novels]
     cover_map = _build_public_cover_map(db, novel_ids, site_key)
+    latest_episode_activity_map = _build_public_latest_episode_activity_map(db, novel_ids, site_key)
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
 
     payload = [
@@ -17802,6 +18087,8 @@ def list_tag_novels(
             "age_limit": str(getattr(novel, "age_limit", "all") or "all"),
             "creative_type": str(getattr(novel, "creative_type", "original") or "original"),
             "cover_image_url": cover_map.get(int(novel.id)),
+            "latest_episode_activity_at": latest_episode_activity_map.get(int(novel.id)),
+            "latest_episode_created_at": latest_episode_activity_map.get(int(novel.id)),
         }
         for novel, favorite_count, comment_count in rows
     ]
@@ -18388,6 +18675,7 @@ def _serialize_feed_novels_for_user(
 
     novel_ids = [int(n.id) for n in novels]
     cover_map = _build_public_cover_map(db, novel_ids, site_key)
+    latest_episode_activity_map = _build_public_latest_episode_activity_map(db, novel_ids, site_key)
     comment_count_map = _build_public_comment_count_map(db, novel_ids, site_key)
     char_counts = get_novel_char_counts(db, novel_ids, public_only=True)
     favorite_rows = (
@@ -18441,6 +18729,8 @@ def _serialize_feed_novels_for_user(
             "is_liked": int(novel.id) in liked_ids,
             "is_favorited": int(novel.id) in favorited_ids,
             "cover_image_url": cover_map.get(int(novel.id)),
+            "latest_episode_activity_at": latest_episode_activity_map.get(int(novel.id)),
+            "latest_episode_created_at": latest_episode_activity_map.get(int(novel.id)),
         }
         for novel in novels
     ]
@@ -19176,6 +19466,11 @@ def list_public_novels(
 
     novel_ids = [novel.id for novel in novels]
     cover_map = _build_public_cover_map(db, [int(nid) for nid in novel_ids], site_key)
+    latest_episode_activity_map = _build_public_latest_episode_activity_map(
+        db,
+        [int(nid) for nid in novel_ids],
+        site_key,
+    )
     favorite_counts = {}
     if novel_ids:
         favorite_rows = (
@@ -19252,6 +19547,8 @@ def list_public_novels(
                 "is_liked": novel.id in liked_ids,
                 "is_favorited": novel.id in favorited_ids,
                 "cover_image_url": cover_map.get(novel.id),
+                "latest_episode_activity_at": latest_episode_activity_map.get(int(novel.id)),
+                "latest_episode_created_at": latest_episode_activity_map.get(int(novel.id)),
             }
         )
     redis_json_set(cache_key, result, REDIS_PUBLIC_LIST_CACHE_TTL_SEC)
@@ -20658,6 +20955,7 @@ def create_episode(
         episode_number=payload.episode_number,
         status="draft",
         is_public=False,
+        is_free_public=bool(getattr(payload, "is_free_public", False)),
         language=language,
         site_key=site_key,
     )
@@ -20702,6 +21000,7 @@ def create_episode(
     needs_translation = has_translatable_content and not is_episode_draft(ep)
     db.commit()
     db.refresh(ep)
+    is_indexable_episode = _is_episode_indexable_for_search(ep, novel)
     if needs_translation:
         if AUTO_TRANSLATION_REQUIRED:
             upsert_episode_translation(db, episode=ep, source_language=language)
@@ -20718,6 +21017,14 @@ def create_episode(
             background_tasks.add_task(_background_upsert_episode_and_novel_translation, ep.id)
     if publish_mode == "public":
         background_tasks.add_task(_background_notify_episode_published, novel_id, ep.id, site_key)
+    if is_indexable_episode:
+        base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlUpdated",
+            urls=[f"{base_origin.rstrip('/')}/episodes/{ep.id}"],
+        )
     return ep
 
 @app.put("/api/episodes/{episode_id}")
@@ -20763,6 +21070,10 @@ def update_episode(
         has_non_tag_change = True
     if payload.get("body") is not None and payload.get("body") != ep.body:
         has_non_tag_change = True
+    if payload.get("is_free_public") is not None and bool(payload.get("is_free_public")) != bool(
+        getattr(ep, "is_free_public", False)
+    ):
+        has_non_tag_change = True
     if (
         payload_publish_mode is not None
         or payload_status is not None
@@ -20777,6 +21088,7 @@ def update_episode(
     novel = get_novel_in_site_or_404(db, request, ep.novel_id)
     if not novel:
         raise HTTPException(404, "小説が存在しません")
+    was_indexable = _is_episode_indexable_for_search(ep, novel)
     is_author = novel.author_id == user.id
     if not is_author and not tag_only_update:
         logger.warning(
@@ -20803,6 +21115,8 @@ def update_episode(
     if is_author and "body" in payload and payload["body"] is not None:
         ep.body = payload["body"]
         needs_translation = True
+    if is_author and "is_free_public" in payload and payload["is_free_public"] is not None:
+        ep.is_free_public = bool(payload["is_free_public"])
 
     if is_author and (
         next_publish_mode is not None or "scheduled_publish_at" in payload
@@ -20820,7 +21134,7 @@ def update_episode(
 
     # タグ更新（差し替え）
     tag_names = payload.get("tag_names")
-    if tag_only_update and tag_names is not None:
+    if tag_names is not None and (is_author or tag_only_update):
         # 既存タグの関連を削除
         db.query(models.EpisodeTag).filter(
             models.EpisodeTag.episode_id == episode_id
@@ -20838,6 +21152,42 @@ def update_episode(
 
     db.commit()
     db.refresh(ep)
+    is_indexable = _is_episode_indexable_for_search(ep, novel)
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    episode_url = f"{base_origin.rstrip('/')}/episodes/{ep.id}"
+    should_notify_indexnow_update = bool(
+        "language" in payload
+        or "episode_number" in payload
+        or "title" in payload
+        or "body" in payload
+        or payload_publish_mode is not None
+        or payload_status is not None
+        or payload_is_public is not None
+        or payload.get("is_free_public") is not None
+        or "scheduled_publish_at" in payload
+        or payload.get("tag_names") is not None
+    )
+    if not was_indexable and is_indexable:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlUpdated",
+            urls=[episode_url],
+        )
+    elif was_indexable and not is_indexable:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlDeleted",
+            urls=[episode_url],
+        )
+    elif was_indexable and is_indexable and should_notify_indexnow_update:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlUpdated",
+            urls=[episode_url],
+        )
     has_translatable_content = bool(
         (ep.title or "").strip()
         or (ep.body or "").strip()
@@ -20926,6 +21276,7 @@ def unschedule_episode(
 @app.delete("/api/episodes/{episode_id}")
 def delete_episode(
     episode_id: int,
+    background_tasks: BackgroundTasks,
     request: Request,
     db: Session = Depends(get_db),
 ):
@@ -20956,6 +21307,9 @@ def delete_episode(
             locals().get("episode_id", None),
         )
         raise HTTPException(403, "削除権限がありません")
+    should_indexnow_delete = _is_episode_indexable_for_search(ep, novel)
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    episode_url = f"{base_origin.rstrip('/')}/episodes/{episode_id}"
 
     file_paths: list[str] = []
     if ep.cover_image_url:
@@ -20974,6 +21328,13 @@ def delete_episode(
     )
     db.delete(ep)
     db.commit()
+    if should_indexnow_delete:
+        _enqueue_indexnow_urls(
+            background_tasks=background_tasks,
+            request=request,
+            event="urlDeleted",
+            urls=[episode_url],
+        )
 
     for url in file_paths:
         rel_path = (url or "").lstrip("/")
@@ -21039,7 +21400,13 @@ def list_episodes(
             "title": ep.title,
             "cover_image_url": ep.cover_image_url,
             "number": get_episode_number(ep),
-            "body": ep.body if can_read_full else truncate_for_free(ep.body or ""),
+            "is_free_public": bool(getattr(ep, "is_free_public", False)),
+            "body": ep.body
+            if (
+                bool(getattr(ep, "is_free_public", False))
+                or can_read_full
+            )
+            else truncate_for_free(ep.body or ""),
             "created_at": ep.created_at,
         }
         for ep in episodes
@@ -21478,6 +21845,7 @@ def get_episode_for_edit(
             "novel_id": ep.novel_id,
             "title": ep.title,
             "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
+            "is_free_public": bool(getattr(ep, "is_free_public", False)),
             "can_edit_full": False,
         }
 
@@ -21511,6 +21879,7 @@ def get_episode_for_edit(
         "is_liked": is_liked,
         "status": getattr(ep, "status", "public"),
         "is_public": bool(getattr(ep, "is_public", True)),
+        "is_free_public": bool(getattr(ep, "is_free_public", False)),
         "scheduled_publish_at": ep.scheduled_publish_at,
         "published_at": ep.published_at,
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
@@ -21600,7 +21969,12 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
 
     is_premium_user = is_effective_premium_user(user)
     is_free_time = is_free_reading_time()
-    can_read_full = is_premium_user or is_free_time or (user and novel.author_id == user.id)
+    can_read_full = (
+        bool(getattr(ep, "is_free_public", False))
+        or is_premium_user
+        or is_free_time
+        or (user and novel.author_id == user.id)
+    )
 
     body_converted = ep.body if can_read_full else truncate_for_free(ep.body or "")
 
@@ -21677,6 +22051,7 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         "is_liked": is_liked,
         "status": getattr(ep, "status", "public"),
         "is_public": bool(getattr(ep, "is_public", True)),
+        "is_free_public": bool(getattr(ep, "is_free_public", False)),
         "tags": [{"id": t.tag.id, "name": t.tag.name} for t in ep.episode_tags],
         "illusts": [
             {
@@ -21697,6 +22072,216 @@ def get_episode(episode_id: int, request: Request, db: Session = Depends(get_db)
         and bool(novel)
         and novel.age_limit == "r18",
     }
+
+
+@app.get("/prerender/novels/{novel_id}", response_class=HTMLResponse)
+def prerender_novel_page(novel_id: int, request: Request, db: Session = Depends(get_db)):
+    site_key = resolve_site_key(request)
+    novel = (
+        db.query(models.Novel)
+        .options(
+            selectinload(models.Novel.author),
+            selectinload(models.Novel.novel_tags).selectinload(models.NovelTag.tag),
+            selectinload(models.Novel.episodes),
+        )
+        .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
+    if not _is_novel_indexable_for_search(novel):
+        raise HTTPException(404, "小説が存在しません")
+
+    public_episodes = sorted(
+        [
+            ep
+            for ep in (novel.episodes or [])
+            if bool(getattr(ep, "is_public", False))
+            and str(getattr(ep, "status", "public") or "public") == "public"
+        ],
+        key=lambda x: (x.episode_number is None, x.episode_number or 0, x.id),
+    )
+
+    origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    canonical_url = f"{origin.rstrip('/')}/novels/{novel.id}"
+    author_name = str(getattr(novel.author, "username", "") or "").strip() or "author"
+    author_url = f"{origin.rstrip('/')}/users/{quote(author_name)}"
+    title = str(getattr(novel, "title", "") or "").strip() or "無題の小説"
+    description_source = str(getattr(novel, "description", "") or "").strip()
+    if not description_source and public_episodes:
+        description_source = str(getattr(public_episodes[0], "body", "") or "").strip()
+    description = re.sub(r"\s+", " ", description_source).strip()
+    if len(description) > 140:
+        description = description[:139] + "…"
+
+    toc_items = []
+    for ep in public_episodes[:500]:
+        ep_title = str(getattr(ep, "title", "") or "").strip() or f"Episode {ep.id}"
+        ep_url = f"{origin.rstrip('/')}/episodes/{ep.id}"
+        toc_items.append(f'<li><a href="{html.escape(ep_url, quote=True)}">{html.escape(ep_title, quote=False)}</a></li>')
+    toc_html = "".join(toc_items) if toc_items else "<li>エピソードはまだありません</li>"
+
+    tags = [str(nt.tag.name or "").strip() for nt in (getattr(novel, "novel_tags", []) or []) if getattr(nt, "tag", None)]
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Home", "item": f"{origin.rstrip('/')}/"},
+            {"@type": "ListItem", "position": 2, "name": title, "item": canonical_url},
+        ],
+    }
+    person = {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": author_name,
+        "url": author_url,
+    }
+    book = {
+        "@context": "https://schema.org",
+        "@type": "Book",
+        "name": title,
+        "description": description,
+        "url": canonical_url,
+        "author": {"@type": "Person", "name": author_name, "url": author_url},
+        "keywords": ", ".join([tag for tag in tags if tag][:20]),
+    }
+    json_ld = "\n".join(
+        [
+            f'<script type="application/ld+json">{json.dumps(breadcrumbs, ensure_ascii=False)}</script>',
+            f'<script type="application/ld+json">{json.dumps(person, ensure_ascii=False)}</script>',
+            f'<script type="application/ld+json">{json.dumps(book, ensure_ascii=False)}</script>',
+        ]
+    )
+    safe_title = html.escape(f"{title}｜小説投稿サイトLexis", quote=True)
+    safe_description = html.escape(description, quote=True)
+    safe_canonical = html.escape(canonical_url, quote=True)
+    safe_author_name = html.escape(author_name, quote=False)
+    safe_author_url = html.escape(author_url, quote=True)
+
+    content = f"""<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{safe_title}</title>
+    <meta name="description" content="{safe_description}" />
+    <link rel="canonical" href="{safe_canonical}" />
+    <meta name="robots" content="index,follow" />
+    <meta property="og:type" content="book" />
+    <meta property="og:title" content="{safe_title}" />
+    <meta property="og:description" content="{safe_description}" />
+    <meta property="og:url" content="{safe_canonical}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    {json_ld}
+  </head>
+  <body>
+    <main>
+      <h1>{html.escape(title, quote=False)}</h1>
+      <p>作者: <a href="{safe_author_url}">{safe_author_name}</a></p>
+      <p>{html.escape(description, quote=False)}</p>
+      <h2>目次</h2>
+      <ul>{toc_html}</ul>
+    </main>
+  </body>
+</html>"""
+    return HTMLResponse(content)
+
+
+@app.get("/prerender/episodes/{episode_id}", response_class=HTMLResponse)
+def prerender_episode_page(episode_id: int, request: Request, db: Session = Depends(get_db)):
+    site_key = resolve_site_key(request)
+    ep = (
+        db.query(models.Episode)
+        .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+        .first()
+    )
+    if not ep:
+        raise HTTPException(404, "エピソードが存在しません")
+    novel = (
+        db.query(models.Novel)
+        .options(selectinload(models.Novel.author))
+        .filter(models.Novel.id == ep.novel_id, models.Novel.site_key == site_key)
+        .first()
+    )
+    if not _is_episode_indexable_for_search(ep, novel):
+        raise HTTPException(404, "エピソードが存在しません")
+
+    origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    canonical_url = f"{origin.rstrip('/')}/episodes/{ep.id}"
+    novel_url = f"{origin.rstrip('/')}/novels/{novel.id}"
+    author_name = str(getattr(novel.author, "username", "") or "").strip() or "author"
+    author_url = f"{origin.rstrip('/')}/users/{quote(author_name)}"
+    ep_title = str(getattr(ep, "title", "") or "").strip() or "エピソード"
+    novel_title = str(getattr(novel, "title", "") or "").strip() or "作品"
+    title = f"{novel_title}｜{ep_title}"
+    body_text = re.sub(r"\s+", " ", str(getattr(ep, "body", "") or "").strip())
+    description = body_text[:140] + ("…" if len(body_text) > 140 else "")
+    article_body = body_text[:3000]
+
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Home", "item": f"{origin.rstrip('/')}/"},
+            {"@type": "ListItem", "position": 2, "name": novel_title, "item": novel_url},
+            {"@type": "ListItem", "position": 3, "name": ep_title, "item": canonical_url},
+        ],
+    }
+    person = {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": author_name,
+        "url": author_url,
+    }
+    article = {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": title,
+        "description": description,
+        "articleBody": article_body,
+        "author": {"@type": "Person", "name": author_name, "url": author_url},
+        "mainEntityOfPage": canonical_url,
+        "datePublished": ep.created_at.isoformat() if isinstance(ep.created_at, datetime) else None,
+    }
+    json_ld = "\n".join(
+        [
+            f'<script type="application/ld+json">{json.dumps(breadcrumbs, ensure_ascii=False)}</script>',
+            f'<script type="application/ld+json">{json.dumps(person, ensure_ascii=False)}</script>',
+            f'<script type="application/ld+json">{json.dumps(article, ensure_ascii=False)}</script>',
+        ]
+    )
+
+    safe_title = html.escape(f"{title}｜小説投稿サイトLexis", quote=True)
+    safe_description = html.escape(description, quote=True)
+    safe_canonical = html.escape(canonical_url, quote=True)
+    safe_novel_url = html.escape(novel_url, quote=True)
+    safe_author_name = html.escape(author_name, quote=False)
+    safe_author_url = html.escape(author_url, quote=True)
+
+    content = f"""<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{safe_title}</title>
+    <meta name="description" content="{safe_description}" />
+    <link rel="canonical" href="{safe_canonical}" />
+    <meta name="robots" content="index,follow" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="{safe_title}" />
+    <meta property="og:description" content="{safe_description}" />
+    <meta property="og:url" content="{safe_canonical}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    {json_ld}
+  </head>
+  <body>
+    <main>
+      <p><a href="{safe_novel_url}">{html.escape(novel_title, quote=False)}</a></p>
+      <h1>{html.escape(ep_title, quote=False)}</h1>
+      <p>作者: <a href="{safe_author_url}">{safe_author_name}</a></p>
+      <article>{html.escape(article_body, quote=False)}</article>
+    </main>
+  </body>
+</html>"""
+    return HTMLResponse(content)
 
 
 @app.get("/api/episodes/{episode_id}/translations/{lang}")
@@ -21938,6 +22523,27 @@ def _dedupe_urls_keep_order(urls: list[str]) -> list[str]:
     return out
 
 
+def _filter_frontend_origin_urls(urls: list[str]) -> tuple[list[str], list[str]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for raw in _dedupe_urls_keep_order(urls):
+        if _is_frontend_origin_url(raw):
+            valid.append(raw)
+        else:
+            invalid.append(raw)
+    return valid, invalid
+
+
+def _merge_indexing_urls_prioritize_carryover(
+    carryover_urls: list[str],
+    candidate_urls: list[str],
+) -> tuple[list[str], list[str]]:
+    valid_carryover, invalid_carryover = _filter_frontend_origin_urls(carryover_urls)
+    valid_candidates, _ = _filter_frontend_origin_urls(candidate_urls)
+    merged = _dedupe_urls_keep_order(valid_carryover + valid_candidates)
+    return merged, invalid_carryover
+
+
 def _get_indexing_carryover_payload() -> dict[str, Any]:
     global _indexing_carryover_fallback_urls, _indexing_carryover_fallback_updated_at
     payload = redis_json_get(GOOGLE_INDEXING_CARRYOVER_KEY)
@@ -22017,22 +22623,37 @@ def _calc_indexing_priority_score(
     return round(importance_score + views_score + recency_score, 2)
 
 
-def build_public_page_url_items(db: Session) -> list[dict]:
-    base = FRONTEND_ORIGIN.rstrip("/")
-    items: list[dict] = [
+def _sitemap_static_path_items(base: str) -> list[dict]:
+    return [
         {"url": f"{base}/", "lastmod": None, "view_count": 0, "page_type": "home"},
-        {"url": f"{base}/ai_chat", "lastmod": None, "view_count": 0, "page_type": "ai_chat"},
-        {"url": f"{base}/ai_chat/public", "lastmod": None, "view_count": 0, "page_type": "ai_chat_public"},
+        {"url": f"{base}/?sort=new", "lastmod": None, "view_count": 0, "page_type": "new"},
+        {"url": f"{base}/authors", "lastmod": None, "view_count": 0, "page_type": "authors"},
+        {"url": f"{base}/tags", "lastmod": None, "view_count": 0, "page_type": "tags"},
     ]
 
+
+def _sitemap_split_url_items_for_site(db: Session, *, base: str, site_key: str) -> dict[str, list[dict]]:
+    base = (base or "").rstrip("/")
+    site_key = normalize_site_key(site_key)
+    split: dict[str, list[dict]] = {
+        "static": _sitemap_static_path_items(base),
+        "novels": [],
+        "episodes": [],
+        "authors": [],
+        "tags": [],
+    }
+
     novels = (
-        db.query(models.Novel.id, models.Novel.created_at, models.Novel.view_count)
+        db.query(models.Novel.id, models.Novel.created_at, models.Novel.view_count, models.Novel.author_id)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.is_public == True)
+        .filter(models.Novel.status == "public")
+        .filter(models.Novel.age_limit != "r18")
         .order_by(models.Novel.id.asc())
         .all()
     )
-    for novel_id, created_at, view_count in novels:
-        items.append(
+    for novel_id, created_at, view_count, _author_id in novels:
+        split["novels"].append(
             {
                 "url": f"{base}/novels/{novel_id}",
                 "lastmod": created_at,
@@ -22044,14 +22665,18 @@ def build_public_page_url_items(db: Session) -> list[dict]:
     episodes = (
         db.query(models.Episode.id, models.Episode.created_at, models.Episode.view_count)
         .join(models.Novel, models.Episode.novel_id == models.Novel.id)
+        .filter(models.Episode.site_key == site_key)
         .filter(models.Episode.status == "public")
         .filter(models.Episode.is_public == True)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.is_public == True)
+        .filter(models.Novel.status == "public")
+        .filter(models.Novel.age_limit != "r18")
         .order_by(models.Episode.id.asc())
         .all()
     )
     for episode_id, created_at, view_count in episodes:
-        items.append(
+        split["episodes"].append(
             {
                 "url": f"{base}/episodes/{episode_id}",
                 "lastmod": created_at,
@@ -22060,12 +22685,38 @@ def build_public_page_url_items(db: Session) -> list[dict]:
             }
         )
 
+    author_rows = (
+        db.query(models.User.username, func.max(models.Novel.created_at))
+        .join(models.Novel, models.Novel.author_id == models.User.id)
+        .filter(models.Novel.site_key == site_key)
+        .filter(models.Novel.is_public == True)
+        .filter(models.Novel.status == "public")
+        .filter(models.Novel.age_limit != "r18")
+        .group_by(models.User.id, models.User.username)
+        .all()
+    )
+    for username, lastmod in author_rows:
+        clean_username = str(username or "").strip()
+        if not clean_username:
+            continue
+        split["authors"].append(
+            {
+                "url": f"{base}/users/{quote(clean_username)}",
+                "lastmod": lastmod,
+                "view_count": 0,
+                "page_type": "author",
+            }
+        )
+
     tag_names = set()
     novel_tag_rows = (
         db.query(models.Tag.name)
         .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
         .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.is_public == True)
+        .filter(models.Novel.status == "public")
+        .filter(models.Novel.age_limit != "r18")
         .distinct()
         .all()
     )
@@ -22074,9 +22725,13 @@ def build_public_page_url_items(db: Session) -> list[dict]:
         .join(models.EpisodeTag, models.EpisodeTag.tag_id == models.Tag.id)
         .join(models.Episode, models.Episode.id == models.EpisodeTag.episode_id)
         .join(models.Novel, models.Novel.id == models.Episode.novel_id)
+        .filter(models.Episode.site_key == site_key)
         .filter(models.Episode.status == "public")
         .filter(models.Episode.is_public == True)
+        .filter(models.Novel.site_key == site_key)
         .filter(models.Novel.is_public == True)
+        .filter(models.Novel.status == "public")
+        .filter(models.Novel.age_limit != "r18")
         .distinct()
         .all()
     )
@@ -22087,7 +22742,7 @@ def build_public_page_url_items(db: Session) -> list[dict]:
         if name:
             tag_names.add(name)
     for name in sorted(tag_names):
-        items.append(
+        split["tags"].append(
             {
                 "url": f"{base}/tags/{quote(name)}",
                 "lastmod": None,
@@ -22095,7 +22750,19 @@ def build_public_page_url_items(db: Session) -> list[dict]:
                 "page_type": "tag",
             }
         )
-    return items
+    return split
+
+
+def build_public_page_url_items(db: Session) -> list[dict]:
+    base = FRONTEND_ORIGIN.rstrip("/")
+    split = _sitemap_split_url_items_for_site(db, base=base, site_key=SITE_KEY_DEFAULT)
+    return [
+        *split["static"],
+        *split["novels"],
+        *split["episodes"],
+        *split["authors"],
+        *split["tags"],
+    ]
 
 
 def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
@@ -22106,87 +22773,14 @@ def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
 
 
 def build_public_page_url_items_for_site(db: Session, *, base: str, site_key: str) -> list[dict]:
-    base = (base or "").rstrip("/")
-    site_key = normalize_site_key(site_key)
-    items: list[dict] = [
-        {"url": f"{base}/", "lastmod": None, "view_count": 0, "page_type": "home"},
-        {"url": f"{base}/ai_chat", "lastmod": None, "view_count": 0, "page_type": "ai_chat"},
-        {"url": f"{base}/ai_chat/public", "lastmod": None, "view_count": 0, "page_type": "ai_chat_public"},
+    split = _sitemap_split_url_items_for_site(db, base=base, site_key=site_key)
+    return [
+        *split["static"],
+        *split["novels"],
+        *split["episodes"],
+        *split["authors"],
+        *split["tags"],
     ]
-
-    novels = (
-        db.query(models.Novel.id, models.Novel.created_at, models.Novel.view_count)
-        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
-        .order_by(models.Novel.id.asc())
-        .all()
-    )
-    for novel_id, created_at, view_count in novels:
-        items.append(
-            {
-                "url": f"{base}/novels/{novel_id}",
-                "lastmod": created_at,
-                "view_count": int(view_count or 0),
-                "page_type": "novel",
-            }
-        )
-
-    episodes = (
-        db.query(models.Episode.id, models.Episode.created_at, models.Episode.view_count)
-        .join(models.Novel, models.Episode.novel_id == models.Novel.id)
-        .filter(models.Episode.status == "public")
-        .filter(models.Episode.is_public == True)
-        .filter(models.Episode.site_key == site_key)
-        .filter(models.Novel.is_public == True)
-        .filter(models.Novel.site_key == site_key)
-        .order_by(models.Episode.id.asc())
-        .all()
-    )
-    for episode_id, created_at, view_count in episodes:
-        items.append(
-            {
-                "url": f"{base}/episodes/{episode_id}",
-                "lastmod": created_at,
-                "view_count": int(view_count or 0),
-                "page_type": "episode",
-            }
-        )
-
-    tag_names = set()
-    novel_tag_rows = (
-        db.query(models.Tag.name)
-        .join(models.NovelTag, models.NovelTag.tag_id == models.Tag.id)
-        .join(models.Novel, models.Novel.id == models.NovelTag.novel_id)
-        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
-        .distinct()
-        .all()
-    )
-    episode_tag_rows = (
-        db.query(models.Tag.name)
-        .join(models.EpisodeTag, models.EpisodeTag.tag_id == models.Tag.id)
-        .join(models.Episode, models.Episode.id == models.EpisodeTag.episode_id)
-        .join(models.Novel, models.Novel.id == models.Episode.novel_id)
-        .filter(models.Episode.status == "public")
-        .filter(models.Episode.is_public == True, models.Episode.site_key == site_key)
-        .filter(models.Novel.is_public == True, models.Novel.site_key == site_key)
-        .distinct()
-        .all()
-    )
-    for (name,) in novel_tag_rows:
-        if name:
-            tag_names.add(name)
-    for (name,) in episode_tag_rows:
-        if name:
-            tag_names.add(name)
-    for name in sorted(tag_names):
-        items.append(
-            {
-                "url": f"{base}/tags/{quote(name)}",
-                "lastmod": None,
-                "view_count": 0,
-                "page_type": "tag",
-            }
-        )
-    return items
 
 
 def build_public_page_urls_for_site(
@@ -22556,16 +23150,27 @@ def admin_indexing_submit(
     else:
         target_urls = _dedupe_urls_keep_order(payload.urls)
 
-    target_urls = _dedupe_urls_keep_order(queued_urls + target_urls)
+    target_urls, invalid_carryover_urls = _merge_indexing_urls_prioritize_carryover(
+        queued_urls,
+        target_urls,
+    )
+    if invalid_carryover_urls:
+        logger.warning(
+            "indexing carryover contains invalid urls; dropped count=%s sample=%s",
+            len(invalid_carryover_urls),
+            invalid_carryover_urls[:3],
+        )
 
-    invalid_urls = [url for url in target_urls if not _is_frontend_origin_url(url)]
-    if invalid_urls:
+    _, invalid_payload_urls = _filter_frontend_origin_urls(payload.urls or [])
+    if invalid_payload_urls:
         raise HTTPException(
             400,
-            f"FRONTEND_ORIGIN 配下ではないURLは送信できません。例: {invalid_urls[0]}",
+            f"FRONTEND_ORIGIN 配下ではないURLは送信できません。例: {invalid_payload_urls[0]}",
         )
 
     if not target_urls:
+        if invalid_carryover_urls:
+            _set_indexing_carryover_urls([])
         carryover_payload = _get_indexing_carryover_payload()
         carryover_urls = list(carryover_payload.get("urls") or [])
         return AdminIndexingSubmitOut(
@@ -22653,6 +23258,199 @@ def admin_indexing_carryover_clear(request: Request):
         carryover_count=0,
         carryover_updated_at=None,
         carryover_urls=[],
+    )
+
+
+def _indexnow_host_from_request(request: Request) -> str:
+    if INDEXNOW_HOST:
+        return INDEXNOW_HOST
+    host = _site_host_no_port_from_request(request)
+    if host:
+        return host
+    try:
+        parsed = urlparse(FRONTEND_ORIGIN.rstrip("/"))
+        if parsed.hostname:
+            return parsed.hostname.strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _indexnow_key_location(request: Request) -> str:
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    return f"{base_origin.rstrip('/')}/{INDEXNOW_KEY}.txt"
+
+
+def _is_novel_indexable_for_search(novel: models.Novel | None) -> bool:
+    if novel is None:
+        return False
+    if not bool(getattr(novel, "is_public", False)):
+        return False
+    if str(getattr(novel, "status", "public") or "public") != "public":
+        return False
+    if str(getattr(novel, "age_limit", "all") or "all") == "r18":
+        return False
+    return True
+
+
+def _is_episode_indexable_for_search(ep: models.Episode | None, novel: models.Novel | None) -> bool:
+    if ep is None or novel is None:
+        return False
+    if not _is_novel_indexable_for_search(novel):
+        return False
+    if not bool(getattr(ep, "is_public", False)):
+        return False
+    if str(getattr(ep, "status", "public") or "public") != "public":
+        return False
+    return True
+
+
+def _background_submit_indexnow_urls(
+    event: str,
+    urls: list[str],
+    host: str,
+    key_location: str,
+) -> None:
+    if not INDEXNOW_ENABLED or not INDEXNOW_KEY:
+        return
+    endpoint = str(INDEXNOW_ENDPOINT or "").strip()
+    if not endpoint:
+        return
+
+    target_urls = [url for url in _dedupe_urls_keep_order(urls) if _is_frontend_origin_url(url)]
+    if not target_urls:
+        return
+
+    body = {
+        "host": host,
+        "key": INDEXNOW_KEY,
+        "keyLocation": key_location,
+        "urlList": target_urls,
+    }
+    normalized_event = str(event or "").strip()
+    if normalized_event in ("urlUpdated", "urlDeleted"):
+        body["eventType"] = normalized_event
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                endpoint,
+                json=body,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "indexnow auto submit failed status=%s body=%s urls=%s",
+                resp.status_code,
+                (resp.text or "")[:300],
+                target_urls[:5],
+            )
+    except Exception as e:
+        logger.warning("indexnow auto submit exception err=%r urls=%s", e, target_urls[:5])
+
+
+def _enqueue_indexnow_urls(
+    *,
+    background_tasks: BackgroundTasks | None,
+    request: Request | None,
+    event: str,
+    urls: list[str],
+) -> None:
+    if not INDEXNOW_ENABLED or not INDEXNOW_KEY:
+        return
+    target_urls = _dedupe_urls_keep_order(urls or [])
+    if not target_urls:
+        return
+    host = _indexnow_host_from_request(request) if request is not None else ""
+    if not host:
+        return
+    key_location = _indexnow_key_location(request) if request is not None else ""
+    if not key_location:
+        return
+    if background_tasks is not None:
+        background_tasks.add_task(_background_submit_indexnow_urls, event, target_urls, host, key_location)
+        return
+    _background_submit_indexnow_urls(event, target_urls, host, key_location)
+
+
+@app.get("/{indexnow_key_file}.txt")
+def indexnow_key_file(indexnow_key_file: str):
+    if not INDEXNOW_ENABLED or not INDEXNOW_KEY:
+        raise HTTPException(404, "Not found")
+    if indexnow_key_file != INDEXNOW_KEY:
+        raise HTTPException(404, "Not found")
+    return Response(content=INDEXNOW_KEY + "\n", media_type="text/plain; charset=utf-8")
+
+
+@app.post("/api/admin/indexnow/submit", response_model=AdminIndexNowSubmitOut)
+def admin_indexnow_submit(
+    payload: AdminIndexNowSubmitRequest,
+    request: Request,
+):
+    require_admin(request)
+    if not INDEXNOW_ENABLED:
+        raise HTTPException(400, "INDEXNOW_ENABLED が無効です。")
+    if not INDEXNOW_KEY:
+        raise HTTPException(400, "INDEXNOW_KEY が未設定です。")
+    endpoint = str(INDEXNOW_ENDPOINT or "").strip()
+    if not endpoint:
+        raise HTTPException(400, "INDEXNOW_ENDPOINT が未設定です。")
+
+    target_urls = _dedupe_urls_keep_order(payload.urls or [])
+    if not target_urls:
+        raise HTTPException(400, "送信対象URLがありません。")
+    invalid_urls = [url for url in target_urls if not _is_frontend_origin_url(url)]
+    if invalid_urls:
+        raise HTTPException(400, f"FRONTEND_ORIGIN 配下ではないURLは送信できません。例: {invalid_urls[0]}")
+
+    host = _indexnow_host_from_request(request)
+    if not host:
+        raise HTTPException(500, "IndexNow host を解決できませんでした。")
+    key_location = _indexnow_key_location(request)
+
+    req_body = {
+        "host": host,
+        "key": INDEXNOW_KEY,
+        "keyLocation": key_location,
+        "urlList": target_urls,
+    }
+    event = str(payload.event or "urlUpdated").strip()
+    if event in ("urlUpdated", "urlDeleted"):
+        req_body["eventType"] = event
+
+    status_code: int | None = None
+    req_error: str | None = None
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                endpoint,
+                json=req_body,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+        status_code = int(resp.status_code)
+        if resp.status_code >= 400:
+            req_error = (resp.text or "").strip()[:500] or f"HTTP {resp.status_code}"
+    except Exception as e:
+        req_error = repr(e)
+
+    ok = status_code is not None and 200 <= int(status_code) < 300 and not req_error
+    items = [
+        AdminIndexNowSubmitItem(
+            url=url,
+            ok=ok,
+            status_code=status_code,
+            error=req_error,
+        )
+        for url in target_urls
+    ]
+    return AdminIndexNowSubmitOut(
+        submitted=len(target_urls),
+        success=len(target_urls) if ok else 0,
+        failed=0 if ok else len(target_urls),
+        host=host,
+        endpoint=endpoint,
+        key_location=key_location,
+        items=items,
     )
 
 
@@ -22762,11 +23560,29 @@ def _sitemap_urlset_xml(urls: list[tuple[str, Optional[datetime]]]) -> str:
     )
 
 
-def _sitemap_index_xml(sitemaps: list[str]) -> str:
+def _max_lastmod(items: list[dict]) -> Optional[datetime]:
+    latest: Optional[datetime] = None
+    for item in items:
+        ts = item.get("lastmod")
+        if not isinstance(ts, datetime):
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    return latest
+
+
+def _sitemap_index_xml(sitemaps: list[str | tuple[str, Optional[datetime]]]) -> str:
     items = []
-    for loc in sitemaps:
+    for sitemap in sitemaps:
+        if isinstance(sitemap, tuple):
+            loc, lastmod = sitemap
+        else:
+            loc, lastmod = sitemap, None
         safe_loc = html.escape(loc, quote=True)
-        items.append(f"<sitemap><loc>{safe_loc}</loc></sitemap>")
+        lastmod_tag = ""
+        if isinstance(lastmod, datetime):
+            lastmod_tag = f"<lastmod>{lastmod.date().isoformat()}</lastmod>"
+        items.append(f"<sitemap><loc>{safe_loc}</loc>{lastmod_tag}</sitemap>")
     return (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
@@ -22792,10 +23608,67 @@ def _sitemap_merge_urls(
     return list(merged.items())
 
 
+def _sitemap_part_urls_for_site(db: Session, *, base: str, site_key: str, part: str) -> list[tuple[str, Optional[datetime]]]:
+    split = _sitemap_split_url_items_for_site(db, base=base, site_key=site_key)
+    rows = split.get(part, [])
+    return [(row["url"], row.get("lastmod")) for row in rows]
+
+
+def _sitemap_index_entries_for_site(db: Session, *, base: str, site_key: str) -> list[tuple[str, Optional[datetime]]]:
+    split = _sitemap_split_url_items_for_site(db, base=base, site_key=site_key)
+    return [
+        (f"{base}/sitemap-static.xml", _max_lastmod(split.get("static", []))),
+        (f"{base}/sitemap-novels.xml", _max_lastmod(split.get("novels", []))),
+        (f"{base}/sitemap-episodes.xml", _max_lastmod(split.get("episodes", []))),
+        (f"{base}/sitemap-authors.xml", _max_lastmod(split.get("authors", []))),
+        (f"{base}/sitemap-tags.xml", _max_lastmod(split.get("tags", []))),
+    ]
+
+
 @app.get("/sitemap-main.xml")
 def sitemap_main_xml(request: Request, db: Session = Depends(get_db)):
     base = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
     urls = build_public_page_urls_for_site(db, base=base, site_key="main")
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/sitemap-static.xml")
+def sitemap_static_xml(request: Request, db: Session = Depends(get_db)):
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    site_key = resolve_site_key(request)
+    urls = _sitemap_part_urls_for_site(db, base=base_origin, site_key=site_key, part="static")
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/sitemap-novels.xml")
+def sitemap_novels_xml(request: Request, db: Session = Depends(get_db)):
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    site_key = resolve_site_key(request)
+    urls = _sitemap_part_urls_for_site(db, base=base_origin, site_key=site_key, part="novels")
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/sitemap-episodes.xml")
+def sitemap_episodes_xml(request: Request, db: Session = Depends(get_db)):
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    site_key = resolve_site_key(request)
+    urls = _sitemap_part_urls_for_site(db, base=base_origin, site_key=site_key, part="episodes")
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/sitemap-authors.xml")
+def sitemap_authors_xml(request: Request, db: Session = Depends(get_db)):
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    site_key = resolve_site_key(request)
+    urls = _sitemap_part_urls_for_site(db, base=base_origin, site_key=site_key, part="authors")
+    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+
+
+@app.get("/sitemap-tags.xml")
+def sitemap_tags_xml(request: Request, db: Session = Depends(get_db)):
+    base_origin = _request_origin(request, fallback=FRONTEND_ORIGIN.rstrip("/"))
+    site_key = resolve_site_key(request)
+    urls = _sitemap_part_urls_for_site(db, base=base_origin, site_key=site_key, part="tags")
     return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
 
 
@@ -22813,14 +23686,18 @@ def sitemap_index_xml(request: Request, db: Session = Depends(get_db)):
     family = _sitemap_family_domain(host)
     if not family:
         site_key = resolve_site_key(request)
-        urls = build_public_page_urls_for_site(db, base=base_origin, site_key=site_key)
-        return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+        entries = _sitemap_index_entries_for_site(db, base=base_origin, site_key=site_key)
+        return Response(content=_sitemap_index_xml(entries), media_type="application/xml")
 
-    sitemaps = [
-        f"{scheme}://{family}/sitemap-main.xml",
-        f"{scheme}://renai.{family}/sitemap.xml",
-        f"{scheme}://rekishi.{family}/sitemap.xml",
-    ]
+    base_main = f"{scheme}://{family}"
+    main_entries = _sitemap_index_entries_for_site(db, base=base_main, site_key="main")
+    sitemaps: list[tuple[str, Optional[datetime]]] = list(main_entries)
+    sitemaps.extend(
+        [
+            (f"{scheme}://renai.{family}/sitemap.xml", None),
+            (f"{scheme}://rekishi.{family}/sitemap.xml", None),
+        ]
+    )
     return Response(content=_sitemap_index_xml(sitemaps), media_type="application/xml")
 
 
@@ -22837,19 +23714,21 @@ def sitemap_xml(request: Request, db: Session = Depends(get_db)):
 
     family = _sitemap_family_domain(host)
     if family:
-        # Apex sitemap includes subdomain URLs too (useful for Domain property in Search Console).
+        # Apex sitemap is an index and points to each site-part + subdomains.
         base_main = f"{scheme}://{family}"
-        base_romance = f"{scheme}://renai.{family}"
-        base_history = f"{scheme}://rekishi.{family}"
-        urls_main = build_public_page_urls_for_site(db, base=base_main, site_key="main")
-        urls_romance = build_public_page_urls_for_site(db, base=base_romance, site_key="romance")
-        urls_history = build_public_page_urls_for_site(db, base=base_history, site_key="history")
-        merged = _sitemap_merge_urls(urls_main, urls_romance, urls_history)
-        return Response(content=_sitemap_urlset_xml(merged), media_type="application/xml")
+        main_entries = _sitemap_index_entries_for_site(db, base=base_main, site_key="main")
+        sitemaps: list[tuple[str, Optional[datetime]]] = list(main_entries)
+        sitemaps.extend(
+            [
+                (f"{scheme}://renai.{family}/sitemap.xml", None),
+                (f"{scheme}://rekishi.{family}/sitemap.xml", None),
+            ]
+        )
+        return Response(content=_sitemap_index_xml(sitemaps), media_type="application/xml")
 
     site_key = resolve_site_key(request)
-    urls = build_public_page_urls_for_site(db, base=base_origin, site_key=site_key)
-    return Response(content=_sitemap_urlset_xml(urls), media_type="application/xml")
+    entries = _sitemap_index_entries_for_site(db, base=base_origin, site_key=site_key)
+    return Response(content=_sitemap_index_xml(entries), media_type="application/xml")
 
 
 @app.get("/robots.txt")
@@ -22860,7 +23739,27 @@ def robots_txt(request: Request):
     host = _site_host_no_port_from_request(request)
     family = _sitemap_family_domain(host)
 
-    lines = ["User-agent: *", "Allow: /"]
+    lines = [
+        "User-agent: *",
+        "Allow: /",
+        "Disallow: /admin",
+        "Disallow: /login",
+        "Disallow: /register",
+        "Disallow: /reset-password",
+        "Disallow: /oauth/",
+        "Disallow: /mypage",
+        "Disallow: /notifications",
+        "Disallow: /me/",
+        "Disallow: /dms/",
+        "Disallow: /api/auth/",
+        "Disallow: /api/admin/",
+        "Disallow: /api/me/",
+        "Disallow: /api/users/me",
+        "Disallow: /api/stripe/",
+        "Disallow: /api/support/",
+        "Disallow: /api/membership/",
+        "Disallow: /api/ai/",
+    ]
     if family and host in (family, f"www.{family}"):
         lines.append(f"Sitemap: {scheme}://{family}/sitemap.xml")
         lines.append(f"Sitemap: {scheme}://{family}/sitemap-index.xml")

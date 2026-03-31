@@ -5,6 +5,8 @@ import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
 import { getApiBase } from "../lib/apiBase";
+import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
+import { isRecentEpisode } from "../lib/freshness";
 import {
   dismissGuideBubble,
   getDismissedGuideBubbles,
@@ -52,6 +54,71 @@ export default function NovelDetail() {
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [comments]);
+
+  useEffect(() => {
+    if (!novel) return undefined;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const safeNovelId = encodeURIComponent(String(id || novel.id || ""));
+    const canonicalPath = `/novels/${safeNovelId}`;
+    const canonicalUrl = `${origin}${canonicalPath}`;
+    const pageTitle = t({
+      ja: `${novel.title || "無題の小説"}｜小説投稿サイトLexis`,
+      en: `${novel.title || "Untitled Novel"} | Lexis`,
+    });
+    const firstEpisodeBody = Array.isArray(novel.episodes) && novel.episodes.length > 0
+      ? novel.episodes[0]?.body
+      : "";
+    const pageDescription = buildSeoDescription(
+      novel.description,
+      summarizeText(firstEpisodeBody, 140),
+      t({ ja: "公開中の小説ページです。", en: "Public novel page." })
+    );
+    const robots =
+      novel?.is_public === true &&
+      String(novel?.status || "public") === "public" &&
+      String(novel?.age_limit || "all") !== "r18"
+        ? "index,follow"
+        : "noindex,follow";
+    const authorName = String(novel?.author_username || "").trim();
+    const authorUrl = authorName ? `${origin}/users/${encodeURIComponent(authorName)}` : "";
+    const jsonLd = [
+      {
+        "@context": "https://schema.org",
+        "@type": "Book",
+        name: novel?.title || "Untitled Novel",
+        description: pageDescription,
+        url: canonicalUrl,
+        author: authorName
+          ? { "@type": "Person", name: authorName, url: authorUrl }
+          : undefined,
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: `${origin}/` },
+          { "@type": "ListItem", position: 2, name: novel?.title || "Novel", item: canonicalUrl },
+        ],
+      },
+    ];
+    if (authorName) {
+      jsonLd.push({
+        "@context": "https://schema.org",
+        "@type": "Person",
+        name: authorName,
+        url: authorUrl,
+      });
+    }
+    return applySeoMeta({
+      title: pageTitle,
+      description: pageDescription,
+      canonicalPath,
+      ogType: "article",
+      imageUrl: novel?.cover_image_url || "/ogp.png",
+      robots,
+      jsonLd,
+    });
+  }, [novel, id, t, lang]);
 
 
   const formatDateTime = (isoString) => {
@@ -944,6 +1011,11 @@ export default function NovelDetail() {
                     ep.title
                   )}
                 </Link>
+                {isRecentEpisode(ep, 7) && (
+                  <span className="age-chip novel-fresh-chip">
+                    {t({ ja: "新着", en: "New" })}
+                  </span>
+                )}
 
                 {/* エピソード編集・削除ボタン */}
                 <button

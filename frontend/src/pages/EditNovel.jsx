@@ -15,6 +15,7 @@ export default function EditNovel() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [characterNamesInput, setCharacterNamesInput] = useState("");
   const [ageLimit, setAgeLimit] = useState("all");           // 全年齢 / R15 / R18
   const [isAIGenerated, setIsAIGenerated] = useState(false); // AI創作フラグ
   const [creativeType, setCreativeType] = useState("original"); // オリジナル / 二次創作
@@ -37,12 +38,21 @@ export default function EditNovel() {
   const [titleCandidates, setTitleCandidates] = useState([]);
   const [tagSuggestLoading, setTagSuggestLoading] = useState(false);
   const [tagSuggestError, setTagSuggestError] = useState("");
+  const [characterSuggestLoading, setCharacterSuggestLoading] = useState(false);
+  const [characterSuggestError, setCharacterSuggestError] = useState("");
   const [tagCandidates, setTagCandidates] = useState([]);
   const [selectedTagCandidates, setSelectedTagCandidates] = useState(() => new Set());
   const [showCoverModal, setShowCoverModal] = useState(false);
   const [coverGenerating, setCoverGenerating] = useState(false);
   const [coverSaving, setCoverSaving] = useState(false);
+  const [coverRemoving, setCoverRemoving] = useState(false);
   const [coverError, setCoverError] = useState("");
+  const [localCoverFile, setLocalCoverFile] = useState(null);
+  const [localCoverUploading, setLocalCoverUploading] = useState(false);
+  const [localCoverError, setLocalCoverError] = useState("");
+  const [fanficAutoFillLoading, setFanficAutoFillLoading] = useState(false);
+  const [fanficAutoFillError, setFanficAutoFillError] = useState("");
+  const [fanficSourceTitleCandidates, setFanficSourceTitleCandidates] = useState([]);
   const [coverHistory, setCoverHistory] = useState([]);
   const [coverForm, setCoverForm] = useState({
     genre: "",
@@ -102,6 +112,7 @@ export default function EditNovel() {
           setCreativeType(data.creative_type || "original");
           setFanficSourceTitle(data.fanfic_source_title || "");
           setFanficCharacters(data.fanfic_characters || "");
+          setCharacterNamesInput(data.fanfic_characters || "");
           setFanficCoupling(data.fanfic_coupling || "");
           setFanficNotes(data.fanfic_notes || "");
           setSeriesName(data.series_name || "");
@@ -167,6 +178,7 @@ export default function EditNovel() {
       if (draft.creativeType) setCreativeType(draft.creativeType);
       if (typeof draft.fanficSourceTitle === "string") setFanficSourceTitle(draft.fanficSourceTitle);
       if (typeof draft.fanficCharacters === "string") setFanficCharacters(draft.fanficCharacters);
+      if (typeof draft.characterNamesInput === "string") setCharacterNamesInput(draft.characterNamesInput);
       if (typeof draft.fanficCoupling === "string") setFanficCoupling(draft.fanficCoupling);
       if (typeof draft.fanficNotes === "string") setFanficNotes(draft.fanficNotes);
       if (typeof draft.seriesName === "string") setSeriesName(draft.seriesName);
@@ -191,6 +203,7 @@ export default function EditNovel() {
         creativeType,
         fanficSourceTitle,
         fanficCharacters,
+        characterNamesInput,
         fanficCoupling,
         fanficNotes,
         seriesName,
@@ -216,6 +229,7 @@ export default function EditNovel() {
     creativeType,
     fanficSourceTitle,
     fanficCharacters,
+    characterNamesInput,
     fanficCoupling,
     fanficNotes,
     seriesName,
@@ -260,7 +274,10 @@ export default function EditNovel() {
                 is_ai_generated: isAIGenerated,
                 creative_type: creativeType,
                 fanfic_source_title: creativeType === "fanfic" ? fanficSourceTitle : "",
-                fanfic_characters: creativeType === "fanfic" ? fanficCharacters : "",
+                fanfic_characters:
+                  creativeType === "fanfic"
+                    ? (fanficCharacters || "").trim() || (characterNamesInput || "").trim()
+                    : "",
                 fanfic_coupling: creativeType === "fanfic" ? fanficCoupling : "",
                 fanfic_notes: creativeType === "fanfic" ? fanficNotes : "",
                 series_name: seriesName,
@@ -403,6 +420,87 @@ export default function EditNovel() {
       setCoverError(e.message || t({ ja: "表紙設定に失敗しました", en: "Failed to set novel cover." }));
     } finally {
       setCoverSaving(false);
+    }
+  };
+
+  const handleRemoveNovelCover = async () => {
+    const confirmed = window.confirm(t({ ja: "現在の表紙を削除しますか？", en: "Remove current cover?" }));
+    if (!confirmed) return;
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+    try {
+      setCoverError("");
+      setCoverRemoving(true);
+      const res = await fetch(`${API_BASE}/api/novels/${id}/cover`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || t({ ja: "表紙削除に失敗しました", en: "Failed to remove cover." }));
+      }
+      setNovelCoverImageUrl("");
+    } catch (e) {
+      setCoverError(e.message || t({ ja: "表紙削除に失敗しました", en: "Failed to remove cover." }));
+    } finally {
+      setCoverRemoving(false);
+    }
+  };
+
+  const resolveCoverUrl = (raw) => {
+    const path = String(raw || "").trim();
+    if (!path) return "";
+    if (path.startsWith("http://") || path.startsWith("https://")) return path;
+    return `${API_BASE}${path}`;
+  };
+
+  const handleLocalCoverFileChange = (e) => {
+    const file = e.target.files?.[0] || null;
+    setLocalCoverFile(file);
+    setLocalCoverError("");
+  };
+
+  const handleUploadLocalCover = async () => {
+    if (!localCoverFile) {
+      setLocalCoverError(
+        t({ ja: "表紙画像ファイルを選択してください。", en: "Please select a cover image file." })
+      );
+      return;
+    }
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+    try {
+      setLocalCoverUploading(true);
+      setLocalCoverError("");
+      const formData = new FormData();
+      formData.append("file", localCoverFile);
+      const res = await fetch(`${API_BASE}/api/novels/${id}/cover-image`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data.detail ||
+            t({ ja: "表紙画像のアップロードに失敗しました。", en: "Failed to upload cover image." })
+        );
+      }
+      setNovelCoverImageUrl(data.cover_image_path || "");
+      setLocalCoverFile(null);
+    } catch (e) {
+      setLocalCoverError(
+        e.message ||
+          t({ ja: "表紙画像のアップロード中にエラーが発生しました。", en: "Failed while uploading cover image." })
+      );
+    } finally {
+      setLocalCoverUploading(false);
     }
   };
 
@@ -562,6 +660,131 @@ export default function EditNovel() {
     setSelectedTagCandidates(new Set());
   };
 
+  const handleSuggestCharacterNames = async () => {
+    setCharacterSuggestError("");
+    const sourceText = [title, description, tagsInput].filter(Boolean).join("\n");
+    if (!sourceText.trim()) {
+      setCharacterSuggestError(
+        t({
+          ja: "タイトル/説明/タグが空のためキャラ名を抽出できません。",
+          en: "No title/description/tags to extract character names.",
+        })
+      );
+      return;
+    }
+    try {
+      setCharacterSuggestLoading(true);
+      const res = await fetch(`${API_BASE}/api/ai/character_terms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description,
+          tags: tagsInput,
+          limit: 8,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t({ ja: "キャラ名の抽出に失敗しました。", en: "Failed to extract character names." })
+        );
+      }
+      const terms = Array.isArray(data?.terms)
+        ? data.terms.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (!terms.length) {
+        throw new Error(
+          t({ ja: "キャラ名候補を抽出できませんでした。", en: "No character name candidates found." })
+        );
+      }
+      setCharacterNamesInput(terms.slice(0, 5).join(", "));
+    } catch (e) {
+      console.error(e);
+      setCharacterSuggestError(
+        e.message ||
+          t({ ja: "キャラ名の抽出中にエラーが発生しました。", en: "Failed while extracting character names." })
+      );
+    } finally {
+      setCharacterSuggestLoading(false);
+    }
+  };
+
+  const handleAutoFillFanficFields = async () => {
+    setCreativeType("fanfic");
+    setFanficAutoFillError("");
+    setFanficSourceTitleCandidates([]);
+    const source = (fanficSourceTitle || "").trim() || (title || "").trim();
+    const rawTags = (tagsInput || "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const fallbackChars = rawTags.slice(0, 3).join(", ");
+    const nextCharacters = (fanficCharacters || "").trim() || fallbackChars || "主人公, 相手役";
+    const charTokens = nextCharacters
+      .split(/[,\u3001]/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const nextPairing =
+      (fanficCoupling || "").trim() ||
+      (charTokens.length >= 2 ? `${charTokens[0]}×${charTokens[1]}` : "");
+    const nextNotes =
+      (fanficNotes || "").trim() ||
+      "二次創作です。原作・公式とは関係ありません。解釈違いを含む可能性があります。";
+
+    const charQuery =
+      (fanficCharacters || "").trim() ||
+      (characterNamesInput || "").trim() ||
+      fallbackChars;
+    let inferredSourceTitle = source;
+    if (charQuery) {
+      try {
+        setFanficAutoFillLoading(true);
+        const res = await fetch(`${API_BASE}/api/ai/novels/auto-fill`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: (title || "").trim() || undefined,
+            characters: charQuery,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data?.detail ||
+              t({ ja: "タイトル推測に失敗しました。", en: "Failed to infer source title." })
+          );
+        }
+        const candidates = Array.isArray(data?.source_title_candidates)
+          ? data.source_title_candidates.map((v) => String(v || "").trim()).filter(Boolean)
+          : [];
+        const topCandidates = candidates.slice(0, 5);
+        setFanficSourceTitleCandidates(topCandidates);
+        inferredSourceTitle =
+          String(data?.inferred_source_title || "").trim() || topCandidates[0] || inferredSourceTitle;
+      } catch (e) {
+        console.error(e);
+        setFanficAutoFillError(
+          e.message ||
+            t({
+              ja: "Google検索でのタイトル推測に失敗したため、ローカル補完のみ行いました。",
+              en: "Google title inference failed. Applied local autofill only.",
+            })
+        );
+      } finally {
+        setFanficAutoFillLoading(false);
+      }
+    }
+
+    if (!fanficSourceTitle.trim()) setFanficSourceTitle(inferredSourceTitle);
+    if (!fanficCharacters.trim()) {
+      setFanficCharacters((characterNamesInput || "").trim() || nextCharacters);
+    }
+    if (!fanficCoupling.trim()) setFanficCoupling(nextPairing);
+    if (!fanficNotes.trim()) setFanficNotes(nextNotes);
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
@@ -676,12 +899,50 @@ export default function EditNovel() {
               {novelCoverImageUrl && (
                 <div style={{ marginBottom: 8 }}>
                   <img
-                    src={`${API_BASE}${novelCoverImageUrl}`}
+                    src={resolveCoverUrl(novelCoverImageUrl)}
                     alt={t({ ja: "現在の表紙", en: "Current cover" })}
                     style={{ width: 180, borderRadius: 8, border: "1px solid #ddd" }}
                   />
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-border"
+                      onClick={handleRemoveNovelCover}
+                      disabled={coverSaving || coverGenerating || coverRemoving}
+                    >
+                      {coverRemoving
+                        ? t({ ja: "削除中...", en: "Removing..." })
+                        : t({ ja: "表紙を削除", en: "Remove cover" })}
+                    </button>
+                  </div>
                 </div>
               )}
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 14, marginBottom: 6 }}>
+                  {t({ ja: "ローカル画像を表紙に設定", en: "Set cover from local image" })}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <input type="file" accept="image/*" onChange={handleLocalCoverFileChange} />
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={handleUploadLocalCover}
+                    disabled={localCoverUploading || !localCoverFile}
+                  >
+                    {localCoverUploading
+                      ? t({ ja: "アップロード中...", en: "Uploading..." })
+                      : t({ ja: "この画像を表紙に反映", en: "Apply this image as cover" })}
+                  </button>
+                </div>
+                {localCoverFile && (
+                  <div style={{ marginTop: 6, fontSize: "0.85rem", color: "#666" }}>
+                    {t({ ja: "選択中: {{name}}", en: "Selected: {{name}}" }, { name: localCoverFile.name })}
+                  </div>
+                )}
+                {localCoverError && (
+                  <div style={{ marginTop: 6, color: "red" }}>{localCoverError}</div>
+                )}
+              </div>
               <button type="button" className="btn btn-border" onClick={openCoverModal}>
                 {t({ ja: "AI表紙を生成・選択", en: "Generate / Select AI cover" })}
               </button>
@@ -838,6 +1099,35 @@ export default function EditNovel() {
               </label>
             </div>
 
+            <div style={{ marginBottom: 8 }}>
+              <label>
+                {t({ ja: "キャラ名（検索・補助用）", en: "Character names (for search/autofill)" })}
+                <br />
+                <input
+                  type="text"
+                  value={characterNamesInput}
+                  onChange={(e) => setCharacterNamesInput(e.target.value)}
+                  style={{ width: "100%", padding: 4 }}
+                  placeholder={t({ ja: "例: 五条 悟, 夏油 傑", en: "e.g., Gojo Satoru, Geto Suguru" })}
+                />
+              </label>
+              <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={handleSuggestCharacterNames}
+                  disabled={characterSuggestLoading}
+                >
+                  {characterSuggestLoading
+                    ? t({ ja: "抽出中...", en: "Extracting..." })
+                    : t({ ja: "キャラ名を自動入力", en: "Auto-fill character names" })}
+                </button>
+              </div>
+              {characterSuggestError && (
+                <div style={{ marginTop: 6, color: "red" }}>{characterSuggestError}</div>
+              )}
+            </div>
+
             {creativeType === "fanfic" && (
               <section
                 style={{
@@ -851,6 +1141,19 @@ export default function EditNovel() {
                   {t({ ja: "二次創作向け入力", en: "Fanfic fields" })}
                 </h3>
                 <div style={{ marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-border"
+                    onClick={handleAutoFillFanficFields}
+                    disabled={fanficAutoFillLoading}
+                  >
+                    {fanficAutoFillLoading
+                      ? t({ ja: "推測中...", en: "Inferring..." })
+                      : t({ ja: "二次創作向け入力を自動で埋める", en: "Auto-fill fanfic fields" })}
+                  </button>
+                </div>
+                {fanficAutoFillError && <div style={{ marginBottom: 8, color: "red" }}>{fanficAutoFillError}</div>}
+                <div style={{ marginBottom: 8 }}>
                   <label>
                     {t({ ja: "原作名", en: "Source title" })}<br />
                     <input
@@ -860,6 +1163,29 @@ export default function EditNovel() {
                       style={{ width: "100%", padding: 4 }}
                     />
                   </label>
+                  {fanficSourceTitleCandidates.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: "0.85rem", color: "#666", marginBottom: 6 }}>
+                        {t({ ja: "カスタム検索候補（最大5件）", en: "Custom search candidates (up to 5)" })}
+                      </div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {fanficSourceTitleCandidates.map((candidate, idx) => (
+                          <button
+                            key={`fanfic-source-${idx}-${candidate}`}
+                            type="button"
+                            className="btn btn-border"
+                            onClick={() => setFanficSourceTitle(candidate)}
+                            style={{
+                              textAlign: "left",
+                              borderColor: fanficSourceTitle === candidate ? "var(--primary)" : undefined,
+                            }}
+                          >
+                            {candidate}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div style={{ marginBottom: 8 }}>
                   <label>
@@ -1093,15 +1419,33 @@ export default function EditNovel() {
                       {item.status === "failed" ? t({ ja: "失敗", en: "Failed" }) : item.status}
                     </div>
                     {item.image_path && item.status === "succeeded" && (
-                      <button
-                        type="button"
-                        className="btn btn-border"
-                        style={{ marginTop: 8, width: "100%" }}
-                        onClick={() => handleAdoptCover(item.image_path)}
-                        disabled={coverSaving || coverGenerating}
-                      >
-                        {t({ ja: "この画像を表紙に設定", en: "Use this image as cover" })}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-border"
+                          style={{ marginTop: 8, width: "100%" }}
+                          onClick={() => handleAdoptCover(item.image_path)}
+                          disabled={coverSaving || coverGenerating || coverRemoving}
+                        >
+                          {t({ ja: "この画像を表紙に設定", en: "Use this image as cover" })}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-border"
+                          style={{ marginTop: 6, width: "100%" }}
+                          onClick={handleRemoveNovelCover}
+                          disabled={
+                            coverSaving ||
+                            coverGenerating ||
+                            coverRemoving ||
+                            String(item.image_path || "") !== String(novelCoverImageUrl || "")
+                          }
+                        >
+                          {coverRemoving
+                            ? t({ ja: "削除中...", en: "Removing..." })
+                            : t({ ja: "表紙を削除", en: "Remove cover" })}
+                        </button>
+                      </>
                     )}
                   </div>
                 ))}

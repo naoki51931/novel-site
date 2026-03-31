@@ -636,6 +636,7 @@ export default function App() {
           <Link
             to="/ai_chat"
             className="nav-link"
+            style={{ position: "relative", zIndex: 10 }}
             onClick={() => setMenuOpen(false)}
           >
             {t(HEADER_I18N.aiChat)}
@@ -993,10 +994,10 @@ export default function App() {
             gap: 8,
           }}
         >
-          <Link className="btn btn-border" to="/contact">
+          <Link className="btn btn-border" to="/contact" style={{ position: "relative", zIndex: 10 }}>
             {t(HEADER_I18N.contact)}
           </Link>
-          <Link className="btn btn-border" to="/admin">
+          <Link className="btn btn-border" to="/admin" style={{ position: "relative", zIndex: 10 }}>
             {t(HEADER_I18N.admin)}
           </Link>
         </footer>

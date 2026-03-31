@@ -20,6 +20,8 @@ const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
 const DEFAULT_AI_NOVEL_MODEL = "gpt-5-mini";
+const REVISION_CHUNK_MAX_CHARS = 3200;
+const COMMENT_REVISION_OUTPUT_RETRY_MAX = 5;
 
 function savePendingAiPost(data) {
   try {
@@ -175,6 +177,121 @@ function uint8ArrayToBase64Url(bytes) {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function buildLineDiffSegments(beforeText, afterText) {
+  const beforeLines = String(beforeText || "").split("\n");
+  const afterLines = String(afterText || "").split("\n");
+  const n = beforeLines.length;
+  const m = afterLines.length;
+  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      if (beforeLines[i] === afterLines[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  const unchangedAfterIndexes = new Set();
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (beforeLines[i] === afterLines[j]) {
+      unchangedAfterIndexes.add(j);
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+
+  return afterLines.map((line, idx) => ({
+    text: idx === afterLines.length - 1 ? line : `${line}\n`,
+    changed: !unchangedAfterIndexes.has(idx),
+  }));
+}
+
+function splitTextForRevision(text, maxChars = 7000) {
+  const source = String(text || "");
+  if (!source) return [];
+  if (source.length <= maxChars) {
+    return [{ start: 0, end: source.length, text: source }];
+  }
+
+  const chunks = [];
+  let start = 0;
+  while (start < source.length) {
+    let end = Math.min(start + maxChars, source.length);
+    if (end < source.length) {
+      const windowText = source.slice(start, end);
+      const minCut = Math.floor(maxChars * 0.6);
+      const candidates = [
+        windowText.lastIndexOf("\n\n"),
+        windowText.lastIndexOf("\n"),
+        windowText.lastIndexOf("。"),
+        windowText.lastIndexOf("！"),
+        windowText.lastIndexOf("？"),
+      ].filter((idx) => idx >= minCut);
+      if (candidates.length > 0) {
+        const cut = Math.max(...candidates);
+        const markerLen = windowText.slice(cut, cut + 2) === "\n\n" ? 2 : 1;
+        end = start + cut + markerLen;
+      }
+    }
+    if (end <= start) {
+      end = Math.min(start + maxChars, source.length);
+    }
+    chunks.push({
+      start,
+      end,
+      text: source.slice(start, end),
+    });
+    start = end;
+  }
+  return chunks;
+}
+
+function getCommentRevisionOutputIssue(text) {
+  const raw = String(text || "");
+  if (!raw.trim()) return "empty";
+
+  const stripFence = (s) => {
+    const t = (s || "").trim();
+    if (!t.startsWith("```")) return t;
+    const lines = t.split("\n");
+    if (lines.length && lines[0].startsWith("```")) lines.shift();
+    if (lines.length && lines[lines.length - 1].trim() === "```") lines.pop();
+    return lines.join("\n").trim();
+  };
+
+  const cleaned = stripFence(raw);
+  const looksLikeJson =
+    cleaned.startsWith("{")
+    || cleaned.startsWith("[")
+    || cleaned.includes('"body"')
+    || cleaned.includes("'body'");
+  if (!looksLikeJson) return "";
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== "object") return "json_invalid";
+    const extracted =
+      (typeof parsed.body === "string" && parsed.body)
+      || (typeof parsed.text === "string" && parsed.text)
+      || (typeof parsed.content === "string" && parsed.content)
+      || (typeof parsed.story === "string" && parsed.story)
+      || "";
+    if (!String(extracted || "").trim()) return "json_empty_body";
+    return "";
+  } catch {
+    return "json_parse_error";
+  }
 }
 
 async function pushDebug(token, stage, detail = "") {
@@ -354,6 +471,7 @@ export default function AINovelPage() {
   const [continueInfoError, setContinueInfoError] = useState("");
   const [isEditMode, setIsEditMode] = useState(false);
   const [editSourceBody, setEditSourceBody] = useState("");
+  const [editEpisodeId, setEditEpisodeId] = useState(null);
 
   const [loading, setLoading] = useState(false);
   const [continuing, setContinuing] = useState(false);
@@ -362,8 +480,17 @@ export default function AINovelPage() {
   const [polishing, setPolishing] = useState(false);
   const [polishIntensity, setPolishIntensity] = useState(50);
   const [lastPolishContext, setLastPolishContext] = useState(null);
+  const [lastPolishScope, setLastPolishScope] = useState("full");
   const [hasActiveSelection, setHasActiveSelection] = useState(false);
   const [polishPreview, setPolishPreview] = useState(null);
+  const [revisionCommentInput, setRevisionCommentInput] = useState("");
+  const [revisionComments, setRevisionComments] = useState([]);
+  const [lastRevisionTargetInfo, setLastRevisionTargetInfo] = useState(null);
+  const [revisingByComment, setRevisingByComment] = useState(false);
+  const [revisionChatScope, setRevisionChatScope] = useState("full");
+  const [commentRevisionDiffSegments, setCommentRevisionDiffSegments] = useState([]);
+  const [commentRevisionUndoBody, setCommentRevisionUndoBody] = useState("");
+  const [commentRevisionHasActiveDiff, setCommentRevisionHasActiveDiff] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
@@ -411,7 +538,7 @@ export default function AINovelPage() {
 
   const countChars = (value) => (value || "").length;
   const showRetryStatus =
-    (loading || continuing) &&
+    (loading || continuing || polishing || revisingByComment || retryAttempts > 0) &&
     ((typeof activeRetryMax === "number" && activeRetryMax > 0) ||
       (activeRetryMax === null && retryMode && retryMax > 0));
   const displayRetryMax =
@@ -486,8 +613,16 @@ export default function AINovelPage() {
     return Number.isFinite(ts) ? ts : 0;
   };
 
-  const applyDraft = (draft) => {
+  const hasUrlModeOverride = () => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return Boolean(params.get("episode_id") || params.get("edit_episode_id"));
+  };
+
+  const applyDraft = (draft, options = {}) => {
     if (!draft || typeof draft !== "object") return;
+    const preserveUrlMode = Boolean(options?.preserveUrlMode);
+    const skipModeOverwrite = preserveUrlMode && hasUrlModeOverride();
     const draftEpisodeId =
       typeof draft.episodeId === "number" || typeof draft.episodeId === "string"
         ? draft.episodeId
@@ -501,21 +636,55 @@ export default function AINovelPage() {
     if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
     if (typeof draft.retryMode === "boolean") setRetryMode(draft.retryMode);
     if (typeof draft.retryMax === "number") setRetryMax(draft.retryMax);
-    if (typeof draft.isContinueMode === "boolean") {
+    if (!skipModeOverwrite && typeof draft.isContinueMode === "boolean") {
       setIsContinueMode(Boolean(draft.isContinueMode && draftEpisodeId !== null));
     }
-    setEpisodeId(draftEpisodeId);
-    if (typeof draft.continueNovelId === "number" || draft.continueNovelId === null)
+    if (!skipModeOverwrite) {
+      setEpisodeId(draftEpisodeId);
+    }
+    if (!skipModeOverwrite && (typeof draft.continueNovelId === "number" || draft.continueNovelId === null))
       setContinueNovelId(draft.continueNovelId);
-    if (typeof draft.continueEpisodeNumber === "number" || draft.continueEpisodeNumber === null)
+    if (
+      !skipModeOverwrite
+      && (typeof draft.continueEpisodeNumber === "number" || draft.continueEpisodeNumber === null)
+    )
       setContinueEpisodeNumber(draft.continueEpisodeNumber);
-    if (typeof draft.isEditMode === "boolean") setIsEditMode(draft.isEditMode);
-    if (typeof draft.editSourceBody === "string") setEditSourceBody(draft.editSourceBody);
+    if (!skipModeOverwrite && typeof draft.isEditMode === "boolean") setIsEditMode(draft.isEditMode);
+    if (!skipModeOverwrite && typeof draft.editSourceBody === "string") setEditSourceBody(draft.editSourceBody);
+    if (
+      !skipModeOverwrite
+      && (typeof draft.editEpisodeId === "number" || draft.editEpisodeId === null)
+    ) {
+      setEditEpisodeId(draft.editEpisodeId);
+    }
     if (draft.result && typeof draft.result === "object") setResult(draft.result);
     if (typeof draft.continuationBody === "string") setContinuationBody(draft.continuationBody);
     if (typeof draft.postEpisodeTitle === "string") setPostEpisodeTitle(draft.postEpisodeTitle);
     if (draft.lastGenerateParams && typeof draft.lastGenerateParams === "object") {
       setLastGenerateParams(draft.lastGenerateParams);
+    }
+    if (typeof draft.lastPolishScope === "string") {
+      setLastPolishScope(draft.lastPolishScope === "selection" ? "selection" : "full");
+    }
+    if (typeof draft.revisionCommentInput === "string") setRevisionCommentInput(draft.revisionCommentInput);
+    if (typeof draft.revisionChatScope === "string") {
+      setRevisionChatScope(draft.revisionChatScope === "selection" ? "selection" : "full");
+    }
+    if (Array.isArray(draft.revisionComments)) {
+      setRevisionComments(
+        draft.revisionComments
+          .filter((item) => item && typeof item === "object")
+          .map((item) => ({
+            role: item.role === "assistant" ? "assistant" : "user",
+            content: String(item.content || ""),
+            at: typeof item.at === "string" ? item.at : new Date().toISOString(),
+          }))
+          .filter((item) => item.content.trim())
+      );
+    }
+    if (typeof draft.commentRevisionUndoBody === "string") setCommentRevisionUndoBody(draft.commentRevisionUndoBody);
+    if (typeof draft.commentRevisionHasActiveDiff === "boolean") {
+      setCommentRevisionHasActiveDiff(draft.commentRevisionHasActiveDiff);
     }
   };
 
@@ -535,10 +704,17 @@ export default function AINovelPage() {
     continueEpisodeNumber,
     isEditMode,
     editSourceBody,
+    editEpisodeId,
     result,
     continuationBody,
     postEpisodeTitle,
     lastGenerateParams,
+    lastPolishScope,
+    revisionCommentInput,
+    revisionChatScope,
+    revisionComments,
+    commentRevisionUndoBody,
+    commentRevisionHasActiveDiff,
     saved_at: new Date().toISOString(),
   });
 
@@ -1082,7 +1258,7 @@ export default function AINovelPage() {
       if (!raw) return;
       const draft = JSON.parse(raw);
       localDraftRef.current = draft;
-      applyDraft(draft);
+      applyDraft(draft, { preserveUrlMode: true });
     } catch (e) {
       console.error("failed to load ai novel draft", e);
     }
@@ -1105,7 +1281,7 @@ export default function AINovelPage() {
         const serverTs = extractDraftTimestamp(serverDraft);
         if (serverTs >= localTs) {
           localDraftRef.current = serverDraft;
-          applyDraft(serverDraft);
+          applyDraft(serverDraft, { preserveUrlMode: true });
         }
       } catch (e) {
         console.error("failed to load ai novel server draft", e);
@@ -1141,10 +1317,17 @@ export default function AINovelPage() {
     continueEpisodeNumber,
     isEditMode,
     editSourceBody,
+    editEpisodeId,
     result,
     continuationBody,
     postEpisodeTitle,
     lastGenerateParams,
+    lastPolishScope,
+    revisionCommentInput,
+    revisionChatScope,
+    revisionComments,
+    commentRevisionUndoBody,
+    commentRevisionHasActiveDiff,
   ]);
 
   useEffect(() => {
@@ -1187,10 +1370,17 @@ export default function AINovelPage() {
     continueEpisodeNumber,
     isEditMode,
     editSourceBody,
+    editEpisodeId,
     result,
     continuationBody,
     postEpisodeTitle,
     lastGenerateParams,
+    lastPolishScope,
+    revisionCommentInput,
+    revisionChatScope,
+    revisionComments,
+    commentRevisionUndoBody,
+    commentRevisionHasActiveDiff,
   ]);
 
   useEffect(() => {
@@ -1207,6 +1397,21 @@ export default function AINovelPage() {
         pending.generated_title || pending.title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
       body: pending.body,
     });
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mode") !== "new_novel") return;
+    setIsContinueMode(false);
+    setEpisodeId(null);
+    setContinueNovelId(null);
+    setContinueEpisodeNumber(null);
+    setCanPostToContinueNovel(null);
+    setContinueInfoError("");
+    setIsEditMode(false);
+    setEditSourceBody("");
+    setEditEpisodeId(null);
+    setPostEpisodeTitle("");
   }, []);
 
   useEffect(() => {
@@ -1253,6 +1458,7 @@ export default function AINovelPage() {
 
     setIsContinueMode(true);
     setEpisodeId(eid);
+    setEditEpisodeId(null);
     setContinueInfoError("");
     setCanPostToContinueNovel(null);
 
@@ -1376,10 +1582,13 @@ export default function AINovelPage() {
     if (params.get("episode_id")) return;
     const editEid = params.get("edit_episode_id");
     if (!editEid) return;
+    const parsedEditEpisodeId = Number(editEid);
+    const safeEditEpisodeId = Number.isFinite(parsedEditEpisodeId) ? parsedEditEpisodeId : null;
 
     setIsEditMode(true);
     setIsContinueMode(false);
     setEpisodeId(null);
+    setEditEpisodeId(safeEditEpisodeId);
     setContinueNovelId(null);
     setContinueEpisodeNumber(null);
     setContinueInfoError("");
@@ -1553,6 +1762,525 @@ export default function AINovelPage() {
     ].join("\n");
   };
 
+  const buildRevisionPromptFromComments = (baseBody, params, comments, options = {}) => {
+    const scope = options?.scope === "selection" ? "selection" : "full";
+    const chunkIndex = Number(options?.chunkIndex || 0);
+    const chunkTotal = Number(options?.chunkTotal || 0);
+    const sourceChars = Number(options?.sourceChars || 0);
+    const isChunkedRevision = chunkTotal > 1 && chunkIndex >= 1;
+    const level = Math.min(100, Math.max(0, Number(polishIntensity) || 0));
+    const strengthText =
+      level <= 20
+        ? "極めて軽い添削（誤字・表記ゆれ中心）"
+        : level <= 40
+        ? "軽めの添削（重複や違和感を軽く調整）"
+        : level <= 60
+        ? "標準の添削（読みやすさを中心に整える）"
+        : level <= 80
+        ? "強めのリライト（文の組み替えや表現の刷新も可）"
+        : "非常に強いリライト（構成の再整理まで許可）";
+    const r18Note = params.isR18
+      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
+      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
+    const titleHintText = params.titleHint || "指定なし";
+    const genreText = params.genre || "指定なし";
+    const toneText = params.tone || "指定なし";
+    const charactersText = params.characters || "指定なし";
+    const userComments = (comments || [])
+      .filter((item) => item && item.role === "user" && String(item.content || "").trim())
+      .map((item, idx) => `${idx + 1}. ${String(item.content || "").trim()}`);
+    return [
+      "あなたは日本語の小説編集者です。",
+      "以下の本文を、ユーザーコメント（修正指示）を反映して改稿してください。",
+      "既存の世界観・時系列・人物像は維持し、指示の範囲で自然に修正してください。",
+      "矛盾する指示がある場合は、後から書かれた指示を優先してください。",
+      "本文の意味を壊さず、読みやすい日本語に整えてください。",
+      scope === "selection"
+        ? "適用範囲は選択範囲のみです。本文の他の部分は変更しないでください。"
+        : "適用範囲は生成した文章全体です。必要な修正を本文全体に反映してください。",
+      isChunkedRevision
+        ? `今回は全文の分割改稿です。以下は ${chunkTotal} 分割中 ${chunkIndex} 件目の本文です。この本文のみ改稿し、前後と自然につながる文体を維持してください。`
+        : "",
+      sourceChars > 0
+        ? `分量を極端に削らないでください。出力文字数は入力本文（約${sourceChars}文字）の 85%〜120% を目安にしてください。`
+        : "分量を極端に削らないでください。要点だけに短縮せず、本文の情報量を維持してください。",
+      "省略記号（…）などで内容を飛ばさず、本文を最後まで改稿してください。",
+      `添削の強さ: ${strengthText}`,
+      level >= 70
+        ? "必要なら文の並び替えや言い回しの大きな変更も行ってください。"
+        : "大幅な改変や新規の内容追加は避けてください。",
+      r18Note,
+      "",
+      "【本文】",
+      baseBody,
+      "",
+      "【ユーザーコメント（修正指示）】",
+      userComments.length ? userComments.join("\n") : "（指示なし）",
+      "",
+      "【参考情報】",
+      `- 編集方針・指示: ${titleHintText}`,
+      `- ジャンル: ${genreText}`,
+      `- 雰囲気: ${toneText}`,
+      `- 登場人物・設定: ${charactersText}`,
+      "",
+      "出力は JSON の body に改稿後の本文のみを書いてください（タイトルは変更しない）。",
+    ].join("\n");
+  };
+
+  const handleReviseByComment = async (scope = "full") => {
+    if (polishing || loading || continuing || revisingByComment) return;
+    const latestComment = (revisionCommentInput || "").trim();
+    if (!latestComment) {
+      setError(
+        t({
+          ja: "修正コメントを入力してください。",
+          en: "Please enter a revision comment.",
+        })
+      );
+      return;
+    }
+    const generatedFullBody = getCombinedBody();
+    if (!generatedFullBody) {
+      setError(
+        t({
+          ja: "本文がありません。先にAIで本文を生成してください。",
+          en: "No text available. Generate content before revising.",
+        })
+      );
+      return;
+    }
+    const normalizedScope = scope === "selection" ? "selection" : "full";
+    const selectionContext =
+      normalizedScope === "selection"
+        ? lastSelectionContextRef.current || getSelectionContext()
+        : null;
+    if (normalizedScope === "selection" && !selectionContext) {
+      setError(
+        t({
+          ja: "部分修正するには、本文から修正したい範囲を選択してください。",
+          en: "To partially revise, select the text range you want to edit.",
+        })
+      );
+      return;
+    }
+    const token = getAuthToken();
+    const params = {
+      ...(lastGenerateParams || {}),
+      titleHint,
+      genre,
+      characters,
+      tone,
+      length,
+      model,
+      isR18,
+      retryMode,
+      retryMax,
+    };
+    const nextComments = [
+      ...revisionComments,
+      { role: "user", content: latestComment, at: new Date().toISOString() },
+    ];
+    setRevisionComments(nextComments);
+    setRevisionCommentInput("");
+    setRevisingByComment(true);
+    setLastRevisionTargetInfo(null);
+    setRetryAttempts(0);
+    setActiveRetryMax(Boolean(params.retryMode) ? Number(params.retryMax || 0) : 0);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+    setAutoFillError("");
+
+    try {
+      const userCommentTexts = nextComments
+        .filter((item) => item && item.role === "user" && String(item.content || "").trim())
+        .map((item) => String(item.content || "").trim());
+      const baseContext =
+        normalizedScope === "selection"
+          ? selectionContext
+          : {
+              fullText: generatedFullBody,
+              start: 0,
+              end: generatedFullBody.length,
+              selectedText: generatedFullBody,
+            };
+      let targetContext = baseContext;
+      let usedWeaviateTargeting = false;
+      if (normalizedScope === "selection") {
+        try {
+          const targetRes = await fetch("/api/ai/novels/revision-target", {
+            method: "POST",
+            headers: token
+              ? {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              : { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              body: baseContext.selectedText,
+              comments: userCommentTexts,
+              scope: normalizedScope,
+              r18: Boolean(params.isR18),
+            }),
+          });
+          if (targetRes.ok) {
+            const targetData = await targetRes.json().catch(() => ({}));
+            const candidateCount = Number(targetData?.candidate_count);
+            setLastRevisionTargetInfo({
+              usedWeaviate: Boolean(targetData?.used_weaviate),
+              attemptedWeaviate: Boolean(targetData?.attempted_weaviate),
+              fallbackReason:
+                typeof targetData?.fallback_reason === "string" ? targetData.fallback_reason : "",
+              candidateCount: Number.isFinite(candidateCount) ? candidateCount : 0,
+            });
+            const relStart = Number(targetData?.start);
+            const relEnd = Number(targetData?.end);
+            const targetText = String(targetData?.target_text || "");
+            if (
+              Number.isFinite(relStart)
+              && Number.isFinite(relEnd)
+              && relStart >= 0
+              && relEnd > relStart
+              && relEnd <= baseContext.selectedText.length
+              && targetText
+            ) {
+              targetContext = {
+                fullText: baseContext.fullText,
+                start: baseContext.start + relStart,
+                end: baseContext.start + relEnd,
+                selectedText: targetText,
+              };
+              usedWeaviateTargeting = Boolean(targetData?.used_weaviate);
+            }
+          } else {
+            setLastRevisionTargetInfo({
+              usedWeaviate: false,
+              attemptedWeaviate: true,
+              fallbackReason: "target_api_http_error",
+              candidateCount: 0,
+            });
+          }
+        } catch (targetErr) {
+          console.warn("failed to locate revision target by weaviate", targetErr);
+          setLastRevisionTargetInfo({
+            usedWeaviate: false,
+            attemptedWeaviate: true,
+            fallbackReason: "target_api_fetch_error",
+            candidateCount: 0,
+          });
+        }
+      }
+
+      const targetBody = targetContext.selectedText;
+      const throwHandled = () => {
+        const e = new Error("handled");
+        e.handled = true;
+        throw e;
+      };
+      const runRevisionJob = async (bodyText, promptOptions = {}) => {
+        const disableServerRetry = Boolean(promptOptions?.disableServerRetry);
+        const prompt = buildRevisionPromptFromComments(bodyText, params, nextComments, {
+          ...promptOptions,
+          sourceChars: bodyText.length,
+        });
+        const res = await fetch("/api/ai/novels/generate_job", {
+          method: "POST",
+          headers: token
+            ? {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              }
+            : { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title_hint: params.titleHint || null,
+            genre: params.genre || null,
+            characters: params.characters || null,
+            tone: params.tone || null,
+            length: String(bodyText.length || 0),
+            model: params.model || DEFAULT_AI_NOVEL_MODEL,
+            r18: params.isR18,
+            retry_mode: disableServerRetry ? false : Boolean(params.retryMode),
+            retry_max: disableServerRetry ? 0 : Number(params.retryMax || 0),
+            prompt,
+          }),
+        });
+
+        let errorDetail = null;
+        if (!res.ok) {
+          const isJson = res.headers.get("content-type")?.includes("application/json");
+          if (isJson) {
+            const data = await res.json().catch(() => ({}));
+            if (data && typeof data.detail === "string" && data.detail.trim()) {
+              errorDetail = data.detail.trim();
+            }
+          } else {
+            const text = await res.text().catch(() => "");
+            if (text && text.trim()) {
+              errorDetail = text.trim().slice(0, 300);
+            }
+          }
+        }
+
+        if (res.status === 401 && token) {
+          setError(
+            t({
+              ja: "ログインの有効期限が切れています。再ログインしてください。",
+              en: "Your session has expired. Please log in again.",
+            })
+          );
+          setTimeout(() => navigate("/login"), 800);
+          throwHandled();
+        }
+
+        if (res.status === 402) {
+          setPremiumError(
+            t({
+              ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
+              en: "This feature is for paid plans only. Check your plan on My Page.",
+            })
+          );
+          throwHandled();
+        }
+
+        if (res.status === 429) {
+          setQuotaError(
+            errorDetail ||
+              t({
+                ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
+                en: "You've reached today's AI generation limit. Please try again tomorrow.",
+              })
+          );
+          throwHandled();
+        }
+
+        if (!res.ok) {
+          throw new Error(
+            errorDetail ||
+              t(
+                { ja: "修正に失敗しました (status={{status}})", en: "Revision failed (status={{status}})" },
+                { status: res.status }
+              )
+          );
+        }
+        const jobData = await res.json().catch(() => ({}));
+        const jobId = Number(jobData?.job_id);
+        if (!Number.isFinite(jobId) || jobId <= 0) {
+          throw new Error(
+            t({ ja: "修正ジョブの開始に失敗しました。", en: "Failed to start revision job." })
+          );
+        }
+
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const startedAt = Date.now();
+        let finalPayload = null;
+        while (true) {
+          if (Date.now() - startedAt > 3 * 60 * 1000) {
+            throw new Error(
+              t({
+                ja: "修正処理がタイムアウトしました。時間をおいて再度お試しください。",
+                en: "Revision timed out. Please try again later.",
+              })
+            );
+          }
+          await sleep(700);
+          const statusRes = await fetch(`/api/ai/jobs/${jobId}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          if (!statusRes.ok) {
+            const statusErr = await statusRes.json().catch(() => ({}));
+            throw new Error(
+              statusErr?.detail ||
+                t(
+                  {
+                    ja: "修正ジョブの状態取得に失敗しました (status={{status}})",
+                    en: "Failed to get revision job status (status={{status}})",
+                  },
+                  { status: statusRes.status }
+                )
+            );
+          }
+          const statusData = await statusRes.json().catch(() => ({}));
+          if (typeof statusData?.retry_attempts === "number") {
+            setRetryAttempts(statusData.retry_attempts);
+          }
+          if (typeof statusData?.retry_max === "number") {
+            setActiveRetryMax(statusData.retry_max);
+          }
+          if (statusData?.status === "succeeded") {
+            finalPayload = statusData?.response || {};
+            break;
+          }
+          if (statusData?.status === "failed") {
+            const attempts = Number(statusData?.retry_attempts || 0);
+            const max = Number(statusData?.retry_max || 0);
+            const retrySummary = max > 0
+              ? t({ ja: "再試行: {{attempts}}/{{max}}", en: "Retries: {{attempts}}/{{max}}" }, { attempts, max })
+              : "";
+            throw new Error(
+              `${statusData?.error || t({ ja: "修正に失敗しました。", en: "Revision failed." })}${
+                retrySummary ? ` (${retrySummary})` : ""
+              }`
+            );
+          }
+        }
+
+        const data = normalizeAINovelResponse(finalPayload || {});
+        const revisedChunk = String(data?.body || "");
+        if (typeof data?.retry_attempts === "number") {
+          setRetryAttempts(data.retry_attempts);
+        }
+        if (typeof data?.retry_max === "number") {
+          setActiveRetryMax(data.retry_max);
+        }
+        if (typeof data?.guest_remaining === "number") setGuestRemaining(data.guest_remaining);
+        if (typeof data?.user_remaining === "number") setUserRemaining(data.user_remaining);
+        return revisedChunk;
+      };
+
+      const chunks = splitTextForRevision(targetBody, REVISION_CHUNK_MAX_CHARS);
+      const useGlobalRetryAcrossChunks =
+        normalizedScope === "full"
+        && chunks.length > 1
+        && Boolean(params.retryMode)
+        && Number(params.retryMax || 0) > 0;
+      const globalRetryMax = useGlobalRetryAcrossChunks ? Number(params.retryMax || 0) : 0;
+      let globalRetryAttempts = 0;
+      const revisedParts = [];
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex];
+        let revisedChunk = "";
+        let outputRetryCount = 0;
+        while (true) {
+          try {
+            revisedChunk = await runRevisionJob(chunk.text, {
+              scope: normalizedScope,
+              chunkIndex: chunks.length > 1 ? chunkIndex + 1 : 0,
+              chunkTotal: chunks.length,
+              disableServerRetry: useGlobalRetryAcrossChunks,
+            });
+            const outputIssue = getCommentRevisionOutputIssue(revisedChunk);
+            if (!outputIssue) {
+              break;
+            }
+            if (outputRetryCount < COMMENT_REVISION_OUTPUT_RETRY_MAX) {
+              outputRetryCount += 1;
+              continue;
+            }
+            throw new Error(
+              t({
+                ja: "コメント修正の出力が不正（JSON形式エラーまたは空）だったため、再試行上限に達しました。",
+                en: "Comment revision output was invalid (JSON error or empty) and reached retry limit.",
+              })
+            );
+            
+          } catch (chunkErr) {
+            if (chunkErr?.handled) throw chunkErr;
+            if (!useGlobalRetryAcrossChunks || globalRetryAttempts >= globalRetryMax) {
+              throw chunkErr;
+            }
+            globalRetryAttempts += 1;
+            setRetryAttempts(globalRetryAttempts);
+            setActiveRetryMax(globalRetryMax);
+          }
+        }
+        revisedParts.push(revisedChunk);
+      }
+      const revisedBody = revisedParts.join("");
+
+      const nextFullBody =
+        targetContext && typeof targetContext.start === "number" && typeof targetContext.end === "number"
+          ? applyPolishReplacement(
+              targetContext.fullText,
+              targetContext.start,
+              targetContext.end,
+              revisedBody
+            )
+          : revisedBody;
+      setResult((prev) => ({
+        ...(prev || {}),
+        body: nextFullBody,
+      }));
+      setContinuationBody("");
+      setCommentRevisionUndoBody(generatedFullBody);
+      setCommentRevisionDiffSegments(buildLineDiffSegments(generatedFullBody, nextFullBody));
+      setCommentRevisionHasActiveDiff(true);
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        try {
+          new Notification(
+            t({ ja: "コメント修正が完了しました", en: "Comment revision is ready" })
+          );
+        } catch {
+          // ignore
+        }
+      }
+      notifyAndroidAiResult({
+        title: t({ ja: "コメント修正が完了しました", en: "Comment revision is ready" }),
+        body: revisedBody.slice(0, 120),
+        url: "/ai-novel",
+      });
+      setRevisionComments((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            normalizedScope === "selection"
+              ? t({
+                  ja: usedWeaviateTargeting
+                    ? "コメント内容を反映して、選択範囲内の関連箇所を更新しました。"
+                    : "コメント内容を反映して、選択範囲のみ更新しました。",
+                  en: usedWeaviateTargeting
+                    ? "Applied your comment and updated the related part in the selected range."
+                    : "Applied your comment and updated only the selected range.",
+                })
+              : t({
+                  ja: usedWeaviateTargeting
+                    ? "コメント内容を反映して、生成した文章全体から関連箇所を検索して更新しました。"
+                    : "コメント内容を反映して生成した文章全体を更新しました。",
+                  en: usedWeaviateTargeting
+                    ? "Applied your comment and updated the searched related part in the generated text."
+                    : "Applied your comment and updated the entire generated text.",
+                }),
+          at: new Date().toISOString(),
+        },
+      ]);
+    } catch (err) {
+      if (err?.handled) return;
+      console.error(err);
+      setError(
+        err.message ||
+          t({
+            ja: "コメント反映中にエラーが発生しました。",
+            en: "An error occurred while applying your comment.",
+          })
+      );
+    } finally {
+      setRevisingByComment(false);
+    }
+  };
+
+  const handleUndoCommentRevision = () => {
+    if (!commentRevisionUndoBody) return;
+    setResult((prev) => ({
+      ...(prev || {}),
+      body: commentRevisionUndoBody,
+    }));
+    setContinuationBody("");
+    setCommentRevisionUndoBody("");
+    setCommentRevisionDiffSegments([]);
+    setCommentRevisionHasActiveDiff(false);
+    setRevisionComments((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        content: t({
+          ja: "直前のコメント修正を元に戻しました。",
+          en: "Reverted the latest comment-based revision.",
+        }),
+        at: new Date().toISOString(),
+      },
+    ]);
+  };
+
   const handleStartNovelAddonCheckout = async () => {
     const token = getAuthToken();
     if (!token) {
@@ -1626,7 +2354,14 @@ export default function AINovelPage() {
       : "";
     setResult(null);
     setLastGenerateParams(null);
+    setLastPolishScope("full");
     setContinuationBody("");
+    setRevisionCommentInput("");
+    setRevisionChatScope("full");
+    setRevisionComments([]);
+    setCommentRevisionUndoBody("");
+    setCommentRevisionDiffSegments([]);
+    setCommentRevisionHasActiveDiff(false);
     setHasContinuationAttempted(false);
     setRedoContinuationArmed(false);
 
@@ -1911,15 +2646,27 @@ export default function AINovelPage() {
     await handleGenerateContinuation(result.body);
   };
 
-  const handlePolishText = async (overrideContext = null) => {
+  const handlePolishText = async (overrideContext = null, options = {}) => {
+    const scope = options?.scope === "selection" ? "selection" : "full";
     const safeOverride =
       overrideContext && typeof overrideContext === "object" && "selectedText" in overrideContext
         ? overrideContext
         : null;
     const selectionContext =
-      safeOverride || lastSelectionContextRef.current || getSelectionContext();
+      scope === "selection"
+        ? safeOverride || lastSelectionContextRef.current || getSelectionContext()
+        : null;
     const combinedBody = combinedBodyRef.current || getCombinedBody();
     if (!combinedBody) return;
+    if (scope === "selection" && !selectionContext) {
+      setError(
+        t({
+          ja: "部分修正するには、本文から修正したい範囲を選択してください。",
+          en: "To partially revise, select the text range you want to edit.",
+        })
+      );
+      return;
+    }
     if (!selectionContext && !result?.body) {
       setError(
         t({
@@ -1957,6 +2704,7 @@ export default function AINovelPage() {
 
     try {
       setLastPolishContext(context);
+      setLastPolishScope(scope);
       const maxChars = combinedBody.length || 0;
       const prompt = buildPolishPrompt({
         baseBody,
@@ -2304,6 +3052,80 @@ export default function AINovelPage() {
       console.error(err);
       setError(
         err.message || t({ ja: "投稿中にエラーが発生しました。", en: "An error occurred while posting." })
+      );
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const handleUpdateEditedEpisode = async () => {
+    if (!result?.body) return;
+    if (!editEpisodeId) {
+      setError(
+        t({
+          ja: "更新対象のエピソードIDが取得できませんでした。",
+          en: "Could not get the target episode ID for update.",
+        })
+      );
+      return;
+    }
+
+    setPosting(true);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+    setAutoFillError("");
+
+    const token = getAuthToken();
+    const combinedBody = getCombinedBody();
+    if (!token) {
+      setError(
+        t({
+          ja: "更新にはログインが必要です。ログイン画面へ移動します。",
+          en: "Login required to update. Redirecting to the login page.",
+        })
+      );
+      setTimeout(() => navigate("/login"), 200);
+      setPosting(false);
+      return;
+    }
+
+    try {
+      const payload = {
+        title: (result.generated_title || "").trim() || t({ ja: "タイトル未設定", en: "Untitled" }),
+        body: combinedBody,
+      };
+      const res = await fetch(`/api/episodes/${editEpisodeId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 403) {
+        throw new Error(
+          t({
+            ja: "このエピソードを更新する権限がありません。",
+            en: "You don't have permission to update this episode.",
+          })
+        );
+      }
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            t(
+              { ja: "エピソード更新に失敗しました (status={{status}})", en: "Failed to update episode (status={{status}})" },
+              { status: res.status }
+            )
+        );
+      }
+      navigate(`/episodes/${editEpisodeId}`);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err.message || t({ ja: "更新中にエラーが発生しました。", en: "An error occurred while updating." })
       );
     } finally {
       setPosting(false);
@@ -3014,6 +3836,12 @@ export default function AINovelPage() {
             <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="gpt-4o">GPT-4o</option>
             <option value="openai/chatgpt-4o-latest">{t({ ja: "ChatGPT（OpenRouter / chatgpt-4o-latest）", en: "ChatGPT (OpenRouter / chatgpt-4o-latest)" })}</option>
+            <option value="x-ai/grok-4">{t({ ja: "Grok 4（OpenRouter）", en: "Grok 4 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-4.1-fast">{t({ ja: "Grok 4.1 Fast（OpenRouter）", en: "Grok 4.1 Fast (OpenRouter)" })}</option>
+            <option value="x-ai/grok-4-fast">{t({ ja: "Grok 4 Fast（OpenRouter）", en: "Grok 4 Fast (OpenRouter)" })}</option>
+            <option value="x-ai/grok-3">{t({ ja: "Grok 3（OpenRouter）", en: "Grok 3 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-3-mini">{t({ ja: "Grok 3 Mini（OpenRouter）", en: "Grok 3 Mini (OpenRouter)" })}</option>
+            <option value="x-ai/grok-code-fast-1">{t({ ja: "Grok Code Fast 1（OpenRouter）", en: "Grok Code Fast 1 (OpenRouter)" })}</option>
             <option value="z-ai/glm-4.6">{t({ ja: "GLM 4.6（OpenRouter / z-ai/glm-4.6）", en: "GLM 4.6 (OpenRouter / z-ai/glm-4.6)" })}</option>
             <option value="google/gemini-3-pro-preview">{t({ ja: "Gemini 3 Pro Preview（OpenRouter）", en: "Gemini 3 Pro Preview (OpenRouter)" })}</option>
             <option value="google/gemini-3-flash-preview">{t({ ja: "Gemini 3 Flash Preview（OpenRouter）", en: "Gemini 3 Flash Preview (OpenRouter)" })}</option>
@@ -3211,14 +4039,55 @@ export default function AINovelPage() {
                   <span>{t({ ja: "強め", en: "Heavy" })}</span>
                 </div>
               </div>
-              {hasActiveSelection && (
-                <span style={{ fontSize: "0.85rem", color: "var(--muted-text)" }}>
-                  {t({ ja: "選択部分を添削します", en: "Polishing selection only" })}
-                </span>
-              )}
+              <span
+                style={{
+                  fontSize: "0.8rem",
+                  color: lastPolishScope === "selection" ? "#065f46" : "#6b7280",
+                  backgroundColor: lastPolishScope === "selection" ? "#dcfce7" : "#f3f4f6",
+                  border: lastPolishScope === "selection" ? "1px solid #86efac" : "1px solid #d1d5db",
+                  boxShadow:
+                    lastPolishScope === "selection" ? "0 0 0.55rem rgba(34,197,94,0.38)" : "none",
+                  borderRadius: "999px",
+                  padding: "0.2rem 0.55rem",
+                }}
+              >
+                {t({ ja: "部分添削", en: "Partial polish" })}
+              </span>
               <button
                 type="button"
-                onClick={() => handlePolishText()}
+                onClick={() => handlePolishText(null, { scope: "selection" })}
+                disabled={polishing || loading || continuing || !hasActiveSelection}
+                style={{
+                  height: "2.2rem",
+                  alignSelf: "center",
+                  padding: "0.3rem 0.8rem",
+                  borderRadius: "4px",
+                  border: "1px solid var(--border)",
+                  cursor: polishing ? "default" : "pointer",
+                  opacity: polishing ? 0.7 : 1,
+                }}
+              >
+                {polishing
+                  ? t({ ja: "部分添削中...", en: "Partially polishing..." })
+                  : t({ ja: "選択範囲を部分添削", en: "Partially polish selection" })}
+              </button>
+              <span
+                style={{
+                  fontSize: "0.8rem",
+                  color: lastPolishScope === "full" ? "#1e3a8a" : "#6b7280",
+                  backgroundColor: lastPolishScope === "full" ? "#dbeafe" : "#f3f4f6",
+                  border: lastPolishScope === "full" ? "1px solid #93c5fd" : "1px solid #d1d5db",
+                  boxShadow:
+                    lastPolishScope === "full" ? "0 0 0.55rem rgba(59,130,246,0.35)" : "none",
+                  borderRadius: "999px",
+                  padding: "0.2rem 0.55rem",
+                }}
+              >
+                {t({ ja: "全体添削", en: "Full polish" })}
+              </span>
+              <button
+                type="button"
+                onClick={() => handlePolishText(null, { scope: "full" })}
                 disabled={polishing || loading || continuing}
                 style={{
                   height: "2.2rem",
@@ -3231,12 +4100,12 @@ export default function AINovelPage() {
                 }}
               >
                 {polishing
-                  ? t({ ja: "AI添削中...", en: "Polishing..." })
-                  : t({ ja: "AI添削", en: "Polish with AI" })}
+                  ? t({ ja: "全体添削中...", en: "Polishing full text..." })
+                  : t({ ja: "文章全体を添削", en: "Polish full text" })}
               </button>
               <button
                 type="button"
-                onClick={() => handlePolishText(lastPolishContext)}
+                onClick={() => handlePolishText(lastPolishContext, { scope: lastPolishScope })}
                 disabled={polishing || loading || continuing || !lastPolishContext}
                 style={{
                   height: "2.2rem",
@@ -3326,6 +4195,22 @@ export default function AINovelPage() {
                 </>
               )}
             </div>
+          </div>
+          <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.45rem" }}>
+            {hasActiveSelection
+                  ? t({
+                      ja: "現在: テキスト選択あり（部分添削が使えます）",
+                      en: "Current: text selected (partial polish is available)",
+                    })
+                  : t({
+                      ja: "現在: テキスト未選択（部分添削は無効、全体添削は利用可能）",
+                      en: "Current: no text selected (partial polish disabled, full polish available)",
+                    })}
+            {` / ${t({ ja: "前回の添削モード", en: "Last polish mode" })}: ${
+              lastPolishScope === "selection"
+                ? t({ ja: "部分添削", en: "Partial polish" })
+                : t({ ja: "全体添削", en: "Full polish" })
+            }`}
           </div>
 
           <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
@@ -3467,6 +4352,244 @@ export default function AINovelPage() {
                 backgroundColor: "var(--ai-result-surface)",
               }}
             >
+              <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                {t({ ja: "修正チャット / コメント", en: "Revision chat / comments" })}
+              </div>
+              <div style={{ fontSize: "0.9rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                {t({
+                  ja: "コメント指示を送ると、Weaviateで関連箇所を検索し、部分修正（選択範囲内）または全体修正（生成した文章全体内）として反映できます。",
+                  en: "Send a comment to search related parts with Weaviate, then apply as partial revise (inside selection) or full revise (inside generated text).",
+                })}
+              </div>
+              {lastRevisionTargetInfo && (
+                <div style={{ fontSize: "0.82rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                  {lastRevisionTargetInfo.usedWeaviate
+                    ? t(
+                        {
+                          ja: "対象抽出: Weaviate検索を使用（候補 {{count}} 件）",
+                          en: "Targeting: used Weaviate search ({{count}} candidates)",
+                        },
+                        { count: String(lastRevisionTargetInfo.candidateCount || 0) }
+                      )
+                    : t(
+                        {
+                          ja: "対象抽出: フォールバック（理由: {{reason}}）",
+                          en: "Targeting: fallback (reason: {{reason}})",
+                        },
+                        {
+                          reason:
+                            lastRevisionTargetInfo.fallbackReason ||
+                            (lastRevisionTargetInfo.attemptedWeaviate
+                              ? "unknown"
+                              : "not_attempted"),
+                        }
+                      )}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+                <span
+                  style={{
+                    fontSize: "0.8rem",
+                    color: revisionChatScope === "selection" ? "#065f46" : "#6b7280",
+                    backgroundColor: revisionChatScope === "selection" ? "#dcfce7" : "#f3f4f6",
+                    border: revisionChatScope === "selection" ? "1px solid #86efac" : "1px solid #d1d5db",
+                    boxShadow:
+                      revisionChatScope === "selection" ? "0 0 0.5rem rgba(34,197,94,0.35)" : "none",
+                    borderRadius: "999px",
+                    padding: "0.15rem 0.55rem",
+                  }}
+                >
+                  {t({ ja: "部分修正", en: "Partial revise" })}
+                </span>
+                <span
+                  style={{
+                    fontSize: "0.8rem",
+                    color: revisionChatScope === "full" ? "#1e3a8a" : "#6b7280",
+                    backgroundColor: revisionChatScope === "full" ? "#dbeafe" : "#f3f4f6",
+                    border: revisionChatScope === "full" ? "1px solid #93c5fd" : "1px solid #d1d5db",
+                    boxShadow:
+                      revisionChatScope === "full" ? "0 0 0.5rem rgba(59,130,246,0.35)" : "none",
+                    borderRadius: "999px",
+                    padding: "0.15rem 0.55rem",
+                  }}
+                >
+                  {t({ ja: "全体修正", en: "Full revise" })}
+                </span>
+                <span style={{ fontSize: "0.8rem", color: "var(--muted-text)" }}>
+                  {hasActiveSelection
+                    ? t({
+                        ja: "現在: 選択あり（部分修正が使えます）",
+                        en: "Current: selection exists (partial revise available)",
+                      })
+                    : t({
+                        ja: "現在: 選択なし（全体修正: 生成した文章全体）",
+                        en: "Current: no selection (full revise: entire generated text)",
+                      })}
+                  {` / ${t({ ja: "前回モード", en: "Last mode" })}: ${
+                    revisionChatScope === "selection"
+                      ? t({ ja: "部分修正", en: "Partial" })
+                      : t({ ja: "全体修正", en: "Full" })
+                  }`}
+                </span>
+              </div>
+              <div
+                style={{
+                  maxHeight: "180px",
+                  overflowY: "auto",
+                  border: "1px solid var(--border)",
+                  borderRadius: "6px",
+                  backgroundColor: "var(--ai-result-bg)",
+                  padding: "0.5rem",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                {revisionComments.length === 0 ? (
+                  <div style={{ color: "var(--muted-text)", fontSize: "0.85rem" }}>
+                    {t({
+                      ja: "まだコメントはありません。修正したい内容を送信してください。",
+                      en: "No comments yet. Send instructions to revise the text.",
+                    })}
+                  </div>
+                ) : (
+                  revisionComments.map((item, idx) => (
+                    <div
+                      key={`${item.role}-${item.at}-${idx}`}
+                      style={{
+                        marginBottom: idx === revisionComments.length - 1 ? 0 : "0.4rem",
+                        fontSize: "0.9rem",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      <strong>
+                        {item.role === "assistant"
+                          ? t({ ja: "AI", en: "AI" })
+                          : t({ ja: "あなた", en: "You" })}
+                        :
+                      </strong>{" "}
+                      <span style={{ whiteSpace: "pre-wrap" }}>{item.content}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <textarea
+                value={revisionCommentInput}
+                onChange={(e) => {
+                  markUserInput();
+                  setRevisionCommentInput(e.target.value);
+                }}
+                rows={3}
+                placeholder={t({
+                  ja: "例: 三人称で統一して、終盤の会話をもっと短くしてください",
+                  en: "e.g. Keep third-person POV and shorten the dialogue near the end.",
+                })}
+                style={{
+                  width: "100%",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  backgroundColor: "var(--ai-result-bg)",
+                  padding: "0.6rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border)",
+                  lineHeight: 1.5,
+                  resize: "vertical",
+                  marginBottom: "0.5rem",
+                }}
+              />
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => {
+                    setRevisionChatScope("selection");
+                    handleReviseByComment("selection");
+                  }}
+                  disabled={revisingByComment || polishing || loading || continuing || !hasActiveSelection}
+                >
+                  {revisingByComment
+                    ? t({ ja: "コメント反映中...", en: "Applying comment..." })
+                    : t({ ja: "部分修正で送信", en: "Send as partial revise" })}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => {
+                    setRevisionChatScope("full");
+                    handleReviseByComment("full");
+                  }}
+                  disabled={revisingByComment || polishing || loading || continuing}
+                >
+                  {revisingByComment
+                    ? t({ ja: "コメント反映中...", en: "Applying comment..." })
+                    : t({ ja: "全体修正で送信", en: "Send as full revise" })}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={() => setRevisionComments([])}
+                  disabled={revisingByComment || revisionComments.length === 0}
+                >
+                  {t({ ja: "履歴をクリア", en: "Clear history" })}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-border"
+                  onClick={handleUndoCommentRevision}
+                  disabled={revisingByComment || !commentRevisionUndoBody}
+                >
+                  {t({ ja: "修正を戻す", en: "Undo revision" })}
+                </button>
+              </div>
+            </div>
+            {commentRevisionHasActiveDiff && commentRevisionDiffSegments.length > 0 && (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border)",
+                  backgroundColor: "var(--ai-result-surface)",
+                }}
+              >
+                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                  {t({ ja: "コメント修正の差分", en: "Comment revision diff" })}
+                </div>
+                <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.4rem" }}>
+                  {t({
+                    ja: "変更された行は赤文字で表示されます。",
+                    en: "Changed lines are shown in red.",
+                  })}
+                </div>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    backgroundColor: "var(--ai-result-bg)",
+                    padding: "0.6rem",
+                    borderRadius: "6px",
+                    border: "1px solid var(--border)",
+                    maxHeight: "260px",
+                    overflowY: "auto",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {commentRevisionDiffSegments.map((seg, idx) => (
+                    <span
+                      key={`comment-diff-${idx}`}
+                      style={seg.changed ? { color: "#c53030", fontWeight: 700 } : undefined}
+                    >
+                      {seg.text}
+                    </span>
+                  ))}
+                </pre>
+              </div>
+            )}
+            <div
+              style={{
+                padding: "0.75rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                backgroundColor: "var(--ai-result-surface)",
+              }}
+            >
                 <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
                   {t({ ja: "続きを作成する", en: "Generate continuation" })}
                 </div>
@@ -3576,6 +4699,25 @@ export default function AINovelPage() {
               )}
 
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                {isEditMode && (
+                  <button
+                    type="button"
+                    onClick={handleUpdateEditedEpisode}
+                    disabled={posting || !editEpisodeId}
+                    style={{
+                      padding: "0.6rem 1rem",
+                      fontWeight: "bold",
+                      borderRadius: "6px",
+                      border: "1px solid #ccc",
+                      cursor: posting ? "default" : "pointer",
+                      opacity: posting ? 0.7 : 1,
+                    }}
+                  >
+                    {posting
+                      ? t({ ja: "更新中...", en: "Updating..." })
+                      : t({ ja: "このエピソードを更新", en: "Update this episode" })}
+                  </button>
+                )}
                 {(isContinueMode || isEditMode) && (
                   <button
                     type="button"

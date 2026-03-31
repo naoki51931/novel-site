@@ -1,7 +1,9 @@
+import io
 import os
+import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -51,6 +53,36 @@ def _require_owner_novel(db: Session, *, request: Request, user_id: int, novel_i
     if int(getattr(novel, "author_id", 0) or 0) != int(user_id):
         raise HTTPException(403, "この小説を操作する権限がありません")
     return novel
+
+
+def _delete_local_uploaded_cover_if_needed(image_path: str) -> None:
+    path = str(image_path or "").strip()
+    if not path.startswith("/uploads/covers/local/"):
+        return
+    rel = path.lstrip("/")
+    file_path = os.path.join("/app", rel)
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception:
+        # best effort
+        pass
+
+
+def _delete_cover_file_if_needed(image_path: str) -> None:
+    path = str(image_path or "").strip()
+    if not path.startswith("/uploads/covers/"):
+        return
+    rel = os.path.normpath(path.lstrip("/"))
+    if rel.startswith(".."):
+        return
+    file_path = os.path.join("/app", rel)
+    try:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+    except Exception:
+        # best effort
+        pass
 
 
 @router.post("/api/covers/generate", response_model=CoverGenerateResponse)
@@ -160,6 +192,51 @@ def get_cover_history(
     ]
 
 
+@router.delete("/api/covers/history/{cover_id}")
+def delete_cover_history_item(
+    cover_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    legacy.assert_premium_user(user, "AI表紙生成はプレミアム会員限定です")
+
+    row = (
+        db.query(models.CoverGeneration)
+        .filter(
+            models.CoverGeneration.id == cover_id,
+            models.CoverGeneration.user_id == int(user.id),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "表紙履歴が見つかりません")
+
+    image_path = str(getattr(row, "image_path", "") or "").strip()
+    if image_path:
+        linked_novels = (
+            db.query(models.Novel)
+            .filter(
+                models.Novel.author_id == int(user.id),
+                models.Novel.cover_image_path == image_path,
+            )
+            .all()
+        )
+        for novel in linked_novels:
+            novel.cover_image_path = None
+            db.add(novel)
+
+    db.delete(row)
+    db.commit()
+
+    if image_path:
+        _delete_cover_file_if_needed(image_path)
+
+    return {"ok": True, "deleted_id": int(cover_id)}
+
+
 @router.post("/api/novels/{novel_id}/cover")
 def set_novel_cover(
     novel_id: int,
@@ -183,4 +260,94 @@ def set_novel_cover(
     novel.cover_image_path = image_path
     db.add(novel)
     db.commit()
+    return {"ok": True, "novel_id": int(novel.id), "cover_image_path": novel.cover_image_path}
+
+
+@router.delete("/api/novels/{novel_id}/cover")
+def delete_novel_cover(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    novel = _require_owner_novel(db, request=request, user_id=user.id, novel_id=novel_id)
+    novel.cover_image_path = None
+    db.add(novel)
+    db.commit()
+    return {"ok": True, "novel_id": int(novel.id), "cover_image_path": None}
+
+
+@router.post("/api/novels/{novel_id}/cover-image")
+async def upload_novel_cover_image(
+    novel_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    novel = _require_owner_novel(db, request=request, user_id=user.id, novel_id=novel_id)
+
+    content_type = str(file.content_type or "").lower()
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    if content_type not in ext_map:
+        raise HTTPException(400, "画像ファイル（jpg/png/webp/gif）のみアップロードできます")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "画像ファイルが空です")
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "画像サイズが大きすぎます（最大 10MB）")
+
+    cfg = _cover_config()
+    local_dir = os.path.join(cfg.upload_dir, "local")
+    os.makedirs(local_dir, exist_ok=True)
+
+    ext = ext_map[content_type]
+    filename = f"novel_{novel_id}_cover_{secrets.token_hex(8)}{ext}"
+    save_path = os.path.join(local_dir, filename)
+
+    if ext == ".gif":
+        with open(save_path, "wb") as f:
+            f.write(data)
+    elif getattr(legacy, "PIL_AVAILABLE", False):
+        try:
+            img = legacy.Image.open(io.BytesIO(data))
+            img = legacy.ImageOps.exif_transpose(img)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            img.thumbnail((1600, 2400))
+            if ext == ".jpg":
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(save_path, format="JPEG", quality=90, optimize=True)
+            elif ext == ".png":
+                img.save(save_path, format="PNG", optimize=True)
+            elif ext == ".webp":
+                img.save(save_path, format="WEBP", quality=85, method=6)
+            else:
+                with open(save_path, "wb") as f:
+                    f.write(data)
+        except Exception:
+            with open(save_path, "wb") as f:
+                f.write(data)
+    else:
+        with open(save_path, "wb") as f:
+            f.write(data)
+
+    old_cover_path = str(getattr(novel, "cover_image_path", "") or "").strip()
+    novel.cover_image_path = f"/uploads/covers/local/{filename}"
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
+    _delete_local_uploaded_cover_if_needed(old_cover_path)
     return {"ok": True, "novel_id": int(novel.id), "cover_image_path": novel.cover_image_path}

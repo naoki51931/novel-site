@@ -4,6 +4,7 @@ import NovelCard from "../components/NovelCard.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
 import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
+import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
 
 const API_BASE = getApiBase();
 
@@ -47,10 +48,6 @@ export default function TagPage() {
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
 
-    const previousTitle = document.title;
-    const metaDescription = document.querySelector('meta[name="description"]');
-    const previousDescription = metaDescription?.getAttribute("content");
-
     const nextTitle = isTagIndex
       ? t({ ja: "タグ一覧｜小説投稿サイトLexis", en: "Tag List | Lexis" })
       : t({
@@ -66,19 +63,15 @@ export default function TagPage() {
           ja: `「${tagName}」タグの作品一覧です。人気順・新着順で探せます。`,
           en: `Explore novels tagged "${tagName}" by popularity and recency.`,
         });
-
-    document.title = nextTitle;
-    if (metaDescription) {
-      metaDescription.setAttribute("content", nextDescription);
-    }
-
-    return () => {
-      document.title = previousTitle;
-      if (metaDescription) {
-        if (previousDescription == null) metaDescription.removeAttribute("content");
-        else metaDescription.setAttribute("content", previousDescription);
-      }
-    };
+    const canonicalPath = isTagIndex
+      ? "/tags"
+      : `/tags/${encodeURIComponent(tagName)}`;
+    return applySeoMeta({
+      title: nextTitle,
+      description: buildSeoDescription(nextDescription),
+      canonicalPath,
+      ogType: "website",
+    });
   }, [isTagIndex, tagName, t, lang]);
 
   useEffect(() => {

@@ -5,6 +5,7 @@ import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
 import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
+import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
 
 const API_BASE = getApiBase();
 const FAVORITE_SUMMARY_MAX_CHARS = 500;
@@ -167,6 +168,61 @@ export default function UserPage() {
 
     fetchAll();
   }, [username]);
+
+  useEffect(() => {
+    if (!username) return undefined;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const canonicalPath = `/users/${encodeURIComponent(username)}`;
+    const canonicalUrl = `${origin}${canonicalPath}`;
+    if (loading) return undefined;
+    if (error) {
+      return applySeoMeta({
+        title: t({ ja: "作者ページ｜小説投稿サイトLexis", en: "Author Page | Lexis" }),
+        description: t({ ja: "作者ページです。", en: "Author page." }),
+        canonicalPath,
+        ogType: "profile",
+        robots: "noindex,follow",
+      });
+    }
+
+    const displayName = profile?.username || username;
+    const title = t({
+      ja: `${displayName}｜作者ページ｜小説投稿サイトLexis`,
+      en: `${displayName} | Author Page | Lexis`,
+    });
+    const description = buildSeoDescription(
+      profile?.profile_bio,
+      t({ ja: `${displayName} の公開作品一覧ページです。`, en: `Public works by ${displayName}.` })
+    );
+    const profileUrl = canonicalUrl;
+    const jsonLd = [
+      {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        name: displayName,
+        description,
+        url: profileUrl,
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: `${origin}/` },
+          { "@type": "ListItem", position: 2, name: "Authors", item: `${origin}/authors` },
+          { "@type": "ListItem", position: 3, name: displayName, item: profileUrl },
+        ],
+      },
+    ];
+    return applySeoMeta({
+      title,
+      description,
+      canonicalPath,
+      ogType: "profile",
+      imageUrl: profile?.profile_icon_url || "/ogp.png",
+      robots: "index,follow",
+      jsonLd,
+    });
+  }, [username, profile, loading, error, t]);
 
   if (loading) return <p>{t({ ja: "読み込み中...", en: "Loading..." })}</p>;
 

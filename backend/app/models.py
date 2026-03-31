@@ -303,6 +303,7 @@ class Episode(Base):
     cover_image_url = Column(String(255))
     status = Column(String(16), nullable=False, server_default="public")
     is_public = Column(Boolean, nullable=False, default=True)
+    is_free_public = Column(Boolean, nullable=False, server_default="0")
     scheduled_publish_at = Column(DateTime, nullable=True, index=True)
     published_at = Column(DateTime, nullable=True, index=True)
     view_count = Column(Integer, nullable=False, server_default="0")

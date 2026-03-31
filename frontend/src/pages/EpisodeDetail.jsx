@@ -5,6 +5,7 @@ import SupportPanel from "../components/SupportPanel.jsx";
 import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
 import { getApiBase } from "../lib/apiBase";
+import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
 
 const API_BASE = getApiBase();
 const FREE_READING_SCHEDULE = {
@@ -51,10 +52,82 @@ export default function EpisodeDetail() {
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [comments]);
 
+  useEffect(() => {
+    if (!episode) return undefined;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const episodeNo = episode.episode_number ?? episode.number;
+    const displayEpisodeTitle = formatEpisodeDisplayTitle(episodeNo, episode.title) || t({
+      ja: "エピソード",
+      en: "Episode",
+    });
+    const pageTitle = t({
+      ja: `${episode.novel_title || "作品"}｜${displayEpisodeTitle}｜小説投稿サイトLexis`,
+      en: `${episode.novel_title || "Novel"} | ${displayEpisodeTitle} | Lexis`,
+    });
+    const pageDescription = buildSeoDescription(
+      summarizeText(episode.body, 140),
+      episode.novel_description,
+      t({ ja: "公開中のエピソードページです。", en: "Public episode page." })
+    );
+    const safeEpisodeId = encodeURIComponent(String(id || episode.id || ""));
+    const canonicalPath = `/episodes/${safeEpisodeId}`;
+    const canonicalUrl = `${origin}${canonicalPath}`;
+    const novelUrl = episode?.novel_id ? `${origin}/novels/${episode.novel_id}` : `${origin}/`;
+    const robots =
+      episode?.is_public === true &&
+      String(episode?.status || "public") === "public" &&
+      String(episode?.novel_age_limit || "all") !== "r18"
+        ? "index,follow"
+        : "noindex,follow";
+    const authorName = String(episode?.author_username || "").trim();
+    const authorUrl = authorName ? `${origin}/users/${encodeURIComponent(authorName)}` : "";
+    const jsonLd = [
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        headline: displayEpisodeTitle,
+        description: pageDescription,
+        mainEntityOfPage: canonicalUrl,
+        url: canonicalUrl,
+        articleBody: summarizeText(episode?.body, 3000),
+        author: authorName
+          ? { "@type": "Person", name: authorName, url: authorUrl }
+          : undefined,
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: `${origin}/` },
+          { "@type": "ListItem", position: 2, name: episode?.novel_title || "Novel", item: novelUrl },
+          { "@type": "ListItem", position: 3, name: displayEpisodeTitle, item: canonicalUrl },
+        ],
+      },
+    ];
+    if (authorName) {
+      jsonLd.push({
+        "@context": "https://schema.org",
+        "@type": "Person",
+        name: authorName,
+        url: authorUrl,
+      });
+    }
+    return applySeoMeta({
+      title: pageTitle,
+      description: pageDescription,
+      canonicalPath,
+      ogType: "article",
+      imageUrl: episode?.cover_image_url || "/ogp.png",
+      robots,
+      jsonLd,
+    });
+  }, [episode, id, t, lang]);
+
   // ★ 画像モーダル
   const [modalImageUrl, setModalImageUrl] = useState("");
   const isPremiumUser = !!episode?.is_premium_user;
   const isFreeReadingTime = !!episode?.is_free_reading_time;
+  const isFreePublic = !!episode?.is_free_public;
   const handleBackToNovel = () => {
     if (episode?.novel_id != null) {
       navigate(`/novels/${episode.novel_id}`);
@@ -788,6 +861,23 @@ export default function EpisodeDetail() {
           </p>
           <p style={{ marginTop: 6, fontSize: 12, color: "var(--premium-text)" }}>
             {t(FREE_READING_SCHEDULE)}
+          </p>
+        </div>
+      ) : isFreePublic ? (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 12,
+            border: "1px solid #0a6",
+            background: "#e8fff5",
+            borderRadius: 6,
+          }}
+        >
+          <p style={{ marginBottom: 6, fontWeight: "bold", color: "#0a6" }}>
+            {t({
+              ja: "★ このエピソードは無料公開中のため、誰でも全文を読めます",
+              en: "★ This episode is free public, so everyone can read the full text.",
+            })}
           </p>
         </div>
       ) : isFreeReadingTime ? (
