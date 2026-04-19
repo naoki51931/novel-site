@@ -3873,10 +3873,10 @@ def _is_force_premium_username(username: str | None) -> bool:
 
 
 def is_effective_premium_user(user: models.User | None) -> bool:
-    if not user:
-        return False
     if FORCE_ALL_PREMIUM:
         return True
+    if not user:
+        return False
     if _is_force_premium_username(getattr(user, "username", None)):
         return True
     return bool(getattr(user, "is_premium", False))
@@ -4330,6 +4330,12 @@ def require_premium_user(request: Request, db: Session) -> models.User:
 AI_GUEST_COOKIE_NAME = "ai_guest_id"
 AI_GUEST_FREE_MAX = 10
 AI_USER_DAILY_MAX = 80
+AI_USER_DAILY_MAX_BY_USERNAME = {
+    "demo02": 300,
+}
+AI_USER_DAILY_MAX_BY_USERNAME_AND_DATE = {
+    ("demo02", "2026-04-19"): 1000,
+}
 AI_NOVEL_ADDON_UNIT_GENERATIONS = int(os.getenv("AI_NOVEL_ADDON_UNIT_GENERATIONS", "80"))
 AI_NOVEL_ADDON_PRICE_YEN = int(os.getenv("AI_NOVEL_ADDON_PRICE_YEN", "1000"))
 AI_JOB_TIMEOUT_MINUTES = 60
@@ -8852,9 +8858,19 @@ def _ai_novel_paid_remaining(user: models.User | None) -> int:
     return max(0, int(getattr(user, "ai_novel_paid_generations", 0) or 0))
 
 
+def _ai_novel_daily_max_for_user(user: models.User | None) -> int:
+    username = str(getattr(user, "username", "") or "").strip().lower()
+    today_key = datetime.utcnow().date().isoformat()
+    dated_limit = AI_USER_DAILY_MAX_BY_USERNAME_AND_DATE.get((username, today_key))
+    if dated_limit is not None:
+        return int(dated_limit)
+    return int(AI_USER_DAILY_MAX_BY_USERNAME.get(username, AI_USER_DAILY_MAX))
+
+
 def _ai_novel_remaining_for_user(db: Session, user: models.User) -> tuple[int, int, int]:
     count_today = _count_ai_usage_today(db, user.id)
-    base_remaining = max(0, AI_USER_DAILY_MAX - count_today)
+    daily_max = _ai_novel_daily_max_for_user(user)
+    base_remaining = max(0, daily_max - count_today)
     paid_remaining = _ai_novel_paid_remaining(user)
     total_remaining = base_remaining + paid_remaining
     return total_remaining, base_remaining, paid_remaining
@@ -8873,7 +8889,8 @@ def _reserve_ai_novel_generation_slot(db: Session, user: models.User) -> int:
         )
 
     count_today = _count_ai_usage_today(db, user.id)
-    if count_today >= AI_USER_DAILY_MAX:
+    daily_max = _ai_novel_daily_max_for_user(user)
+    if count_today >= daily_max:
         if paid_remaining <= 0:
             raise HTTPException(
                 status_code=429,

@@ -302,16 +302,22 @@ export default function EpisodeDetail() {
           }
         }
 
-        setEpisode(data);
         const needsConfirm = !!data.age_confirmation_required;
+        const ageConfirmKey = `age_confirmed_novel_${data.novel_id}`;
+        const alreadyConfirmed =
+          isGoogleCrawler() ||
+          (typeof sessionStorage !== "undefined" &&
+            sessionStorage.getItem(ageConfirmKey) === "yes");
+        if (needsConfirm && !alreadyConfirmed) {
+          const target = data.novel_id ? `/novels/${data.novel_id}` : "/";
+          navigate(target, { replace: true });
+          return;
+        }
+
+        setEpisode(data);
         setAgeConfirmRequired(needsConfirm);
         if (needsConfirm) {
-          if (isGoogleCrawler()) {
-            setAgeConfirmed(true);
-          } else {
-            const key = `age_confirmed_novel_${data.novel_id}`;
-            setAgeConfirmed(sessionStorage.getItem(key) === "yes");
-          }
+          setAgeConfirmed(alreadyConfirmed);
         } else {
           setAgeConfirmed(false);
         }
@@ -337,7 +343,7 @@ export default function EpisodeDetail() {
     fetch(`${API_BASE}/api/episodes/${id}/comments`)
       .then((res) => res.json())
       .then((data) => setComments(Array.isArray(data) ? data : []));
-  }, [id, lang]);
+  }, [id, lang, navigate]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
