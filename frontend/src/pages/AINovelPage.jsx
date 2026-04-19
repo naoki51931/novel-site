@@ -18,10 +18,28 @@ function getAuthToken() {
 const PENDING_AI_POST_KEY = "pending_ai_post_v1";
 const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
+const AI_NOVEL_SEGMENT_PREFS_KEY = "ai_novel_segment_prefs_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
 const DEFAULT_AI_NOVEL_MODEL = "gpt-5-mini";
 const REVISION_CHUNK_MAX_CHARS = 3200;
 const COMMENT_REVISION_OUTPUT_RETRY_MAX = 5;
+const SEGMENT_TARGET_CHARS = 2000;
+const SEGMENT_COUNT_MIN = 1;
+const SEGMENT_COUNT_MAX = 12;
+const CHUNK_BLOCK_TIMEOUT_MS = 5 * 60 * 1000;
+
+function clampSegmentCount(value) {
+  const n = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(n)) return SEGMENT_COUNT_MIN;
+  return Math.max(SEGMENT_COUNT_MIN, Math.min(SEGMENT_COUNT_MAX, n));
+}
+
+function makeSegmentPlanItem(index) {
+  return {
+    id: `seg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${index}`,
+    instruction: "",
+  };
+}
 
 function savePendingAiPost(data) {
   try {
@@ -294,6 +312,16 @@ function getCommentRevisionOutputIssue(text) {
   }
 }
 
+function getGenerateOutputIssue(payload) {
+  const rawBody = String(payload?.body || "");
+  const rawIssue = getCommentRevisionOutputIssue(rawBody);
+  const normalized = normalizeAINovelResponse(payload || {});
+  const normalizedBody = String(normalized?.body || "");
+  if (!normalizedBody.trim()) return "empty";
+  if (rawIssue) return rawIssue;
+  return "";
+}
+
 async function pushDebug(token, stage, detail = "") {
   try {
     const headers = {
@@ -461,6 +489,16 @@ export default function AINovelPage() {
   const [retryMax, setRetryMax] = useState(2);
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [activeRetryMax, setActiveRetryMax] = useState(null);
+  const [chunkedGenerationEnabled, setChunkedGenerationEnabled] = useState(false);
+  const [chunkedGenerationCount, setChunkedGenerationCount] = useState(2);
+  const [chunkedGenerationPlans, setChunkedGenerationPlans] = useState([
+    makeSegmentPlanItem(1),
+    makeSegmentPlanItem(2),
+  ]);
+  const [chunkedProgressActive, setChunkedProgressActive] = useState(false);
+  const [chunkedProgressBlock, setChunkedProgressBlock] = useState(1);
+  const [chunkedProgressPercent, setChunkedProgressPercent] = useState(0);
+  const [chunkedCompletedBlocks, setChunkedCompletedBlocks] = useState(0);
 
   // ★ ここが「続き生成モード」用の state
   const [isContinueMode, setIsContinueMode] = useState(false);
@@ -489,7 +527,7 @@ export default function AINovelPage() {
   const [revisingByComment, setRevisingByComment] = useState(false);
   const [revisionChatScope, setRevisionChatScope] = useState("full");
   const [commentRevisionDiffSegments, setCommentRevisionDiffSegments] = useState([]);
-  const [commentRevisionUndoBody, setCommentRevisionUndoBody] = useState("");
+  const [commentRevisionUndoStack, setCommentRevisionUndoStack] = useState([]);
   const [commentRevisionHasActiveDiff, setCommentRevisionHasActiveDiff] = useState(false);
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
@@ -537,6 +575,12 @@ export default function AINovelPage() {
   const isAbortError = (err) => err && (err.name === "AbortError" || err.code === "ABORT_ERR");
 
   const countChars = (value) => (value || "").length;
+  const targetTotalChars = chunkedGenerationCount * SEGMENT_TARGET_CHARS;
+  const canUseChunkedGeneration = !isContinueMode && !isEditMode;
+  const isLengthOverriddenByChunkedGeneration = canUseChunkedGeneration && chunkedGenerationEnabled;
+  const activeProgressInstruction = (
+    chunkedGenerationPlans[chunkedProgressBlock - 1]?.instruction || ""
+  ).trim();
   const showRetryStatus =
     (loading || continuing || polishing || revisingByComment || retryAttempts > 0) &&
     ((typeof activeRetryMax === "number" && activeRetryMax > 0) ||
@@ -551,13 +595,107 @@ export default function AINovelPage() {
   const lastSelectionContextRef = useRef(null);
   const jobPollTimerRef = useRef(null);
   const activeJobSessionRef = useRef(0);
+  const chunkedGenerateRetryRef = useRef({
+    enabled: false,
+    attempts: 0,
+    max: 0,
+    endpoint: "",
+    requestBody: null,
+  });
   const localDraftRef = useRef(null);
   const draftSaveTimerRef = useRef(null);
   const hasUserInputRef = useRef(false);
+  const segmentPrefsLoadedRef = useRef(false);
+  const chunkedProgressTimerRef = useRef(null);
   const [pendingJob, setPendingJob] = useState(null);
   const hasAuthToken = Boolean(getAuthToken());
   const markUserInput = () => {
     hasUserInputRef.current = true;
+  };
+
+  const setChunkPlanCount = (nextCountRaw) => {
+    const nextCount = clampSegmentCount(nextCountRaw);
+    setChunkedGenerationCount(nextCount);
+    setChunkedGenerationPlans((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      if (safePrev.length === nextCount) return safePrev;
+      if (safePrev.length > nextCount) return safePrev.slice(0, nextCount);
+      const appended = [...safePrev];
+      for (let i = safePrev.length; i < nextCount; i += 1) {
+        appended.push(makeSegmentPlanItem(i + 1));
+      }
+      return appended;
+    });
+  };
+
+  const stopChunkedProgress = (complete = false) => {
+    if (chunkedProgressTimerRef.current) {
+      clearInterval(chunkedProgressTimerRef.current);
+      chunkedProgressTimerRef.current = null;
+    }
+    setChunkedProgressActive(false);
+    if (complete) {
+      setChunkedProgressPercent(100);
+      setChunkedProgressBlock(chunkedGenerationCount);
+      setChunkedCompletedBlocks(chunkedGenerationCount);
+    } else {
+      setChunkedProgressPercent(0);
+      setChunkedProgressBlock(1);
+      setChunkedCompletedBlocks(0);
+    }
+  };
+
+  const resetChunkedGenerateRetryContext = () => {
+    resetChunkedGenerateRetryContext();
+  };
+
+  const startChunkedProgress = (count) => {
+    const safeCount = clampSegmentCount(count);
+    stopChunkedProgress(false);
+    setChunkedProgressActive(true);
+    setChunkedProgressBlock(1);
+    setChunkedProgressPercent(3);
+    setChunkedCompletedBlocks(0);
+    let tick = 0;
+    chunkedProgressTimerRef.current = setInterval(() => {
+      tick += 1;
+      const uiBlock = Math.min(safeCount, Math.floor(tick / 5) + 1);
+      const uiPercent = Math.min(95, 3 + Math.floor((tick / (safeCount * 6)) * 90));
+      setChunkedProgressBlock(uiBlock);
+      setChunkedProgressPercent(uiPercent);
+      setChunkedCompletedBlocks(Math.max(0, uiBlock - 1));
+    }, 1000);
+  };
+
+  useEffect(() => () => {
+    if (chunkedProgressTimerRef.current) {
+      clearInterval(chunkedProgressTimerRef.current);
+      chunkedProgressTimerRef.current = null;
+    }
+  }, []);
+
+  const handleAddChunkPlan = () => {
+    markUserInput();
+    if (chunkedGenerationCount >= SEGMENT_COUNT_MAX) return;
+    setChunkPlanCount(chunkedGenerationCount + 1);
+  };
+
+  const handleRemoveChunkPlan = (index) => {
+    markUserInput();
+    if (chunkedGenerationCount <= SEGMENT_COUNT_MIN) return;
+    setChunkedGenerationPlans((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      const next = safePrev.filter((_, i) => i !== index);
+      return next.length > 0 ? next : [makeSegmentPlanItem(1)];
+    });
+    setChunkedGenerationCount((prev) => Math.max(SEGMENT_COUNT_MIN, Number(prev || 1) - 1));
+  };
+
+  const handleChangeChunkPlanInstruction = (index, value) => {
+    markUserInput();
+    setChunkedGenerationPlans((prev) =>
+      (prev || []).map((item, i) => (i === index ? { ...item, instruction: value } : item))
+    );
   };
 
   useEffect(() => {
@@ -598,6 +736,64 @@ export default function AINovelPage() {
     fetchRemaining();
   }, []);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AI_NOVEL_SEGMENT_PREFS_KEY);
+      if (!raw) {
+        segmentPrefsLoadedRef.current = true;
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.enabled === "boolean") {
+        setChunkedGenerationEnabled(parsed.enabled);
+      }
+      const savedCount = clampSegmentCount(
+        typeof parsed?.count === "number" ? parsed.count : SEGMENT_COUNT_MIN
+      );
+      setChunkedGenerationCount(savedCount);
+      if (Array.isArray(parsed?.plans) && parsed.plans.length > 0) {
+        const normalized = parsed.plans
+          .filter((item) => item && typeof item === "object")
+          .map((item, idx) => ({
+            id: typeof item.id === "string" && item.id ? item.id : makeSegmentPlanItem(idx + 1).id,
+            instruction: String(item.instruction || ""),
+          }));
+        if (normalized.length >= savedCount) {
+          setChunkedGenerationPlans(normalized.slice(0, savedCount));
+        } else {
+          const padded = [...normalized];
+          for (let i = normalized.length; i < savedCount; i += 1) {
+            padded.push(makeSegmentPlanItem(i + 1));
+          }
+          setChunkedGenerationPlans(padded);
+        }
+      }
+    } catch (e) {
+      console.error("failed to load ai segment prefs", e);
+    } finally {
+      segmentPrefsLoadedRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!segmentPrefsLoadedRef.current) return;
+    try {
+      const payload = {
+        enabled: chunkedGenerationEnabled,
+        count: clampSegmentCount(chunkedGenerationCount),
+        plans: (chunkedGenerationPlans || [])
+          .slice(0, clampSegmentCount(chunkedGenerationCount))
+          .map((item, idx) => ({
+            id: typeof item?.id === "string" && item.id ? item.id : makeSegmentPlanItem(idx + 1).id,
+            instruction: String(item?.instruction || ""),
+          })),
+      };
+      localStorage.setItem(AI_NOVEL_SEGMENT_PREFS_KEY, JSON.stringify(payload));
+    } catch (e) {
+      console.error("failed to save ai segment prefs", e);
+    }
+  }, [chunkedGenerationEnabled, chunkedGenerationCount, chunkedGenerationPlans]);
+
   const stopJobPolling = () => {
     if (jobPollTimerRef.current) {
       clearTimeout(jobPollTimerRef.current);
@@ -636,6 +832,32 @@ export default function AINovelPage() {
     if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
     if (typeof draft.retryMode === "boolean") setRetryMode(draft.retryMode);
     if (typeof draft.retryMax === "number") setRetryMax(draft.retryMax);
+    if (typeof draft.chunkedGenerationEnabled === "boolean") {
+      setChunkedGenerationEnabled(draft.chunkedGenerationEnabled);
+    }
+    const draftChunkCount = clampSegmentCount(
+      typeof draft.chunkedGenerationCount === "number" ? draft.chunkedGenerationCount : 2
+    );
+    setChunkedGenerationCount(draftChunkCount);
+    if (Array.isArray(draft.chunkedGenerationPlans) && draft.chunkedGenerationPlans.length > 0) {
+      const normalizedPlans = draft.chunkedGenerationPlans
+        .filter((item) => item && typeof item === "object")
+        .map((item, idx) => ({
+          id: typeof item.id === "string" && item.id ? item.id : makeSegmentPlanItem(idx + 1).id,
+          instruction: String(item.instruction || ""),
+        }));
+      if (normalizedPlans.length >= draftChunkCount) {
+        setChunkedGenerationPlans(normalizedPlans.slice(0, draftChunkCount));
+      } else {
+        const padded = [...normalizedPlans];
+        for (let i = normalizedPlans.length; i < draftChunkCount; i += 1) {
+          padded.push(makeSegmentPlanItem(i + 1));
+        }
+        setChunkedGenerationPlans(padded);
+      }
+    } else {
+      setChunkedGenerationPlans(Array.from({ length: draftChunkCount }, (_, idx) => makeSegmentPlanItem(idx + 1)));
+    }
     if (!skipModeOverwrite && typeof draft.isContinueMode === "boolean") {
       setIsContinueMode(Boolean(draft.isContinueMode && draftEpisodeId !== null));
     }
@@ -682,7 +904,16 @@ export default function AINovelPage() {
           .filter((item) => item.content.trim())
       );
     }
-    if (typeof draft.commentRevisionUndoBody === "string") setCommentRevisionUndoBody(draft.commentRevisionUndoBody);
+    if (Array.isArray(draft.commentRevisionUndoStack)) {
+      setCommentRevisionUndoStack(
+        draft.commentRevisionUndoStack
+          .filter((item) => typeof item === "string")
+          .map((item) => String(item))
+      );
+    } else if (typeof draft.commentRevisionUndoBody === "string") {
+      const legacyUndoBody = String(draft.commentRevisionUndoBody || "");
+      setCommentRevisionUndoStack(legacyUndoBody ? [legacyUndoBody] : []);
+    }
     if (typeof draft.commentRevisionHasActiveDiff === "boolean") {
       setCommentRevisionHasActiveDiff(draft.commentRevisionHasActiveDiff);
     }
@@ -698,6 +929,9 @@ export default function AINovelPage() {
     isR18,
     retryMode,
     retryMax,
+    chunkedGenerationEnabled,
+    chunkedGenerationCount,
+    chunkedGenerationPlans,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -713,7 +947,11 @@ export default function AINovelPage() {
     revisionCommentInput,
     revisionChatScope,
     revisionComments,
-    commentRevisionUndoBody,
+    commentRevisionUndoStack,
+    commentRevisionUndoBody:
+      commentRevisionUndoStack.length > 0
+        ? commentRevisionUndoStack[commentRevisionUndoStack.length - 1]
+        : "",
     commentRevisionHasActiveDiff,
     saved_at: new Date().toISOString(),
   });
@@ -773,8 +1011,16 @@ export default function AINovelPage() {
       setActiveRetryMax(null);
       return;
     }
+    stopChunkedProgress(true);
     const normalized = normalizeAINovelResponse(payload || {});
     setResult(normalized);
+    chunkedGenerateRetryRef.current = {
+      enabled: false,
+      attempts: 0,
+      max: 0,
+      endpoint: "",
+      requestBody: null,
+    };
     notifyAndroidAiResult({
       title:
         normalized?.generated_title ||
@@ -785,6 +1031,52 @@ export default function AINovelPage() {
     setLoading(false);
     setRetryAttempts(0);
     setActiveRetryMax(null);
+  };
+
+  const retryChunkedGenerateForInvalidOutput = async (issue) => {
+    const ctx = chunkedGenerateRetryRef.current || {};
+    if (!ctx.enabled || !ctx.endpoint || !ctx.requestBody) return false;
+    const nextAttempts = Number(ctx.attempts || 0) + 1;
+    chunkedGenerateRetryRef.current = {
+      ...ctx,
+      attempts: nextAttempts,
+    };
+    setRetryAttempts(nextAttempts);
+    setActiveRetryMax(null);
+    setError(
+      t(
+        {
+          ja: "分割生成の出力が不正（{{issue}}）だったため、自動で再生成しています...",
+          en: "Chunked output was invalid ({{issue}}). Retrying automatically...",
+        },
+        { issue: String(issue || "unknown") }
+      )
+    );
+    const token = getAuthToken();
+    const res = await fetchWithTimeout(
+      ctx.endpoint,
+      {
+        method: "POST",
+        headers: token
+          ? {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            }
+          : { "Content-Type": "application/json" },
+        body: JSON.stringify(ctx.requestBody),
+      },
+      20000
+    );
+    if (!res.ok) {
+      return false;
+    }
+    const data = await res.json().catch(() => ({}));
+    const nextJobId = Number(data?.job_id);
+    if (!Number.isFinite(nextJobId) || nextJobId <= 0) {
+      return false;
+    }
+    startJobPolling({ job_id: nextJobId, kind: "generate" });
+    return true;
   };
 
   const pollAiJob = async (job, sessionId = activeJobSessionRef.current) => {
@@ -819,9 +1111,11 @@ export default function AINovelPage() {
         setTimeout(() => navigate("/login"), 800);
         stopJobPolling();
         setLoading(false);
+        stopChunkedProgress(false);
         setContinuing(false);
         setRetryAttempts(0);
         setActiveRetryMax(null);
+        resetChunkedGenerateRetryContext();
         clearPendingAiJob();
         setPendingJob(null);
         return;
@@ -857,9 +1151,11 @@ export default function AINovelPage() {
         }
         stopJobPolling();
         setLoading(false);
+        stopChunkedProgress(false);
         setContinuing(false);
         setRetryAttempts(0);
         setActiveRetryMax(null);
+        resetChunkedGenerateRetryContext();
         clearPendingAiJob();
         setPendingJob(null);
         return;
@@ -873,6 +1169,39 @@ export default function AINovelPage() {
         setActiveRetryMax(data.retry_max);
       }
       if (data.status === "succeeded") {
+        if (job?.kind === "generate") {
+          const outputIssue = getGenerateOutputIssue(data.response || {});
+          if (outputIssue) {
+            const retried = await retryChunkedGenerateForInvalidOutput(outputIssue);
+            if (retried) {
+              return;
+            }
+            if (!chunkedGenerateRetryRef.current?.enabled) {
+              handleJobResult(job, data.response);
+              stopJobPolling();
+              clearPendingAiJob();
+              setPendingJob(null);
+              return;
+            }
+            setError(
+              t(
+                {
+                  ja: "分割生成の出力が不正（{{issue}}）で、自動再生成ジョブの起動に失敗しました。",
+                  en: "Chunked output was invalid ({{issue}}) and failed to enqueue auto-retry job.",
+                },
+                { issue: String(outputIssue || "unknown") }
+              )
+            );
+            stopJobPolling();
+            stopChunkedProgress(false);
+            setLoading(false);
+            setContinuing(false);
+            resetChunkedGenerateRetryContext();
+            clearPendingAiJob();
+            setPendingJob(null);
+            return;
+          }
+        }
         handleJobResult(job, data.response);
         stopJobPolling();
         clearPendingAiJob();
@@ -897,9 +1226,11 @@ export default function AINovelPage() {
         );
         stopJobPolling();
         setLoading(false);
+        stopChunkedProgress(false);
         setContinuing(false);
         setRetryAttempts(0);
         setActiveRetryMax(null);
+        resetChunkedGenerateRetryContext();
         clearPendingAiJob();
         setPendingJob(null);
         return;
@@ -1154,6 +1485,9 @@ export default function AINovelPage() {
     setIsR18(false);
     setRetryMode(false);
     setRetryMax(2);
+    setChunkedGenerationEnabled(false);
+    setChunkedGenerationCount(2);
+    setChunkedGenerationPlans([makeSegmentPlanItem(1), makeSegmentPlanItem(2)]);
     setRetryAttempts(0);
     setActiveRetryMax(null);
     setResult(null);
@@ -1311,6 +1645,9 @@ export default function AINovelPage() {
     isR18,
     retryMode,
     retryMax,
+    chunkedGenerationEnabled,
+    chunkedGenerationCount,
+    chunkedGenerationPlans,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -1326,7 +1663,7 @@ export default function AINovelPage() {
     revisionCommentInput,
     revisionChatScope,
     revisionComments,
-    commentRevisionUndoBody,
+    commentRevisionUndoStack,
     commentRevisionHasActiveDiff,
   ]);
 
@@ -1364,6 +1701,9 @@ export default function AINovelPage() {
     isR18,
     retryMode,
     retryMax,
+    chunkedGenerationEnabled,
+    chunkedGenerationCount,
+    chunkedGenerationPlans,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -1379,7 +1719,7 @@ export default function AINovelPage() {
     revisionCommentInput,
     revisionChatScope,
     revisionComments,
-    commentRevisionUndoBody,
+    commentRevisionUndoStack,
     commentRevisionHasActiveDiff,
   ]);
 
@@ -1687,6 +2027,222 @@ export default function AINovelPage() {
     if (!selectedText) return null;
 
     return { fullText, start, end, selectedText };
+  };
+
+  const buildSegmentedNovelPrompt = (params, planItems, segmentChars = SEGMENT_TARGET_CHARS) => {
+    const safePlans = (planItems || []).map((item, idx) => ({
+      index: idx + 1,
+      instruction: String(item?.instruction || "").trim(),
+    }));
+    const chunkCount = Math.max(1, safePlans.length);
+    const totalChars = chunkCount * segmentChars;
+    const r18Note = params.isR18
+      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
+      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
+    const titleHintText = params.titleHint || "指定なし";
+    const genreText = params.genre || "指定なし";
+    const toneText = params.tone || "指定なし";
+    const charactersText = params.characters || "指定なし";
+    const scopeLines = safePlans.map((item) => {
+      const start = (item.index - 1) * segmentChars + 1;
+      const end = item.index * segmentChars;
+      const label = `第${item.index}ブロック（目安 ${start}〜${end} 文字）`;
+      const body = item.instruction || "（特記事項なし。前後と自然につながる展開にする）";
+      return `- ${label}: ${body}`;
+    });
+
+    return [
+      "あなたは日本語の小説作家です。",
+      `以下の条件で、約${totalChars}文字（${segmentChars}文字×${chunkCount}ブロック）の本文を書いてください。`,
+      "本文は連続した1本の小説として出力し、途中で箇条書きや見出しを出さないでください。",
+      `各ブロックはおおむね ${Math.round(segmentChars * 0.85)}〜${Math.round(segmentChars * 1.15)} 文字に収めてください。`,
+      "各ブロックの担当範囲を意識して、前後のつながりが自然になるように構成してください。",
+      r18Note,
+      "",
+      "【ブロックごとの執筆範囲】",
+      ...scopeLines,
+      "",
+      "【共通条件】",
+      `- タイトルのイメージ: ${titleHintText}`,
+      `- ジャンル: ${genreText}`,
+      `- 雰囲気: ${toneText}`,
+      `- 登場人物・設定: ${charactersText}`,
+      "",
+      "出力は JSON の body に本文のみを書いてください（タイトルは変更しない）。",
+    ].join("\n");
+  };
+
+  const buildChunkBlockPrompt = (
+    params,
+    blockInstruction,
+    blockIndex,
+    totalBlocks,
+    previousText,
+    segmentChars = SEGMENT_TARGET_CHARS
+  ) => {
+    const r18Note = params.isR18
+      ? "成人向けの内容を許可します。性的描写を含めても構いません。"
+      : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
+    const titleHintText = params.titleHint || "指定なし";
+    const genreText = params.genre || "指定なし";
+    const toneText = params.tone || "指定なし";
+    const charactersText = params.characters || "指定なし";
+    const start = blockIndex * segmentChars + 1;
+    const end = (blockIndex + 1) * segmentChars;
+    const hasPrevious = Boolean((previousText || "").trim());
+
+    return [
+      "あなたは日本語の小説作家です。",
+      hasPrevious
+        ? `以下は分割生成の第${blockIndex + 1}/${totalBlocks}ブロックです。前ブロックの続きとして本文のみを書いてください。`
+        : `以下は分割生成の第1/${totalBlocks}ブロックです。本文の導入から書いてください。`,
+      `今回の出力は約${segmentChars}文字（目安 ${start}〜${end} 文字の範囲）にしてください。`,
+      "すでに書かれた内容の要約や繰り返しは避け、物語を前進させてください。",
+      r18Note,
+      "",
+      hasPrevious ? "【これまでに生成済みの本文】" : "",
+      hasPrevious ? previousText : "",
+      hasPrevious ? "" : "",
+      "【このブロックで書く内容】",
+      String(blockInstruction || "").trim() || "前後と自然につながる展開にする。",
+      "",
+      "【共通条件】",
+      `- タイトルのイメージ: ${titleHintText}`,
+      `- ジャンル: ${genreText}`,
+      `- 雰囲気: ${toneText}`,
+      `- 登場人物・設定: ${charactersText}`,
+      "",
+      "出力は JSON の body に本文のみを書いてください（タイトルは変更しない）。",
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+  };
+
+  const requestGenerateJob = async (endpoint, token, bodyPayload) => {
+    const res = await fetchWithTimeout(
+      endpoint,
+      {
+        method: "POST",
+        headers: token
+          ? {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            }
+          : { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyPayload),
+      },
+      20000
+    );
+    let detail = "";
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      detail = String(data?.detail || "").trim();
+    }
+    if (res.status === 401 && token) {
+      const e = new Error(
+        t({
+          ja: "ログインの有効期限が切れています。再ログインしてください。",
+          en: "Your session has expired. Please log in again.",
+        })
+      );
+      e.code = "auth_expired";
+      throw e;
+    }
+    if (res.status === 402) {
+      const e = new Error(
+        t({
+          ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
+          en: "This feature is for paid plans only. Check your plan on My Page.",
+        })
+      );
+      e.code = "premium";
+      throw e;
+    }
+    if (res.status === 429) {
+      const e = new Error(
+        detail ||
+          t({
+            ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
+            en: "You've reached today's AI generation limit. Please try again tomorrow.",
+          })
+      );
+      e.code = "quota";
+      throw e;
+    }
+    if (!res.ok) {
+      const e = new Error(
+        detail ||
+          t(
+            { ja: "生成に失敗しました (status={{status}})", en: "Generation failed (status={{status}})" },
+            { status: res.status }
+          )
+      );
+      e.code = "request_failed";
+      throw e;
+    }
+    const data = await res.json().catch(() => ({}));
+    const jobId = Number(data?.job_id);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      const e = new Error(
+        t({ ja: "生成ジョブの開始に失敗しました。", en: "Failed to start generation job." })
+      );
+      e.code = "job_start_failed";
+      throw e;
+    }
+    return jobId;
+  };
+
+  const pollGenerateJobUntilDone = async (jobId, token) => {
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const started = Date.now();
+    while (true) {
+      if (Date.now() - started > CHUNK_BLOCK_TIMEOUT_MS) {
+        const e = new Error(
+          t({
+            ja: "分割ブロック生成が5分でタイムアウトしました。次のブロックに進むか再試行してください。",
+            en: "Chunk block generation timed out after 5 minutes. Retry or continue with available blocks.",
+          })
+        );
+        e.code = "poll_timeout";
+        throw e;
+      }
+      await sleep(800);
+      const statusRes = await fetch(`/api/ai/jobs/${jobId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!statusRes.ok) {
+        const data = await statusRes.json().catch(() => ({}));
+        const e = new Error(
+          data?.detail ||
+            t(
+              {
+                ja: "生成ジョブの状態取得に失敗しました (status={{status}})",
+                en: "Failed to get generation job status (status={{status}})",
+              },
+              { status: statusRes.status }
+            )
+        );
+        e.code = "status_failed";
+        throw e;
+      }
+      const statusData = await statusRes.json().catch(() => ({}));
+      if (typeof statusData?.retry_attempts === "number") {
+        setRetryAttempts(statusData.retry_attempts);
+      }
+      if (typeof statusData?.retry_max === "number") {
+        setActiveRetryMax(statusData.retry_max);
+      }
+      if (statusData?.status === "succeeded") {
+        return statusData?.response || {};
+      }
+      if (statusData?.status === "failed") {
+        const e = new Error(
+          statusData?.error || t({ ja: "生成に失敗しました。", en: "Generation failed." })
+        );
+        e.code = "job_failed";
+        throw e;
+      }
+    }
   };
 
   const buildContinuationPrompt = (baseBody, params) => {
@@ -2201,7 +2757,7 @@ export default function AINovelPage() {
         body: nextFullBody,
       }));
       setContinuationBody("");
-      setCommentRevisionUndoBody(generatedFullBody);
+      setCommentRevisionUndoStack((prev) => [...prev, generatedFullBody]);
       setCommentRevisionDiffSegments(buildLineDiffSegments(generatedFullBody, nextFullBody));
       setCommentRevisionHasActiveDiff(true);
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
@@ -2259,13 +2815,14 @@ export default function AINovelPage() {
   };
 
   const handleUndoCommentRevision = () => {
-    if (!commentRevisionUndoBody) return;
+    if (!commentRevisionUndoStack.length) return;
+    const restoreBody = commentRevisionUndoStack[commentRevisionUndoStack.length - 1];
     setResult((prev) => ({
       ...(prev || {}),
-      body: commentRevisionUndoBody,
+      body: restoreBody,
     }));
     setContinuationBody("");
-    setCommentRevisionUndoBody("");
+    setCommentRevisionUndoStack((prev) => prev.slice(0, -1));
     setCommentRevisionDiffSegments([]);
     setCommentRevisionHasActiveDiff(false);
     setRevisionComments((prev) => [
@@ -2345,6 +2902,7 @@ export default function AINovelPage() {
     clearPendingAiJob();
     setPendingJob(null);
     setLoading(true);
+    stopChunkedProgress(false);
     setError("");
     setQuotaError("");
     setPremiumError("");
@@ -2359,7 +2917,7 @@ export default function AINovelPage() {
     setRevisionCommentInput("");
     setRevisionChatScope("full");
     setRevisionComments([]);
-    setCommentRevisionUndoBody("");
+    setCommentRevisionUndoStack([]);
     setCommentRevisionDiffSegments([]);
     setCommentRevisionHasActiveDiff(false);
     setHasContinuationAttempted(false);
@@ -2377,6 +2935,7 @@ export default function AINovelPage() {
         navigate("/login"); // 既存のログインパスに合わせて変更
       }, 800);
       setLoading(false);
+      stopChunkedProgress(false);
       return;
     }
     if (isEditMode && !baseBodyForEdit) {
@@ -2387,6 +2946,7 @@ export default function AINovelPage() {
         })
       );
       setLoading(false);
+      stopChunkedProgress(false);
       return;
     }
 
@@ -2400,15 +2960,171 @@ export default function AINovelPage() {
       isR18,
       retryMode,
       retryMax,
+      chunkedGenerationEnabled,
+      chunkedGenerationCount,
+      chunkedGenerationPlans,
     };
     // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
     const endpoint = episodeId
       ? `/api/ai/episodes/${episodeId}/continue_job`
       : "/api/ai/novels/generate_job";
-    const prompt =
-      isEditMode && baseBodyForEdit
-        ? buildEditPrompt(baseBodyForEdit, params)
-        : null;
+    const activeChunkCount = clampSegmentCount(chunkedGenerationCount);
+    const activeChunkPlans = (chunkedGenerationPlans || []).slice(0, activeChunkCount);
+    const useChunkedGeneration =
+      !episodeId
+      && !isEditMode
+      && canUseChunkedGeneration
+      && Boolean(chunkedGenerationEnabled)
+      && activeChunkCount >= 1;
+    chunkedGenerateRetryRef.current = {
+      enabled: useChunkedGeneration,
+      attempts: 0,
+      max: useChunkedGeneration ? Math.max(1, Number(retryMode ? retryMax : 2)) : 0,
+      endpoint,
+      requestBody: null,
+    };
+    const prompt = isEditMode && baseBodyForEdit
+      ? buildEditPrompt(baseBodyForEdit, params)
+      : useChunkedGeneration
+      ? buildSegmentedNovelPrompt(params, activeChunkPlans, SEGMENT_TARGET_CHARS)
+      : null;
+    const requestBody = {
+      title_hint: titleHint || null,
+      genre: genre || null,
+      characters: characters || null,
+      tone: tone || null,
+      length: useChunkedGeneration ? String(activeChunkCount * SEGMENT_TARGET_CHARS) : (length || "medium"),
+      model: model || DEFAULT_AI_NOVEL_MODEL,
+      r18: isR18,
+      prompt,
+      retry_mode: retryMode,
+      retry_max: retryMax,
+    };
+    if (useChunkedGeneration) {
+      chunkedGenerateRetryRef.current = {
+        ...chunkedGenerateRetryRef.current,
+        requestBody,
+      };
+      let combinedChunkText = "";
+      let finalTitle = "";
+      try {
+        startChunkedProgress(activeChunkCount);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
+        for (let blockIdx = 0; blockIdx < activeChunkCount; blockIdx += 1) {
+          const blockInstruction = activeChunkPlans[blockIdx]?.instruction || "";
+          setChunkedProgressBlock(blockIdx + 1);
+          setChunkedCompletedBlocks(blockIdx);
+          while (true) {
+            const chunkPrompt = buildChunkBlockPrompt(
+              params,
+              blockInstruction,
+              blockIdx,
+              activeChunkCount,
+              combinedChunkText,
+              SEGMENT_TARGET_CHARS
+            );
+            const chunkBodyPayload = {
+              ...requestBody,
+              prompt: chunkPrompt,
+              length: String(SEGMENT_TARGET_CHARS),
+            };
+            const blockJobId = await requestGenerateJob(endpoint, token, chunkBodyPayload);
+            const blockPayload = await pollGenerateJobUntilDone(blockJobId, token);
+            const outputIssue = getGenerateOutputIssue(blockPayload || {});
+            if (outputIssue) {
+              setError(
+                t(
+                  {
+                    ja: "第{{block}}ブロックの出力が不正（{{issue}}）のため再生成しています...",
+                    en: "Block {{block}} output was invalid ({{issue}}). Retrying...",
+                  },
+                  { block: blockIdx + 1, issue: String(outputIssue || "unknown") }
+                )
+              );
+              continue;
+            }
+            const normalizedBlock = normalizeAINovelResponse(blockPayload || {});
+            const nextChunkBody = String(normalizedBlock?.body || "").trim();
+            if (!nextChunkBody) {
+              setError(
+                t(
+                  {
+                    ja: "第{{block}}ブロックの出力が空だったため再生成しています...",
+                    en: "Block {{block}} output was empty. Retrying...",
+                  },
+                  { block: blockIdx + 1 }
+                )
+              );
+              continue;
+            }
+            if (!finalTitle) {
+              finalTitle = String(normalizedBlock?.generated_title || "").trim();
+            }
+            combinedChunkText = combinedChunkText
+              ? `${combinedChunkText}\n\n${nextChunkBody}`
+              : nextChunkBody;
+            setResult({
+              generated_title: finalTitle || titleHint || t({ ja: "生成された小説", en: "Generated Novel" }),
+              body: combinedChunkText,
+            });
+            if (typeof normalizedBlock?.guest_remaining === "number") {
+              setGuestRemaining(normalizedBlock.guest_remaining);
+            }
+            if (typeof normalizedBlock?.user_remaining === "number") {
+              setUserRemaining(normalizedBlock.user_remaining);
+            }
+            setChunkedCompletedBlocks(blockIdx + 1);
+            setChunkedProgressPercent(Math.min(95, Math.round(((blockIdx + 1) / activeChunkCount) * 100)));
+            break;
+          }
+        }
+        stopChunkedProgress(true);
+        setLastGenerateParams(params);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
+        setError("");
+        setLoading(false);
+        resetChunkedGenerateRetryContext();
+      } catch (err) {
+        console.error(err);
+        setLoading(false);
+        setChunkedProgressActive(false);
+        resetChunkedGenerateRetryContext();
+        if (combinedChunkText.trim()) {
+          setResult((prev) => ({
+            ...(prev || {}),
+            generated_title:
+              (prev?.generated_title || finalTitle || titleHint || t({ ja: "生成された小説", en: "Generated Novel" })),
+            body: combinedChunkText,
+          }));
+          const baseMessage =
+            err?.message ||
+            t({ ja: "分割生成中にエラーが発生しました。", en: "An error occurred during chunked generation." });
+          setError(
+            t(
+              {
+                ja: "途中まで生成した本文を表示しています。理由: {{reason}}",
+                en: "Showing partially generated text. Reason: {{reason}}",
+              },
+              { reason: baseMessage }
+            )
+          );
+        } else if (err?.code === "premium") {
+          setPremiumError(err.message);
+        } else if (err?.code === "quota") {
+          setQuotaError(err.message);
+        } else if (err?.code === "auth_expired") {
+          setError(err.message);
+          setTimeout(() => navigate("/login"), 800);
+        } else {
+          setError(
+            err?.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
+          );
+        }
+      }
+      return;
+    }
 
     try {
       const res = await fetchWithTimeout(
@@ -2421,18 +3137,7 @@ export default function AINovelPage() {
                 Authorization: `Bearer ${token}`,
               }
             : { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title_hint: titleHint || null,
-            genre: genre || null,
-            characters: characters || null,
-            tone: tone || null,
-            length: length || "medium",
-            model: model || DEFAULT_AI_NOVEL_MODEL,
-            r18: isR18,
-            prompt,
-            retry_mode: retryMode,
-            retry_max: retryMax,
-          }),
+          body: JSON.stringify(requestBody),
         },
         20000
       );
@@ -2446,6 +3151,7 @@ export default function AINovelPage() {
         );
         setTimeout(() => navigate("/login"), 800);
         setLoading(false);
+        resetChunkedGenerateRetryContext();
         return;
       }
 
@@ -2457,6 +3163,7 @@ export default function AINovelPage() {
           })
         );
         setLoading(false);
+        resetChunkedGenerateRetryContext();
         return;
       }
 
@@ -2470,6 +3177,7 @@ export default function AINovelPage() {
             })
         );
         setLoading(false);
+        resetChunkedGenerateRetryContext();
         return;
       }
 
@@ -2488,6 +3196,11 @@ export default function AINovelPage() {
       setLastGenerateParams(params);
       setRetryAttempts(0);
       setActiveRetryMax(params.retryMode ? params.retryMax : 0);
+      if (useChunkedGeneration) {
+        startChunkedProgress(activeChunkCount);
+      } else {
+        stopChunkedProgress(false);
+      }
       startJobPolling({ job_id: data.job_id, kind: "generate" });
     } catch (err) {
       console.error(err);
@@ -2504,6 +3217,8 @@ export default function AINovelPage() {
         );
       }
       setLoading(false);
+      stopChunkedProgress(false);
+      resetChunkedGenerateRetryContext();
     }
   };
 
@@ -3788,6 +4503,7 @@ export default function AINovelPage() {
               markUserInput();
               setLength(e.target.value);
             }}
+            disabled={isLengthOverriddenByChunkedGeneration}
             style={{ width: "100%", padding: "0.5rem" }}
           >
             <option value="short">{t({ ja: "短め（800〜1200文字程度）", en: "Short (800–1200 chars)" })}</option>
@@ -3796,7 +4512,148 @@ export default function AINovelPage() {
             <option value="xlong">{t({ ja: "すごく長め（6000〜8000文字程度）", en: "Very long (6000–8000 chars)" })}</option>
             <option value="xxlong">{t({ ja: "超長め（8000〜10000文字程度）", en: "Ultra long (8000–10000 chars)" })}</option>
           </select>
+          {isLengthOverriddenByChunkedGeneration && (
+            <div style={{ marginTop: "0.35rem", fontSize: "0.82rem", color: "var(--muted-text)" }}>
+              {t({
+                ja: "分割生成ON中はこの長さ指定は無効です。2000文字×ブロック数が優先されます。",
+                en: "Length selection is ignored while chunked generation is ON. 2000 chars × block count is used.",
+              })}
+            </div>
+          )}
         </div>
+
+        {canUseChunkedGeneration && (
+          <div
+            style={{
+              padding: "0.75rem",
+              border: "1px solid var(--border)",
+              borderRadius: "6px",
+              backgroundColor: "var(--ai-result-surface)",
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "bold" }}>
+              <input
+                type="checkbox"
+                checked={chunkedGenerationEnabled}
+                onChange={(e) => {
+                  markUserInput();
+                  setChunkedGenerationEnabled(e.target.checked);
+                }}
+              />
+              {t({ ja: "2000文字単位で分割生成する", en: "Generate in 2000-char chunks" })}
+            </label>
+            <div style={{ marginTop: "0.45rem", fontSize: "0.85rem", color: "var(--muted-text)" }}>
+              {t(
+                {
+                  ja: "目標文字数: 約{{per}}文字 × {{count}}ブロック = 約{{total}}文字",
+                  en: "Target length: about {{per}} chars × {{count}} blocks = about {{total}} chars",
+                },
+                { per: SEGMENT_TARGET_CHARS, count: chunkedGenerationCount, total: targetTotalChars }
+              )}
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginTop: "0.5rem" }}>
+              <label style={{ fontSize: "0.9rem", color: "var(--muted-text)" }}>
+                {t({ ja: "ブロック数", en: "Block count" })}
+              </label>
+              <input
+                type="number"
+                min={SEGMENT_COUNT_MIN}
+                max={SEGMENT_COUNT_MAX}
+                value={chunkedGenerationCount}
+                onChange={(e) => {
+                  markUserInput();
+                  setChunkPlanCount(e.target.value);
+                }}
+                disabled={!chunkedGenerationEnabled}
+                style={{ width: "110px", padding: "0.4rem" }}
+              />
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={handleAddChunkPlan}
+                disabled={!chunkedGenerationEnabled || chunkedGenerationCount >= SEGMENT_COUNT_MAX}
+              >
+                {t({ ja: "+ 次の2000文字を追加", en: "+ Add next 2000-char block" })}
+              </button>
+            </div>
+            {chunkedGenerationEnabled && (
+              <div style={{ marginTop: "0.7rem", display: "grid", gap: "0.6rem" }}>
+                {chunkedGenerationPlans.slice(0, chunkedGenerationCount).map((item, idx) => {
+                  const start = idx * SEGMENT_TARGET_CHARS + 1;
+                  const end = (idx + 1) * SEGMENT_TARGET_CHARS;
+                  const blockNumber = idx + 1;
+                  const isBlockCompleted = chunkedCompletedBlocks >= blockNumber;
+                  const isBlockCurrent = chunkedProgressActive && loading && blockNumber === chunkedProgressBlock;
+                  const blockStatusLabel = isBlockCompleted
+                    ? t({ ja: "生成済み", en: "Completed" })
+                    : isBlockCurrent
+                    ? t({ ja: "生成中", en: "Generating" })
+                    : t({ ja: "未着手", en: "Pending" });
+                  const blockStatusStyle = isBlockCompleted
+                    ? { color: "#065f46", backgroundColor: "#dcfce7", border: "1px solid #86efac" }
+                    : isBlockCurrent
+                    ? { color: "#1e3a8a", backgroundColor: "#dbeafe", border: "1px solid #93c5fd" }
+                    : { color: "#6b7280", backgroundColor: "#f3f4f6", border: "1px solid #d1d5db" };
+                  return (
+                    <div
+                      key={item.id || `seg-${idx}`}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: "6px",
+                        padding: "0.55rem",
+                        backgroundColor: "var(--ai-result-bg)",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <div style={{ fontWeight: "bold", fontSize: "0.92rem" }}>
+                          {t(
+                            { ja: "第{{n}}ブロック（{{start}}〜{{end}}文字 目安）", en: "Block {{n}} (about {{start}}–{{end}} chars)" },
+                            { n: idx + 1, start, end }
+                          )}
+                        </div>
+                        <span
+                          style={{
+                            fontSize: "0.78rem",
+                            borderRadius: "999px",
+                            padding: "0.12rem 0.5rem",
+                            ...blockStatusStyle,
+                          }}
+                        >
+                          {blockStatusLabel}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-border"
+                          onClick={() => handleRemoveChunkPlan(idx)}
+                          disabled={chunkedGenerationCount <= SEGMENT_COUNT_MIN}
+                        >
+                          {t({ ja: "このブロックを削除", en: "Remove block" })}
+                        </button>
+                      </div>
+                      <textarea
+                        value={item.instruction || ""}
+                        onChange={(e) => handleChangeChunkPlanInstruction(idx, e.target.value)}
+                        rows={2}
+                        placeholder={t({
+                          ja: "この2000文字で書きたい内容（例: 導入、主人公の葛藤を描く、伏線を置く）",
+                          en: "What to write in this 2000-char block (e.g., opening, conflict, foreshadowing)",
+                        })}
+                        style={{
+                          width: "100%",
+                          marginTop: "0.45rem",
+                          padding: "0.5rem",
+                          borderRadius: "4px",
+                          border: "1px solid var(--border)",
+                          resize: "vertical",
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
           <label style={{ fontWeight: "bold", display: "block", marginBottom: "0.25rem" }}>
@@ -3933,6 +4790,57 @@ export default function AINovelPage() {
             ? t({ ja: "AIで次話を作成", en: "Create next episode with AI" })
             : t({ ja: "AI小説を生成する", en: "Generate AI novel" })}
         </button>
+        {chunkedProgressActive && loading && canUseChunkedGeneration && (
+          <div
+            style={{
+              marginTop: "0.5rem",
+              padding: "0.65rem 0.75rem",
+              borderRadius: "6px",
+              border: "1px solid var(--border)",
+              backgroundColor: "var(--ai-result-surface)",
+            }}
+          >
+            <div style={{ fontSize: "0.9rem", fontWeight: "bold", marginBottom: "0.35rem" }}>
+              {t(
+                { ja: "分割生成中: 第{{current}}/{{total}}ブロック", en: "Chunked generation: block {{current}}/{{total}}" },
+                { current: chunkedProgressBlock, total: chunkedGenerationCount }
+              )}
+            </div>
+            <div
+              style={{
+                width: "100%",
+                height: "9px",
+                borderRadius: "999px",
+                backgroundColor: "var(--ai-result-bg)",
+                overflow: "hidden",
+                border: "1px solid var(--border)",
+              }}
+            >
+              <div
+                style={{
+                  width: `${chunkedProgressPercent}%`,
+                  height: "100%",
+                  backgroundColor: "#3b82f6",
+                  transition: "width 0.6s ease",
+                }}
+              />
+            </div>
+            <div style={{ marginTop: "0.3rem", fontSize: "0.82rem", color: "var(--muted-text)" }}>
+              {t({ ja: "進捗目安", en: "Estimated progress" })}: {chunkedProgressPercent}%
+            </div>
+            <div style={{ marginTop: "0.2rem", fontSize: "0.82rem", color: "var(--muted-text)" }}>
+              {t(
+                { ja: "生成済みブロック: {{done}} / {{total}}", en: "Completed blocks: {{done}} / {{total}}" },
+                { done: chunkedCompletedBlocks, total: chunkedGenerationCount }
+              )}
+            </div>
+            {activeProgressInstruction && (
+              <div style={{ marginTop: "0.2rem", fontSize: "0.82rem", color: "var(--muted-text)" }}>
+                {t({ ja: "このブロックの指示", en: "Current block note" })}: {activeProgressInstruction}
+              </div>
+            )}
+          </div>
+        )}
         <button
           type="button"
           className="btn btn-border"
@@ -4534,7 +5442,7 @@ export default function AINovelPage() {
                   type="button"
                   className="btn btn-border"
                   onClick={handleUndoCommentRevision}
-                  disabled={revisingByComment || !commentRevisionUndoBody}
+                  disabled={revisingByComment || commentRevisionUndoStack.length === 0}
                 >
                   {t({ ja: "修正を戻す", en: "Undo revision" })}
                 </button>
