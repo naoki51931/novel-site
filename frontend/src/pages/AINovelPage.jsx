@@ -576,7 +576,7 @@ export default function AINovelPage() {
 
   const countChars = (value) => (value || "").length;
   const targetTotalChars = chunkedGenerationCount * SEGMENT_TARGET_CHARS;
-  const canUseChunkedGeneration = !isContinueMode && !isEditMode;
+  const canUseChunkedGeneration = !isEditMode;
   const isLengthOverriddenByChunkedGeneration = canUseChunkedGeneration && chunkedGenerationEnabled;
   const activeProgressInstruction = (
     chunkedGenerationPlans[chunkedProgressBlock - 1]?.instruction || ""
@@ -2114,6 +2114,8 @@ export default function AINovelPage() {
       "あなたは日本語の小説作家です。",
       hasPrevious
         ? `以下は分割生成の第${blockIndex + 1}/${totalBlocks}ブロックです。前ブロックの続きとして本文のみを書いてください。`
+        : params.isContinueMode
+        ? `以下は分割生成の第1/${totalBlocks}ブロックです。前のエピソード本文の続きとして本文のみを書いてください。`
         : `以下は分割生成の第1/${totalBlocks}ブロックです。本文の導入から書いてください。`,
       `今回の出力は約${segmentChars}文字（目安 ${start}〜${end} 文字の範囲）にしてください。`,
       "すでに書かれた内容の要約や繰り返しは避け、物語を前進させてください。",
@@ -2984,6 +2986,7 @@ export default function AINovelPage() {
       chunkedGenerationEnabled,
       chunkedGenerationCount,
       chunkedGenerationPlans,
+      isContinueMode,
     };
     // ★ ここで「通常の新規生成」と「エピソード続き生成」を切り替える
     const endpoint = episodeId
@@ -2992,8 +2995,7 @@ export default function AINovelPage() {
     const activeChunkCount = clampSegmentCount(chunkedGenerationCount);
     const activeChunkPlans = (chunkedGenerationPlans || []).slice(0, activeChunkCount);
     const useChunkedGeneration =
-      !episodeId
-      && !isEditMode
+      !isEditMode
       && canUseChunkedGeneration
       && Boolean(chunkedGenerationEnabled)
       && activeChunkCount >= 1;
