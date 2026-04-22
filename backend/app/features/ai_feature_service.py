@@ -359,38 +359,7 @@ async def locate_ai_novel_revision_target_service(payload, request, db):
                     "fallback_reason": None,
                     "candidate_count": len(hits),
                 }
-        # 4) Weaviate object scan fallback (検索API無ヒット時でもWeaviate保存内容から選ぶ)
-        scanned: list[dict] = []
-        seen_scan: set[str] = set()
-        for feature in feature_candidates:
-            part = legacy.scan_feature_docs(
-                feature=feature,
-                site_key=site_key,
-                limit=500,
-                target_ids=[int(doc["target_id"]) for doc in docs],
-                include_r18=is_r18,
-                public_only=False,
-            )
-            for h in part:
-                key = str(h.get("doc_id") or "")
-                if not key or key in seen_scan:
-                    continue
-                seen_scan.add(key)
-                scanned.append(h)
-        if scanned:
-            best_id = int(scanned[0].get("target_id") or 0)
-            selected = next((c for c in chunks if int(c["target_id"]) == best_id), None)
-            if selected and int(selected["end"]) > int(selected["start"]):
-                return {
-                    "target_text": str(selected["text"] or ""),
-                    "start": int(selected["start"]),
-                    "end": int(selected["end"]),
-                    "used_weaviate": True,
-                    "attempted_weaviate": True,
-                    "fallback_reason": "weaviate_scan_fallback",
-                    "candidate_count": len(scanned),
-                }
-        # 5) lexical fallback: comments を単純一致スコア化して最適チャンクを選ぶ
+        # 4) lexical fallback: comments を単純一致スコア化して最適チャンクを選ぶ
         words: list[str] = []
         bigrams: list[str] = []
         for c in comments:

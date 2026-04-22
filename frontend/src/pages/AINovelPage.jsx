@@ -2078,6 +2078,7 @@ export default function AINovelPage() {
     blockIndex,
     totalBlocks,
     previousText,
+    previousBlocks = [],
     segmentChars = SEGMENT_TARGET_CHARS
   ) => {
     const r18Note = params.isR18
@@ -2089,7 +2090,25 @@ export default function AINovelPage() {
     const charactersText = params.characters || "指定なし";
     const start = blockIndex * segmentChars + 1;
     const end = (blockIndex + 1) * segmentChars;
-    const hasPrevious = Boolean((previousText || "").trim());
+    const previousBlockContext = (Array.isArray(previousBlocks) ? previousBlocks : [])
+      .map((block) => {
+        const body = String(block?.body || "").trim();
+        if (!body) return "";
+        const instruction = String(block?.instruction || "").trim() || "（特記事項なし）";
+        const index = Number(block?.index || 0);
+        const label = index > 0 ? `第${index}ブロック` : "以前のブロック";
+        return [
+          `【${label}】`,
+          `- このブロックの指示: ${instruction}`,
+          "- 生成済み本文:",
+          body,
+        ].join("\n");
+      })
+      .filter(Boolean)
+      .join("\n\n");
+    const fallbackPreviousText = String(previousText || "").trim();
+    const previousContext = previousBlockContext || fallbackPreviousText;
+    const hasPrevious = Boolean(previousContext);
 
     return [
       "あなたは日本語の小説作家です。",
@@ -2100,8 +2119,8 @@ export default function AINovelPage() {
       "すでに書かれた内容の要約や繰り返しは避け、物語を前進させてください。",
       r18Note,
       "",
-      hasPrevious ? "【これまでに生成済みの本文】" : "",
-      hasPrevious ? previousText : "",
+      hasPrevious ? "【これ以前のブロック情報】" : "",
+      hasPrevious ? previousContext : "",
       hasPrevious ? "" : "",
       "【このブロックで書く内容】",
       String(blockInstruction || "").trim() || "前後と自然につながる展開にする。",
@@ -2347,15 +2366,17 @@ export default function AINovelPage() {
       .map((item, idx) => `${idx + 1}. ${String(item.content || "").trim()}`);
     return [
       "あなたは日本語の小説編集者です。",
-      "以下の本文を、ユーザーコメント（修正指示）を反映して改稿してください。",
-      "既存の世界観・時系列・人物像は維持し、指示の範囲で自然に修正してください。",
+      "以下の本文を、ユーザーコメント（修正指示）を反映して必要最小限だけ改稿してください。",
+      "コメントで明示された箇所・意味的に直接関係する箇所だけを修正対象にしてください。",
+      "コメントに関係しない文、場面、台詞、描写、段落構成は変更しないでください。",
+      "既存の世界観・時系列・人物像は維持し、指示された範囲で自然に修正してください。",
       "矛盾する指示がある場合は、後から書かれた指示を優先してください。",
-      "本文の意味を壊さず、読みやすい日本語に整えてください。",
+      "コメント対応に必要な場合を除き、単なる言い換え・添削・美化・要約はしないでください。",
       scope === "selection"
-        ? "適用範囲は選択範囲のみです。本文の他の部分は変更しないでください。"
-        : "適用範囲は生成した文章全体です。必要な修正を本文全体に反映してください。",
+        ? "適用範囲は選択範囲内です。選択範囲内でも、コメントに関係しない箇所は元のまま残してください。"
+        : "適用範囲は生成した文章全体ですが、全文を書き換えるのではなく、コメントに該当する箇所だけを修正してください。",
       isChunkedRevision
-        ? `今回は全文の分割改稿です。以下は ${chunkTotal} 分割中 ${chunkIndex} 件目の本文です。この本文のみ改稿し、前後と自然につながる文体を維持してください。`
+        ? `今回は長文を分割したうち ${chunkTotal} 分割中 ${chunkIndex} 件目の本文です。この本文内でもコメントに関係する箇所だけを修正し、他は元のまま維持してください。`
         : "",
       sourceChars > 0
         ? `分量を極端に削らないでください。出力文字数は入力本文（約${sourceChars}文字）の 85%〜120% を目安にしてください。`
@@ -2363,8 +2384,8 @@ export default function AINovelPage() {
       "省略記号（…）などで内容を飛ばさず、本文を最後まで改稿してください。",
       `添削の強さ: ${strengthText}`,
       level >= 70
-        ? "必要なら文の並び替えや言い回しの大きな変更も行ってください。"
-        : "大幅な改変や新規の内容追加は避けてください。",
+        ? "必要なら対象箇所内で文の並び替えや言い回しの大きな変更も行ってください。対象外は変更しないでください。"
+        : "対象箇所以外の大幅な改変や新規の内容追加は避けてください。",
       r18Note,
       "",
       "【本文】",
@@ -2462,7 +2483,7 @@ export default function AINovelPage() {
             };
       let targetContext = baseContext;
       let usedWeaviateTargeting = false;
-      if (normalizedScope === "selection") {
+      if (userCommentTexts.length > 0) {
         try {
           const targetRes = await fetch("/api/ai/novels/revision-target", {
             method: "POST",
@@ -2517,7 +2538,7 @@ export default function AINovelPage() {
             });
           }
         } catch (targetErr) {
-          console.warn("failed to locate revision target by weaviate", targetErr);
+          console.warn("failed to locate revision target", targetErr);
           setLastRevisionTargetInfo({
             usedWeaviate: false,
             attemptedWeaviate: true,
@@ -3006,6 +3027,7 @@ export default function AINovelPage() {
         requestBody,
       };
       let combinedChunkText = "";
+      const generatedChunkBlocks = [];
       let finalTitle = "";
       try {
         startChunkedProgress(activeChunkCount);
@@ -3022,6 +3044,7 @@ export default function AINovelPage() {
               blockIdx,
               activeChunkCount,
               combinedChunkText,
+              generatedChunkBlocks,
               SEGMENT_TARGET_CHARS
             );
             const chunkBodyPayload = {
@@ -3064,6 +3087,11 @@ export default function AINovelPage() {
             combinedChunkText = combinedChunkText
               ? `${combinedChunkText}\n\n${nextChunkBody}`
               : nextChunkBody;
+            generatedChunkBlocks.push({
+              index: blockIdx + 1,
+              instruction: blockInstruction,
+              body: nextChunkBody,
+            });
             setResult({
               generated_title: finalTitle || titleHint || t({ ja: "生成された小説", en: "Generated Novel" }),
               body: combinedChunkText,
