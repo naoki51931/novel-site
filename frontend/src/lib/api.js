@@ -8,11 +8,16 @@ const getToken = () => {
   return localStorage.getItem("token") || localStorage.getItem("access_token");
 };
 
+/**
+ * @param {string} path
+ * @param {any} options
+ * @returns {Promise<any>}
+ */
 export async function apiFetch(
   path,
-  { method = "GET", body = null, auth = false, credentials = "same-origin" } = {}
+  { method = "GET", body = null, auth = false, credentials = "same-origin", headers: extraHeaders = undefined } = {}
 ) {
-  const headers = {};
+  const headers = { ...(extraHeaders || {}) };
   const token = getToken();
   if (auth && token) {
     headers.Authorization = `Bearer ${token}`;

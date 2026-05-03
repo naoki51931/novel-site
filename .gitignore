@@ -5,6 +5,7 @@
 
 # vite build output
 frontend/dist/
+frontend/.next/
 
 # --- build/cache/tools (do not commit) ---
 .gradle/

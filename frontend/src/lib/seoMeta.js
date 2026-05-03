@@ -81,12 +81,16 @@ function restoreAttr(target, state) {
   }
 }
 
+/**
+ * @param {any} options
+ * @returns {() => void}
+ */
 export function applySeoMeta({
   title,
   description,
   canonicalPath,
   ogType = DEFAULT_OG_TYPE,
-  imageUrl,
+  imageUrl = "",
   robots = "index,follow",
   twitterCard = DEFAULT_TWITTER_CARD,
   jsonLd = [],

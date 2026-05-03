@@ -1,5 +1,5 @@
 export function getApiBase() {
-  const envBase = (import.meta.env.VITE_BACKEND_ORIGIN || "")
+  const envBase = (process.env.NEXT_PUBLIC_BACKEND_ORIGIN || "")
     .toString()
     .trim()
     .replace(/\/+$/, "");
@@ -14,4 +14,3 @@ export function getApiBase() {
   // Dev: allow env override; fallback to local backend.
   return envBase || "http://localhost:8000";
 }
-

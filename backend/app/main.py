@@ -23052,6 +23052,47 @@ def _publish_google_indexing_url(url: str, access_token: str) -> tuple[bool, int
     return True, resp.status_code, None
 
 
+def _is_google_indexing_daily_quota_error(status_code: int | None, error: str | None) -> bool:
+    if int(status_code or 0) != 429:
+        return False
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return False
+    daily_markers = (
+        "per day",
+        "requests/day",
+        "requests per day",
+        "daily",
+        "day quota",
+        "daily quota",
+    )
+    minute_or_burst_markers = (
+        "per minute",
+        "per user",
+        "per project",
+        "rate limit",
+        "too many requests",
+        "quota metric",
+        "please try again later",
+    )
+    if any(marker in normalized for marker in minute_or_burst_markers):
+        return False
+    return any(marker in normalized for marker in daily_markers)
+
+
+def _should_retry_google_indexing_publish(status_code: int | None, error: str | None) -> bool:
+    code = int(status_code or 0)
+    if code in (500, 502, 503, 504):
+        return True
+    if code != 429:
+        return False
+    return not _is_google_indexing_daily_quota_error(code, error)
+
+
+def _google_indexing_retry_delay_seconds(attempt: int) -> float:
+    return min(8.0, float(max(1, attempt)))
+
+
 @app.get("/api/admin/indexing/urls", response_model=AdminIndexingUrlsOut)
 def admin_indexing_urls(
     request: Request,
@@ -23209,24 +23250,42 @@ def admin_indexing_submit(
     items: list[AdminIndexingSubmitItem] = []
     success = 0
     failed = 0
+    stop_batch = False
     for idx, url in enumerate(send_urls):
-        ok, status_code, error = _publish_google_indexing_url(url, access_token)
+        ok = False
+        status_code: int | None = None
+        error: str | None = None
+        retry_count = 0
+        while True:
+            ok, status_code, error = _publish_google_indexing_url(url, access_token)
+            if ok:
+                break
+            if not _should_retry_google_indexing_publish(status_code, error) or retry_count >= 2:
+                break
+            retry_count += 1
+            delay = _google_indexing_retry_delay_seconds(retry_count)
+            logger.warning(
+                "google indexing publish retry url=%s status=%s retry=%s delay=%.1fs error=%s",
+                url,
+                status_code,
+                retry_count,
+                delay,
+                (error or "")[:200],
+            )
+            time.sleep(delay)
+
         if ok:
             success += 1
         else:
             failed += 1
-            # Google 側の日次クォータ到達時は、未送信分と当該URLを繰越キューに戻す
+            if retry_count:
+                suffix = f" (retried {retry_count}x)"
+                error = f"{error}{suffix}" if error else suffix.strip()
+            # Google 側の429は日次クォータ枯渇または短時間レート制限の可能性がある。
+            # ここまで到達した時点で未送信分と当該URLを繰越キューに戻す。
             if int(status_code or 0) == 429:
                 carryover_urls = _dedupe_urls_keep_order([url] + send_urls[idx + 1 :] + carryover_urls)
-                items.append(
-                    AdminIndexingSubmitItem(
-                        url=url,
-                        ok=ok,
-                        status_code=status_code,
-                        error=error,
-                    )
-                )
-                break
+                stop_batch = True
         items.append(
             AdminIndexingSubmitItem(
                 url=url,
@@ -23235,6 +23294,8 @@ def admin_indexing_submit(
                 error=error,
             )
         )
+        if stop_batch:
+            break
 
     _set_indexing_carryover_urls(carryover_urls)
     carryover_payload = _get_indexing_carryover_payload()

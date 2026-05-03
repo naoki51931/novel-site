@@ -143,6 +143,22 @@ services:
       weaviate:
         condition: service_started
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: novel-frontend
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Tokyo
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_INTERNAL_BACKEND_ORIGIN: http://backend:8000
+      NEXT_PUBLIC_BACKEND_ORIGIN: ${NEXT_PUBLIC_BACKEND_ORIGIN:-}
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ${VITE_RECAPTCHA_SITE_KEY}
+      NEXT_PUBLIC_SITE_KEY: ${VITE_SITE_KEY:-}
+    depends_on:
+      - backend
+
   redis:
     image: redis:7-alpine
     container_name: novel-redis
@@ -159,11 +175,11 @@ services:
       TZ: Asia/Tokyo
     depends_on:
       - backend
+      - frontend
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html
       - ./static:/static
       - ./uploads:/uploads
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf

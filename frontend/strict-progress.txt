@@ -1,0 +1,78 @@
+TypeScript strict migration progress
+Date: 2026-05-02
+
+Current status
+- `tsconfig.json` is already set to `strict: true`.
+- Shared helper added: `src/lib/errorUtils.ts`.
+- React DOM client type stub added: `src/types/react-dom-client.d.ts`.
+- Current frontend verification passes with `strict: true`; no reproducible TypeScript errors remain in the present worktree.
+
+Recently completed
+- `src/legacy-pages/UserPage.tsx`
+- `src/legacy-pages/Board.tsx`
+- `src/legacy-pages/AdminAiJobs.tsx`
+- `src/legacy-pages/AdminI18nJobs.tsx`
+- `src/legacy-pages/AdminPayouts.tsx`
+- `src/legacy-pages/AiLogsPage.tsx`
+- `src/legacy-pages/AuthorDashboard.tsx`
+
+Previously completed in earlier batches
+- `src/app/layout.tsx`
+- `src/app/[[...path]]/page.tsx`
+- `src/NextClientApp.tsx`
+- `src/main.tsx`
+- `src/lib/i18n.tsx`
+- multiple files under `src/components`
+- `src/legacy-pages/Home.tsx`
+- `src/legacy-pages/NovelDetail.tsx`
+- `src/legacy-pages/StripeReturn.tsx`
+- `src/legacy-pages/SupportReturn.tsx`
+- `src/legacy-pages/AccountSettings.tsx`
+- `src/legacy-pages/SeriesPage.tsx`
+- `src/legacy-pages/TagPage.tsx`
+- `src/legacy-pages/Notifications.tsx`
+- `src/legacy-pages/Login.tsx`
+- `src/legacy-pages/Register.tsx`
+- `src/legacy-pages/ResetPassword.tsx`
+- `src/legacy-pages/SupportPlans.tsx`
+- `src/legacy-pages/ScheduledEpisodes.tsx`
+- `src/legacy-pages/Contact.tsx`
+- `src/legacy-pages/DirectMessageThread.tsx`
+- `src/legacy-pages/DiscoverPage.tsx`
+- `src/legacy-pages/PremiumLP.tsx`
+- `src/legacy-pages/AdminHome.tsx`
+- `src/legacy-pages/AdminLogin.tsx`
+- `src/legacy-pages/NewEpisode.tsx`
+- `src/legacy-pages/EditEpisode.tsx`
+- `src/legacy-pages/NewNovel.tsx`
+- `src/legacy-pages/EditNovel.tsx`
+- `src/legacy-pages/Mypage.tsx`
+- `src/legacy-pages/EpisodeDetail.tsx`
+- `src/legacy-pages/AiChatPublicPage.tsx`
+- `src/legacy-pages/AdminUsers.tsx`
+- `src/legacy-pages/AdminDashboard.tsx`
+
+Latest verification
+- Commands used:
+  - `npx tsc --noEmit --pretty false`
+  - `npx tsc --noEmit --pretty false --incremental false`
+  - `npm run build`
+- Result:
+  - TypeScript check passed with no errors.
+  - Next.js production build passed.
+
+Recommended next step
+1. Keep `strict: true` enabled.
+2. If an editor or another branch still reports errors, capture the exact diagnostics and re-check that state directly.
+
+What was being fixed in recent batches
+- Add explicit local types for API payloads and UI state.
+- Replace implicit `any` in handlers, mappers, reducers, and helper functions.
+- Convert `{}` dictionary state to `Record<string, ...>` or `Record<number, ...>`.
+- Replace raw `catch (e)` property access with `getErrorMessage(error, fallback)`.
+- Add `Map`/`Set` generics where needed.
+
+Notes for restart
+- `UserPage.tsx` and `Board.tsx` are already clean in focused `tsc`.
+- Small admin pages listed above are also clean in focused `tsc`.
+- The previously noted remaining work in the two large AI pages is no longer reproducible in the current worktree.

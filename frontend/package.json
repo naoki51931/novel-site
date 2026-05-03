@@ -3,9 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "test": "node tests/aiPolish.test.mjs",
     "i18n:check-ui": "node scripts/check_ui_translations.mjs"
   },
@@ -13,16 +13,21 @@
     "@fortawesome/fontawesome-svg-core": "^6.5.2",
     "@fortawesome/free-regular-svg-icons": "^6.5.2",
     "@fortawesome/react-fontawesome": "^0.2.2",
-    "axios": "^1.13.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^7.9.6"
+    "axios": "^1.15.2",
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.14.2"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.0.0",
+    "@types/node": "25.6.0",
+    "@types/react": "19.2.14",
     "autoprefixer": "^10.4.22",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.17",
-    "vite": "^5.0.0"
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "follow-redirects": "1.16.0"
   }
 }
