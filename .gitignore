@@ -15,3 +15,7 @@ frontend/.next/
 **/*.zip
 
 # If you actually need some jars/zips, remove the last two lines and whitelist explicitly.
+
+# dependencies
+node_modules/
+frontend/node_modules/
