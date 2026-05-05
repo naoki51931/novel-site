@@ -91,6 +91,7 @@ export default function AccountSettings() {
   const [aiTitleModel, setAiTitleModel] = useState("");
   const [aiTagModel, setAiTagModel] = useState("");
   const [aiStoryAgentModel, setAiStoryAgentModel] = useState("");
+  const [aiCommentRevisionModel, setAiCommentRevisionModel] = useState("");
   const [aiStoryAgentVisible, setAiStoryAgentVisible] = useState(true);
   const [theme, setThemeState] = useState(() => {
     try {
@@ -171,6 +172,7 @@ export default function AccountSettings() {
         setAiTitleModel(data.ai_title_model || "");
         setAiTagModel(data.ai_tag_model || "");
         setAiStoryAgentModel(data.ai_story_agent_model || "");
+        setAiCommentRevisionModel(data.ai_comment_revision_model || "");
         setAiStoryAgentVisible(data.ai_story_agent_visible !== false);
       })
       .catch((e) =>
@@ -223,6 +225,7 @@ export default function AccountSettings() {
           ai_title_model: aiTitleModel,
           ai_tag_model: aiTagModel,
           ai_story_agent_model: aiStoryAgentModel,
+          ai_comment_revision_model: aiCommentRevisionModel,
           ai_story_agent_visible: aiStoryAgentVisible,
         }),
       });
@@ -364,6 +367,16 @@ export default function AccountSettings() {
                 <select value={aiStoryAgentModel} onChange={(e) => setAiStoryAgentModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
                   {AI_MODEL_OPTIONS.map((option) => (
                     <option key={`agent-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t({ ja: "AIコメント修正", en: "AI comment revision" })}<br />
+                <select value={aiCommentRevisionModel} onChange={(e) => setAiCommentRevisionModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`comment-revision-${option.value || "default"}`} value={option.value}>
                       {t({ ja: option.labelJa, en: option.labelEn })}
                     </option>
                   ))}

@@ -20,7 +20,7 @@ const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 const AI_NOVEL_SEGMENT_PREFS_KEY = "ai_novel_segment_prefs_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
-const DEFAULT_AI_NOVEL_MODEL = "gpt-5-mini";
+const DEFAULT_AI_NOVEL_MODEL = "google/gemini-3-flash-preview";
 const REVISION_CHUNK_MAX_CHARS = 3200;
 const COMMENT_REVISION_OUTPUT_RETRY_MAX = 5;
 const SEGMENT_TARGET_CHARS = 2000;
@@ -590,6 +590,7 @@ export default function AINovelPage() {
   const [draftTitle, setDraftTitle] = useState("");
   const [hasContinuationAttempted, setHasContinuationAttempted] = useState(false);
   const [redoContinuationArmed, setRedoContinuationArmed] = useState(false);
+  const [aiCommentRevisionModel, setAiCommentRevisionModel] = useState("");
   const [textEditMode, setTextEditMode] = useState(false);
   const [textEditValue, setTextEditValue] = useState("");
   const [textEditOriginal, setTextEditOriginal] = useState("");
@@ -641,6 +642,10 @@ export default function AINovelPage() {
       (activeRetryMax === null && retryMode && retryMax > 0));
   const displayRetryMax =
     typeof activeRetryMax === "number" ? activeRetryMax : retryMode ? retryMax : null;
+  const effectiveCommentRevisionModel = aiCommentRevisionModel || model || DEFAULT_AI_NOVEL_MODEL;
+  const effectiveCommentRevisionModelSource = aiCommentRevisionModel
+    ? t({ ja: "マイページ設定", en: "My Page setting" })
+    : t({ ja: "AI小説ページの現在モデル", en: "Current AI novel page model" });
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -809,6 +814,31 @@ export default function AINovelPage() {
     };
 
     fetchRemaining();
+  }, []);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      setAiCommentRevisionModel("");
+      return;
+    }
+    const loadProfilePrefs = async () => {
+      try {
+        const res = await fetch("/api/users/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        setAiCommentRevisionModel(
+          typeof data?.ai_comment_revision_model === "string"
+            ? data.ai_comment_revision_model
+            : ""
+        );
+      } catch (e: any) {
+        console.error("failed to load ai comment revision model", e);
+      }
+    };
+    loadProfilePrefs();
   }, []);
 
   useEffect(() => {
@@ -2664,7 +2694,7 @@ export default function AINovelPage() {
             characters: params.characters || null,
             tone: params.tone || null,
             length: String(bodyText.length || 0),
-            model: params.model || DEFAULT_AI_NOVEL_MODEL,
+            model: aiCommentRevisionModel || params.model || DEFAULT_AI_NOVEL_MODEL,
             r18: params.isR18,
             retry_mode: disableServerRetry ? false : Boolean(params.retryMode),
             retry_max: disableServerRetry ? 0 : Number(params.retryMax || 0),
@@ -5660,6 +5690,17 @@ export default function AINovelPage() {
                       : t({ ja: "全体修正", en: "Full" })
                   }`}
                 </span>
+              </div>
+              <div
+                style={{
+                  marginBottom: "0.5rem",
+                  fontSize: "0.82rem",
+                  color: "var(--muted-text)",
+                }}
+              >
+                {t({ ja: "コメント修正で使用するモデル", en: "Model used for comment revision" })}:{" "}
+                <strong style={{ color: "var(--text-color)" }}>{effectiveCommentRevisionModel}</strong>
+                {` (${effectiveCommentRevisionModelSource})`}
               </div>
               <div
                 style={{

@@ -165,6 +165,7 @@ class ProfileRead(BaseModel):
     ai_title_model: Optional[str] = None
     ai_tag_model: Optional[str] = None
     ai_story_agent_model: Optional[str] = None
+    ai_comment_revision_model: Optional[str] = None
     ai_story_agent_visible: Optional[bool] = True
 
     class Config:
@@ -186,6 +187,7 @@ class ProfileUpdate(BaseModel):
     ai_title_model: Optional[str] = None
     ai_tag_model: Optional[str] = None
     ai_story_agent_model: Optional[str] = None
+    ai_comment_revision_model: Optional[str] = None
     ai_story_agent_visible: Optional[bool] = None
 
 

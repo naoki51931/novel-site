@@ -540,6 +540,7 @@ def _build_user_cache_payload(user: models.User) -> dict[str, Any]:
         "ai_title_model": str(getattr(user, "ai_title_model", "") or "") or None,
         "ai_tag_model": str(getattr(user, "ai_tag_model", "") or "") or None,
         "ai_story_agent_model": str(getattr(user, "ai_story_agent_model", "") or "") or None,
+        "ai_comment_revision_model": str(getattr(user, "ai_comment_revision_model", "") or "") or None,
         "ai_story_agent_visible": bool(getattr(user, "ai_story_agent_visible", True)),
     }
 
@@ -807,6 +808,8 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN ai_tag_model VARCHAR(120) NULL")
             if "ai_story_agent_model" not in existing:
                 alters.append("ADD COLUMN ai_story_agent_model VARCHAR(120) NULL")
+            if "ai_comment_revision_model" not in existing:
+                alters.append("ADD COLUMN ai_comment_revision_model VARCHAR(120) NULL")
             if "ai_story_agent_visible" not in existing:
                 alters.append("ADD COLUMN ai_story_agent_visible TINYINT(1) NOT NULL DEFAULT 1")
             if "email_address_invalid" not in existing:
@@ -5120,6 +5123,8 @@ class StoryAgentResponse(BaseModel):
     chunked_generation_plans: List[str] = []
     model: str | None = None
     used_tokens: int | None = None
+    guest_remaining: int | None = None
+    user_remaining: int | None = None
 
 
 class EpisodeAssistCandidatesRequest(BaseModel):
@@ -6845,9 +6850,27 @@ async def generate_title_candidates(
 async def generate_story_agent_reply(
     payload: StoryAgentRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
-    user = require_current_user(request, db)
+    user = get_optional_current_user_soft(request, db)
+    guest_usage: models.AIChatGuestUsage | None = None
+    novel_guest_usage: models.AIGuestGenerateUsage | None = None
+    guest_id_for_novel_quota: str | None = None
+    novel_user_remaining_before: int | None = None
+    if user is not None:
+        _ensure_ai_chat_access(user, db)
+    else:
+        guest_id = get_or_set_ai_guest_id(request, response)
+        guest_usage = get_ai_chat_guest_usage(db, guest_id)
+        _ensure_ai_chat_guest_access(guest_usage)
+
+    is_premium = is_effective_premium_user(user)
+    if is_premium and user is not None:
+        novel_user_remaining_before = _reserve_ai_novel_generation_slot(db, user)
+    else:
+        guest_id_for_novel_quota = get_or_set_ai_guest_id(request, response)
+        novel_guest_usage = require_guest_ai_quota(db, guest_id_for_novel_quota)
     mode = str(payload.mode or "new_novel").strip() or "new_novel"
     title_hint = str(payload.title_hint or "").strip()
     genre = str(payload.genre or "").strip()
@@ -6906,7 +6929,11 @@ async def generate_story_agent_reply(
 
     data, tokens, model = await _call_ai_chat_json_with_fallback(
         prompt,
-        model=getattr(user, "ai_story_agent_model", None),
+        model=(
+            getattr(user, "ai_story_agent_model", None)
+            if user is not None
+            else (selected_model or None)
+        ),
         provider=None,
         system_instructions=(
             "あなたは小説企画アシスタントです。"
@@ -6941,6 +6968,32 @@ async def generate_story_agent_reply(
             text = str(item or "").strip()
             if text:
                 next_chunked_plans.append(text)
+
+    guest_remaining: int | None = None
+    user_remaining: int | None = None
+    if novel_guest_usage is not None:
+        novel_guest_usage.generate_count = int(getattr(novel_guest_usage, "generate_count", 0) or 0) + 1
+        novel_guest_usage.last_used_at = datetime.utcnow()
+        db.add(novel_guest_usage)
+        guest_remaining = max(0, AI_GUEST_FREE_MAX - int(getattr(novel_guest_usage, "generate_count", 0) or 0))
+    elif is_premium and user is not None:
+        prompt_summary = "story-agent"
+        model_used = model or selected_model or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+        model_log = _format_ai_log_model(provider_from_model(model_used), model_used)
+        db.add(
+            models.AIGenerateLog(
+                user_id=user.id,
+                prompt_summary=prompt_summary,
+                tokens_used=tokens,
+                model=model_log,
+            )
+        )
+        if novel_user_remaining_before is not None:
+            user_remaining = max(0, novel_user_remaining_before - 1)
+
+    _record_ai_chat_tokens(db, user, guest_usage, tokens)
+    db.commit()
+
     return StoryAgentResponse(
         reply=reply,
         characters_append=characters_append,
@@ -6954,6 +7007,8 @@ async def generate_story_agent_reply(
         chunked_generation_plans=next_chunked_plans,
         model=model,
         used_tokens=tokens,
+        guest_remaining=guest_remaining,
+        user_remaining=user_remaining,
     )
 
 
@@ -10819,6 +10874,36 @@ def _ai_chat_provider_candidates(provider: str | None, model: str | None) -> lis
     return out
 
 
+def _default_ai_chat_openrouter_model() -> str:
+    return (
+        (os.getenv("AI_CHAT_OPENROUTER_FALLBACK_MODEL", "") or "").strip()
+        or (os.getenv("OPENROUTER_MODEL_TEXT", "") or "").strip()
+        or "google/gemini-2.5-flash"
+    )
+
+
+def _default_ai_chat_deepseek_model() -> str:
+    return (
+        (os.getenv("AI_CHAT_DEEPSEEK_FALLBACK_MODEL", "") or "").strip()
+        or (os.getenv("DEEPSEEK_MODEL_TEXT", "") or "").strip()
+    )
+
+
+def _resolve_ai_chat_candidate_model(
+    *,
+    candidate: str,
+    primary_provider: str,
+    primary_model: str | None,
+) -> str | None:
+    if candidate == primary_provider and primary_model:
+        return primary_model
+    if candidate == "openrouter":
+        return _default_ai_chat_openrouter_model()
+    if candidate == "deepseek":
+        return _default_ai_chat_deepseek_model() or None
+    return None
+
+
 async def _call_ai_chat_json_with_fallback(
     prompt: str,
     *,
@@ -10834,8 +10919,17 @@ async def _call_ai_chat_json_with_fallback(
     primary_model = normalized_model
 
     for candidate in _ai_chat_provider_candidates(provider, normalized_model):
-        candidate_model = primary_model if candidate == primary_provider else None
+        candidate_model = _resolve_ai_chat_candidate_model(
+            candidate=candidate,
+            primary_provider=primary_provider,
+            primary_model=primary_model,
+        )
+        if candidate in {"deepseek", "openrouter"} and not candidate_model:
+            logger.info("ai chat provider skipped provider=%s reason=no_model", candidate)
+            continue
         try:
+            if candidate == "openrouter":
+                assert_openrouter_model_allowed_for_pricing(candidate_model)
             return await call_ai_json(
                 prompt,
                 model=candidate_model,
@@ -15219,8 +15313,17 @@ def _call_translation_ai_json(
     primary_model = TRANSLATION_MODEL_TEXT or None
 
     for provider in _translation_provider_candidates():
-        model = primary_model if provider == primary_provider else None
+        model = _resolve_ai_chat_candidate_model(
+            candidate=provider,
+            primary_provider=primary_provider,
+            primary_model=primary_model,
+        )
+        if provider in {"deepseek", "openrouter"} and not model:
+            logger.info("translation provider skipped provider=%s reason=no_model", provider)
+            continue
         try:
+            if provider == "openrouter":
+                assert_openrouter_model_allowed_for_pricing(model)
             return _run_async(
                 call_ai_json(
                     prompt,
@@ -25227,6 +25330,8 @@ def update_profile(
         user.ai_tag_model = _normalize_optional_ai_model(payload.ai_tag_model)
     if payload.ai_story_agent_model is not None:
         user.ai_story_agent_model = _normalize_optional_ai_model(payload.ai_story_agent_model)
+    if payload.ai_comment_revision_model is not None:
+        user.ai_comment_revision_model = _normalize_optional_ai_model(payload.ai_comment_revision_model)
     if payload.ai_story_agent_visible is not None:
         user.ai_story_agent_visible = bool(payload.ai_story_agent_visible)
 
