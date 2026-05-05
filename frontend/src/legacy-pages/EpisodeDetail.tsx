@@ -726,6 +726,19 @@ export default function EpisodeDetail() {
         {t({ ja: "← 戻る", en: "← Back" })}
       </button>
 
+      {episode.novel_id != null && (
+        <div style={{ marginTop: 12 }}>
+          <Link
+            to={`/novels/${episode.novel_id}`}
+            className="user-link"
+            style={{ fontSize: "0.95rem", color: "#666" }}
+          >
+            {episode.novel_title ||
+              t({ ja: "この小説の詳細を見る", en: "View this novel" })}
+          </Link>
+        </div>
+      )}
+
       <h2 style={{ marginTop: 12 }}>
         {formatEpisodeDisplayTitle(
           episode.number || episode.episode_number,

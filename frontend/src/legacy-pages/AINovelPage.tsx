@@ -34,6 +34,21 @@ type GeneratedChunkBlock = {
   body: string;
 };
 
+type StoryAgentMessage = {
+  id: string;
+  role: "assistant" | "user";
+  content: string;
+  appendedText?: string;
+  appliedTitleHint?: string;
+  appliedGenre?: string;
+  appliedTone?: string;
+  appliedIsR18?: boolean | null;
+  appliedModel?: string;
+  appliedChunkedGenerationEnabled?: boolean | null;
+  appliedChunkedGenerationCount?: number | null;
+  appliedChunkedGenerationPlans?: string[];
+};
+
 function clampSegmentCount(value: any) {
   const n = Number.parseInt(String(value), 10);
   if (!Number.isFinite(n)) return SEGMENT_COUNT_MIN;
@@ -162,6 +177,24 @@ function normalizeAINovelResponse(data: any) {
   const body = parsed.body || parsed.text || parsed.content || parsed.story || data.body;
 
   return { ...data, generated_title: title, body };
+}
+
+function mergeCharactersFieldText(baseValue: any, nextChunk: any) {
+  const base = String(baseValue || "").trim();
+  const addition = String(nextChunk || "").trim();
+  if (!addition) {
+    return { value: String(baseValue || ""), appended: "" };
+  }
+  if (base.includes(addition)) {
+    return { value: String(baseValue || ""), appended: "" };
+  }
+  if (!base) {
+    return { value: addition, appended: addition };
+  }
+  return {
+    value: `${base}\n\n${addition}`,
+    appended: addition,
+  };
 }
 
 function getJwtUserId(token: any) {
@@ -567,6 +600,21 @@ export default function AINovelPage() {
     ok: null,
     at: 0,
   });
+  const [storyAgentOpen, setStoryAgentOpen] = useState(true);
+  const [storyAgentVisible, setStoryAgentVisible] = useState(true);
+  const [storyAgentInput, setStoryAgentInput] = useState("");
+  const [storyAgentLoading, setStoryAgentLoading] = useState(false);
+  const [storyAgentError, setStoryAgentError] = useState("");
+  const [storyAgentMessages, setStoryAgentMessages] = useState<StoryAgentMessage[]>([
+    {
+      id: "story-agent-welcome",
+      role: "assistant",
+      content: t({
+        ja: "小説案を書いてください。プロット、キャラクター、舞台設定の相談ができます。会話しながら、使えそうな案を「登場人物・設定」欄に追記しつつ、タイトルのイメージやジャンル、雰囲気、分割案も反映できます。",
+        en: "Ask for a novel idea. I can help with plot, characters, and setting, append useful notes to the Characters & settings field, and also update the title idea, genre, tone, and segmented plan.",
+      }),
+    },
+  ]);
 
   const fetchWithTimeout = async (url: any, options: any, timeoutMs: any) => {
     const controller = new AbortController();
@@ -598,6 +646,7 @@ export default function AINovelPage() {
   const location = useLocation();
   const resultBodyRef = useRef<HTMLPreElement | null>(null);
   const charactersInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const storyAgentMessagesRef = useRef<HTMLDivElement | null>(null);
   const combinedBodyRef = useRef("");
   const lastSelectionContextRef = useRef<any>(null);
   const jobPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -680,6 +729,12 @@ export default function AINovelPage() {
       chunkedProgressTimerRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (!storyAgentOpen) return;
+    if (!storyAgentMessagesRef.current) return;
+    storyAgentMessagesRef.current.scrollTop = storyAgentMessagesRef.current.scrollHeight;
+  }, [storyAgentMessages, storyAgentOpen, storyAgentLoading]);
 
   const handleAddChunkPlan = () => {
     markUserInput();
@@ -1584,12 +1639,15 @@ export default function AINovelPage() {
         });
         if (!res.ok) {
           setIsPushDebugUser(false);
+          setStoryAgentVisible(true);
           return;
         }
         const data = await res.json().catch(() => ({}));
         setIsPushDebugUser((data?.username || "") === "demo02");
+        setStoryAgentVisible(data?.ai_story_agent_visible !== false);
       } catch {
         setIsPushDebugUser(false);
+        setStoryAgentVisible(true);
       }
     })();
   }, [hasAuthToken]);
@@ -4075,7 +4133,187 @@ export default function AINovelPage() {
     }
   };
 
+  const buildStoryAgentPrompt = (history: StoryAgentMessage[]) => {
+    return {
+      mode: isEditMode
+        ? "episode_edit"
+        : isContinueMode
+          ? "continue_episode"
+          : "new_novel",
+      title_hint: titleHint || "",
+      genre: genre || "",
+      characters: characters || "",
+      tone: tone || "",
+      is_r18: isR18,
+      selected_model: model || "",
+      chunked_generation_enabled: chunkedGenerationEnabled,
+      chunked_generation_count: chunkedGenerationCount,
+      chunked_generation_plans: (chunkedGenerationPlans || [])
+        .slice(0, chunkedGenerationCount)
+        .map((item: any) => String(item?.instruction || "").trim())
+        .filter(Boolean),
+      conversation: history.slice(-8).map((item) => ({
+        role: item.role,
+        content: item.content,
+      })),
+    };
+  };
+
+  const handleStoryAgentSend = async () => {
+    const message = String(storyAgentInput || "").trim();
+    if (!message || storyAgentLoading) return;
+
+    markUserInput();
+    setStoryAgentOpen(true);
+    setStoryAgentError("");
+    setStoryAgentInput("");
+
+    const userMessage: StoryAgentMessage = {
+      id: `story-agent-user-${Date.now()}`,
+      role: "user",
+      content: message,
+    };
+    const conversation = [...storyAgentMessages, userMessage];
+    setStoryAgentMessages(conversation);
+    setStoryAgentLoading(true);
+
+    try {
+      const token = getAuthToken();
+      const res = await fetchWithTimeout(
+        "/api/ai/novels/story-agent",
+        {
+          method: "POST",
+          headers: token
+            ? {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              }
+            : { "Content-Type": "application/json" },
+          body: JSON.stringify(buildStoryAgentPrompt(conversation)),
+        },
+        30000
+      );
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          String(payload?.detail || "").trim()
+            || t({
+              ja: "AIエージェントの返答取得に失敗しました。",
+              en: "Failed to get a response from the AI agent.",
+            })
+        );
+      }
+      const reply = String(payload?.reply || "").trim();
+      if (!reply) {
+        throw new Error(
+          t({
+            ja: "AIエージェントの返答が空でした。",
+            en: "The AI agent reply was empty.",
+          })
+        );
+      }
+      const merged = mergeCharactersFieldText(
+        charactersInputRef.current?.value ?? characters ?? "",
+        payload?.characters_append || ""
+      );
+
+      if (typeof payload?.guest_remaining === "number") {
+        setGuestRemaining(payload.guest_remaining);
+      }
+      if (typeof payload?.user_remaining === "number") {
+        setUserRemaining(payload.user_remaining);
+      }
+
+      const nextTitleHint = typeof payload?.title_hint === "string" ? payload.title_hint.trim() : "";
+      const nextGenre = typeof payload?.genre === "string" ? payload.genre.trim() : "";
+      const nextTone = typeof payload?.tone === "string" ? payload.tone.trim() : "";
+      const nextIsR18 = typeof payload?.is_r18 === "boolean" ? payload.is_r18 : null;
+      const nextModel = typeof payload?.suggested_model === "string" ? payload.suggested_model.trim() : "";
+      const nextChunkedEnabled =
+        typeof payload?.chunked_generation_enabled === "boolean"
+          ? payload.chunked_generation_enabled
+          : null;
+      const nextChunkedCount =
+        typeof payload?.chunked_generation_count === "number"
+          ? clampSegmentCount(payload.chunked_generation_count)
+          : null;
+      const nextChunkedPlans = Array.isArray(payload?.chunked_generation_plans)
+        ? payload.chunked_generation_plans
+            .map((item: any) => String(item || "").trim())
+            .filter(Boolean)
+            .slice(0, SEGMENT_COUNT_MAX)
+        : [];
+
+      if (merged.appended) {
+        setCharacters(merged.value);
+      }
+      if (nextTitleHint) {
+        setTitleHint(nextTitleHint);
+      }
+      if (nextGenre) {
+        setGenre(nextGenre);
+      }
+      if (nextTone) {
+        setTone(nextTone);
+      }
+      if (typeof nextIsR18 === "boolean") {
+        setIsR18(nextIsR18);
+      }
+      if (nextModel) {
+        setModel(nextModel);
+      }
+      if (typeof nextChunkedEnabled === "boolean") {
+        setChunkedGenerationEnabled(nextChunkedEnabled);
+      }
+      if (typeof nextChunkedCount === "number") {
+        setChunkedGenerationCount(nextChunkedCount);
+      }
+      if (nextChunkedPlans.length > 0) {
+        const targetCount = typeof nextChunkedCount === "number" ? nextChunkedCount : nextChunkedPlans.length;
+        const safeCount = clampSegmentCount(targetCount);
+        const normalizedPlans = Array.from({ length: safeCount }, (_: any, idx: any) => ({
+          ...makeSegmentPlanItem(idx + 1),
+          instruction: nextChunkedPlans[idx] || "",
+        }));
+        setChunkedGenerationPlans(normalizedPlans);
+        if (typeof nextChunkedCount !== "number") {
+          setChunkedGenerationCount(safeCount);
+        }
+      }
+
+      setStoryAgentMessages((prev) => [
+        ...prev,
+        {
+          id: `story-agent-assistant-${Date.now()}`,
+          role: "assistant",
+          content: reply,
+          appendedText: merged.appended,
+          appliedTitleHint: nextTitleHint || undefined,
+          appliedGenre: nextGenre || undefined,
+          appliedTone: nextTone || undefined,
+          appliedIsR18: nextIsR18,
+          appliedModel: nextModel || undefined,
+          appliedChunkedGenerationEnabled: nextChunkedEnabled,
+          appliedChunkedGenerationCount: nextChunkedCount,
+          appliedChunkedGenerationPlans: nextChunkedPlans,
+        },
+      ]);
+    } catch (e: any) {
+      console.error(e);
+      const messageText =
+        e?.message ||
+        t({
+          ja: "AIエージェントの返答取得に失敗しました。",
+          en: "Failed to get a response from the AI agent.",
+        });
+      setStoryAgentError(messageText);
+    } finally {
+      setStoryAgentLoading(false);
+    }
+  };
+
   return (
+    <>
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "1.5rem" }}>
       <h1 style={{ fontSize: "1.8rem", marginBottom: "1rem" }}>
         {isEditMode
@@ -5751,5 +5989,251 @@ export default function AINovelPage() {
         </div>
       )}
     </div>
+    {storyAgentVisible && (
+    <div
+      style={{
+        position: "fixed",
+        right: 20,
+        bottom: 20,
+        width: "min(360px, calc(100vw - 24px))",
+        zIndex: 40,
+        border: "1px solid var(--border)",
+        borderRadius: 14,
+        overflow: "hidden",
+        backgroundColor: "#fffdf7",
+        boxShadow: "0 18px 40px rgba(0, 0, 0, 0.18)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          padding: "0.8rem 0.9rem",
+          background: "linear-gradient(135deg, #17324d 0%, #355e3b 100%)",
+          color: "#fff",
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 700 }}>
+            {t({ ja: "小説相談AI", en: "Novel Helper AI" })}
+          </div>
+          <div style={{ fontSize: "0.78rem", opacity: 0.88 }}>
+            {t({ ja: "案を整理して設定欄へ追記", en: "Organize ideas and append to settings" })}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setStoryAgentOpen((prev) => !prev)}
+          style={{
+            border: "1px solid rgba(255,255,255,0.35)",
+            background: "transparent",
+            color: "#fff",
+            borderRadius: 999,
+            padding: "0.3rem 0.7rem",
+            cursor: "pointer",
+            fontSize: "0.8rem",
+          }}
+        >
+          {storyAgentOpen
+            ? t({ ja: "閉じる", en: "Minimize" })
+            : t({ ja: "開く", en: "Open" })}
+        </button>
+      </div>
+
+      {storyAgentOpen && (
+        <div style={{ padding: "0.8rem", backgroundColor: "#fffdf7" }}>
+          <div
+            ref={storyAgentMessagesRef}
+            style={{
+              maxHeight: "320px",
+              overflowY: "auto",
+              display: "grid",
+              gap: "0.65rem",
+              paddingRight: "0.15rem",
+            }}
+          >
+            {storyAgentMessages.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  alignSelf: item.role === "user" ? "end" : "start",
+                  backgroundColor: item.role === "user" ? "#e7f0ff" : "#f4f0e8",
+                  color: "#1f2937",
+                  borderRadius: 12,
+                  padding: "0.7rem 0.8rem",
+                  border: "1px solid rgba(0,0,0,0.08)",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "0.72rem",
+                    fontWeight: 700,
+                    marginBottom: "0.3rem",
+                    color: item.role === "user" ? "#1d4ed8" : "#6b4f2a",
+                  }}
+                >
+                  {item.role === "user"
+                    ? t({ ja: "あなた", en: "You" })
+                    : t({ ja: "AI", en: "AI" })}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.92rem", lineHeight: 1.55 }}>
+                  {item.content}
+                </div>
+                {item.appendedText && (
+                  <div
+                    style={{
+                      marginTop: "0.55rem",
+                      paddingTop: "0.55rem",
+                      borderTop: "1px dashed rgba(0,0,0,0.12)",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#355e3b", marginBottom: "0.25rem" }}>
+                      {t({ ja: "登場人物・設定に追加", en: "Added to characters/settings" })}
+                    </div>
+                    <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.84rem", color: "#355e3b" }}>
+                      {item.appendedText}
+                    </div>
+                  </div>
+                )}
+                {(item.appliedTitleHint
+                  || item.appliedGenre
+                  || item.appliedTone
+                  || typeof item.appliedIsR18 === "boolean"
+                  || item.appliedModel
+                  || typeof item.appliedChunkedGenerationEnabled === "boolean"
+                  || typeof item.appliedChunkedGenerationCount === "number"
+                  || (item.appliedChunkedGenerationPlans && item.appliedChunkedGenerationPlans.length > 0)) && (
+                  <div
+                    style={{
+                      marginTop: "0.55rem",
+                      paddingTop: "0.55rem",
+                      borderTop: "1px dashed rgba(0,0,0,0.12)",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#7c3f00", marginBottom: "0.3rem" }}>
+                      {t({ ja: "反映した設定", en: "Applied settings" })}
+                    </div>
+                    <div style={{ display: "grid", gap: "0.25rem", fontSize: "0.84rem", color: "#7c3f00" }}>
+                      {item.appliedTitleHint && (
+                        <div>
+                          <strong>{t({ ja: "タイトルのイメージ:", en: "Title idea:" })}</strong> {item.appliedTitleHint}
+                        </div>
+                      )}
+                      {item.appliedGenre && (
+                        <div>
+                          <strong>{t({ ja: "ジャンル:", en: "Genre:" })}</strong> {item.appliedGenre}
+                        </div>
+                      )}
+                      {item.appliedTone && (
+                        <div>
+                          <strong>{t({ ja: "雰囲気:", en: "Tone:" })}</strong> {item.appliedTone}
+                        </div>
+                      )}
+                      {typeof item.appliedIsR18 === "boolean" && (
+                        <div>
+                          <strong>{t({ ja: "R18:", en: "R18:" })}</strong>{" "}
+                          {item.appliedIsR18 ? t({ ja: "ON", en: "On" }) : t({ ja: "OFF", en: "Off" })}
+                        </div>
+                      )}
+                      {item.appliedModel && (
+                        <div>
+                          <strong>{t({ ja: "使用モデル:", en: "Model:" })}</strong> {item.appliedModel}
+                        </div>
+                      )}
+                      {typeof item.appliedChunkedGenerationEnabled === "boolean" && (
+                        <div>
+                          <strong>{t({ ja: "分割生成:", en: "Segmented generation:" })}</strong>{" "}
+                          {item.appliedChunkedGenerationEnabled ? t({ ja: "ON", en: "On" }) : t({ ja: "OFF", en: "Off" })}
+                        </div>
+                      )}
+                      {typeof item.appliedChunkedGenerationCount === "number" && (
+                        <div>
+                          <strong>{t({ ja: "分割数:", en: "Segments:" })}</strong> {item.appliedChunkedGenerationCount}
+                        </div>
+                      )}
+                      {item.appliedChunkedGenerationPlans && item.appliedChunkedGenerationPlans.length > 0 && (
+                        <div>
+                          <strong>{t({ ja: "分割案:", en: "Segment plan:" })}</strong>
+                          <div style={{ marginTop: "0.2rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                            {item.appliedChunkedGenerationPlans.map((plan, idx) => `${idx + 1}. ${plan}`).join("\n")}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {storyAgentLoading && (
+              <div
+                style={{
+                  backgroundColor: "#f4f0e8",
+                  borderRadius: 12,
+                  padding: "0.7rem 0.8rem",
+                  border: "1px solid rgba(0,0,0,0.08)",
+                  fontSize: "0.9rem",
+                  color: "#6b4f2a",
+                }}
+              >
+                {t({ ja: "案をまとめています...", en: "Organizing ideas..." })}
+              </div>
+            )}
+          </div>
+
+          {storyAgentError && (
+            <div style={{ marginTop: "0.65rem", color: "#842029", fontSize: "0.84rem" }}>
+              {storyAgentError}
+            </div>
+          )}
+
+          <div style={{ marginTop: "0.75rem", fontSize: "0.8rem", color: "var(--muted-text)" }}>
+            {t({
+              ja: "例: 小説案を書いてください / ヒロイン案を3つ出して / 学園ミステリの導入を考えて",
+              en: "Examples: Give me a novel idea / Suggest 3 heroine ideas / Plan an opening for a school mystery",
+            })}
+          </div>
+
+          <div style={{ display: "grid", gap: "0.55rem", marginTop: "0.65rem" }}>
+            <textarea
+              value={storyAgentInput}
+              onChange={(e: any) => setStoryAgentInput(e.target.value)}
+              onKeyDown={(e: any) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleStoryAgentSend();
+                }
+              }}
+              rows={3}
+              placeholder={t({
+                ja: "小説案を書いてください。など、気軽に相談できます。",
+                en: "Ask freely, for example: Please suggest a novel idea.",
+              })}
+              style={{
+                width: "100%",
+                padding: "0.7rem",
+                resize: "vertical",
+                borderRadius: 10,
+                border: "1px solid var(--border)",
+                backgroundColor: "#fff",
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleStoryAgentSend}
+              disabled={storyAgentLoading || !String(storyAgentInput || "").trim()}
+            >
+              {storyAgentLoading
+                ? t({ ja: "相談中...", en: "Thinking..." })
+                : t({ ja: "相談する", en: "Ask AI" })}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+    )}
+    </>
   );
 }

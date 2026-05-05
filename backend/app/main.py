@@ -536,6 +536,11 @@ def _build_user_cache_payload(user: models.User) -> dict[str, Any]:
         "profile_header_url": str(getattr(user, "profile_header_url", "") or "") or None,
         "profile_website_url": str(getattr(user, "profile_website_url", "") or "") or None,
         "profile_x_url": str(getattr(user, "profile_x_url", "") or "") or None,
+        "ai_summary_model": str(getattr(user, "ai_summary_model", "") or "") or None,
+        "ai_title_model": str(getattr(user, "ai_title_model", "") or "") or None,
+        "ai_tag_model": str(getattr(user, "ai_tag_model", "") or "") or None,
+        "ai_story_agent_model": str(getattr(user, "ai_story_agent_model", "") or "") or None,
+        "ai_story_agent_visible": bool(getattr(user, "ai_story_agent_visible", True)),
     }
 
 
@@ -551,6 +556,11 @@ def cache_user_payload(user: models.User) -> dict[str, Any]:
             REDIS_USER_CACHE_TTL_SEC,
         )
     return payload
+
+
+def _normalize_optional_ai_model(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    return raw or None
 
 
 def invalidate_public_list_caches() -> None:
@@ -789,6 +799,16 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN profile_website_url VARCHAR(255) NULL")
             if "profile_x_url" not in existing:
                 alters.append("ADD COLUMN profile_x_url VARCHAR(255) NULL")
+            if "ai_summary_model" not in existing:
+                alters.append("ADD COLUMN ai_summary_model VARCHAR(120) NULL")
+            if "ai_title_model" not in existing:
+                alters.append("ADD COLUMN ai_title_model VARCHAR(120) NULL")
+            if "ai_tag_model" not in existing:
+                alters.append("ADD COLUMN ai_tag_model VARCHAR(120) NULL")
+            if "ai_story_agent_model" not in existing:
+                alters.append("ADD COLUMN ai_story_agent_model VARCHAR(120) NULL")
+            if "ai_story_agent_visible" not in existing:
+                alters.append("ADD COLUMN ai_story_agent_visible TINYINT(1) NOT NULL DEFAULT 1")
             if "email_address_invalid" not in existing:
                 alters.append("ADD COLUMN email_address_invalid TINYINT(1) NOT NULL DEFAULT 0")
             if "email_2fa_skip_until" not in existing:
@@ -5073,6 +5093,35 @@ class TitleCandidatesOut(BaseModel):
     used_tokens: int | None = None
 
 
+class StoryAgentRequest(BaseModel):
+    mode: str | None = None
+    title_hint: str | None = None
+    genre: str | None = None
+    characters: str | None = None
+    tone: str | None = None
+    is_r18: bool | None = None
+    selected_model: str | None = None
+    chunked_generation_enabled: bool | None = None
+    chunked_generation_count: int | None = None
+    chunked_generation_plans: List[str] = []
+    conversation: List[dict] = []
+
+
+class StoryAgentResponse(BaseModel):
+    reply: str
+    characters_append: str = ""
+    title_hint: str | None = None
+    genre: str | None = None
+    tone: str | None = None
+    is_r18: bool | None = None
+    suggested_model: str | None = None
+    chunked_generation_enabled: bool | None = None
+    chunked_generation_count: int | None = None
+    chunked_generation_plans: List[str] = []
+    model: str | None = None
+    used_tokens: int | None = None
+
+
 class EpisodeAssistCandidatesRequest(BaseModel):
     title: str | None = None
     text: str
@@ -6719,12 +6768,15 @@ async def generate_tag_candidates(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    require_current_user(request, db)
+    user = require_current_user(request, db)
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(400, "本文が空です。")
     source_text = text[:1000]
-    candidates, tokens, model = await call_openai_tag_candidates(source_text)
+    candidates, tokens, model = await call_openai_tag_candidates(
+        source_text,
+        model=getattr(user, "ai_tag_model", None),
+    )
     return TagCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
 
 
@@ -6734,12 +6786,15 @@ async def generate_summary_candidates(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    require_current_user(request, db)
+    user = require_current_user(request, db)
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(400, "本文が空です。")
     source_text = text[:3000]
-    candidates, tokens, model = await call_openai_summary_candidates(source_text)
+    candidates, tokens, model = await call_openai_summary_candidates(
+        source_text,
+        model=getattr(user, "ai_summary_model", None),
+    )
     limit = max(1, min(8, int(getattr(payload, "suggestions_count", 4) or 4)))
     return NovelSummaryCandidatesOut(
         candidates=[str(c or "").strip() for c in (candidates or []) if str(c or "").strip()][:limit],
@@ -6754,12 +6809,15 @@ async def generate_title_candidate(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    require_current_user(request, db)
+    user = require_current_user(request, db)
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(400, "本文が空です。")
     source_text = text[:2000]
-    title, tokens, model = await call_openai_title_candidate(source_text)
+    title, tokens, model = await call_openai_title_candidate(
+        source_text,
+        model=getattr(user, "ai_title_model", None),
+    )
     return TitleCandidateOut(title=title, model=model, used_tokens=tokens)
 
 
@@ -6769,7 +6827,7 @@ async def generate_title_candidates(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    require_current_user(request, db)
+    user = require_current_user(request, db)
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(400, "本文が空です。")
@@ -6777,9 +6835,126 @@ async def generate_title_candidates(
     count = max(2, min(8, int(payload.suggestions_count or 5)))
     candidates, tokens, model = await call_openai_title_candidates(
         source_text,
+        model=getattr(user, "ai_title_model", None),
         suggestions_count=count,
     )
     return TitleCandidatesOut(candidates=candidates, model=model, used_tokens=tokens)
+
+
+@app.post("/api/ai/novels/story-agent", response_model=StoryAgentResponse)
+async def generate_story_agent_reply(
+    payload: StoryAgentRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_current_user(request, db)
+    mode = str(payload.mode or "new_novel").strip() or "new_novel"
+    title_hint = str(payload.title_hint or "").strip()
+    genre = str(payload.genre or "").strip()
+    characters = str(payload.characters or "").strip()
+    tone = str(payload.tone or "").strip()
+    is_r18 = bool(payload.is_r18) if payload.is_r18 is not None else False
+    selected_model = str(payload.selected_model or "").strip()
+    chunked_generation_enabled = bool(payload.chunked_generation_enabled) if payload.chunked_generation_enabled is not None else False
+    chunked_generation_count = max(1, min(30, int(payload.chunked_generation_count or 1)))
+    chunked_generation_plans = [
+        str(item or "").strip()
+        for item in list(payload.chunked_generation_plans or [])[:30]
+        if str(item or "").strip()
+    ]
+
+    conversation_lines: list[str] = []
+    for item in list(payload.conversation or [])[-8:]:
+        if not isinstance(item, dict):
+            continue
+        role = "assistant" if str(item.get("role") or "").strip().lower() == "assistant" else "user"
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        speaker = "Assistant" if role == "assistant" else "User"
+        conversation_lines.append(f"{speaker}: {content}")
+    conversation_text = "\n".join(conversation_lines).strip()
+    if not conversation_text:
+        raise HTTPException(400, "会話内容が空です。")
+
+    prompt = (
+        "あなたは AI小説生成ページ専用の企画アシスタントです。\n"
+        "ユーザーと日本語で会話し、小説のプロット案、キャラクター案、舞台設定案を整理してください。\n"
+        "返答は必ず具体案を出してください。抽象的な感想だけで終わってはいけません。\n"
+        "ユーザーが広い相談をした場合は、少なくとも3案を並べてください。\n"
+        "各案には、雰囲気、関係性、物語の転がし方が分かる短い説明を付けてください。\n"
+        "可能なら『案1』『案2』『案3』のように見出しを付けて読みやすくしてください。\n"
+        "最後に、次に詰めるとよいポイントを1つだけ短く添えてください。\n"
+        "会話の内容から、登場人物・設定欄へ追記すべき内容を整理してください。\n"
+        "既存の情報と重複する内容は避け、新しく増えた要素だけを characters_append に入れてください。\n"
+        "characters_append には、登場人物、設定、プロット案としてそのまま貼れる日本語メモだけを書いてください。\n"
+        "characters_append が不要な場合は空文字にしてください。\n"
+        "必要に応じて title_hint, genre, tone, is_r18, suggested_model, chunked_generation_enabled, chunked_generation_count, chunked_generation_plans を提案してください。\n"
+        "提案が不要な項目は空文字、null、false、空配列のいずれかにしてください。\n"
+        "chunked_generation_plans は各ブロックの指示文だけを順番に入れてください。\n"
+        "必ずJSON 1個のみを返してください。キーは reply, characters_append, title_hint, genre, tone, is_r18, suggested_model, chunked_generation_enabled, chunked_generation_count, chunked_generation_plans のみです。\n\n"
+        f"【現在の入力欄】\n- モード: {mode}\n- タイトルのイメージ: {title_hint or '未入力'}\n"
+        f"- ジャンル: {genre or '未入力'}\n- 登場人物・設定: {characters or '未入力'}\n"
+        f"- 雰囲気・トーン: {tone or '未入力'}\n"
+        f"- R18: {'ON' if is_r18 else 'OFF'}\n"
+        f"- 使用モデル: {selected_model or '未入力'}\n"
+        f"- 分割生成: {'ON' if chunked_generation_enabled else 'OFF'}\n"
+        f"- 分割数: {chunked_generation_count}\n"
+        f"- 分割案: {(' / '.join(chunked_generation_plans) or '未入力')}\n\n"
+        f"【直近の会話】\n{conversation_text}"
+    )
+
+    data, tokens, model = await _call_ai_chat_json_with_fallback(
+        prompt,
+        model=getattr(user, "ai_story_agent_model", None),
+        provider=None,
+        system_instructions=(
+            "あなたは小説企画アシスタントです。"
+            "必ずJSON 1個のみを返してください。"
+            "キーは reply, characters_append, title_hint, genre, tone, is_r18, suggested_model, chunked_generation_enabled, chunked_generation_count, chunked_generation_plans のみです。"
+        ),
+    )
+    reply = str(data.get("reply") or "").strip()
+    characters_append = str(data.get("characters_append") or "").strip()
+    if not reply:
+        raise HTTPException(502, "AI から相談用の返答を取得できませんでした。")
+    next_title_hint = str(data.get("title_hint") or "").strip() or None
+    next_genre = str(data.get("genre") or "").strip() or None
+    next_tone = str(data.get("tone") or "").strip() or None
+    next_is_r18 = data.get("is_r18") if isinstance(data.get("is_r18"), bool) else None
+    next_suggested_model = str(data.get("suggested_model") or "").strip() or None
+    next_chunked_enabled = (
+        data.get("chunked_generation_enabled")
+        if isinstance(data.get("chunked_generation_enabled"), bool)
+        else None
+    )
+    next_chunked_count = None
+    if data.get("chunked_generation_count") is not None:
+        try:
+            next_chunked_count = max(1, min(30, int(data.get("chunked_generation_count"))))
+        except Exception:
+            next_chunked_count = None
+    next_chunked_plans: list[str] = []
+    raw_plans = data.get("chunked_generation_plans")
+    if isinstance(raw_plans, list):
+        for item in raw_plans[:30]:
+            text = str(item or "").strip()
+            if text:
+                next_chunked_plans.append(text)
+    return StoryAgentResponse(
+        reply=reply,
+        characters_append=characters_append,
+        title_hint=next_title_hint,
+        genre=next_genre,
+        tone=next_tone,
+        is_r18=next_is_r18,
+        suggested_model=next_suggested_model,
+        chunked_generation_enabled=next_chunked_enabled,
+        chunked_generation_count=next_chunked_count,
+        chunked_generation_plans=next_chunked_plans,
+        model=model,
+        used_tokens=tokens,
+    )
 
 
 async def generate_episode_assist_candidates(
@@ -21455,7 +21630,10 @@ async def generate_novel_summary_candidates(
         raise HTTPException(404, "本文が存在しません")
 
     source_text = (first_episode.body or "").strip()[:1000]
-    candidates, tokens, model = await call_openai_summary_candidates(source_text)
+    candidates, tokens, model = await call_openai_summary_candidates(
+        source_text,
+        model=getattr(user, "ai_summary_model", None),
+    )
     return NovelSummaryCandidatesOut(
         candidates=candidates,
         model=model,
@@ -21488,7 +21666,10 @@ async def generate_novel_tag_candidates(
         raise HTTPException(404, "本文が存在しません")
 
     source_text = (first_episode.body or "").strip()[:1000]
-    candidates, tokens, model = await call_openai_tag_candidates(source_text)
+    candidates, tokens, model = await call_openai_tag_candidates(
+        source_text,
+        model=getattr(user, "ai_tag_model", None),
+    )
     return TagCandidatesOut(
         candidates=candidates,
         model=model,
@@ -21521,7 +21702,11 @@ async def generate_novel_title_candidates(
         raise HTTPException(404, "本文が存在しません")
 
     source_text = (first_episode.body or "").strip()[:2200]
-    candidates, tokens, model = await call_openai_title_candidates(source_text, suggestions_count=5)
+    candidates, tokens, model = await call_openai_title_candidates(
+        source_text,
+        model=getattr(user, "ai_title_model", None),
+        suggestions_count=5,
+    )
     return TitleCandidatesOut(
         candidates=candidates,
         model=model,
@@ -21544,7 +21729,11 @@ async def generate_episode_title_candidates(
         raise HTTPException(404, "本文が存在しません")
 
     source_text = (ep.body or "").strip()[:2200]
-    candidates, tokens, model = await call_openai_title_candidates(source_text, suggestions_count=5)
+    candidates, tokens, model = await call_openai_title_candidates(
+        source_text,
+        model=getattr(user, "ai_title_model", None),
+        suggestions_count=5,
+    )
     return TitleCandidatesOut(
         candidates=candidates,
         model=model,
@@ -25030,6 +25219,16 @@ def update_profile(
         user.profile_website_url = _normalize_profile_url(payload.profile_website_url)
     if payload.profile_x_url is not None:
         user.profile_x_url = _normalize_profile_url(payload.profile_x_url)
+    if payload.ai_summary_model is not None:
+        user.ai_summary_model = _normalize_optional_ai_model(payload.ai_summary_model)
+    if payload.ai_title_model is not None:
+        user.ai_title_model = _normalize_optional_ai_model(payload.ai_title_model)
+    if payload.ai_tag_model is not None:
+        user.ai_tag_model = _normalize_optional_ai_model(payload.ai_tag_model)
+    if payload.ai_story_agent_model is not None:
+        user.ai_story_agent_model = _normalize_optional_ai_model(payload.ai_story_agent_model)
+    if payload.ai_story_agent_visible is not None:
+        user.ai_story_agent_visible = bool(payload.ai_story_agent_visible)
 
     db.add(user)
     db.commit()

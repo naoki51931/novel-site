@@ -11,6 +11,24 @@ type ThemeName = "light" | "dark";
 type TranslationFn = (value: Record<string, string>, vars?: Record<string, string | number>) => string;
 type BirthDateParts = { year: number; month: number; day: number };
 type ApiValidationIssue = { loc?: unknown[]; msg?: string };
+type AiModelOption = { value: string; labelJa: string; labelEn: string };
+
+const AI_MODEL_OPTIONS: AiModelOption[] = [
+  { value: "", labelJa: "デフォルト", labelEn: "Default" },
+  { value: "gpt-5.2", labelJa: "GPT-5.2", labelEn: "GPT-5.2" },
+  { value: "gpt-5", labelJa: "GPT-5", labelEn: "GPT-5" },
+  { value: "gpt-5-mini", labelJa: "GPT-5 Mini", labelEn: "GPT-5 Mini" },
+  { value: "gpt-4.1", labelJa: "GPT-4.1", labelEn: "GPT-4.1" },
+  { value: "gpt-4.1-mini", labelJa: "GPT-4.1 Mini", labelEn: "GPT-4.1 Mini" },
+  { value: "openai/chatgpt-4o-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
+  { value: "google/gemini-2.5-pro", labelJa: "Gemini 2.5 Pro（OpenRouter）", labelEn: "Gemini 2.5 Pro (OpenRouter)" },
+  { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
+  { value: "moonshotai/kimi-k2", labelJa: "Kimi（OpenRouter）", labelEn: "Kimi (OpenRouter)" },
+  { value: "deepseek/deepseek-chat", labelJa: "DeepSeek（OpenRouter）", labelEn: "DeepSeek (OpenRouter)" },
+  { value: "deepseek/deepseek-reasoner", labelJa: "DeepSeek Reasoner（OpenRouter）", labelEn: "DeepSeek Reasoner (OpenRouter)" },
+  { value: "deepseek:deepseek-chat", labelJa: "DeepSeek（公式）", labelEn: "DeepSeek (official)" },
+  { value: "deepseek:deepseek-reasoner", labelJa: "DeepSeek Reasoner（公式）", labelEn: "DeepSeek Reasoner (official)" },
+];
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const formatBirthDate = (year: number, month: number, day: number) =>
@@ -69,6 +87,11 @@ export default function AccountSettings() {
   const [profileHeaderUrl, setProfileHeaderUrl] = useState("");
   const [profileWebsiteUrl, setProfileWebsiteUrl] = useState("");
   const [profileXUrl, setProfileXUrl] = useState("");
+  const [aiSummaryModel, setAiSummaryModel] = useState("");
+  const [aiTitleModel, setAiTitleModel] = useState("");
+  const [aiTagModel, setAiTagModel] = useState("");
+  const [aiStoryAgentModel, setAiStoryAgentModel] = useState("");
+  const [aiStoryAgentVisible, setAiStoryAgentVisible] = useState(true);
   const [theme, setThemeState] = useState(() => {
     try {
       return getSavedTheme();
@@ -144,6 +167,11 @@ export default function AccountSettings() {
         setProfileHeaderUrl(data.profile_header_url || "");
         setProfileWebsiteUrl(data.profile_website_url || "");
         setProfileXUrl(data.profile_x_url || "");
+        setAiSummaryModel(data.ai_summary_model || "");
+        setAiTitleModel(data.ai_title_model || "");
+        setAiTagModel(data.ai_tag_model || "");
+        setAiStoryAgentModel(data.ai_story_agent_model || "");
+        setAiStoryAgentVisible(data.ai_story_agent_visible !== false);
       })
       .catch((e) =>
         setError(
@@ -191,6 +219,11 @@ export default function AccountSettings() {
           profile_header_url: profileHeaderUrl,
           profile_website_url: profileWebsiteUrl,
           profile_x_url: profileXUrl,
+          ai_summary_model: aiSummaryModel,
+          ai_title_model: aiTitleModel,
+          ai_tag_model: aiTagModel,
+          ai_story_agent_model: aiStoryAgentModel,
+          ai_story_agent_visible: aiStoryAgentVisible,
         }),
       });
 
@@ -289,6 +322,73 @@ export default function AccountSettings() {
                 })}
               </span>
             </label>
+          </fieldset>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <fieldset style={{ padding: 12, border: "1px solid var(--border)" }}>
+            <legend>{t({ ja: "AIモデル設定", en: "AI model preferences" })}</legend>
+            <div style={{ display: "grid", gap: 12 }}>
+              <label>
+                {t({ ja: "概要生成", en: "Summary generation" })}<br />
+                <select value={aiSummaryModel} onChange={(e) => setAiSummaryModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`summary-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t({ ja: "タイトル変更", en: "Title generation" })}<br />
+                <select value={aiTitleModel} onChange={(e) => setAiTitleModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`title-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t({ ja: "タグ生成", en: "Tag generation" })}<br />
+                <select value={aiTagModel} onChange={(e) => setAiTagModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`tag-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t({ ja: "AI小説ページの相談AI", en: "AI novel page helper" })}<br />
+                <select value={aiStoryAgentModel} onChange={(e) => setAiStoryAgentModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`agent-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={aiStoryAgentVisible}
+                  onChange={(e) => setAiStoryAgentVisible(e.target.checked)}
+                />
+                <span>
+                  {t({
+                    ja: "AI小説ページで小説相談AIを表示する",
+                    en: "Show the novel helper AI on the AI novel page",
+                  })}
+                </span>
+              </label>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted-text)" }}>
+              {t({
+                ja: "デフォルトを選ぶと既存の標準モデルを使います。OpenRouter や DeepSeek を選ぶと、その機能だけ切り替わります。",
+                en: "Choose Default to keep the existing standard model. Select OpenRouter or DeepSeek to switch only that feature.",
+              })}
+            </div>
           </fieldset>
         </div>
 

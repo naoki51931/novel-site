@@ -787,8 +787,6 @@ async def call_openai_novel_api(
 
 
 async def call_openai_summary_candidates(text: str, model: str | None = None) -> tuple[list[str], int | None, str]:
-    if client is None:
-        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
     source_text = (text or "").strip()
     if not source_text:
         raise HTTPException(status_code=400, detail="本文が空です。")
@@ -805,33 +803,13 @@ async def call_openai_summary_candidates(text: str, model: str | None = None) ->
         """
     ).strip()
 
-    try:
-        resp = await asyncio.to_thread(
-            client.responses.create,
-            model=effective_model,
-            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
-            input=prompt,
-            max_output_tokens=512,
-        )
-    except Exception as e:
-        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        _raise_ai_api_call_error("AI 要約 API", e)
-
-    raw = ""
-    try:
-        raw = resp.output[0].content[0].text
-    except Exception:
-        raw = getattr(resp, "output_text", "") or ""
-
-    if not raw:
-        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
-
-    try:
-        data = _parse_json_payload(raw)
-    except Exception as e:
-        _log_ai_raw_response(raw, "summary_candidates")
-        print("[ERROR] AI JSON parse failed:", repr(e))
-        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+    data, tokens, effective_model = await call_ai_json(
+        prompt,
+        model=effective_model,
+        provider=provider_from_model(effective_model),
+        system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        max_output_tokens=512,
+    )
 
     candidates = data.get("candidates") if isinstance(data, dict) else None
     if not isinstance(candidates, list):
@@ -853,17 +831,10 @@ async def call_openai_summary_candidates(text: str, model: str | None = None) ->
     if not normalized:
         raise HTTPException(status_code=500, detail="AI から候補が取得できませんでした。")
 
-    tokens: int | None = None
-    usage = getattr(resp, "usage", None)
-    if usage is not None:
-        tokens = getattr(usage, "total_tokens", None)
-
     return normalized, tokens, effective_model
 
 
 async def call_openai_tag_candidates(text: str, model: str | None = None) -> tuple[list[str], int | None, str]:
-    if client is None:
-        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
     source_text = (text or "").strip()
     if not source_text:
         raise HTTPException(status_code=400, detail="本文が空です。")
@@ -880,33 +851,13 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
         """
     ).strip()
 
-    try:
-        resp = await asyncio.to_thread(
-            client.responses.create,
-            model=effective_model,
-            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
-            input=prompt,
-            max_output_tokens=256,
-        )
-    except Exception as e:
-        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        _raise_ai_api_call_error("AI タグ生成 API", e)
-
-    raw = ""
-    try:
-        raw = resp.output[0].content[0].text
-    except Exception:
-        raw = getattr(resp, "output_text", "") or ""
-
-    if not raw:
-        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
-
-    try:
-        data = _parse_json_payload(raw)
-    except Exception as e:
-        _log_ai_raw_response(raw, "tag_candidates")
-        print("[ERROR] AI JSON parse failed:", repr(e))
-        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+    data, tokens, effective_model = await call_ai_json(
+        prompt,
+        model=effective_model,
+        provider=provider_from_model(effective_model),
+        system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        max_output_tokens=256,
+    )
 
     candidates = data.get("candidates") if isinstance(data, dict) else None
     if not isinstance(candidates, list):
@@ -928,17 +879,10 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
     if not normalized:
         raise HTTPException(status_code=500, detail="AI から候補が取得できませんでした。")
 
-    tokens: int | None = None
-    usage = getattr(resp, "usage", None)
-    if usage is not None:
-        tokens = getattr(usage, "total_tokens", None)
-
     return normalized, tokens, effective_model
 
 
 async def call_openai_title_candidate(text: str, model: str | None = None) -> tuple[str, int | None, str]:
-    if client is None:
-        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
     source_text = (text or "").strip()
     if not source_text:
         raise HTTPException(status_code=400, detail="本文が空です。")
@@ -958,33 +902,13 @@ async def call_openai_title_candidate(text: str, model: str | None = None) -> tu
         """
     ).strip()
 
-    try:
-        resp = await asyncio.to_thread(
-            client.responses.create,
-            model=effective_model,
-            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
-            input=prompt,
-            max_output_tokens=128,
-        )
-    except Exception as e:
-        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        _raise_ai_api_call_error("AI タイトル生成 API", e)
-
-    raw = ""
-    try:
-        raw = resp.output[0].content[0].text
-    except Exception:
-        raw = getattr(resp, "output_text", "") or ""
-
-    if not raw:
-        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
-
-    try:
-        data = _parse_json_payload(raw)
-    except Exception as e:
-        _log_ai_raw_response(raw, "title_candidate")
-        print("[ERROR] AI JSON parse failed:", repr(e))
-        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+    data, tokens, effective_model = await call_ai_json(
+        prompt,
+        model=effective_model,
+        provider=provider_from_model(effective_model),
+        system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        max_output_tokens=128,
+    )
 
     title = data.get("title") if isinstance(data, dict) else None
     if not isinstance(title, str):
@@ -992,11 +916,6 @@ async def call_openai_title_candidate(text: str, model: str | None = None) -> tu
     normalized = title.strip().strip('"').strip("'")
     if not normalized:
         raise HTTPException(status_code=500, detail="AI からタイトルが取得できませんでした。")
-
-    tokens: int | None = None
-    usage = getattr(resp, "usage", None)
-    if usage is not None:
-        tokens = getattr(usage, "total_tokens", None)
 
     return normalized[:40], tokens, effective_model
 
@@ -1006,8 +925,6 @@ async def call_openai_title_candidates(
     model: str | None = None,
     suggestions_count: int = 5,
 ) -> tuple[list[str], int | None, str]:
-    if client is None:
-        raise HTTPException(status_code=500, detail="OpenAI クライアントの初期化に失敗しています。")
     source_text = (text or "").strip()
     if not source_text:
         raise HTTPException(status_code=400, detail="本文が空です。")
@@ -1029,33 +946,13 @@ async def call_openai_title_candidates(
         """
     ).strip()
 
-    try:
-        resp = await asyncio.to_thread(
-            client.responses.create,
-            model=effective_model,
-            instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
-            input=prompt,
-            max_output_tokens=256,
-        )
-    except Exception as e:
-        print("[ERROR] OpenAI Responses API 呼び出し失敗:", repr(e))
-        _raise_ai_api_call_error("AI タイトル生成 API", e)
-
-    raw = ""
-    try:
-        raw = resp.output[0].content[0].text
-    except Exception:
-        raw = getattr(resp, "output_text", "") or ""
-
-    if not raw:
-        raise HTTPException(status_code=500, detail="AI からの応答が空でした。")
-
-    try:
-        data = _parse_json_payload(raw)
-    except Exception as e:
-        _log_ai_raw_response(raw, "title_candidates")
-        print("[ERROR] AI JSON parse failed:", repr(e))
-        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+    data, tokens, effective_model = await call_ai_json(
+        prompt,
+        model=effective_model,
+        provider=provider_from_model(effective_model),
+        system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        max_output_tokens=256,
+    )
 
     candidates = data.get("candidates") if isinstance(data, dict) else None
     if not isinstance(candidates, list):
@@ -1077,11 +974,6 @@ async def call_openai_title_candidates(
         normalized.append(v)
     if not normalized:
         raise HTTPException(status_code=500, detail="AI からタイトル候補が取得できませんでした。")
-
-    tokens: int | None = None
-    usage = getattr(resp, "usage", None)
-    if usage is not None:
-        tokens = getattr(usage, "total_tokens", None)
 
     return normalized, tokens, effective_model
 

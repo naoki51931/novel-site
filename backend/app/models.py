@@ -26,6 +26,11 @@ class User(Base):
     profile_header_url = Column(String(255), nullable=True)
     profile_website_url = Column(String(255), nullable=True)
     profile_x_url = Column(String(255), nullable=True)
+    ai_summary_model = Column(String(120), nullable=True)
+    ai_title_model = Column(String(120), nullable=True)
+    ai_tag_model = Column(String(120), nullable=True)
+    ai_story_agent_model = Column(String(120), nullable=True)
+    ai_story_agent_visible = Column(Boolean, nullable=False, server_default="1")
     # 課金フラグ（Stripe 用）
     is_premium = Column(Boolean, nullable=False, server_default="0")
     # プレミアム状態の再確認（ログイン時などで更新）

@@ -161,6 +161,11 @@ class ProfileRead(BaseModel):
     profile_header_url: Optional[str] = None
     profile_website_url: Optional[str] = None
     profile_x_url: Optional[str] = None
+    ai_summary_model: Optional[str] = None
+    ai_title_model: Optional[str] = None
+    ai_tag_model: Optional[str] = None
+    ai_story_agent_model: Optional[str] = None
+    ai_story_agent_visible: Optional[bool] = True
 
     class Config:
         orm_mode = True
@@ -177,6 +182,11 @@ class ProfileUpdate(BaseModel):
     profile_header_url: Optional[str] = None
     profile_website_url: Optional[str] = None
     profile_x_url: Optional[str] = None
+    ai_summary_model: Optional[str] = None
+    ai_title_model: Optional[str] = None
+    ai_tag_model: Optional[str] = None
+    ai_story_agent_model: Optional[str] = None
+    ai_story_agent_visible: Optional[bool] = None
 
 
 # =========================
