@@ -613,9 +613,10 @@ async def create_ai_novel_job_service(req, request, response, db):
     from .. import main as legacy
 
     user = legacy.get_optional_current_user(request, db)
-    is_premium = legacy.is_effective_premium_user(user)
+    is_guest = user is None
+    is_premium = False if is_guest else legacy.is_effective_premium_user(user)
 
-    if not is_premium:
+    if is_guest or not is_premium:
         guest_id = legacy.get_or_set_ai_guest_id(request, response)
         usage = legacy.require_guest_ai_quota(db, guest_id)
         usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1

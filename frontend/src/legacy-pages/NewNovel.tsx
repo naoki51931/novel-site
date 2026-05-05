@@ -605,123 +605,115 @@ export default function NewNovel() {
 
       {canShowGuides && (
       <section className="novel-post-guide" aria-label={t({ ja: "投稿ガイド", en: "Posting guide" })}>
-        <div
-          className={`novel-post-guide-bubble ${
-            hasRegistered ? "is-done" : activeGuideStep === "register" ? "is-current" : ""
-          } ${expandedBubble === "newnovel_step1" ? "is-expanded" : ""}`.trim()}
-          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step1" ? "" : "newnovel_step1"))}
-        >
-          {isBubbleVisible("newnovel_step1") && (
+        {isBubbleVisible("newnovel_step1") && (
+          <div
+            className={`novel-post-guide-bubble ${
+              hasRegistered ? "is-done" : activeGuideStep === "register" ? "is-current" : ""
+            } ${expandedBubble === "newnovel_step1" ? "is-expanded" : ""}`.trim()}
+            onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step1" ? "" : "newnovel_step1"))}
+          >
             <div className="novel-post-guide-actions">
               <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step1")}>
                 {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
               </button>
               <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step1")}>×</button>
             </div>
-          )}
-          {!isBubbleVisible("newnovel_step1") ? null : (
             <>
-          <strong>{t({ ja: "STEP 1", en: "STEP 1" })}</strong>
-          <span>
-            {hasRegistered
-              ? t({
-                  ja: "会員登録は完了しています。",
-                  en: "Registration is complete.",
-                })
-              : t({
-                  ja: "まずは、会員登録をしてください。",
-                  en: "First, please create an account.",
-                })}
-          </span>
+              <strong>{t({ ja: "STEP 1", en: "STEP 1" })}</strong>
+              <span>
+                {hasRegistered
+                  ? t({
+                      ja: "会員登録は完了しています。",
+                      en: "Registration is complete.",
+                    })
+                  : t({
+                      ja: "まずは、会員登録をしてください。",
+                      en: "First, please create an account.",
+                    })}
+              </span>
             </>
-          )}
-        </div>
-        <div
-          className={`novel-post-guide-bubble ${
-            isLoggedIn ? "is-done" : activeGuideStep === "login" ? "is-current" : ""
-          } ${expandedBubble === "newnovel_step2" ? "is-expanded" : ""}`.trim()}
-          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step2" ? "" : "newnovel_step2"))}
-        >
-          {isBubbleVisible("newnovel_step2") && (
+          </div>
+        )}
+        {isBubbleVisible("newnovel_step2") && (
+          <div
+            className={`novel-post-guide-bubble ${
+              isLoggedIn ? "is-done" : activeGuideStep === "login" ? "is-current" : ""
+            } ${expandedBubble === "newnovel_step2" ? "is-expanded" : ""}`.trim()}
+            onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step2" ? "" : "newnovel_step2"))}
+          >
             <div className="novel-post-guide-actions">
               <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step2")}>
                 {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
               </button>
               <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step2")}>×</button>
             </div>
-          )}
-          {!isBubbleVisible("newnovel_step2") ? null : (
             <>
-          <strong>{t({ ja: "STEP 2", en: "STEP 2" })}</strong>
-          <span>
-            {isLoggedIn
-              ? t({
-                  ja: "ログインは完了しています。",
-                  en: "Login is complete.",
-                })
-              : t({
-                  ja: "次は、ログインしてください。",
-                  en: "Next, please log in.",
-                })}
-          </span>
+              <strong>{t({ ja: "STEP 2", en: "STEP 2" })}</strong>
+              <span>
+                {isLoggedIn
+                  ? t({
+                      ja: "ログインは完了しています。",
+                      en: "Login is complete.",
+                    })
+                  : t({
+                      ja: "次は、ログインしてください。",
+                      en: "Next, please log in.",
+                    })}
+              </span>
             </>
-          )}
-        </div>
-        <div
-          className={`novel-post-guide-bubble ${
-            activeGuideStep === "create" ? "is-ready" : ""
-          } ${expandedBubble === "newnovel_step3" ? "is-expanded" : ""}`.trim()}
-          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step3" ? "" : "newnovel_step3"))}
-        >
-          {isBubbleVisible("newnovel_step3") && (
+          </div>
+        )}
+        {isBubbleVisible("newnovel_step3") && (
+          <div
+            className={`novel-post-guide-bubble ${
+              activeGuideStep === "create" ? "is-ready" : ""
+            } ${expandedBubble === "newnovel_step3" ? "is-expanded" : ""}`.trim()}
+            onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step3" ? "" : "newnovel_step3"))}
+          >
             <div className="novel-post-guide-actions">
               <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step3")}>
                 {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
               </button>
               <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step3")}>×</button>
             </div>
-          )}
-          {!isBubbleVisible("newnovel_step3") ? null : (
             <>
-          <strong>{t({ ja: "STEP 3", en: "STEP 3" })}</strong>
-          <span>
-            {isLoggedIn
-              ? t({
-                  ja: "最後に、小説を作成してください。",
-                  en: "Finally, create your novel.",
-                })
-              : t({
-                  ja: "ログイン後に小説を作成してください。",
-                  en: "Create your novel after logging in.",
-                })}
-          </span>
+              <strong>{t({ ja: "STEP 3", en: "STEP 3" })}</strong>
+              <span>
+                {isLoggedIn
+                  ? t({
+                      ja: "最後に、小説を作成してください。",
+                      en: "Finally, create your novel.",
+                    })
+                  : t({
+                      ja: "ログイン後に小説を作成してください。",
+                      en: "Create your novel after logging in.",
+                    })}
+              </span>
             </>
-          )}
-        </div>
-        <div
-          className={`novel-post-guide-bubble is-optional ${expandedBubble === "newnovel_step4" ? "is-expanded" : ""}`.trim()}
-          onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step4" ? "" : "newnovel_step4"))}
-        >
-          {isBubbleVisible("newnovel_step4") && (
+          </div>
+        )}
+        {isBubbleVisible("newnovel_step4") && (
+          <div
+            className={`novel-post-guide-bubble is-optional ${expandedBubble === "newnovel_step4" ? "is-expanded" : ""}`.trim()}
+            onClick={() => setExpandedBubble((prev) => (prev === "newnovel_step4" ? "" : "newnovel_step4"))}
+          >
             <div className="novel-post-guide-actions">
               <button type="button" className="onboarding-guide-dismiss" onClick={(e) => handleDismissBubble(e, "newnovel_step4")}>
                 {t({ ja: "吹き出しを消す", en: "Dismiss bubble" })}
               </button>
               <button type="button" className="onboarding-guide-close" onClick={(e) => handleDismissBubble(e, "newnovel_step4")}>×</button>
             </div>
-          )}
-          {!isBubbleVisible("newnovel_step4") ? null : (
             <>
-          <strong>{t({ ja: "STEP 4", en: "STEP 4" })}</strong>
-          <span>
-            {t({
-              ja: "小説作成の次は、エピソードを作成してください。",
-              en: "After creating the novel, create an episode.",
-            })}
-          </span>
+              <strong>{t({ ja: "STEP 4", en: "STEP 4" })}</strong>
+              <span>
+                {t({
+                  ja: "小説作成の次は、エピソードを作成してください。",
+                  en: "After creating the novel, create an episode.",
+                })}
+              </span>
             </>
-          )}
-        </div>
+          </div>
+        )}
       </section>
       )}
 

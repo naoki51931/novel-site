@@ -531,6 +531,7 @@ async def call_ai_json(
     timeout_sec: float | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> tuple[dict, int | None, str | None]:
     if not prompt:
         raise HTTPException(status_code=400, detail="プロンプトが空です。")
@@ -538,10 +539,14 @@ async def call_ai_json(
     provider = (provider or "").strip().lower() or provider_from_model(model)
     system_instructions = system_instructions or "JSON 1個のみを返してください。"
     try:
-        max_output_tokens = int(os.getenv("AI_JSON_MAX_OUTPUT_TOKENS", "8192"))
+        configured_max_output_tokens = (
+            int(max_output_tokens)
+            if max_output_tokens is not None
+            else int(os.getenv("AI_JSON_MAX_OUTPUT_TOKENS", "8192"))
+        )
     except Exception:
-        max_output_tokens = 8192
-    max_output_tokens = max(512, min(16384, max_output_tokens))
+        configured_max_output_tokens = 8192
+    max_output_tokens = max(128, min(16384, configured_max_output_tokens))
     effective_timeout: float | None = None
     if timeout_sec is not None:
         try:
