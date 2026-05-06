@@ -84,3 +84,22 @@ Codex で作業するときの要点と入口をまとめます。
 - `docker compose build backend` はイメージ更新のみ。稼働中コンテナへは未反映。
 - 反映には必ず `docker compose up --build -d backend`（または recreate）を実行する。
 - フロント修正後は `frontend/dist` へビルドし、`docker compose restart nginx` で配信反映。
+
+## API 防御強化の優先順（2026-05）
+
+- 1. `POST /api/admin/auth/login`
+  - 管理者ログインに失敗回数ベースのレート制限を入れる。
+  - IP 単位とユーザー名単位の両方で制限する。
+- 2. `/api/admin/*` の状態変更系
+  - Cookie ベースの管理 API に CSRF 防御を追加する。
+  - 移行用の `X-Admin-Token` は廃止候補として扱う。
+- 3. `POST /api/contact/messages`
+  - reCAPTCHA、IP 単位レート制限、短時間の重複投稿抑止を入れる。
+- 4. `POST /api/auth/login/start` と `POST /api/auth/register/email/start`
+  - ログインコード送信と登録メール認証コード送信に abuse 対策を入れる。
+  - 既存メールアドレスの列挙を避けるため、レスポンス差分を減らす。
+- 5. `/api/ai/chat*` と画像生成系
+  - `guest_id` / `user_id` / IP 単位の頻度制限と同時実行制限を入れる。
+  - 高コストな画像生成はログイン必須化を優先候補にする。
+
+この順番で段階的に進める。1つずつ実装し、各段階で手動確認手順も作業メモか PR に残す。

@@ -309,6 +309,16 @@ _redis_metrics_flusher_started = False
 _redis_metrics_flusher_lock = threading.Lock()
 _indexing_carryover_fallback_urls: list[str] = []
 _indexing_carryover_fallback_updated_at: str | None = None
+_admin_login_rate_limit_lock = threading.Lock()
+_admin_login_rate_limit_fallback: dict[str, tuple[int, float]] = {}
+_public_contact_rate_limit_lock = threading.Lock()
+_public_contact_rate_limit_fallback: dict[str, tuple[int, float]] = {}
+_public_contact_duplicate_fallback: dict[str, float] = {}
+_auth_abuse_lock = threading.Lock()
+_auth_abuse_rate_limit_fallback: dict[str, tuple[int, float]] = {}
+_auth_abuse_marker_fallback: dict[str, float] = {}
+_ai_chat_rate_limit_lock = threading.Lock()
+_ai_chat_rate_limit_fallback: dict[str, tuple[int, float]] = {}
 
 
 @lru_cache(maxsize=1)
@@ -1783,6 +1793,38 @@ ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
 ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "")
 ADMIN_JWT_EXPIRES_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRES_MINUTES", "120"))
 ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "1") == "1"
+ADMIN_CSRF_COOKIE_NAME = "admin_csrf_token"
+ADMIN_LOGIN_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("ADMIN_LOGIN_RATE_LIMIT_WINDOW_SEC", "900") or "900"))
+ADMIN_LOGIN_RATE_LIMIT_MAX_FAILURES = max(1, int(os.getenv("ADMIN_LOGIN_RATE_LIMIT_MAX_FAILURES", "5") or "5"))
+PUBLIC_CONTACT_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("PUBLIC_CONTACT_RATE_LIMIT_WINDOW_SEC", "900") or "900"))
+PUBLIC_CONTACT_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("PUBLIC_CONTACT_RATE_LIMIT_MAX_REQUESTS", "5") or "5"))
+PUBLIC_CONTACT_DUPLICATE_WINDOW_SEC = max(60, int(os.getenv("PUBLIC_CONTACT_DUPLICATE_WINDOW_SEC", "300") or "300"))
+REGISTER_EMAIL_START_RATE_LIMIT_WINDOW_SEC = max(
+    60, int(os.getenv("REGISTER_EMAIL_START_RATE_LIMIT_WINDOW_SEC", "900") or "900")
+)
+REGISTER_EMAIL_START_RATE_LIMIT_MAX_REQUESTS = max(
+    1, int(os.getenv("REGISTER_EMAIL_START_RATE_LIMIT_MAX_REQUESTS", "5") or "5")
+)
+REGISTER_EMAIL_START_COOLDOWN_SEC = max(
+    30, int(os.getenv("REGISTER_EMAIL_START_COOLDOWN_SEC", "60") or "60")
+)
+LOGIN_START_FAILURE_WINDOW_SEC = max(60, int(os.getenv("LOGIN_START_FAILURE_WINDOW_SEC", "900") or "900"))
+LOGIN_START_MAX_FAILURES = max(1, int(os.getenv("LOGIN_START_MAX_FAILURES", "5") or "5"))
+LOGIN_START_CODE_COOLDOWN_SEC = max(30, int(os.getenv("LOGIN_START_CODE_COOLDOWN_SEC", "60") or "60"))
+AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC = max(30, int(os.getenv("AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC", "60") or "60"))
+AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS = max(
+    1, int(os.getenv("AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS", "20") or "20")
+)
+AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS = max(
+    1, int(os.getenv("AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS", "8") or "8")
+)
+AI_CHAT_IMAGE_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("AI_CHAT_IMAGE_RATE_LIMIT_WINDOW_SEC", "300") or "300"))
+AI_CHAT_IMAGE_RATE_LIMIT_USER_MAX_REQUESTS = max(
+    1, int(os.getenv("AI_CHAT_IMAGE_RATE_LIMIT_USER_MAX_REQUESTS", "5") or "5")
+)
+AI_CHAT_IMAGE_RATE_LIMIT_GUEST_MAX_REQUESTS = max(
+    1, int(os.getenv("AI_CHAT_IMAGE_RATE_LIMIT_GUEST_MAX_REQUESTS", "2") or "2")
+)
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 BACKEND_ORIGIN = os.getenv("BACKEND_ORIGIN", "http://localhost:8000")
 INDEXNOW_ENABLED = (os.getenv("INDEXNOW_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -3955,6 +3997,418 @@ def revalidate_premium_on_login(user: models.User, db: Session) -> None:
     cache_user_payload(user)
 
 
+def _admin_login_remote_ip(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first[:128]
+    if request.client and request.client.host:
+        return str(request.client.host).strip()[:128] or "unknown"
+    return "unknown"
+
+
+def _admin_login_rate_limit_key(username: str, remote_ip: str) -> str:
+    normalized_username = (username or "").strip().lower()[:128]
+    normalized_ip = (remote_ip or "unknown").strip().lower()[:128]
+    digest = hashlib.sha256(f"{normalized_username}|{normalized_ip}".encode("utf-8")).hexdigest()
+    return f"rate_limit:admin_login:{digest}"
+
+
+def _get_admin_login_rate_limit_state(key: str) -> tuple[int, float]:
+    now_ts = time.time()
+    client = get_redis_client()
+    if client:
+        try:
+            raw = client.get(key)
+            if raw:
+                payload = json.loads(raw)
+                count = max(0, int(payload.get("count") or 0))
+                expires_at = float(payload.get("expires_at") or 0.0)
+                if expires_at > now_ts:
+                    return count, expires_at
+        except Exception:
+            pass
+    with _admin_login_rate_limit_lock:
+        count, expires_at = _admin_login_rate_limit_fallback.get(key, (0, 0.0))
+        if expires_at <= now_ts:
+            _admin_login_rate_limit_fallback.pop(key, None)
+            return 0, 0.0
+        return max(0, int(count or 0)), float(expires_at or 0.0)
+
+
+def _set_admin_login_rate_limit_state(key: str, count: int, expires_at: float) -> None:
+    ttl_sec = max(1, int(math.ceil(expires_at - time.time())))
+    payload = {"count": max(0, int(count or 0)), "expires_at": float(expires_at)}
+    client = get_redis_client()
+    if client:
+        try:
+            client.setex(key, ttl_sec, json.dumps(payload, ensure_ascii=True))
+        except Exception:
+            pass
+    with _admin_login_rate_limit_lock:
+        _admin_login_rate_limit_fallback[key] = (payload["count"], payload["expires_at"])
+
+
+def _clear_admin_login_rate_limit_state(key: str) -> None:
+    redis_delete(key)
+    with _admin_login_rate_limit_lock:
+        _admin_login_rate_limit_fallback.pop(key, None)
+
+
+def _enforce_admin_login_rate_limit(request: Request | None, username: str, response: Response | None = None) -> str:
+    remote_ip = _admin_login_remote_ip(request)
+    key = _admin_login_rate_limit_key(username, remote_ip)
+    count, expires_at = _get_admin_login_rate_limit_state(key)
+    if count >= ADMIN_LOGIN_RATE_LIMIT_MAX_FAILURES and expires_at > time.time():
+        retry_after = max(1, int(math.ceil(expires_at - time.time())))
+        if response is not None:
+            response.headers["Retry-After"] = str(retry_after)
+        raise HTTPException(429, "管理者ログイン試行が多すぎます。しばらく待ってから再試行してください。")
+    return key
+
+
+def _record_admin_login_failure(rate_limit_key: str) -> None:
+    now_ts = time.time()
+    count, expires_at = _get_admin_login_rate_limit_state(rate_limit_key)
+    if expires_at <= now_ts:
+        expires_at = now_ts + float(ADMIN_LOGIN_RATE_LIMIT_WINDOW_SEC)
+        count = 0
+    _set_admin_login_rate_limit_state(rate_limit_key, count + 1, expires_at)
+
+
+def _public_contact_remote_ip(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first[:128]
+    if request.client and request.client.host:
+        return str(request.client.host).strip()[:128] or "unknown"
+    return "unknown"
+
+
+def _public_contact_rate_limit_key(remote_ip: str) -> str:
+    normalized_ip = (remote_ip or "unknown").strip().lower()[:128]
+    digest = hashlib.sha256(normalized_ip.encode("utf-8")).hexdigest()
+    return f"rate_limit:public_contact:{digest}"
+
+
+def _public_contact_duplicate_key(remote_ip: str, subject: str, body: str) -> str:
+    normalized_ip = (remote_ip or "unknown").strip().lower()[:128]
+    normalized_subject = (subject or "").strip()[:200]
+    normalized_body = (body or "").strip()[:4000]
+    digest = hashlib.sha256(f"{normalized_ip}|{normalized_subject}|{normalized_body}".encode("utf-8")).hexdigest()
+    return f"dedupe:public_contact:{digest}"
+
+
+def _get_public_contact_rate_limit_state(key: str) -> tuple[int, float]:
+    now_ts = time.time()
+    client = get_redis_client()
+    if client:
+        try:
+            raw = client.get(key)
+            if raw:
+                payload = json.loads(raw)
+                count = max(0, int(payload.get("count") or 0))
+                expires_at = float(payload.get("expires_at") or 0.0)
+                if expires_at > now_ts:
+                    return count, expires_at
+        except Exception:
+            pass
+    with _public_contact_rate_limit_lock:
+        count, expires_at = _public_contact_rate_limit_fallback.get(key, (0, 0.0))
+        if expires_at <= now_ts:
+            _public_contact_rate_limit_fallback.pop(key, None)
+            return 0, 0.0
+        return max(0, int(count or 0)), float(expires_at or 0.0)
+
+
+def _set_public_contact_rate_limit_state(key: str, count: int, expires_at: float) -> None:
+    ttl_sec = max(1, int(math.ceil(expires_at - time.time())))
+    payload = {"count": max(0, int(count or 0)), "expires_at": float(expires_at)}
+    client = get_redis_client()
+    if client:
+        try:
+            client.setex(key, ttl_sec, json.dumps(payload, ensure_ascii=True))
+        except Exception:
+            pass
+    with _public_contact_rate_limit_lock:
+        _public_contact_rate_limit_fallback[key] = (payload["count"], payload["expires_at"])
+
+
+def _public_contact_duplicate_exists(key: str) -> bool:
+    now_ts = time.time()
+    client = get_redis_client()
+    if client:
+        try:
+            if client.get(key):
+                return True
+        except Exception:
+            pass
+    with _public_contact_rate_limit_lock:
+        expires_at = float(_public_contact_duplicate_fallback.get(key, 0.0) or 0.0)
+        if expires_at <= now_ts:
+            _public_contact_duplicate_fallback.pop(key, None)
+            return False
+        return True
+
+
+def _mark_public_contact_duplicate(key: str) -> None:
+    expires_at = time.time() + float(PUBLIC_CONTACT_DUPLICATE_WINDOW_SEC)
+    ttl_sec = max(1, int(math.ceil(float(PUBLIC_CONTACT_DUPLICATE_WINDOW_SEC))))
+    client = get_redis_client()
+    if client:
+        try:
+            client.setex(key, ttl_sec, "1")
+        except Exception:
+            pass
+    with _public_contact_rate_limit_lock:
+        _public_contact_duplicate_fallback[key] = expires_at
+
+
+def _record_public_contact_submission(remote_ip: str, subject: str, body: str) -> None:
+    now_ts = time.time()
+    rate_limit_key = _public_contact_rate_limit_key(remote_ip)
+    count, expires_at = _get_public_contact_rate_limit_state(rate_limit_key)
+    if expires_at <= now_ts:
+        expires_at = now_ts + float(PUBLIC_CONTACT_RATE_LIMIT_WINDOW_SEC)
+        count = 0
+    _set_public_contact_rate_limit_state(rate_limit_key, count + 1, expires_at)
+    _mark_public_contact_duplicate(_public_contact_duplicate_key(remote_ip, subject, body))
+
+
+def _enforce_public_contact_abuse_guards(request: Request, subject: str, body: str) -> None:
+    remote_ip = _public_contact_remote_ip(request)
+    rate_limit_key = _public_contact_rate_limit_key(remote_ip)
+    count, expires_at = _get_public_contact_rate_limit_state(rate_limit_key)
+    if count >= PUBLIC_CONTACT_RATE_LIMIT_MAX_REQUESTS and expires_at > time.time():
+        raise HTTPException(429, "お問い合わせの送信回数が多すぎます。しばらく待ってから再試行してください。")
+    duplicate_key = _public_contact_duplicate_key(remote_ip, subject, body)
+    if _public_contact_duplicate_exists(duplicate_key):
+        raise HTTPException(429, "同じ内容のお問い合わせは少し時間をおいてから送信してください。")
+
+
+def _get_auth_abuse_rate_limit_state(key: str) -> tuple[int, float]:
+    now_ts = time.time()
+    client = get_redis_client()
+    if client:
+        try:
+            raw = client.get(key)
+            if raw:
+                payload = json.loads(raw)
+                count = max(0, int(payload.get("count") or 0))
+                expires_at = float(payload.get("expires_at") or 0.0)
+                if expires_at > now_ts:
+                    return count, expires_at
+        except Exception:
+            pass
+    with _auth_abuse_lock:
+        count, expires_at = _auth_abuse_rate_limit_fallback.get(key, (0, 0.0))
+        if expires_at <= now_ts:
+            _auth_abuse_rate_limit_fallback.pop(key, None)
+            return 0, 0.0
+        return max(0, int(count or 0)), float(expires_at or 0.0)
+
+
+def _set_auth_abuse_rate_limit_state(key: str, count: int, expires_at: float) -> None:
+    ttl_sec = max(1, int(math.ceil(expires_at - time.time())))
+    payload = {"count": max(0, int(count or 0)), "expires_at": float(expires_at)}
+    client = get_redis_client()
+    if client:
+        try:
+            client.setex(key, ttl_sec, json.dumps(payload, ensure_ascii=True))
+        except Exception:
+            pass
+    with _auth_abuse_lock:
+        _auth_abuse_rate_limit_fallback[key] = (payload["count"], payload["expires_at"])
+
+
+def _clear_auth_abuse_rate_limit_state(key: str) -> None:
+    redis_delete(key)
+    with _auth_abuse_lock:
+        _auth_abuse_rate_limit_fallback.pop(key, None)
+
+
+def _auth_abuse_marker_exists(key: str) -> bool:
+    now_ts = time.time()
+    client = get_redis_client()
+    if client:
+        try:
+            if client.get(key):
+                return True
+        except Exception:
+            pass
+    with _auth_abuse_lock:
+        expires_at = float(_auth_abuse_marker_fallback.get(key, 0.0) or 0.0)
+        if expires_at <= now_ts:
+            _auth_abuse_marker_fallback.pop(key, None)
+            return False
+        return True
+
+
+def _mark_auth_abuse_marker(key: str, ttl_sec: int) -> None:
+    expires_at = time.time() + float(ttl_sec)
+    ttl = max(1, int(math.ceil(float(ttl_sec))))
+    client = get_redis_client()
+    if client:
+        try:
+            client.setex(key, ttl, "1")
+        except Exception:
+            pass
+    with _auth_abuse_lock:
+        _auth_abuse_marker_fallback[key] = expires_at
+
+
+def _register_email_start_rate_limit_key(remote_ip: str, email: str) -> str:
+    digest = hashlib.sha256(f"{remote_ip.strip().lower()[:128]}|{email.strip().lower()[:320]}".encode("utf-8")).hexdigest()
+    return f"rate_limit:register_email_start:{digest}"
+
+
+def _register_email_start_cooldown_key(remote_ip: str, email: str) -> str:
+    digest = hashlib.sha256(f"{remote_ip.strip().lower()[:128]}|{email.strip().lower()[:320]}".encode("utf-8")).hexdigest()
+    return f"cooldown:register_email_start:{digest}"
+
+
+def _enforce_register_email_start_abuse_guards(request: Request, email: str) -> tuple[str, str, str]:
+    remote_ip = _public_contact_remote_ip(request)
+    rate_limit_key = _register_email_start_rate_limit_key(remote_ip, email)
+    cooldown_key = _register_email_start_cooldown_key(remote_ip, email)
+    count, expires_at = _get_auth_abuse_rate_limit_state(rate_limit_key)
+    if count >= REGISTER_EMAIL_START_RATE_LIMIT_MAX_REQUESTS and expires_at > time.time():
+        raise HTTPException(429, "認証コード送信の試行回数が多すぎます。しばらく待ってから再試行してください。")
+    if _auth_abuse_marker_exists(cooldown_key):
+        raise HTTPException(429, "認証コードは少し時間をおいてから再送してください。")
+    return remote_ip, rate_limit_key, cooldown_key
+
+
+def _record_register_email_start_attempt(rate_limit_key: str, cooldown_key: str) -> None:
+    now_ts = time.time()
+    count, expires_at = _get_auth_abuse_rate_limit_state(rate_limit_key)
+    if expires_at <= now_ts:
+        expires_at = now_ts + float(REGISTER_EMAIL_START_RATE_LIMIT_WINDOW_SEC)
+        count = 0
+    _set_auth_abuse_rate_limit_state(rate_limit_key, count + 1, expires_at)
+    _mark_auth_abuse_marker(cooldown_key, REGISTER_EMAIL_START_COOLDOWN_SEC)
+
+
+def _login_start_failure_key(remote_ip: str, username: str) -> str:
+    digest = hashlib.sha256(f"{remote_ip.strip().lower()[:128]}|{username.strip().lower()[:128]}".encode("utf-8")).hexdigest()
+    return f"rate_limit:login_start_failure:{digest}"
+
+
+def _login_start_send_cooldown_key(remote_ip: str, username: str) -> str:
+    digest = hashlib.sha256(f"{remote_ip.strip().lower()[:128]}|{username.strip().lower()[:128]}".encode("utf-8")).hexdigest()
+    return f"cooldown:login_start_send:{digest}"
+
+
+def _enforce_login_start_abuse_guards(request: Request, username: str) -> tuple[str, str, str]:
+    remote_ip = _public_contact_remote_ip(request)
+    failure_key = _login_start_failure_key(remote_ip, username)
+    send_cooldown_key = _login_start_send_cooldown_key(remote_ip, username)
+    count, expires_at = _get_auth_abuse_rate_limit_state(failure_key)
+    if count >= LOGIN_START_MAX_FAILURES and expires_at > time.time():
+        raise HTTPException(429, "ログイン試行回数が多すぎます。しばらく待ってから再試行してください。")
+    return remote_ip, failure_key, send_cooldown_key
+
+
+def _record_login_start_failure(failure_key: str) -> None:
+    now_ts = time.time()
+    count, expires_at = _get_auth_abuse_rate_limit_state(failure_key)
+    if expires_at <= now_ts:
+        expires_at = now_ts + float(LOGIN_START_FAILURE_WINDOW_SEC)
+        count = 0
+    _set_auth_abuse_rate_limit_state(failure_key, count + 1, expires_at)
+
+
+def _clear_login_start_failure(failure_key: str) -> None:
+    _clear_auth_abuse_rate_limit_state(failure_key)
+
+
+def _enforce_login_start_send_cooldown(send_cooldown_key: str) -> None:
+    if _auth_abuse_marker_exists(send_cooldown_key):
+        raise HTTPException(429, "認証コードは少し時間をおいてから再送してください。")
+
+
+def _mark_login_start_send(send_cooldown_key: str) -> None:
+    _mark_auth_abuse_marker(send_cooldown_key, LOGIN_START_CODE_COOLDOWN_SEC)
+
+
+def _get_ai_chat_rate_limit_state(key: str) -> tuple[int, float]:
+    now_ts = time.time()
+    client = get_redis_client()
+    if client:
+        try:
+            raw = client.get(key)
+            if raw:
+                payload = json.loads(raw)
+                count = max(0, int(payload.get("count") or 0))
+                expires_at = float(payload.get("expires_at") or 0.0)
+                if expires_at > now_ts:
+                    return count, expires_at
+        except Exception:
+            pass
+    with _ai_chat_rate_limit_lock:
+        count, expires_at = _ai_chat_rate_limit_fallback.get(key, (0, 0.0))
+        if expires_at <= now_ts:
+            _ai_chat_rate_limit_fallback.pop(key, None)
+            return 0, 0.0
+        return max(0, int(count or 0)), float(expires_at or 0.0)
+
+
+def _set_ai_chat_rate_limit_state(key: str, count: int, expires_at: float) -> None:
+    ttl_sec = max(1, int(math.ceil(expires_at - time.time())))
+    payload = {"count": max(0, int(count or 0)), "expires_at": float(expires_at)}
+    client = get_redis_client()
+    if client:
+        try:
+            client.setex(key, ttl_sec, json.dumps(payload, ensure_ascii=True))
+        except Exception:
+            pass
+    with _ai_chat_rate_limit_lock:
+        _ai_chat_rate_limit_fallback[key] = (payload["count"], payload["expires_at"])
+
+
+def _ai_chat_rate_limit_actor_key(namespace: str, remote_ip: str, actor_kind: str, actor_value: str) -> str:
+    digest = hashlib.sha256(
+        f"{namespace}|{remote_ip.strip().lower()[:128]}|{actor_kind}|{actor_value.strip().lower()[:128]}".encode("utf-8")
+    ).hexdigest()
+    return f"rate_limit:{namespace}:{digest}"
+
+
+def _enforce_ai_chat_rate_limit(
+    *,
+    namespace: str,
+    remote_ip: str,
+    user: models.User | None = None,
+    guest_id: str | None = None,
+    window_sec: int,
+    user_max_requests: int,
+    guest_max_requests: int,
+) -> None:
+    if user is not None:
+        actor_kind = "user"
+        actor_value = str(getattr(user, "id", "") or "").strip() or str(getattr(user, "username", "") or "").strip() or "unknown"
+        max_requests = max(1, int(user_max_requests or 1))
+    else:
+        actor_kind = "guest"
+        actor_value = (guest_id or "").strip() or remote_ip or "unknown"
+        max_requests = max(1, int(guest_max_requests or 1))
+    key = _ai_chat_rate_limit_actor_key(namespace, remote_ip, actor_kind, actor_value)
+    now_ts = time.time()
+    count, expires_at = _get_ai_chat_rate_limit_state(key)
+    if count >= max_requests and expires_at > now_ts:
+        raise HTTPException(429, "AIチャットの利用回数が多すぎます。しばらく待ってから再試行してください。")
+    if expires_at <= now_ts:
+        expires_at = now_ts + float(max(1, int(window_sec or 1)))
+        count = 0
+    _set_ai_chat_rate_limit_state(key, count + 1, expires_at)
+
+
 def create_admin_token(username: str) -> str:
     if not ADMIN_JWT_SECRET:
         raise HTTPException(500, "ADMIN_JWT_SECRET 未設定")
@@ -3975,10 +4429,30 @@ def verify_admin_token(token: str) -> dict:
     return payload
 
 
+def _admin_request_needs_csrf(request: Request) -> bool:
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return False
+    path = (request.url.path or "").strip()
+    if not path.startswith("/api/admin/"):
+        return False
+    if path == "/api/admin/auth/login":
+        return False
+    return True
+
+
+def _ensure_admin_csrf(request: Request) -> None:
+    csrf_cookie = (request.cookies.get(ADMIN_CSRF_COOKIE_NAME) or "").strip()
+    csrf_header = (request.headers.get("X-CSRF-Token") or "").strip()
+    if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+        raise HTTPException(403, "CSRF トークンが無効です")
+
+
 def require_admin(request: Request) -> None:
     admin_cookie = request.cookies.get("admin_token")
     if admin_cookie:
         verify_admin_token(admin_cookie)
+        if _admin_request_needs_csrf(request):
+            _ensure_admin_csrf(request)
         return
     # 移行期間用: 旧 X-Admin-Token を許可 (後で削除)
     if ADMIN_API_KEY:
@@ -3999,6 +4473,19 @@ def get_admin_username(request: Request) -> str | None:
     return payload.get("sub")
 
 
+def _issue_admin_csrf_cookie(response: Response) -> None:
+    csrf_token = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key=ADMIN_CSRF_COOKIE_NAME,
+        value=csrf_token,
+        httponly=False,
+        secure=ADMIN_COOKIE_SECURE,
+        samesite="lax",
+        max_age=ADMIN_JWT_EXPIRES_MINUTES * 60,
+        path="/",
+    )
+
+
 def _set_admin_cookie(response: Response, token: str | None) -> None:
     if token:
         response.set_cookie(
@@ -4010,8 +4497,10 @@ def _set_admin_cookie(response: Response, token: str | None) -> None:
             max_age=ADMIN_JWT_EXPIRES_MINUTES * 60,
             path="/",
         )
+        _issue_admin_csrf_cookie(response)
     else:
         response.delete_cookie(key="admin_token", path="/")
+        response.delete_cookie(key=ADMIN_CSRF_COOKIE_NAME, path="/")
 
 
 def calc_platform_fee(amount_yen: int) -> int:
@@ -4941,6 +5430,8 @@ class PublicContactRequest(BaseModel):
     body: str
     name: str | None = None
     email: str | None = None
+    recaptcha_token: str | None = None
+    recaptcha_action: str | None = None
 
 
 class AdminContactMessageOut(BaseModel):
@@ -5226,11 +5717,13 @@ class AdminIndexNowSubmitOut(BaseModel):
 @app.post("/api/auth/register/email/start")
 def start_register_email_verification(
     payload: RegisterEmailStartRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     email = _normalize_email(str(payload.email))
     if not email:
         raise HTTPException(400, "メールアドレスを入力してください")
+    _, rate_limit_key, cooldown_key = _enforce_register_email_start_abuse_guards(request, email)
 
     exists = (
         db.query(models.User)
@@ -5238,7 +5731,8 @@ def start_register_email_verification(
         .first()
     )
     if exists:
-        raise HTTPException(400, "そのメールアドレスは既に使われています")
+        _record_register_email_start_attempt(rate_limit_key, cooldown_key)
+        return {"ok": True, "expires_minutes": REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES}
 
     now = datetime.utcnow()
     db.query(models.RegisterEmailVerificationToken).filter(
@@ -5273,6 +5767,7 @@ def start_register_email_verification(
         raise HTTPException(500, f"認証コード送信に失敗しました: {e!r}")
 
     db.commit()
+    _record_register_email_start_attempt(rate_limit_key, cooldown_key)
     return {"ok": True, "expires_minutes": REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES}
 
 
@@ -6053,6 +6548,15 @@ def public_create_contact_message(
         user = get_optional_current_user(request, db)
     except HTTPException:
         user = None
+    if user is None:
+        recaptcha_ok = verify_recaptcha_token(
+            payload.recaptcha_token or "",
+            remote_ip=_public_contact_remote_ip(request),
+            expected_action=(payload.recaptcha_action or "CONTACT_MESSAGE"),
+        )
+        if not recaptcha_ok:
+            raise HTTPException(400, "reCAPTCHA の検証に失敗しました")
+        _enforce_public_contact_abuse_guards(request, subject, body)
 
     sender_label = None
     if user:
@@ -6082,21 +6586,27 @@ def public_create_contact_message(
     db.refresh(message)
 
     send_public_contact_email(subject, body_with_sender)
+    if user is None:
+        _record_public_contact_submission(_public_contact_remote_ip(request), subject, body)
     return message
 
 
 @app.post("/api/admin/auth/login")
-def admin_login(payload: AdminLoginRequest, response: Response):
+def admin_login(payload: AdminLoginRequest, request: Request, response: Response):
     if not ADMIN_USERNAME or not ADMIN_PASSWORD_HASH:
         raise HTTPException(500, "管理者認証が未設定です")
+    rate_limit_key = _enforce_admin_login_rate_limit(request, payload.username, response)
     if payload.username != ADMIN_USERNAME:
+        _record_admin_login_failure(rate_limit_key)
         raise HTTPException(401, "ログインに失敗しました")
     raw_password = payload.password or ""
     password_bytes = raw_password.encode("utf-8")
     if len(password_bytes) > 72:
         raw_password = password_bytes[:72].decode("utf-8", errors="ignore")
     if not admin_pwd_context.verify(raw_password, ADMIN_PASSWORD_HASH):
+        _record_admin_login_failure(rate_limit_key)
         raise HTTPException(401, "ログインに失敗しました")
+    _clear_admin_login_rate_limit_state(rate_limit_key)
     token = create_admin_token(payload.username)
     _set_admin_cookie(response, token)
     return {"ok": True}
@@ -6109,11 +6619,13 @@ def admin_logout(response: Response):
 
 
 @app.get("/api/admin/auth/me")
-def admin_me(request: Request):
+def admin_me(request: Request, response: Response):
     admin_cookie = request.cookies.get("admin_token")
     if not admin_cookie:
         raise HTTPException(401, "未ログインです")
     verify_admin_token(admin_cookie)
+    if not (request.cookies.get(ADMIN_CSRF_COOKIE_NAME) or "").strip():
+        _issue_admin_csrf_cookie(response)
     return {"is_admin": True}
 
 
@@ -11853,10 +12365,26 @@ async def ai_chat_next_user_lines(
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
         _ensure_ai_chat_access(viewer, db)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_text",
+            remote_ip=_public_contact_remote_ip(request),
+            user=viewer,
+            window_sec=AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
     else:
         guest_id = get_or_set_ai_guest_id(request, response)
         guest_usage = get_ai_chat_guest_usage(db, guest_id)
         _ensure_ai_chat_guest_access(guest_usage)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_text",
+            remote_ip=_public_contact_remote_ip(request),
+            guest_id=guest_id,
+            window_sec=AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = _find_accessible_ai_chat_character(
@@ -11986,6 +12514,14 @@ async def ai_chat_generate_image(
     character: models.AIChatCharacter | None = None
     if viewer is not None:
         _ensure_ai_chat_access(viewer, db)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_image",
+            remote_ip=_public_contact_remote_ip(request),
+            user=viewer,
+            window_sec=AI_CHAT_IMAGE_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_IMAGE_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_IMAGE_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
         if req.character_id is not None:
             character = _find_editable_ai_chat_character(
                 db=db,
@@ -12485,10 +13021,26 @@ async def ai_chat(
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
         _ensure_ai_chat_access(viewer, db)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_text",
+            remote_ip=_public_contact_remote_ip(request),
+            user=viewer,
+            window_sec=AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
     else:
         guest_id = get_or_set_ai_guest_id(request, response)
         guest_usage = get_ai_chat_guest_usage(db, guest_id)
         _ensure_ai_chat_guest_access(guest_usage)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_text",
+            remote_ip=_public_contact_remote_ip(request),
+            guest_id=guest_id,
+            window_sec=AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = _find_accessible_ai_chat_character(
@@ -12828,10 +13380,26 @@ async def ai_chat_auto_continue(
     viewer = get_optional_current_user(request, db)
     if viewer is not None:
         _ensure_ai_chat_access(viewer, db)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_text",
+            remote_ip=_public_contact_remote_ip(request),
+            user=viewer,
+            window_sec=AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
     else:
         guest_id = get_or_set_ai_guest_id(request, response)
         guest_usage = get_ai_chat_guest_usage(db, guest_id)
         _ensure_ai_chat_guest_access(guest_usage)
+        _enforce_ai_chat_rate_limit(
+            namespace="ai_chat_text",
+            remote_ip=_public_contact_remote_ip(request),
+            guest_id=guest_id,
+            window_sec=AI_CHAT_TEXT_RATE_LIMIT_WINDOW_SEC,
+            user_max_requests=AI_CHAT_TEXT_RATE_LIMIT_USER_MAX_REQUESTS,
+            guest_max_requests=AI_CHAT_TEXT_RATE_LIMIT_GUEST_MAX_REQUESTS,
+        )
     if req.character_id is not None:
         user = require_current_user(request, db)
         character = _find_accessible_ai_chat_character(
@@ -24172,14 +24740,17 @@ def send_2fa_email(to_email: str, code: str):
 
 
 @app.post("/api/auth/login/start")
-def login_start(payload: UserLogin, db: Session = Depends(get_db)):
+def login_start(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
     """
     1段階目: ユーザー名・パスワードを受け取り、2FAコードをメールで送る。
     フロント: /api/auth/login/start に {username, password} を送る。
     """
+    _, failure_key, send_cooldown_key = _enforce_login_start_abuse_guards(request, payload.username)
     user = get_user_by_username(db, payload.username)
     if not user or not verify_password(payload.password, user.password_hash):
+        _record_login_start_failure(failure_key)
         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
+    _clear_login_start_failure(failure_key)
 
     # メール不達フラグのユーザーは、最長60日間だけメール認証をスキップする。
     if bool(getattr(user, "email_address_invalid", False)):
@@ -24204,6 +24775,7 @@ def login_start(payload: UserLogin, db: Session = Depends(get_db)):
     # 期限切れのメール不達ユーザーもここへ来る（メール認証が必要）。
     if not user.email:
         raise HTTPException(400, "メールアドレスが未設定のためログインできません")
+    _enforce_login_start_send_cooldown(send_cooldown_key)
 
     # 6桁のランダムコード生成
     code = f"{secrets.randbelow(1000000):06d}"
@@ -24216,6 +24788,7 @@ def login_start(payload: UserLogin, db: Session = Depends(get_db)):
 
     # メール送信（＋ログ）
     send_2fa_email(user.email, code)
+    _mark_login_start_send(send_cooldown_key)
 
     return {"ok": True, "two_factor_skipped": False}
 

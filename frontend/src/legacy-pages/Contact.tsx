@@ -1,10 +1,14 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useI18n } from "../lib/i18n";
-import { apiFetch } from "../lib/api";
+import { apiFetch, authTokenExists } from "../lib/api";
 import { getErrorMessage } from "../lib/errorUtils";
+
+const RECAPTCHA_SITE_KEY = (process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || "").toString().trim();
 
 export default function Contact() {
   const { t } = useI18n();
+  const isLoggedIn = authTokenExists();
+  const shouldUseRecaptcha = !isLoggedIn && !!RECAPTCHA_SITE_KEY;
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [subject, setSubject] = useState("");
@@ -12,6 +16,58 @@ export default function Contact() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [recaptchaReady, setRecaptchaReady] = useState(!shouldUseRecaptcha);
+
+  useEffect(() => {
+    if (!shouldUseRecaptcha) return;
+    if (typeof window === "undefined") return;
+    setRecaptchaReady(false);
+
+    const scriptId = "google-recaptcha-enterprise-js";
+    let script = document.getElementById(scriptId);
+    if (!script) {
+      script = document.createElement("script");
+      script.id = scriptId;
+      script.src = `https://www.google.com/recaptcha/enterprise.js?render=${encodeURIComponent(RECAPTCHA_SITE_KEY)}`;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    const onLoad = () => setRecaptchaReady(true);
+    const onError = () => setRecaptchaReady(false);
+    script.addEventListener("load", onLoad);
+    script.addEventListener("error", onError);
+    if (window.grecaptcha?.enterprise) {
+      setRecaptchaReady(true);
+    }
+    return () => {
+      script.removeEventListener("load", onLoad);
+      script.removeEventListener("error", onError);
+    };
+  }, [shouldUseRecaptcha]);
+
+  const requestRecaptchaToken = async (action: string) => {
+    if (!shouldUseRecaptcha) return "";
+    const grecaptchaEnterprise = window.grecaptcha?.enterprise;
+    if (!grecaptchaEnterprise) {
+      throw new Error(t({ ja: "reCAPTCHAの初期化に失敗しました", en: "Failed to initialize reCAPTCHA." }));
+    }
+    return await new Promise((resolve, reject) => {
+      grecaptchaEnterprise.ready(async () => {
+        try {
+          const token = await grecaptchaEnterprise.execute(RECAPTCHA_SITE_KEY, { action });
+          if (!token) {
+            reject(new Error(t({ ja: "reCAPTCHAトークン取得に失敗しました", en: "Failed to get reCAPTCHA token." })));
+            return;
+          }
+          resolve(token);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -27,6 +83,7 @@ export default function Contact() {
 
     try {
       setSending(true);
+      const recaptchaToken = shouldUseRecaptcha ? await requestRecaptchaToken("CONTACT_MESSAGE") : "";
       await apiFetch("/api/contact/messages", {
         method: "POST",
         auth: true,
@@ -35,6 +92,8 @@ export default function Contact() {
           email: email.trim() || null,
           subject: subject.trim(),
           body: body.trim(),
+          recaptcha_token: recaptchaToken,
+          recaptcha_action: "CONTACT_MESSAGE",
         },
       });
       setSuccess(t({ ja: "送信しました。", en: "Sent successfully." }));
@@ -58,6 +117,19 @@ export default function Contact() {
           en: "Send a message to the operator. Add an email address if you need a reply.",
         })}
       </p>
+      {shouldUseRecaptcha && (
+        <p style={{ marginBottom: 16, fontSize: 13, color: recaptchaReady ? "var(--muted-text, #666)" : "#b45309" }}>
+          {recaptchaReady
+            ? t({
+                ja: "未ログイン時は bot 対策のため reCAPTCHA が適用されます。",
+                en: "reCAPTCHA is applied for guest submissions.",
+              })
+            : t({
+                ja: "reCAPTCHA を読み込み中です。しばらく待ってから送信してください。",
+                en: "Loading reCAPTCHA. Please wait before sending.",
+              })}
+        </p>
+      )}
       <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
         <input
           type="text"
@@ -92,7 +164,7 @@ export default function Contact() {
         <button
           type="submit"
           className="btn btn-border"
-          disabled={sending || !subject.trim() || !body.trim()}
+          disabled={sending || !subject.trim() || !body.trim() || (shouldUseRecaptcha && !recaptchaReady)}
         >
           {sending ? t({ ja: "送信中...", en: "Sending..." }) : t({ ja: "送信", en: "Send" })}
         </button>
