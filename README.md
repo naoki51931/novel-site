@@ -71,6 +71,13 @@ FastAPI + React + MySQL + nginx + Docker で構成した小説投稿サイトで
 
 前提: Docker / Docker Compose がインストール済み
 
+初回は用途に応じて次のどちらかを `.env` にコピーし、各シークレット値を埋めてください。
+
+- ローカル開発: `.env.development.example`
+- 本番用の最小構成: `.env.production.example`
+
+`.env.example` はローカル開発向けの互換テンプレートです。
+
 ```bash
 git clone <your-repo-url>
 cd novel-site
@@ -138,6 +145,26 @@ npm run dev
   - `frontend/dist` は編集せず `frontend/src` を編集し再ビルドする。
 - 機密情報管理:
   - `.env` や証明書ファイルの取り扱いに注意（本番鍵は安全な保管先で管理）。
+
+## API 防御強化メモ（2026-05）
+
+- 優先順:
+  - `POST /api/admin/auth/login`
+  - `/api/admin/*` の状態変更系
+  - `POST /api/contact/messages`
+  - `POST /api/auth/login/start` と `POST /api/auth/register/email/start`
+  - `/api/ai/chat*` と画像生成系
+- 2026-05 時点で導入済み:
+  - 管理者ログイン失敗制限: 既定 `15分で5回`
+  - 管理系状態変更 API の CSRF 防御: `admin_csrf_token` Cookie と `X-CSRF-Token` ヘッダ照合
+  - 公開問い合わせ: ゲスト送信時 reCAPTCHA、既定 `15分で5回`、短時間重複投稿抑止
+  - 登録メール送信: `email + IP` 単位で既定 `15分で5回`、再送クールダウン `60秒`
+  - ログイン開始: `username + IP` 単位で失敗既定 `15分で5回`、2FA コード再送クールダウン `60秒`
+  - AI チャット系: テキスト `user 20回/分`, `guest 8回/分`
+  - AI 画像生成: `user 5回/5分`, `guest 2回/5分`
+- 補足:
+  - 保存先は Redis 優先、未使用時はプロセス内メモリへフォールバック。
+  - 制限値は環境変数で上書きできる。変更時は README か AGENTS の運用メモも更新する。
 
 ## 現状の開発要点（2026-03 時点）
 
