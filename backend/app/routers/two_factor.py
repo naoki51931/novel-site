@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import secrets
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
@@ -27,8 +28,19 @@ class EmailLoginToken(Base):
     consumed = Column(Boolean, default=False, nullable=False)
 
 
-# このモジュールが読み込まれたタイミングでテーブルを作成（既存には影響なし）
-Base.metadata.create_all(bind=engine)
+_email_login_token_table_ready = False
+_email_login_token_table_lock = threading.Lock()
+
+
+def ensure_email_login_token_table() -> None:
+    global _email_login_token_table_ready
+    if _email_login_token_table_ready:
+        return
+    with _email_login_token_table_lock:
+        if _email_login_token_table_ready:
+            return
+        Base.metadata.create_all(bind=engine)
+        _email_login_token_table_ready = True
 
 
 # ============================
@@ -64,6 +76,7 @@ def request_email_code(payload: EmailCodeRequest, db: Session = Depends(get_db))
     email 宛に6桁コードを送るエンドポイント。
     ユーザーが存在しない場合も 200 を返して「存在有無」は漏らさない。
     """
+    ensure_email_login_token_table()
     user = db.query(User).filter(User.email == payload.email).first()  # User に email カラムがある想定
 
     if user:
@@ -90,6 +103,7 @@ def login_with_email_code(payload: EmailCodeVerify, db: Session = Depends(get_db
     """
     email + 6桁コードで JWT を発行する。
     """
+    ensure_email_login_token_table()
     now = datetime.utcnow()
     token = (
         db.query(EmailLoginToken)

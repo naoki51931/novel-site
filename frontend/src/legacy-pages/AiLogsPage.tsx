@@ -129,8 +129,8 @@ export default function AiLogsPage() {
       <h2>{t({ ja: "AI利用履歴", en: "AI Usage History" })}</h2>
       <p style={{ fontSize: "0.9rem", color: "#666" }}>
         {t({
-          ja: "過去に実行した AI 小説生成の履歴です。日付・モデル・要約を確認できます。",
-          en: "History of AI novel generations. Check date, model, and summary.",
+          ja: "過去に実行した AI 小説生成や翻訳の履歴です。日付・モデル・トークン数・要約を確認できます。",
+          en: "History of AI novel generations and translations. Check date, model, tokens, and summary.",
         })}
       </p>
 
@@ -142,7 +142,7 @@ export default function AiLogsPage() {
 
       {!loading && !error && logs.length === 0 && (
         <p style={{ marginTop: 12, color: "#666" }}>
-          {t({ ja: "まだ AI 小説生成の履歴がありません。", en: "No AI generation history yet." })}
+          {t({ ja: "まだ AI 利用履歴がありません。", en: "No AI usage history yet." })}
         </p>
       )}
 

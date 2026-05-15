@@ -12,9 +12,11 @@ type TranslationFn = (value: Record<string, string>, vars?: Record<string, strin
 type BirthDateParts = { year: number; month: number; day: number };
 type ApiValidationIssue = { loc?: unknown[]; msg?: string };
 type AiModelOption = { value: string; labelJa: string; labelEn: string };
+const DEFAULT_MY_PAGE_AI_MODEL = "google/gemini-2.5-flash";
 
 const AI_MODEL_OPTIONS: AiModelOption[] = [
-  { value: "", labelJa: "デフォルト", labelEn: "Default" },
+  { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
+  { value: "google/gemini-3-flash-preview", labelJa: "Gemini 3 Flash Preview（OpenRouter）", labelEn: "Gemini 3 Flash Preview (OpenRouter)" },
   { value: "gpt-5.2", labelJa: "GPT-5.2", labelEn: "GPT-5.2" },
   { value: "gpt-5", labelJa: "GPT-5", labelEn: "GPT-5" },
   { value: "gpt-5-mini", labelJa: "GPT-5 Mini", labelEn: "GPT-5 Mini" },
@@ -22,7 +24,6 @@ const AI_MODEL_OPTIONS: AiModelOption[] = [
   { value: "gpt-4.1-mini", labelJa: "GPT-4.1 Mini", labelEn: "GPT-4.1 Mini" },
   { value: "openai/chatgpt-4o-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
   { value: "google/gemini-2.5-pro", labelJa: "Gemini 2.5 Pro（OpenRouter）", labelEn: "Gemini 2.5 Pro (OpenRouter)" },
-  { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
   { value: "moonshotai/kimi-k2", labelJa: "Kimi（OpenRouter）", labelEn: "Kimi (OpenRouter)" },
   { value: "deepseek/deepseek-chat", labelJa: "DeepSeek（OpenRouter）", labelEn: "DeepSeek (OpenRouter)" },
   { value: "deepseek/deepseek-reasoner", labelJa: "DeepSeek Reasoner（OpenRouter）", labelEn: "DeepSeek Reasoner (OpenRouter)" },
@@ -63,6 +64,12 @@ const formatApiErrorDetail = (detail: unknown, fallback: string, t: TranslationF
   return fallback;
 };
 
+const getRequiredFieldsHelp = (t: TranslationFn) =>
+  t({
+    ja: "必須項目: ユーザー名、生年月日",
+    en: "Required fields: Username and birth date",
+  });
+
 const parseBirthDate = (value: unknown, maxYear: number): BirthDateParts | null => {
   const m = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
@@ -87,11 +94,11 @@ export default function AccountSettings() {
   const [profileHeaderUrl, setProfileHeaderUrl] = useState("");
   const [profileWebsiteUrl, setProfileWebsiteUrl] = useState("");
   const [profileXUrl, setProfileXUrl] = useState("");
-  const [aiSummaryModel, setAiSummaryModel] = useState("");
-  const [aiTitleModel, setAiTitleModel] = useState("");
-  const [aiTagModel, setAiTagModel] = useState("");
-  const [aiStoryAgentModel, setAiStoryAgentModel] = useState("");
-  const [aiCommentRevisionModel, setAiCommentRevisionModel] = useState("");
+  const [aiSummaryModel, setAiSummaryModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
+  const [aiTitleModel, setAiTitleModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
+  const [aiTagModel, setAiTagModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
+  const [aiStoryAgentModel, setAiStoryAgentModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
+  const [aiCommentRevisionModel, setAiCommentRevisionModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
   const [aiStoryAgentVisible, setAiStoryAgentVisible] = useState(true);
   const [theme, setThemeState] = useState(() => {
     try {
@@ -168,11 +175,11 @@ export default function AccountSettings() {
         setProfileHeaderUrl(data.profile_header_url || "");
         setProfileWebsiteUrl(data.profile_website_url || "");
         setProfileXUrl(data.profile_x_url || "");
-        setAiSummaryModel(data.ai_summary_model || "");
-        setAiTitleModel(data.ai_title_model || "");
-        setAiTagModel(data.ai_tag_model || "");
-        setAiStoryAgentModel(data.ai_story_agent_model || "");
-        setAiCommentRevisionModel(data.ai_comment_revision_model || "");
+        setAiSummaryModel(data.ai_summary_model || DEFAULT_MY_PAGE_AI_MODEL);
+        setAiTitleModel(data.ai_title_model || DEFAULT_MY_PAGE_AI_MODEL);
+        setAiTagModel(data.ai_tag_model || DEFAULT_MY_PAGE_AI_MODEL);
+        setAiStoryAgentModel(data.ai_story_agent_model || DEFAULT_MY_PAGE_AI_MODEL);
+        setAiCommentRevisionModel(data.ai_comment_revision_model || DEFAULT_MY_PAGE_AI_MODEL);
         setAiStoryAgentVisible(data.ai_story_agent_visible !== false);
       })
       .catch((e) =>
@@ -253,6 +260,12 @@ export default function AccountSettings() {
             { status: res.status }
           );
         }
+        if (res.status >= 500) {
+          msg = `${msg} ${t({
+            ja: "入力内容を確認してください。",
+            en: "Please check your input.",
+          })} ${getRequiredFieldsHelp(t)}.`;
+        }
         throw new Error(msg);
       }
 
@@ -278,6 +291,9 @@ export default function AccountSettings() {
   return (
     <div>
       <h2>{t({ ja: "マイページ設定", en: "Account Settings" })}</h2>
+      <p style={{ fontSize: 13, color: "var(--muted-text)" }}>
+        {getRequiredFieldsHelp(t)}
+      </p>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 16 }}>
@@ -398,8 +414,8 @@ export default function AccountSettings() {
             </div>
             <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted-text)" }}>
               {t({
-                ja: "デフォルトを選ぶと既存の標準モデルを使います。OpenRouter や DeepSeek を選ぶと、その機能だけ切り替わります。",
-                en: "Choose Default to keep the existing standard model. Select OpenRouter or DeepSeek to switch only that feature.",
+                ja: "初期設定は Gemini 3 Flash Preview です。項目ごとに別モデルへ変更できます。",
+                en: "The default for these settings is Gemini 3 Flash Preview. You can still switch each feature to a different model.",
               })}
             </div>
           </fieldset>
@@ -407,7 +423,8 @@ export default function AccountSettings() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            {t({ ja: "ユーザー名", en: "Username" })}<br />
+            {t({ ja: "ユーザー名", en: "Username" })}{" "}
+            <span style={{ color: "#c00" }}>*</span><br />
             <input
               type="text"
               value={username}
@@ -506,14 +523,22 @@ export default function AccountSettings() {
 
         <div style={{ marginBottom: 8 }}>
           <label>
-            {t({ ja: "生年月日", en: "Birth date" })}<br />
+            {t({ ja: "生年月日", en: "Birth date" })}{" "}
+            <span style={{ color: "#c00" }}>*</span><br />
             <input
               type="date"
               value={birthDate}
               onChange={(e)=>setBirthDate(e.target.value)}
               style={{ width:"100%", padding:4 }}
+              required
             />
           </label>
+          <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted-text)" }}>
+            {t({
+              ja: "年齢制限作品の閲覧に必要です。未入力だと保存や閲覧でエラーになる場合があります。",
+              en: "This is required to view age-restricted works. If it is missing, saving or viewing may fail.",
+            })}
+          </div>
           <div style={{ marginTop: 8 }}>
             <button
               type="button"

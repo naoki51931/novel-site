@@ -1665,6 +1665,12 @@ def normalize_language(value: str | None) -> str:
 
 def translation_target_languages(source_language: str) -> list[str]:
     src = normalize_language(source_language)
+    if NOVEL_TRANSLATION_ORIGINAL_ONLY:
+        return []
+    if NOVEL_TRANSLATION_JA_EN_ONLY:
+        return [lang for lang in ("ja", "en") if lang != src]
+    if NOVEL_TRANSLATION_ALL_LANGUAGES:
+        return [lang for lang in ("ja", "en", "zh-cn", "zh-tw", "ko") if lang != src]
     if src == "ja":
         return ["en", "zh-cn", "zh-tw", "ko"]
     if src in ("en", "zh-cn", "zh-tw", "ko"):
@@ -1865,6 +1871,9 @@ OAUTH_STATE_EXPIRE_MINUTES = int(os.getenv("OAUTH_STATE_EXPIRE_MINUTES", "10"))
 
 TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "").strip().lower()
 TRANSLATION_MODEL_TEXT = os.getenv("TRANSLATION_MODEL_TEXT", "").strip()
+NOVEL_TRANSLATION_ORIGINAL_ONLY = os.getenv("NOVEL_TRANSLATION_ORIGINAL_ONLY", "0") == "1"
+NOVEL_TRANSLATION_JA_EN_ONLY = os.getenv("NOVEL_TRANSLATION_JA_EN_ONLY", "0") == "1"
+NOVEL_TRANSLATION_ALL_LANGUAGES = os.getenv("NOVEL_TRANSLATION_ALL_LANGUAGES", "0") == "1"
 try:
     TRANSLATION_AI_TIMEOUT_SECONDS = float(os.getenv("TRANSLATION_AI_TIMEOUT_SECONDS", "120") or 120)
 except Exception:
@@ -2471,6 +2480,8 @@ def _run_daily_translation_bot_once() -> dict[str, int]:
             novels_q = novels_q.limit(DAILY_TRANSLATION_BOT_MAX_NOVELS)
         for novel in novels_q.all():
             stats["novels_checked"] += 1
+            if not _can_translate_novel(db, novel=novel):
+                continue
             source_language = normalize_language(getattr(novel, "language", None))
             if _is_novel_translation_complete(db, novel=novel, source_language=source_language):
                 continue
@@ -2498,6 +2509,8 @@ def _run_daily_translation_bot_once() -> dict[str, int]:
         for episode in episodes_q.all():
             stats["episodes_checked"] += 1
             if is_episode_draft(episode):
+                continue
+            if not _can_translate_episode(db, episode=episode):
                 continue
             source_language = normalize_language(getattr(episode, "language", None))
             if _is_episode_translation_complete(db, episode=episode, source_language=source_language):
@@ -2822,6 +2835,7 @@ def _resolve_public_novel_card_translations(
                 background_tasks is not None
                 and enqueued < max(0, int(enqueue_limit))
                 and lang in translation_target_languages(source_language)
+                and _can_translate_novel(db, novel=novel)
                 and _should_enqueue_feed_novel_translation(novel_id, lang)
             ):
                 background_tasks.add_task(_background_upsert_novel_translation, novel_id)
@@ -3950,6 +3964,47 @@ def is_effective_premium_user(user: models.User | None) -> bool:
 def assert_premium_user(user: models.User, detail: str = "この機能はプレミアム会員限定です") -> None:
     if not is_effective_premium_user(user):
         raise HTTPException(status_code=403, detail=detail)
+
+
+def _translation_author_is_premium(
+    db: Session,
+    *,
+    author_id: int | None,
+    cached_user: models.User | None = None,
+) -> bool:
+    if cached_user is not None:
+        return is_effective_premium_user(cached_user)
+    uid = int(author_id or 0)
+    if uid <= 0:
+        return False
+    user = db.query(models.User).filter(models.User.id == uid).first()
+    return is_effective_premium_user(user)
+
+
+def _can_translate_novel(
+    db: Session,
+    *,
+    novel: models.Novel,
+) -> bool:
+    author = getattr(novel, "author", None)
+    return _translation_author_is_premium(
+        db,
+        author_id=int(getattr(novel, "author_id", 0) or 0) or None,
+        cached_user=author,
+    )
+
+
+def _can_translate_episode(
+    db: Session,
+    *,
+    episode: models.Episode,
+) -> bool:
+    novel = getattr(episode, "novel", None)
+    if novel is None and getattr(episode, "novel_id", None):
+        novel = db.query(models.Novel).filter(models.Novel.id == episode.novel_id).first()
+    if novel is None:
+        return False
+    return _can_translate_novel(db, novel=novel)
 
 
 def revalidate_premium_on_login(user: models.User, db: Session) -> None:
@@ -5252,30 +5307,53 @@ def check_ai_quota(db: Session, user_id: int, limit_per_day: int = 10):
 
 def save_ai_log(
     db: Session,
-    user_id: int,
+    *,
+    user_id: int | None,
+    guest_id: str | None,
+    prompt_summary: str | None,
+    tokens_used: int | None,
+    model: str | None,
+    commit: bool = True,
+):
+    if user_id is None and not str(guest_id or "").strip():
+        return
+    log = models.models.AIGenerateLog(
+        user_id=user_id,
+        guest_id=str(guest_id or "").strip()[:64] or None,
+        prompt_summary=(str(prompt_summary or "").strip()[:200] or None),
+        tokens_used=tokens_used,
+        model=(str(model or "").strip()[:64] or None),
+    )
+    db.add(log)
+    if commit:
+        db.commit()
+
+
+def save_ai_novel_request_log(
+    db: Session,
+    *,
+    user_id: int | None,
+    guest_id: str | None,
     req: AINovelRequest,
     resp: AINovelResponse,
 ):
     """
     AI 小説生成1回分の利用ログを DB に保存する。
     """
-    # おおざっぱな要約（タイトル or ジャンル or 登場人物のいずれか）
     summary_src = (
         req.title_hint
         or req.genre
         or req.characters
         or ""
     )
-    prompt_summary = (summary_src or "")[:200]
-
-    log = models.models.AIGenerateLog(
+    save_ai_log(
+        db,
         user_id=user_id,
-        prompt_summary=prompt_summary,
+        guest_id=guest_id,
+        prompt_summary=summary_src,
         tokens_used=resp.used_tokens,
         model=resp.model,
     )
-    db.add(log)
-    db.commit()
 
 
 
@@ -15699,6 +15777,7 @@ def _translate_text_field(
     target_language: str,
     text_value: str,
     field_name: str,
+    usage_stats: dict[str, object] | None = None,
 ) -> str:
     prompt = (
         f"Translate the following {field_name} from {source_language} to {target_language}.\n"
@@ -15709,6 +15788,7 @@ def _translate_text_field(
     data, _tokens, _model = _call_translation_ai_json(
         prompt=prompt,
         system_prompt=system_prompt,
+        usage_stats=usage_stats,
     )
     return str(data.get("text") or "").strip()
 
@@ -15798,6 +15878,7 @@ def _translate_text_with_chunk_fallback(
     field_name: str,
     steps_env: str,
     default_steps: tuple[int, ...] = (1200, 800, 500, 300, 180, 120),
+    usage_stats: dict[str, object] | None = None,
 ) -> str:
     raw_steps = (os.getenv(steps_env, "") or "").strip()
     chunk_steps: list[int] = []
@@ -15833,6 +15914,7 @@ def _translate_text_with_chunk_fallback(
                     target_language=target_language,
                     text_value=chunk,
                     field_name=f"{field_name} chunk {idx}/{total}",
+                    usage_stats=usage_stats,
                 )
                 translated_chunks.append(translated or chunk)
             return "\n\n".join(translated_chunks)
@@ -15871,10 +15953,67 @@ def _translation_provider_candidates() -> list[str]:
     return out
 
 
+def _new_translation_usage_stats() -> dict[str, object]:
+    return {
+        "tokens_used": 0,
+        "has_tokens": False,
+        "provider": None,
+        "model": None,
+    }
+
+
+def _track_translation_usage(
+    usage_stats: dict[str, object] | None,
+    *,
+    provider: str | None,
+    model: str | None,
+    tokens_used: int | None,
+) -> None:
+    if usage_stats is None:
+        return
+    if tokens_used is not None:
+        usage_stats["tokens_used"] = int(usage_stats.get("tokens_used", 0) or 0) + max(0, int(tokens_used or 0))
+        usage_stats["has_tokens"] = True
+    if provider:
+        usage_stats["provider"] = str(provider).strip().lower()
+    if model:
+        usage_stats["model"] = str(model).strip()
+
+
+def _translation_usage_total_tokens(usage_stats: dict[str, object] | None) -> int | None:
+    if not usage_stats or not bool(usage_stats.get("has_tokens")):
+        return None
+    return max(0, int(usage_stats.get("tokens_used", 0) or 0))
+
+
+def _save_translation_ai_log(
+    db: Session,
+    *,
+    user_id: int | None,
+    prompt_summary: str,
+    usage_stats: dict[str, object] | None,
+) -> None:
+    if user_id is None:
+        return
+    save_ai_log(
+        db,
+        user_id=user_id,
+        guest_id=None,
+        prompt_summary=prompt_summary,
+        tokens_used=_translation_usage_total_tokens(usage_stats),
+        model=_format_ai_log_model(
+            str(usage_stats.get("provider") or "").strip().lower() or None,
+            str(usage_stats.get("model") or "").strip() or None,
+        ) if usage_stats else None,
+        commit=False,
+    )
+
+
 def _call_translation_ai_json(
     *,
     prompt: str,
     system_prompt: str,
+    usage_stats: dict[str, object] | None = None,
 ) -> tuple[dict, int | None, str | None]:
     errors: list[str] = []
     primary_provider = (_translation_provider() or "openai").strip().lower()
@@ -15892,7 +16031,7 @@ def _call_translation_ai_json(
         try:
             if provider == "openrouter":
                 assert_openrouter_model_allowed_for_pricing(model)
-            return _run_async(
+            data, tokens_used, model_used = _run_async(
                 call_ai_json(
                     prompt,
                     model=model,
@@ -15901,6 +16040,13 @@ def _call_translation_ai_json(
                     timeout_sec=TRANSLATION_AI_TIMEOUT_SECONDS,
                 )
             )
+            _track_translation_usage(
+                usage_stats,
+                provider=provider,
+                model=model_used or model,
+                tokens_used=tokens_used,
+            )
+            return data, tokens_used, model_used
         except Exception as e:
             errors.append(f"{provider}:{e!r}")
             logger.warning(
@@ -17251,9 +17397,13 @@ def upsert_novel_translation(
     source_language: str,
     tag_names: list[str],
 ) -> None:
+    if not _can_translate_novel(db, novel=novel):
+        return
     provider = _translation_provider()
     targets = translation_target_languages(source_language)
+    author_user_id = int(getattr(novel, "author_id", 0) or 0) or None
     for target_language in targets:
+        usage_stats = _new_translation_usage_stats()
         try:
             prompt = _build_novel_translation_prompt(
                 source_language,
@@ -17266,6 +17416,7 @@ def upsert_novel_translation(
             data, _tokens, _model = _call_translation_ai_json(
                 prompt=prompt,
                 system_prompt=system_prompt,
+                usage_stats=usage_stats,
             )
             title = str(data.get("title") or "").strip() or novel.title
             description = str(data.get("description") or "").strip() or novel.description
@@ -17284,6 +17435,7 @@ def upsert_novel_translation(
                     target_language=target_language,
                     text_value=novel.title or "",
                     field_name="novel title",
+                    usage_stats=usage_stats,
                 ) or novel.title
                 description = _translate_text_with_chunk_fallback(
                     source_language=source_language,
@@ -17291,6 +17443,7 @@ def upsert_novel_translation(
                     text_value=novel.description or "",
                     field_name="novel description",
                     steps_env="NOVEL_TRANSLATION_CHUNK_STEPS",
+                    usage_stats=usage_stats,
                 ) or novel.description
                 tags = []
                 for raw_tag in tag_names:
@@ -17302,6 +17455,7 @@ def upsert_novel_translation(
                         target_language=target_language,
                         text_value=tag_text,
                         field_name="novel tag",
+                        usage_stats=usage_stats,
                     )
                     tags.append((tr_tag or tag_text).strip())
                 tags = _normalize_tag_names(tags)
@@ -17338,6 +17492,12 @@ def upsert_novel_translation(
             translation.title = title
             translation.description = description
             translation.tag_names = serialize_tag_names(tags)
+        _save_translation_ai_log(
+            db,
+            user_id=author_user_id,
+            prompt_summary=f"小説翻訳 N#{int(novel.id)} {source_language}->{target_language}",
+            usage_stats=usage_stats,
+        )
     _notify_multilingual_ready_for_novel(
         db,
         novel=novel,
@@ -17354,12 +17514,20 @@ def upsert_episode_translation(
     force_body: bool = False,
     force_tags: bool = False,
 ) -> None:
+    if not _can_translate_episode(db, episode=episode):
+        return
     provider = _translation_provider()
     targets = translation_target_languages(source_language)
+    episode_novel = getattr(episode, "novel", None)
+    author_user_id = int(getattr(episode_novel, "author_id", 0) or 0) or None
+    if author_user_id is None and getattr(episode, "novel_id", None):
+        episode_novel = db.query(models.Novel).filter(models.Novel.id == episode.novel_id).first()
+        author_user_id = int(getattr(episode_novel, "author_id", 0) or 0) or None
     source_title = (episode.title or "").strip()
     source_body = episode.body or ""
     source_tags = _normalize_tag_names(get_episode_tag_names(db, episode.id))
     for target_language in targets:
+        usage_stats = _new_translation_usage_stats()
         translation = (
             db.query(models.EpisodeTranslation)
             .filter(
@@ -17395,6 +17563,7 @@ def upsert_episode_translation(
                     target_language=target_language,
                     text_value=source_title,
                     field_name="episode title",
+                    usage_stats=usage_stats,
                 ) or source_title
             if need_body:
                 body = _translate_text_with_chunk_fallback(
@@ -17403,6 +17572,7 @@ def upsert_episode_translation(
                     text_value=source_body,
                     field_name="episode body",
                     steps_env="EPISODE_TRANSLATION_CHUNK_STEPS",
+                    usage_stats=usage_stats,
                 ) or source_body
             if need_tags:
                 tags = []
@@ -17415,6 +17585,7 @@ def upsert_episode_translation(
                         target_language=target_language,
                         text_value=tag_text,
                         field_name="episode tag",
+                        usage_stats=usage_stats,
                     )
                     tags.append((tr_tag or tag_text).strip())
                 tags = _normalize_tag_names(tags)
@@ -17443,6 +17614,12 @@ def upsert_episode_translation(
             translation.title = title
             translation.body = body
             translation.tag_names = serialize_tag_names(tags)
+        _save_translation_ai_log(
+            db,
+            user_id=author_user_id,
+            prompt_summary=f"エピソード翻訳 E#{int(episode.id)} {source_language}->{target_language}",
+            usage_stats=usage_stats,
+        )
     _notify_multilingual_ready_for_episode(
         db,
         episode=episode,

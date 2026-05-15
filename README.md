@@ -126,6 +126,42 @@ npm run dev
 - AI: `OPENAI_API_KEY`, `OPENAI_MODEL_TEXT`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`
 - SEO/IndexNow: `INDEXNOW_ENABLED`, `INDEXNOW_KEY`, `INDEXNOW_HOST`, `INDEXNOW_ENDPOINT`
 
+## 翻訳仕様（2026-05）
+
+- 小説翻訳の実行モードは `docker-compose.yml` の以下フラグで切り替える。
+  - `NOVEL_TRANSLATION_ORIGINAL_ONLY`
+  - `NOVEL_TRANSLATION_JA_EN_ONLY`
+  - `NOVEL_TRANSLATION_ALL_LANGUAGES`
+- フラグは排他的に使う想定。複数 `1` の場合は `ORIGINAL_ONLY > JA_EN_ONLY > ALL_LANGUAGES` の順で優先する。
+- 現在の既定値は原語のみ。
+  - `NOVEL_TRANSLATION_ORIGINAL_ONLY=1`
+  - `NOVEL_TRANSLATION_JA_EN_ONLY=0`
+  - `NOVEL_TRANSLATION_ALL_LANGUAGES=0`
+- 翻訳は作者がプレミアム会員のときだけ実行する。
+  - 通常の保存時同期翻訳
+  - バックグラウンド翻訳
+  - 日次翻訳ボット
+  - 公開カード表示を契機にした翻訳キュー投入
+  のすべてで同一条件を使う。
+- 非プレミアム時は「翻訳しない」だけで、翻訳完了扱いにはしない。
+  - 作者があとからプレミアム化した場合、過去作品も未翻訳のまま残る。
+  - そのため、日次翻訳ボットや作品の再保存経由で過去作品も翻訳対象に戻る。
+- 翻訳で使ったAIトークン数は `AI利用履歴` に記録する。
+  - 小説翻訳は `小説翻訳 N#... ja->en` のような要約で保存する。
+  - エピソード翻訳は `エピソード翻訳 E#... ja->en` のような要約で保存する。
+  - 分割翻訳などで複数回AI呼び出しが発生した場合も、1件の翻訳ごとに合算して記録する。
+
+## マイページ AI モデル既定値（2026-05）
+
+- マイページの AI モデル設定の既定値は `google/gemini-2.5-flash`。
+- 対象項目:
+  - `ai_summary_model`
+  - `ai_title_model`
+  - `ai_tag_model`
+  - `ai_story_agent_model`
+  - `ai_comment_revision_model`
+- 2026-05 時点の全ユーザー確認では、保存済み設定に `Gemini 2.5` または `Gemini 3` 以外の値は存在しない。
+
 ## 運用・開発時の注意点
 
 - マイグレーションツール未導入:
@@ -211,6 +247,49 @@ npm test
 ```
 
 必要に応じて API の手動確認手順をPRや作業メモに記載してください。
+
+## `main.py` 縮小の自動化
+
+- `backend/app/main.py` の router 分割作業は既存の抽出/生成スクリプトで半自動化されています。
+- 一括実行は `scripts/auto_refactor_main_py.sh` を使います。既定で `timeout 5h` を内包し、5時間で停止します。
+- 実行後は `scripts/verify_main_py_shrink.py` が `main.py` 行数、残存 `@app` ルート数、変更ファイル範囲を自動確認します。
+- 既存の dirty worktree があっても、実行前の `git status` を baseline として除外して判定します。
+
+```bash
+cd /home/ubuntu/novel-site
+bash scripts/auto_refactor_main_py.sh
+```
+
+- レポート出力先:
+  - `reports/auto_refactor_main_py/before.json`
+  - `reports/auto_refactor_main_py/summary.json`
+- 実行対象:
+  - `refactor_state.json` の `router_files` に登録済み
+  - かつ `completed_groups` に未登録
+  - かつ `main.py` にまだ `@app.*` ルートが残っている group
+- 既定で変更を許可する範囲:
+  - `backend/app/main.py`
+  - `backend/app/routers/`
+  - `refactor_state.json`
+  - `reports/`
+  - `scripts/`
+
+個別確認だけ行う場合:
+
+```bash
+python3 scripts/extract_routes.py --output reports/router_before.json
+# refactor 実行
+python3 scripts/extract_routes.py --output reports/router_after.json
+python3 scripts/verify_main_py_shrink.py \
+  reports/router_before.json \
+  reports/router_after.json \
+  --require-decrease \
+  --allowed-path backend/app/main.py \
+  --allowed-path backend/app/routers/ \
+  --allowed-path refactor_state.json \
+  --allowed-path reports/ \
+  --allowed-path scripts/
+```
 
 ## SEO / インデックス運用
 

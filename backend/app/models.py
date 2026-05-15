@@ -1,8 +1,10 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date, UniqueConstraint, Float, Index
-from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.dialects.mysql import LONGTEXT as MYSQL_LONGTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
+
+LONGTEXT = MYSQL_LONGTEXT().with_variant(Text(), "sqlite")
 
 # =========================
 # User
@@ -739,7 +741,8 @@ class AIGenerateLog(Base):
     __tablename__ = "ai_generate_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    guest_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
 
     prompt_summary = Column(String(255), nullable=True)
@@ -1124,6 +1127,8 @@ class AIChatTokenUsageLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     guest_id = Column(String(64), nullable=True, index=True)
     tokens_used = Column(Integer, nullable=False, server_default="0")
+    provider = Column(String(32), nullable=True, index=True)
+    model = Column(String(120), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
 
     user = relationship("User")

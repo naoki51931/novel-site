@@ -21,8 +21,8 @@ def db_session():
         session.close()
 
 
-def _make_user(db, username: str):
-    user = models.User(username=username, password_hash="x")
+def _make_user(db, username: str, *, is_premium: bool = True):
+    user = models.User(username=username, password_hash="x", is_premium=is_premium)
     db.add(user)
     db.commit()
     db.refresh(user)
