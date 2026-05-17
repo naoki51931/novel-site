@@ -192,7 +192,15 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
         except Exception:
             target_language = None
 
-    user = legacy.require_current_user(request, db)
+    user = legacy.get_optional_current_user_soft(request, db)
+    if not user:
+        return legacy.list_public_novels(
+            request=request,
+            background_tasks=background_tasks,
+            sort="new",
+            lang=lang,
+            db=db,
+        )
     user_age = None
     if getattr(user, "birth_date", None):
         user_age = legacy.calc_age(user.birth_date)

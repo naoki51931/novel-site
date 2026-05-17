@@ -1,79 +1,180 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-
-from ..database import get_db
-from .. import models, schemas
+from fastapi import APIRouter
 
 router = APIRouter(
-    prefix="/episodes",
     tags=["episodes"],
 )
 
+# BEGIN AUTO-GENERATED ROUTER WRAPPERS: EPISODES
+from fastapi import BackgroundTasks, Body, Depends, File, Form, Header, Query, Request, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
-# エピソード用のタグ生成ヘルパー
-def get_or_create_episode_tags(db: Session, tag_names: list[str]):
-    tags: list[models.Tag] = []
-    if not tag_names:
-        return tags
-
-    for name in tag_names:
-        name = name.strip()
-        if not name:
-            continue
-
-        tag = db.query(models.Tag).filter(models.Tag.name == name).first()
-        if not tag:
-            tag = models.Tag(name=name)
-            db.add(tag)
-            db.flush()  # id を採番
-
-        tags.append(tag)
-
-    return tags
+from ..database import get_db
 
 
-@router.get("/{episode_id}", response_model=schemas.Episode)
-def get_episode(episode_id: int, db: Session = Depends(get_db)):
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
-    if not ep:
-        raise HTTPException(status_code=404, detail="Episode not found")
-    return ep
+def _parse_payload(model_cls, payload: dict):
+    try:
+        return model_cls(**payload)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
 
+@router.get("/api/episodes/{episode_id}/comments")
+def get_episode_comments(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..features.comments_service import get_episode_comments_service
 
-@router.put("/{episode_id}", response_model=schemas.Episode)
+    return get_episode_comments_service(episode_id=episode_id, request=request, db=db)
+
+@router.post("/api/episodes/{episode_id}/comments")
+def post_episode_comment(
+    episode_id: int,
+    payload: dict = Body(...),
+    request: Request = None,
+    db: Session = Depends(get_db)
+):
+    from ..features.comments_service import post_episode_comment_service
+
+    return post_episode_comment_service(episode_id=episode_id, payload=payload, request=request, db=db)
+
+@router.put("/api/episodes/{episode_id}")
 def update_episode(
     episode_id: int,
-    payload: schemas.EpisodeUpdate,
-    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks,
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db)
 ):
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
-    if not ep:
-        raise HTTPException(status_code=404, detail="Episode not found")
+    from .. import main as legacy
+    return legacy.update_episode(episode_id=episode_id, background_tasks=background_tasks, request=request, payload=payload, db=db)
 
-    # ★ フィールド名を EpisodeUpdate に合わせる（ここがズレてると本文も変わらない）
-    if payload.episode_number is not None:
-        ep.episode_number = payload.episode_number
-    if payload.title is not None:
-        ep.title = payload.title
-    if payload.body is not None:
-        ep.body = payload.body
+@router.post("/api/episodes/{episode_id}/unschedule")
+def unschedule_episode(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.unschedule_episode(episode_id=episode_id, request=request, db=db)
 
-    # ★ タグ更新
-    if payload.tag_names is not None:
-        ep.tags = get_or_create_episode_tags(db, payload.tag_names)
+@router.delete("/api/episodes/{episode_id}")
+def delete_episode(
+    episode_id: int,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.delete_episode(episode_id=episode_id, background_tasks=background_tasks, request=request, db=db)
 
-    db.commit()
-    db.refresh(ep)
-    return ep
+@router.post("/api/episodes/{episode_id}/title_candidates")
+async def generate_episode_title_candidates(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return await legacy.generate_episode_title_candidates(episode_id=episode_id, request=request, db=db)
 
+@router.delete("/api/episodes/{episode_id}/cover-image")
+def delete_episode_cover_image(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.delete_episode_cover_image(episode_id=episode_id, request=request, db=db)
 
-@router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_episode(episode_id: int, db: Session = Depends(get_db)):
-    ep = db.query(models.Episode).filter(models.Episode.id == episode_id).first()
-    if not ep:
-        raise HTTPException(status_code=404, detail="Episode not found")
+@router.post("/api/episodes/{episode_id}/cover-image")
+async def upload_episode_cover_image(
+    episode_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return await legacy.upload_episode_cover_image(episode_id=episode_id, request=request, file=file, db=db)
 
-    db.delete(ep)
-    db.commit()
-    return
+@router.post("/api/episodes/{episode_id}/illusts")
+async def upload_episode_illust(
+    episode_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    illust_tag: str = Form(""),
+    meta_tags: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return await legacy.upload_episode_illust(episode_id=episode_id, request=request, file=file, caption=caption, illust_tag=illust_tag, meta_tags=meta_tags, db=db)
 
+@router.delete("/api/episodes/{episode_id}/illusts/{illust_id}")
+def delete_episode_illust(
+    episode_id: int,
+    illust_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.delete_episode_illust(episode_id=episode_id, illust_id=illust_id, request=request, db=db)
+
+@router.get("/api/episodes/{episode_id}/edit")
+def get_episode_for_edit(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.get_episode_for_edit(episode_id=episode_id, request=request, db=db)
+
+@router.get("/api/episodes/{episode_id}")
+def get_episode(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.get_episode(episode_id=episode_id, request=request, db=db)
+
+@router.get("/api/episodes/{episode_id}/translations/{lang}")
+def get_episode_translation(
+    episode_id: int,
+    lang: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.get_episode_translation(episode_id=episode_id, lang=lang, request=request, db=db)
+
+@router.post("/api/episodes/{episode_id}/like")
+def like_episode(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.like_episode(episode_id=episode_id, request=request, db=db)
+
+@router.delete("/api/episodes/{episode_id}/like")
+def unlike_episode(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from .. import main as legacy
+    return legacy.unlike_episode(episode_id=episode_id, request=request, db=db)
+
+@router.delete("/api/episodes/{episode_id}/comments/{comment_id}")
+def delete_episode_comment(
+    episode_id: int,
+    comment_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..features.comments_service import delete_episode_comment_service
+
+    return delete_episode_comment_service(episode_id=episode_id, comment_id=comment_id, request=request, db=db)
+# END AUTO-GENERATED ROUTER WRAPPERS: EPISODES

@@ -35,6 +35,24 @@ type NovelItem = {
   total_char_count?: number | null;
 };
 
+type ViewHistoryNovel = {
+  target_id: number | string;
+  viewed_at?: string | null;
+  view_count?: number | null;
+  site_key?: string | null;
+  title?: string | null;
+  author_username?: string | null;
+  age_limit?: string | null;
+};
+
+type ViewHistoryResponse = {
+  items?: ViewHistoryNovel[] | null;
+  total?: number | null;
+  limit?: number | null;
+  offset?: number | null;
+  detail?: string | null;
+};
+
 type AiChatFavorite = {
   id: number | string;
   name?: string | null;
@@ -81,7 +99,7 @@ type AiJob = {
 };
 
 export default function Mypage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [novels, setNovels] = useState<NovelItem[]>([]);
   const [favorites, setFavorites] = useState<NovelItem[]>([]);
   const [aiChatFavorites, setAiChatFavorites] = useState<AiChatFavorite[]>([]);
@@ -115,6 +133,10 @@ export default function Mypage() {
   const [iphoneAppReady, setIphoneAppReady] = useState(false);
   const [emailAddressInvalid, setEmailAddressInvalid] = useState(false);
   const [profileEmail, setProfileEmail] = useState("");
+  const [viewHistoryItems, setViewHistoryItems] = useState<ViewHistoryNovel[]>([]);
+  const [viewHistoryLoading, setViewHistoryLoading] = useState(false);
+  const [viewHistoryError, setViewHistoryError] = useState("");
+  const [viewHistoryLimit, setViewHistoryLimit] = useState<10 | 20>(10);
   const navigate = useNavigate();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -145,7 +167,11 @@ export default function Mypage() {
         setLoading(true);
         setError("");
 
-        const res = await fetch(`${API_BASE}/api/novels?mine=true`, {
+        const params = new URLSearchParams();
+        params.set("mine", "true");
+        if (lang) params.set("lang", lang);
+
+        const res = await fetch(`${API_BASE}/api/novels?${params.toString()}`, {
           headers: {
             Authorization: "Bearer " + token,
           },
@@ -179,7 +205,7 @@ export default function Mypage() {
     };
 
     fetchMine();
-  }, [navigate, token]);
+  }, [lang, navigate, token]);
 
   const loadAiJobs = async () => {
     if (!token) return;
@@ -247,6 +273,43 @@ export default function Mypage() {
   const aiChatFavoritesVisible = showR18
     ? aiChatFavorites
     : aiChatFavorites.filter((item) => !item?.is_r18);
+  const viewHistoryVisible = showR18
+    ? viewHistoryItems
+    : viewHistoryItems.filter((item) => String(item.age_limit || "all").toLowerCase() !== "r18");
+
+  useEffect(() => {
+    if (!token) return;
+    const loadViewHistory = async () => {
+      try {
+        setViewHistoryLoading(true);
+        setViewHistoryError("");
+        const params = new URLSearchParams();
+        params.set("limit", String(viewHistoryLimit));
+        const res = await fetch(`${API_BASE}/api/me/view-history/novels?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data: ViewHistoryResponse = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data.detail
+            || t({ ja: "閲覧履歴の取得に失敗しました", en: "Failed to load view history." })
+          );
+        }
+        setViewHistoryItems(Array.isArray(data.items) ? data.items : []);
+      } catch (err) {
+        console.error(err);
+        setViewHistoryError(
+          getErrorMessage(
+            err,
+            t({ ja: "閲覧履歴の取得中にエラーが発生しました", en: "An error occurred while loading view history." })
+          )
+        );
+      } finally {
+        setViewHistoryLoading(false);
+      }
+    };
+    loadViewHistory();
+  }, [t, token, viewHistoryLimit]);
 
   const aiJobsFiltered = aiJobs.filter((job) => {
     if (aiJobsFilter === "all") return true;
@@ -267,7 +330,10 @@ export default function Mypage() {
     const fetchFavoritesAndProfile = async () => {
       try {
         // お気に入り取得
-        const resFav = await fetch(`${API_BASE}/api/me/favorites`, {
+        const favParams = new URLSearchParams();
+        if (lang) favParams.set("lang", lang);
+
+        const resFav = await fetch(`${API_BASE}/api/me/favorites?${favParams.toString()}`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -326,7 +392,7 @@ export default function Mypage() {
     };
 
     fetchFavoritesAndProfile();
-  }, [token]);
+  }, [lang, token]);
 
   useEffect(() => {
     if (showR18) return;
@@ -1398,6 +1464,90 @@ export default function Mypage() {
                 <p style={{ fontSize: 14, whiteSpace: "pre-wrap", margin: 0 }}>
                   {truncateFavoriteSummary(novel.description)}
                 </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 閲覧履歴 */}
+      <section style={{ marginTop: "2.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6, margin: 0 }}>
+            {t({ ja: "閲覧履歴", en: "View History" })}
+          </h3>
+          <Link className="btn btn-border" to="/me/view-history">
+            {t({ ja: "続きを見る", en: "See more" })}
+          </Link>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          <button
+            type="button"
+            className="btn btn-border"
+            disabled={viewHistoryLimit === 10}
+            onClick={() => setViewHistoryLimit(10)}
+            style={
+              viewHistoryLimit === 10
+                ? {
+                    background: "var(--accent, #2f6f6d)",
+                    borderColor: "var(--accent, #2f6f6d)",
+                    color: "#fff",
+                    fontWeight: 700,
+                  }
+                : undefined
+            }
+          >
+            {t({ ja: "10件", en: "10 items" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            disabled={viewHistoryLimit === 20}
+            onClick={() => setViewHistoryLimit(20)}
+            style={
+              viewHistoryLimit === 20
+                ? {
+                    background: "var(--accent, #2f6f6d)",
+                    borderColor: "var(--accent, #2f6f6d)",
+                    color: "#fff",
+                    fontWeight: 700,
+                  }
+                : undefined
+            }
+          >
+            {t({ ja: "20件", en: "20 items" })}
+          </button>
+        </div>
+        {viewHistoryError && <p style={{ color: "red", marginTop: 10 }}>{viewHistoryError}</p>}
+        {viewHistoryLoading ? (
+          <p style={{ marginTop: 10 }}>{t({ ja: "読み込み中...", en: "Loading..." })}</p>
+        ) : viewHistoryVisible.length === 0 ? (
+          <p style={{ marginTop: 10 }}>
+            {viewHistoryItems.length > 0 && !showR18
+              ? t({ ja: "R18作品を非表示にしているため、表示できる閲覧履歴がありません。", en: "No visible history (R18 is hidden)." })
+              : t({ ja: "閲覧履歴はまだありません。", en: "No view history yet." })}
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+            {viewHistoryVisible.map((item) => (
+              <div
+                key={`${item.target_id}-${item.viewed_at || ""}`}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  padding: 12,
+                  background: "var(--surface)",
+                }}
+              >
+                <h4 style={{ margin: "0 0 6px 0" }}>
+                  <Link to={`/novels/${item.target_id}`}>{item.title || `#${item.target_id}`}</Link>
+                </h4>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, color: "var(--muted-text)" }}>
+                  <span>{t({ ja: "作者", en: "Author" })}: @{item.author_username || "-"}</span>
+                  <span>{t({ ja: "閲覧回数", en: "Views" })}: {item.view_count ?? 0}</span>
+                  <span>{t({ ja: "最終閲覧", en: "Last viewed" })}: {item.viewed_at || "-"}</span>
+                  {item.age_limit ? <span>{String(item.age_limit).toUpperCase()}</span> : null}
+                </div>
               </div>
             ))}
           </div>

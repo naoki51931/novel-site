@@ -1,0 +1,145 @@
+{
+  "generated_at": "2026-05-06T08:36:16.848709+00:00",
+  "main_py": "backend/app/main.py",
+  "main_py_line_count": 25966,
+  "total_route_entries": 11,
+  "remaining_app_route_functions": 11,
+  "completed_groups": [
+    "admin",
+    "ai_chat",
+    "ai_misc",
+    "ai_novel",
+    "auth",
+    "board",
+    "dms",
+    "episodes",
+    "feed",
+    "i18n",
+    "me",
+    "novels",
+    "other",
+    "payments",
+    "public",
+    "search",
+    "series",
+    "tags"
+  ],
+  "pending_group_counts": {},
+  "groups": {
+    "admin": {
+      "count": 11,
+      "functions": [
+        {
+          "function_name": "admin_start_i18n_job",
+          "start_line": 16348,
+          "paths": [
+            "/api/admin/i18n/jobs/start"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_list_i18n_jobs",
+          "start_line": 16472,
+          "paths": [
+            "/api/admin/i18n/jobs"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_i18n_job_status",
+          "start_line": 16481,
+          "paths": [
+            "/api/admin/i18n/jobs/{job_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_cancel_i18n_job",
+          "start_line": 16493,
+          "paths": [
+            "/api/admin/i18n/jobs/{job_id}/cancel"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_retranslate_remaining_i18n",
+          "start_line": 16508,
+          "paths": [
+            "/api/admin/i18n/retranslate_remaining"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_delete_board_post",
+          "start_line": 17515,
+          "paths": [
+            "/api/admin/board/posts/{post_id}"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_urls",
+          "start_line": 23282,
+          "paths": [
+            "/api/admin/indexing/urls"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_submit",
+          "start_line": 23374,
+          "paths": [
+            "/api/admin/indexing/submit"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_carryover",
+          "start_line": 23503,
+          "paths": [
+            "/api/admin/indexing/carryover"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_carryover_clear",
+          "start_line": 23516,
+          "paths": [
+            "/api/admin/indexing/carryover"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "admin_indexnow_submit",
+          "start_line": 23648,
+          "paths": [
+            "/api/admin/indexnow/submit"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    }
+  }
+}

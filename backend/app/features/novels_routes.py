@@ -17,8 +17,16 @@ def create_novel(payload: dict, request: Request, background_tasks: BackgroundTa
 @router.get('/api/novels')
 def list_novels(
     request: Request,
+    background_tasks: BackgroundTasks,
     mine: bool = Query(default=False),
+    lang: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     from .. import main as legacy
-    return legacy.list_novels(request=request, mine=mine, db=db)
+    return legacy.list_novels(
+        request=request,
+        background_tasks=background_tasks,
+        mine=mine,
+        lang=lang,
+        db=db,
+    )

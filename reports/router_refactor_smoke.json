@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-05-06T09:01:17.027483+00:00",
+  "base_url": "https://127.0.0.1",
+  "host_header": "lexis-novel.com",
+  "ok": true,
+  "results": [
+    {
+      "name": "auth register validation",
+      "method": "POST",
+      "path": "/api/auth/register/email/start",
+      "expected_status": [
+        422
+      ],
+      "actual_status": 422,
+      "ok": true,
+      "response_body_preview": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"email\"],\"msg\":\"Field required\",\"input\":{},\"url\":\"https://errors.pydantic.dev/2.13/v/missing\"}]}"
+    },
+    {
+      "name": "stripe checkout requires login",
+      "method": "POST",
+      "path": "/api/stripe/create-checkout-session",
+      "expected_status": [
+        401
+      ],
+      "actual_status": 401,
+      "ok": true,
+      "response_body_preview": "{\"detail\":\"認証が必要です\"}"
+    },
+    {
+      "name": "admin payouts requires admin",
+      "method": "GET",
+      "path": "/api/admin/payouts",
+      "expected_status": [
+        401
+      ],
+      "actual_status": 401,
+      "ok": true,
+      "response_body_preview": "{\"detail\":\"管理者権限が必要です\"}"
+    },
+    {
+      "name": "support plans public route",
+      "method": "GET",
+      "path": "/api/support_plans?author_user_id=1",
+      "expected_status": [
+        200
+      ],
+      "actual_status": 200,
+      "ok": true,
+      "response_body_preview": "[]"
+    }
+  ]
+}

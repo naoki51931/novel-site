@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "updated_at": "2026-05-06T08:36:54.222491+00:00",
+  "completed_groups": [
+    "admin",
+    "ai_chat",
+    "ai_misc",
+    "ai_novel",
+    "auth",
+    "board",
+    "dms",
+    "episodes",
+    "feed",
+    "i18n",
+    "me",
+    "novels",
+    "other",
+    "payments",
+    "public",
+    "search",
+    "series",
+    "tags"
+  ],
+  "pending_groups_hint": [
+    "ai_novel",
+    "ai_chat",
+    "i18n",
+    "novels",
+    "episodes",
+    "board",
+    "tags",
+    "feed",
+    "search",
+    "public",
+    "series",
+    "dms",
+    "me",
+    "other"
+  ],
+  "router_files": {
+    "auth": "backend/app/routers/auth.py",
+    "payments": "backend/app/routers/payments.py",
+    "admin": "backend/app/routers/admin.py",
+    "ai_novel": "backend/app/routers/ai_novel.py",
+    "ai_chat": "backend/app/routers/ai_chat.py",
+    "novels": "backend/app/routers/novels.py",
+    "episodes": "backend/app/routers/episodes.py",
+    "ai_misc": "backend/app/routers/ai_misc.py",
+    "board": "backend/app/routers/board.py",
+    "dms": "backend/app/routers/dms.py",
+    "feed": "backend/app/routers/feed.py",
+    "i18n": "backend/app/routers/i18n.py",
+    "me": "backend/app/routers/me.py",
+    "other": "backend/app/routers/other.py",
+    "public": "backend/app/routers/public.py",
+    "search": "backend/app/routers/search.py",
+    "series": "backend/app/routers/series.py",
+    "tags": "backend/app/routers/tags.py"
+  },
+  "smoke_tests": [
+    {
+      "name": "auth register validation",
+      "method": "POST",
+      "path": "/api/auth/register/email/start",
+      "json": {},
+      "expected_status": [
+        422
+      ]
+    },
+    {
+      "name": "stripe checkout requires login",
+      "method": "POST",
+      "path": "/api/stripe/create-checkout-session",
+      "expected_status": [
+        401
+      ]
+    },
+    {
+      "name": "admin payouts requires admin",
+      "method": "GET",
+      "path": "/api/admin/payouts",
+      "expected_status": [
+        401
+      ]
+    },
+    {
+      "name": "support plans public route",
+      "method": "GET",
+      "path": "/api/support_plans?author_user_id=1",
+      "expected_status": [
+        200
+      ]
+    }
+  ]
+}

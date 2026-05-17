@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-05-06T08:36:54.306325+00:00",
+  "main_py": "backend/app/main.py",
+  "main_py_line_count": 25955,
+  "total_route_entries": 0,
+  "remaining_app_route_functions": 0,
+  "completed_groups": [
+    "admin",
+    "ai_chat",
+    "ai_misc",
+    "ai_novel",
+    "auth",
+    "board",
+    "dms",
+    "episodes",
+    "feed",
+    "i18n",
+    "me",
+    "novels",
+    "other",
+    "payments",
+    "public",
+    "search",
+    "series",
+    "tags"
+  ],
+  "pending_group_counts": {},
+  "groups": {}
+}

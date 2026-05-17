@@ -4898,7 +4898,7 @@ AI_GUEST_COOKIE_NAME = "ai_guest_id"
 AI_GUEST_FREE_MAX = 10
 AI_USER_DAILY_MAX = 80
 AI_USER_DAILY_MAX_BY_USERNAME = {
-    "demo02": 300,
+    "demo02": 3000,
 }
 AI_USER_DAILY_MAX_BY_USERNAME_AND_DATE = {
     ("demo02", "2026-04-19"): 1000,
@@ -5537,6 +5537,13 @@ class NovelViewHistoryItemOut(BaseModel):
     title: str | None = None
     author_username: str | None = None
     age_limit: str | None = None
+
+
+class NovelViewHistoryListOut(BaseModel):
+    items: list[NovelViewHistoryItemOut] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
 
 
 class AIPublicChatViewHistoryItemOut(BaseModel):
@@ -9650,6 +9657,161 @@ def _extract_retry_max_from_request_json(raw: str | None) -> int | None:
     return max(0, value)
 
 
+SEGMENT_TARGET_CHARS = 2000
+SEGMENT_COUNT_MIN = 1
+SEGMENT_COUNT_MAX = 30
+AI_EMPTY_RESPONSE_RETRY_BACKOFF_SECONDS = 60
+AI_EMPTY_RESPONSE_RETRY_BACKOFF_THRESHOLD = 2
+
+
+def _normalize_chunked_generation_payload(payload: dict | None) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    if not bool(payload.get("chunked_generation_enabled")):
+        return None
+
+    raw_plans = payload.get("chunked_generation_plans") or []
+    requested_count = payload.get("chunked_generation_count")
+    try:
+        count = int(requested_count if requested_count is not None else len(raw_plans))
+    except Exception:
+        count = len(raw_plans)
+    count = max(SEGMENT_COUNT_MIN, min(SEGMENT_COUNT_MAX, int(count or 0)))
+
+    plans: list[str] = []
+    for item in list(raw_plans)[:count]:
+        if isinstance(item, dict):
+            instruction = str(item.get("instruction") or "").strip()
+        else:
+            instruction = str(item or "").strip()
+        plans.append(instruction)
+
+    while len(plans) < count:
+        plans.append("")
+
+    return {
+        "count": count,
+        "plans": plans,
+    }
+
+
+def _build_chunked_novel_prompt(
+    req: AINovelRequest,
+    *,
+    block_instruction: str,
+    block_index: int,
+    total_blocks: int,
+    previous_blocks: list[dict] | None = None,
+    segment_chars: int = SEGMENT_TARGET_CHARS,
+    is_continue_mode: bool = False,
+) -> str:
+    r18_note = (
+        "成人向けの内容を許可します。性的描写を含めても構いません。"
+        if getattr(req, "r18", False)
+        else "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。"
+    )
+    title_hint_text = getattr(req, "title_hint", None) or "指定なし"
+    genre_text = getattr(req, "genre", None) or "指定なし"
+    tone_text = getattr(req, "tone", None) or "指定なし"
+    characters_text = getattr(req, "characters", None) or "指定なし"
+    start = block_index * segment_chars + 1
+    end = (block_index + 1) * segment_chars
+
+    previous_context_lines: list[str] = []
+    for block in previous_blocks or []:
+        body = str((block or {}).get("body") or "").strip()
+        if not body:
+            continue
+        instruction = str((block or {}).get("instruction") or "").strip() or "（特記事項なし）"
+        index = int((block or {}).get("index") or 0)
+        label = f"第{index}ブロック" if index > 0 else "以前のブロック"
+        previous_context_lines.extend(
+            [
+                f"【{label}】",
+                f"- このブロックの指示: {instruction}",
+                "- 生成済み本文:",
+                body,
+                "",
+            ]
+        )
+    has_previous = bool(previous_context_lines)
+
+    opening_line = (
+        f"以下は分割生成の第{block_index + 1}/{total_blocks}ブロックです。前ブロックの続きとして本文のみを書いてください。"
+        if has_previous
+        else (
+            f"以下は分割生成の第1/{total_blocks}ブロックです。前のエピソード本文の続きとして本文のみを書いてください。"
+            if is_continue_mode
+            else f"以下は分割生成の第1/{total_blocks}ブロックです。本文の導入から書いてください。"
+        )
+    )
+
+    lines = [
+        "あなたは日本語の小説作家です。",
+        opening_line,
+        f"今回の出力は約{segment_chars}文字（目安 {start}〜{end} 文字の範囲）にしてください。",
+        "すでに書かれた内容の要約や繰り返しは避け、物語を前進させてください。",
+        r18_note,
+        "",
+    ]
+    if has_previous:
+        lines.extend(["【これ以前のブロック情報】", *previous_context_lines])
+    lines.extend(
+        [
+            "【このブロックで書く内容】",
+            str(block_instruction or "").strip() or "前後と自然につながる展開にする。",
+            "",
+            "【共通条件】",
+            f"- タイトルのイメージ: {title_hint_text}",
+            f"- ジャンル: {genre_text}",
+            f"- 雰囲気: {tone_text}",
+            f"- 登場人物・設定: {characters_text}",
+            "",
+            "出力は JSON の body に本文のみを書いてください（タイトルは変更しない）。",
+        ]
+    )
+    return "\n".join([line for line in lines if line != ""])
+
+
+def _build_chunked_job_response(
+    *,
+    title: str,
+    body: str,
+    blocks: list[dict],
+    completed_blocks: int,
+    total_blocks: int,
+    current_block: int | None = None,
+    current_instruction: str | None = None,
+    done: bool = False,
+    guest_remaining: int | None = None,
+    user_remaining: int | None = None,
+    retry_attempts: int | None = None,
+    retry_max: int | None = None,
+) -> dict:
+    safe_total = max(1, int(total_blocks or 1))
+    safe_completed = max(0, min(safe_total, int(completed_blocks or 0)))
+    percent = 100 if done else max(1, min(99, int(round((safe_completed / safe_total) * 100))))
+    payload = {
+        "generated_title": title or "生成された小説",
+        "body": body or "",
+        "guest_remaining": guest_remaining,
+        "user_remaining": user_remaining,
+        "retry_attempts": retry_attempts,
+        "retry_max": retry_max,
+        "chunked_generation": {
+            "enabled": True,
+            "total_blocks": safe_total,
+            "completed_blocks": safe_completed,
+            "current_block": None if done else int(current_block or max(1, safe_completed + 1)),
+            "current_instruction": None if done else (current_instruction or ""),
+            "percent": percent,
+            "blocks": blocks,
+            "done": bool(done),
+        },
+    }
+    return payload
+
+
 def _count_ai_jobs_today(db: Session, user_id: int) -> int:
     today = datetime.utcnow().date()
     start_of_day = datetime.combine(today, datetime.min.time())
@@ -9786,6 +9948,13 @@ def _should_retry_ai_error(err: Exception) -> bool:
     return True
 
 
+def _is_empty_ai_response_error(err: Exception) -> bool:
+    if not isinstance(err, HTTPException):
+        return False
+    detail = str(getattr(err, "detail", "") or "")
+    return "AI からの応答が空でした" in detail
+
+
 async def _call_ai_with_retry(
     req: AINovelRequest,
     provider: str,
@@ -9794,6 +9963,7 @@ async def _call_ai_with_retry(
 ) -> AINovelResponse:
     attempts = 0
     last_error = None
+    consecutive_empty_response_errors = 0
     while True:
         try:
             if provider == "deepseek":
@@ -9804,16 +9974,22 @@ async def _call_ai_with_retry(
         except HTTPException as e:
             last_error = e
             if _should_retry_ai_error(e) and attempts < max_retries:
+                consecutive_empty_response_errors = (
+                    consecutive_empty_response_errors + 1 if _is_empty_ai_response_error(e) else 0
+                )
                 attempts += 1
                 if on_retry:
                     try:
                         await on_retry(attempts)
                     except Exception:
                         pass
+                if consecutive_empty_response_errors >= AI_EMPTY_RESPONSE_RETRY_BACKOFF_THRESHOLD:
+                    await asyncio.sleep(AI_EMPTY_RESPONSE_RETRY_BACKOFF_SECONDS)
                 continue
             raise
         except Exception as e:
             last_error = e
+            consecutive_empty_response_errors = 0
             if _should_retry_ai_error(e) and attempts < max_retries:
                 attempts += 1
                 if on_retry:
@@ -9836,6 +10012,7 @@ async def _call_ai_with_retry_prompt(
 ) -> AINovelResponse:
     attempts = 0
     last_error = None
+    consecutive_empty_response_errors = 0
     while True:
         try:
             if provider == "deepseek":
@@ -9846,16 +10023,22 @@ async def _call_ai_with_retry_prompt(
         except HTTPException as e:
             last_error = e
             if _should_retry_ai_error(e) and attempts < max_retries:
+                consecutive_empty_response_errors = (
+                    consecutive_empty_response_errors + 1 if _is_empty_ai_response_error(e) else 0
+                )
                 attempts += 1
                 if on_retry:
                     try:
                         await on_retry(attempts)
                     except Exception:
                         pass
+                if consecutive_empty_response_errors >= AI_EMPTY_RESPONSE_RETRY_BACKOFF_THRESHOLD:
+                    await asyncio.sleep(AI_EMPTY_RESPONSE_RETRY_BACKOFF_SECONDS)
                 continue
             raise
         except Exception as e:
             last_error = e
+            consecutive_empty_response_errors = 0
             if _should_retry_ai_error(e) and attempts < max_retries:
                 attempts += 1
                 if on_retry:
@@ -9990,15 +10173,104 @@ async def _run_ai_job(job_id: int) -> None:
             retry_max = int(getattr(req, "retry_max", 0) or 0)
             if retry_max < 0:
                 retry_max = 0
-            if retry_enabled and retry_max > 0:
-                resp = await _call_ai_with_retry(req, provider, retry_max, on_retry=record_retry_attempts)
+            chunked = _normalize_chunked_generation_payload(payload)
+            if chunked:
+                combined_chunk_text = ""
+                generated_chunk_blocks: list[dict] = []
+                final_title = str(getattr(req, "title_hint", None) or "").strip() or "生成された小説"
+                for block_idx in range(int(chunked["count"])):
+                    block_instruction = str(chunked["plans"][block_idx] or "").strip()
+                    chunk_prompt = _build_chunked_novel_prompt(
+                        req,
+                        block_instruction=block_instruction,
+                        block_index=block_idx,
+                        total_blocks=int(chunked["count"]),
+                        previous_blocks=generated_chunk_blocks,
+                        segment_chars=SEGMENT_TARGET_CHARS,
+                        is_continue_mode=False,
+                    )
+                    chunk_req = req.copy(
+                        update={
+                            "prompt": chunk_prompt,
+                            "length": str(SEGMENT_TARGET_CHARS),
+                            "chunked_generation_enabled": False,
+                            "chunked_generation_count": None,
+                            "chunked_generation_plans": None,
+                        }
+                    )
+                    if retry_enabled and retry_max > 0:
+                        resp = await _call_ai_with_retry(
+                            chunk_req,
+                            provider,
+                            retry_max,
+                            on_retry=record_retry_attempts,
+                        )
+                    else:
+                        if provider == "deepseek":
+                            resp = await call_deepseek_novel_api(chunk_req)
+                        elif provider == "openrouter":
+                            resp = await call_openrouter_novel_api(chunk_req)
+                        else:
+                            resp = await call_openai_novel_api(chunk_req)
+
+                    normalized_chunk = _serialize_ai_response(resp)
+                    next_chunk_body = str(normalized_chunk.get("body") or "").strip()
+                    if not next_chunk_body:
+                        raise HTTPException(status_code=502, detail=f"第{block_idx + 1}ブロックの本文が空でした。")
+                    if not final_title.strip():
+                        final_title = str(normalized_chunk.get("generated_title") or "").strip() or final_title
+
+                    combined_chunk_text = (
+                        f"{combined_chunk_text}\n\n{next_chunk_body}" if combined_chunk_text else next_chunk_body
+                    )
+                    generated_chunk_blocks.append(
+                        {
+                            "index": block_idx + 1,
+                            "instruction": block_instruction,
+                            "body": next_chunk_body,
+                        }
+                    )
+                    job.response_json = json.dumps(
+                        _build_chunked_job_response(
+                            title=final_title,
+                            body=combined_chunk_text,
+                            blocks=generated_chunk_blocks,
+                            completed_blocks=block_idx + 1,
+                            total_blocks=int(chunked["count"]),
+                            current_block=min(int(chunked["count"]), block_idx + 2),
+                            current_instruction=(
+                                str(chunked["plans"][block_idx + 1] or "").strip()
+                                if block_idx + 1 < int(chunked["count"])
+                                else ""
+                            ),
+                            done=False,
+                            retry_attempts=int(getattr(job, "retry_attempts", 0) or 0),
+                            retry_max=retry_max if retry_enabled else 0,
+                        ),
+                        ensure_ascii=True,
+                    )
+                    db.add(job)
+                    db.commit()
+
+                resp = AINovelResponse(
+                    generated_title=final_title,
+                    body=combined_chunk_text,
+                    used_tokens=None,
+                    model=getattr(req, "model", None),
+                    prompt_used=getattr(req, "prompt", None),
+                    retry_attempts=int(getattr(job, "retry_attempts", 0) or 0),
+                    retry_max=retry_max if retry_enabled else 0,
+                )
             else:
-                if provider == "deepseek":
-                    resp = await call_deepseek_novel_api(req)
-                elif provider == "openrouter":
-                    resp = await call_openrouter_novel_api(req)
+                if retry_enabled and retry_max > 0:
+                    resp = await _call_ai_with_retry(req, provider, retry_max, on_retry=record_retry_attempts)
                 else:
-                    resp = await call_openai_novel_api(req)
+                    if provider == "deepseek":
+                        resp = await call_deepseek_novel_api(req)
+                    elif provider == "openrouter":
+                        resp = await call_openrouter_novel_api(req)
+                    else:
+                        resp = await call_openai_novel_api(req)
 
             job_status = (
                 db.query(models.AINovelJob.status)
@@ -10086,21 +10358,102 @@ async def _run_ai_job(job_id: int) -> None:
             retry_max = int(getattr(req, "retry_max", 0) or 0)
             if retry_max < 0:
                 retry_max = 0
-            if retry_enabled and retry_max > 0:
-                ai_resp = await _call_ai_with_retry_prompt(
-                    prompt,
-                    req.model,
-                    provider,
-                    retry_max,
-                    on_retry=record_retry_attempts,
+            chunked = _normalize_chunked_generation_payload(payload.get("req") or {})
+            if chunked:
+                combined_chunk_text = ""
+                generated_chunk_blocks: list[dict] = []
+                final_title = str(getattr(req, "title_hint", None) or "").strip() or "生成された小説"
+                for block_idx in range(int(chunked["count"])):
+                    block_instruction = str(chunked["plans"][block_idx] or "").strip()
+                    chunk_prompt = _build_chunked_novel_prompt(
+                        req,
+                        block_instruction=block_instruction,
+                        block_index=block_idx,
+                        total_blocks=int(chunked["count"]),
+                        previous_blocks=generated_chunk_blocks,
+                        segment_chars=SEGMENT_TARGET_CHARS,
+                        is_continue_mode=True,
+                    )
+                    if retry_enabled and retry_max > 0:
+                        ai_resp = await _call_ai_with_retry_prompt(
+                            chunk_prompt,
+                            req.model,
+                            provider,
+                            retry_max,
+                            on_retry=record_retry_attempts,
+                        )
+                    else:
+                        if provider == "deepseek":
+                            ai_resp = await call_deepseek_novel_api(chunk_prompt, model=req.model)
+                        elif provider == "openrouter":
+                            ai_resp = await call_openrouter_novel_api(chunk_prompt, model=req.model)
+                        else:
+                            ai_resp = await call_openai_novel_api(chunk_prompt, model=req.model)
+
+                    normalized_chunk = _serialize_ai_response(ai_resp)
+                    next_chunk_body = str(normalized_chunk.get("body") or "").strip()
+                    if not next_chunk_body:
+                        raise HTTPException(status_code=502, detail=f"第{block_idx + 1}ブロックの本文が空でした。")
+                    if not final_title.strip():
+                        final_title = str(normalized_chunk.get("generated_title") or "").strip() or final_title
+
+                    combined_chunk_text = (
+                        f"{combined_chunk_text}\n\n{next_chunk_body}" if combined_chunk_text else next_chunk_body
+                    )
+                    generated_chunk_blocks.append(
+                        {
+                            "index": block_idx + 1,
+                            "instruction": block_instruction,
+                            "body": next_chunk_body,
+                        }
+                    )
+                    job.response_json = json.dumps(
+                        _build_chunked_job_response(
+                            title=final_title,
+                            body=combined_chunk_text,
+                            blocks=generated_chunk_blocks,
+                            completed_blocks=block_idx + 1,
+                            total_blocks=int(chunked["count"]),
+                            current_block=min(int(chunked["count"]), block_idx + 2),
+                            current_instruction=(
+                                str(chunked["plans"][block_idx + 1] or "").strip()
+                                if block_idx + 1 < int(chunked["count"])
+                                else ""
+                            ),
+                            done=False,
+                            retry_attempts=int(getattr(job, "retry_attempts", 0) or 0),
+                            retry_max=retry_max if retry_enabled else 0,
+                        ),
+                        ensure_ascii=True,
+                    )
+                    db.add(job)
+                    db.commit()
+
+                ai_resp = AINovelResponse(
+                    generated_title=final_title,
+                    body=combined_chunk_text,
+                    used_tokens=None,
+                    model=getattr(req, "model", None),
+                    prompt_used=prompt,
+                    retry_attempts=int(getattr(job, "retry_attempts", 0) or 0),
+                    retry_max=retry_max if retry_enabled else 0,
                 )
             else:
-                if provider == "deepseek":
-                    ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
-                elif provider == "openrouter":
-                    ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+                if retry_enabled and retry_max > 0:
+                    ai_resp = await _call_ai_with_retry_prompt(
+                        prompt,
+                        req.model,
+                        provider,
+                        retry_max,
+                        on_retry=record_retry_attempts,
+                    )
                 else:
-                    ai_resp = await call_openai_novel_api(prompt, model=req.model)
+                    if provider == "deepseek":
+                        ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
+                    elif provider == "openrouter":
+                        ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+                    else:
+                        ai_resp = await call_openai_novel_api(prompt, model=req.model)
 
             job_status = (
                 db.query(models.AINovelJob.status)
@@ -15127,7 +15480,7 @@ def get_ai_job_status(
         "retry_attempts": int(getattr(job, "retry_attempts", 0) or 0),
         "retry_max": _extract_retry_max_from_request_json(job.request_json),
     }
-    if job.status == "succeeded" and job.response_json:
+    if job.response_json:
         try:
             result["response"] = json.loads(job.response_json)
         except Exception:
@@ -17746,6 +18099,8 @@ def create_novel(
 def list_novels(
     request: Request,
     mine: bool = False,
+    lang: str | None = None,
+    background_tasks: BackgroundTasks | None = None,
     db: Session = Depends(get_db),
 ):
     site_key = resolve_site_key(request)
@@ -25433,15 +25788,16 @@ def record_my_view_history(
     return {"ok": True}
 
 
-@app.get("/api/me/view-history/novels", response_model=list[NovelViewHistoryItemOut])
+@app.get("/api/me/view-history/novels", response_model=NovelViewHistoryListOut)
 def list_my_novel_view_history(
     request: Request,
     db: Session = Depends(get_db),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     user = require_current_user(request, db)
     site_key = resolve_site_key(request)
-    rows = (
+    base_q = (
         db.query(models.UserViewHistory, models.Novel, models.User.username)
         .outerjoin(
             models.Novel,
@@ -25454,22 +25810,39 @@ def list_my_novel_view_history(
         .filter(models.UserViewHistory.user_id == user.id)
         .filter(models.UserViewHistory.target_type == "novel")
         .filter(models.UserViewHistory.site_key == site_key)
+    )
+    total = (
+        db.query(func.count(models.UserViewHistory.id))
+        .filter(models.UserViewHistory.user_id == user.id)
+        .filter(models.UserViewHistory.target_type == "novel")
+        .filter(models.UserViewHistory.site_key == site_key)
+        .scalar()
+        or 0
+    )
+    rows = (
+        base_q
         .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
-    return [
-        NovelViewHistoryItemOut(
-            target_id=int(hist.target_id),
-            viewed_at=hist.last_viewed_at,
-            view_count=int(hist.view_count or 0),
-            site_key=str(hist.site_key or "main"),
-            title=str(novel.title or "") if novel else None,
-            author_username=str(username or "") if username else None,
-            age_limit=str(getattr(novel, "age_limit", "") or "") if novel else None,
-        )
-        for hist, novel, username in rows
-    ]
+    return NovelViewHistoryListOut(
+        items=[
+            NovelViewHistoryItemOut(
+                target_id=int(hist.target_id),
+                viewed_at=hist.last_viewed_at,
+                view_count=int(hist.view_count or 0),
+                site_key=str(hist.site_key or "main"),
+                title=str(novel.title or "") if novel else None,
+                author_username=str(username or "") if username else None,
+                age_limit=str(getattr(novel, "age_limit", "") or "") if novel else None,
+            )
+            for hist, novel, username in rows
+        ],
+        total=int(total),
+        limit=int(limit),
+        offset=int(offset),
+    )
 
 
 @app.get("/api/me/view-history/ai-public-chats", response_model=list[AIPublicChatViewHistoryItemOut])
@@ -26871,4 +27244,38 @@ def get_my_ai_logs(
             "model": log.model,
         }
         for log in logs
+    ]
+
+
+@app.get("/api/admin/ai/logs")
+def admin_get_ai_logs(
+    request: Request,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """
+    管理者向けに全ユーザーのAI利用履歴を新しい順で返す。
+    翻訳ログも AIGenerateLog に保存されているため同じ一覧で確認できる。
+    """
+    require_admin(request)
+
+    rows = (
+        db.query(models.AIGenerateLog, models.User.username)
+        .outerjoin(models.User, models.User.id == models.AIGenerateLog.user_id)
+        .order_by(models.AIGenerateLog.created_at.desc(), models.AIGenerateLog.id.desc())
+        .limit(max(1, min(int(limit or 200), 1000)))
+        .all()
+    )
+    return [
+        {
+            "id": log.id,
+            "created_at": log.created_at,
+            "prompt_summary": log.prompt_summary,
+            "tokens_used": log.tokens_used,
+            "model": log.model,
+            "user_id": log.user_id,
+            "guest_id": log.guest_id,
+            "username": username,
+        }
+        for log, username in rows
     ]

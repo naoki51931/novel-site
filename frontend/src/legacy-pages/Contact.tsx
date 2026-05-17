@@ -24,7 +24,7 @@ export default function Contact() {
     setRecaptchaReady(false);
 
     const scriptId = "google-recaptcha-enterprise-js";
-    let script = document.getElementById(scriptId);
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
     if (!script) {
       script = document.createElement("script");
       script.id = scriptId;
@@ -47,13 +47,13 @@ export default function Contact() {
     };
   }, [shouldUseRecaptcha]);
 
-  const requestRecaptchaToken = async (action: string) => {
+  const requestRecaptchaToken = async (action: string): Promise<string> => {
     if (!shouldUseRecaptcha) return "";
     const grecaptchaEnterprise = window.grecaptcha?.enterprise;
     if (!grecaptchaEnterprise) {
       throw new Error(t({ ja: "reCAPTCHAの初期化に失敗しました", en: "Failed to initialize reCAPTCHA." }));
     }
-    return await new Promise((resolve, reject) => {
+    return await new Promise<string>((resolve, reject) => {
       grecaptchaEnterprise.ready(async () => {
         try {
           const token = await grecaptchaEnterprise.execute(RECAPTCHA_SITE_KEY, { action });

@@ -1,0 +1,7 @@
+time="2026-05-06T09:01:10Z" level=warning msg="The \"GOOGLE_INDEXING_SERVICE_ACCOUNT_EMAIL\" variable is not set. Defaulting to a blank string."
+time="2026-05-06T09:01:10Z" level=warning msg="The \"NOVELAI_API_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-05-06T09:01:10Z" level=warning msg="The \"GOOGLE_INDEXING_PRIVATE_KEY_ID\" variable is not set. Defaulting to a blank string."
+time="2026-05-06T09:01:10Z" level=warning msg="The \"GOOGLE_INDEXING_PRIVATE_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-05-06T09:01:10Z" level=warning msg="The \"DEEPSEEK_API_KEY_FILE\" variable is not set. Defaulting to a blank string."
+time="2026-05-06T09:01:10Z" level=warning msg="The \"FIREBASE_SERVICE_ACCOUNT_FILE\" variable is not set. Defaulting to a blank string."
+time="2026-05-06T09:01:10Z" level=warning msg="/home/ubuntu/novel-site/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"

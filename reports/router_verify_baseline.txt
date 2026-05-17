@@ -1,0 +1,60 @@
+ M README.md
+ M backend/app/__pycache__/main.cpython-312.pyc
+ M backend/app/features/__pycache__/__init__.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_chat_public_characters_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_chat_public_interactions_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_episode_assist_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_memory_backfill_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_memory_items_deactivate_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_memory_items_delete_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_memory_items_list_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_novel_generate_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_novel_job_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/ai_novel_revision_target_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/auth_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/covers_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/novels_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/public_novel_recommended_routes.cpython-312.pyc
+ M backend/app/features/__pycache__/public_novels_ranking_routes.cpython-312.pyc
+ M backend/app/main.py
+ M backend/app/routers/__pycache__/episodes.cpython-312.pyc
+ M backend/app/routers/__pycache__/novels.cpython-312.pyc
+ M backend/app/routers/__pycache__/two_factor.cpython-312.pyc
+ M backend/app/routers/episodes.py
+ M backend/app/routers/novels.py
+ M nginx/ssl/letsencrypt/renewal/shosetsu-toukou-site.org.conf
+?? backend/app/routers/__init__.py
+?? backend/app/routers/__pycache__/__init__.cpython-312.pyc
+?? backend/app/routers/__pycache__/admin.cpython-312.pyc
+?? backend/app/routers/__pycache__/ai_chat.cpython-312.pyc
+?? backend/app/routers/__pycache__/ai_novel.cpython-312.pyc
+?? backend/app/routers/__pycache__/auth.cpython-312.pyc
+?? backend/app/routers/__pycache__/payments.cpython-312.pyc
+?? backend/app/routers/admin.py
+?? backend/app/routers/ai_chat.py
+?? backend/app/routers/ai_novel.py
+?? backend/app/routers/auth.py
+?? backend/app/routers/payments.py
+?? refactor_state.json
+?? reports/router_refactor_backend.log
+?? reports/router_refactor_ps.txt
+?? reports/router_refactor_routes.json
+?? reports/router_refactor_smoke.json
+?? reports/router_verify_baseline.txt
+?? reports/router_verify_before.json
+?? reports/router_wrappers_ai_chat.py
+?? reports/router_wrappers_ai_novel.py
+?? reports/router_wrappers_episodes.py
+?? scripts/__pycache__/extract_routes.cpython-312.pyc
+?? scripts/__pycache__/gen_router_wrappers.cpython-312.pyc
+?? scripts/__pycache__/remove_app_decorators.cpython-312.pyc
+?? scripts/__pycache__/router_refactor_lib.cpython-312.pyc
+?? scripts/__pycache__/verify_main_py_shrink.cpython-312.pyc
+?? scripts/auto_refactor_main_py.sh
+?? scripts/extract_routes.py
+?? scripts/gen_router_wrappers.py
+?? scripts/remove_app_decorators.py
+?? scripts/router_refactor_lib.py
+?? scripts/run_refactor_batch.sh
+?? scripts/smoke_router_refactor.sh
+?? scripts/verify_main_py_shrink.py

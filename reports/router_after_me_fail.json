@@ -1,0 +1,540 @@
+{
+  "generated_at": "2026-05-06T08:10:50.255068+00:00",
+  "main_py": "backend/app/main.py",
+  "main_py_line_count": 26001,
+  "total_route_entries": 46,
+  "remaining_app_route_functions": 46,
+  "completed_groups": [
+    "admin",
+    "ai_chat",
+    "ai_novel",
+    "auth",
+    "episodes",
+    "novels",
+    "other",
+    "payments"
+  ],
+  "pending_group_counts": {
+    "ai_misc": 7,
+    "feed": 7,
+    "tags": 7,
+    "public": 4,
+    "dms": 3,
+    "board": 2,
+    "i18n": 2,
+    "search": 2,
+    "series": 1
+  },
+  "groups": {
+    "admin": {
+      "count": 11,
+      "functions": [
+        {
+          "function_name": "admin_start_i18n_job",
+          "start_line": 16356,
+          "paths": [
+            "/api/admin/i18n/jobs/start"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_list_i18n_jobs",
+          "start_line": 16480,
+          "paths": [
+            "/api/admin/i18n/jobs"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_i18n_job_status",
+          "start_line": 16489,
+          "paths": [
+            "/api/admin/i18n/jobs/{job_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_cancel_i18n_job",
+          "start_line": 16501,
+          "paths": [
+            "/api/admin/i18n/jobs/{job_id}/cancel"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_retranslate_remaining_i18n",
+          "start_line": 16516,
+          "paths": [
+            "/api/admin/i18n/retranslate_remaining"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_delete_board_post",
+          "start_line": 17525,
+          "paths": [
+            "/api/admin/board/posts/{post_id}"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_urls",
+          "start_line": 23316,
+          "paths": [
+            "/api/admin/indexing/urls"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_submit",
+          "start_line": 23408,
+          "paths": [
+            "/api/admin/indexing/submit"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_carryover",
+          "start_line": 23537,
+          "paths": [
+            "/api/admin/indexing/carryover"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_carryover_clear",
+          "start_line": 23550,
+          "paths": [
+            "/api/admin/indexing/carryover"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "admin_indexnow_submit",
+          "start_line": 23682,
+          "paths": [
+            "/api/admin/indexnow/submit"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    },
+    "ai_misc": {
+      "count": 7,
+      "functions": [
+        {
+          "function_name": "generate_tag_candidates",
+          "start_line": 6787,
+          "paths": [
+            "/api/ai/tag_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_summary_candidates",
+          "start_line": 6805,
+          "paths": [
+            "/api/ai/summary_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_title_candidate",
+          "start_line": 6828,
+          "paths": [
+            "/api/ai/title_candidate"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_title_candidates",
+          "start_line": 6846,
+          "paths": [
+            "/api/ai/title_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "ai_chat",
+          "start_line": 12461,
+          "paths": [
+            "/api/ai/chat"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "extract_ai_character_terms",
+          "start_line": 14908,
+          "paths": [
+            "/api/ai/character_terms"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "get_my_ai_logs",
+          "start_line": 25972,
+          "paths": [
+            "/api/ai/logs/me"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "feed": {
+      "count": 7,
+      "functions": [
+        {
+          "function_name": "list_following_feed",
+          "start_line": 18667,
+          "paths": [
+            "/api/feed/following"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_following_tags_feed",
+          "start_line": 18703,
+          "paths": [
+            "/api/feed/following-tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_history_feed",
+          "start_line": 18769,
+          "paths": [
+            "/api/feed/history"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_pickups_feed",
+          "start_line": 18816,
+          "paths": [
+            "/api/feed/pickups"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_new_feed",
+          "start_line": 18987,
+          "paths": [
+            "/api/feed/new"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_trending_feed",
+          "start_line": 19010,
+          "paths": [
+            "/api/feed/trending"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_recommended_feed",
+          "start_line": 19056,
+          "paths": [
+            "/api/feed/recommended"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "tags": {
+      "count": 7,
+      "functions": [
+        {
+          "function_name": "list_tags",
+          "start_line": 18068,
+          "paths": [
+            "/api/tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_tag_detail",
+          "start_line": 18118,
+          "paths": [
+            "/api/tags/{tag_name}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_tag_novels",
+          "start_line": 18223,
+          "paths": [
+            "/api/tags/{tag_name}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_related_tags",
+          "start_line": 18350,
+          "paths": [
+            "/api/tags/{tag_name}/related"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "follow_tag",
+          "start_line": 18418,
+          "paths": [
+            "/api/tags/{tag_name}/follow"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unfollow_tag",
+          "start_line": 18460,
+          "paths": [
+            "/api/tags/{tag_name}/follow"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "read_tag_follow_status",
+          "start_line": 18498,
+          "paths": [
+            "/api/tags/{tag_name}/follow-status"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "public": {
+      "count": 4,
+      "functions": [
+        {
+          "function_name": "list_public_novels",
+          "start_line": 19377,
+          "paths": [
+            "/api/public/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_public_user",
+          "start_line": 20396,
+          "paths": [
+            "/api/public/users/{username}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_public_user_novels",
+          "start_line": 20453,
+          "paths": [
+            "/api/public/users/{username}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_public_user_favorites",
+          "start_line": 20586,
+          "paths": [
+            "/api/public/users/{username}/favorites"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "dms": {
+      "count": 3,
+      "functions": [
+        {
+          "function_name": "create_dm_thread",
+          "start_line": 20790,
+          "paths": [
+            "/api/dms"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "read_dm_thread",
+          "start_line": 20832,
+          "paths": [
+            "/api/dms/{thread_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "create_dm_message",
+          "start_line": 20915,
+          "paths": [
+            "/api/dms/{thread_id}/messages"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    },
+    "board": {
+      "count": 2,
+      "functions": [
+        {
+          "function_name": "list_board_posts",
+          "start_line": 17332,
+          "paths": [
+            "/api/board/posts"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "create_board_post",
+          "start_line": 17365,
+          "paths": [
+            "/api/board/posts"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    },
+    "i18n": {
+      "count": 2,
+      "functions": [
+        {
+          "function_name": "i18n_translate",
+          "start_line": 15609,
+          "paths": [
+            "/api/i18n/translate"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "i18n_dictionary",
+          "start_line": 16326,
+          "paths": [
+            "/api/i18n/dictionary/{target_lang}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "search": {
+      "count": 2,
+      "functions": [
+        {
+          "function_name": "search_public_users",
+          "start_line": 19822,
+          "paths": [
+            "/api/search/users"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "search_public_tags",
+          "start_line": 19872,
+          "paths": [
+            "/api/search/tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "series": {
+      "count": 1,
+      "functions": [
+        {
+          "function_name": "list_series_novels",
+          "start_line": 18556,
+          "paths": [
+            "/api/series/{series_name}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    }
+  }
+}

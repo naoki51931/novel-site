@@ -64,6 +64,16 @@ export default function PremiumLP() {
         navigate("/login");
         return;
       }
+      const meRes = await fetch("/api/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (meRes.ok) {
+        const meData = await meRes.json().catch(() => ({}));
+        if (meData?.is_premium) {
+          setIsPremium(true);
+          throw new Error(t({ ja: "すでにプレミアム会員です。", en: "You are already Premium." }));
+        }
+      }
       const res = await fetch("/api/stripe/create-checkout-session", {
         method: "POST",
         headers: {
@@ -117,8 +127,8 @@ export default function PremiumLP() {
         </h2>
         <p style={{ margin: "0 0 14px", color: "#473a23", lineHeight: 1.7 }}>
           {t({
-            ja: "AI生成回数の上限拡張や全文閲覧など、毎日の執筆と読書を加速させる機能をまとめて利用できます。",
-            en: "Get bundled features like higher AI limits and full-text access to speed up your daily writing and reading.",
+            ja: "AI小説生成回数やAIチャット利用枠の拡張、全文閲覧など、毎日の執筆と読書を加速させる機能をまとめて利用できます。",
+            en: "Get bundled features like higher AI novel and AI chat limits plus full-text access to speed up your daily writing and reading.",
           })}
         </p>
 
@@ -133,6 +143,10 @@ export default function PremiumLP() {
           <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
             <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "AI小説生成", en: "AI novel generation" })}</div>
             <strong>{t({ ja: "1日80回まで", en: "Up to 80 times/day" })}</strong>
+          </div>
+          <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
+            <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "AIチャット", en: "AI chat" })}</div>
+            <strong>{t({ ja: "利用トークン枠を拡張", en: "Expanded token allowance" })}</strong>
           </div>
           <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
             <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "エピソード閲覧", en: "Episode access" })}</div>

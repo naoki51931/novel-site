@@ -159,6 +159,9 @@ class AINovelRequest(BaseModel):
     r18: bool = False
     retry_mode: bool = False
     retry_max: int | None = None
+    chunked_generation_enabled: bool = False
+    chunked_generation_count: int | None = None
+    chunked_generation_plans: list[dict] | None = None
 
 
 class AINovelResponse(BaseModel):

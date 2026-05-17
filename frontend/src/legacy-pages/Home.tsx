@@ -491,7 +491,10 @@ export default function Home({
       try {
         setFollowingFeedLoading(true);
         setFollowingFeedError("");
-        const res = await fetch(`${API_BASE}/api/feed/following?limit=8`, {
+        const feedParams = new URLSearchParams();
+        feedParams.set("limit", "8");
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) feedParams.set("lang", lang);
+        const res = await fetch(`${API_BASE}/api/feed/following?${feedParams.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         });
@@ -518,7 +521,7 @@ export default function Home({
     };
 
     fetchFollowingFeed();
-  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t]);
+  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t, lang]);
 
   useEffect(() => {
     const fetchFollowingTagsFeed = async () => {
@@ -560,7 +563,10 @@ export default function Home({
       try {
         setFollowingTagsFeedLoading(true);
         setFollowingTagsFeedError("");
-        const res = await fetch(`${API_BASE}/api/feed/following-tags?limit=8`, {
+        const feedParams = new URLSearchParams();
+        feedParams.set("limit", "8");
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) feedParams.set("lang", lang);
+        const res = await fetch(`${API_BASE}/api/feed/following-tags?${feedParams.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         });
@@ -586,7 +592,7 @@ export default function Home({
       }
     };
     fetchFollowingTagsFeed();
-  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t]);
+  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t, lang]);
 
   useEffect(() => {
     const fetchNewAndTrendingFeed = async () => {
@@ -629,12 +635,15 @@ export default function Home({
         setTrendingFeedLoading(true);
         setNewFeedError("");
         setTrendingFeedError("");
+        const feedParams = new URLSearchParams();
+        feedParams.set("limit", "8");
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) feedParams.set("lang", lang);
         const [resNew, resTrending] = await Promise.all([
-          fetch(`${API_BASE}/api/feed/new?limit=8`, {
+          fetch(`${API_BASE}/api/feed/new?${feedParams.toString()}`, {
             headers,
             cache: "no-store",
           }),
-          fetch(`${API_BASE}/api/feed/trending?limit=8`, {
+          fetch(`${API_BASE}/api/feed/trending?${feedParams.toString()}`, {
             headers,
             cache: "no-store",
           }),
@@ -670,7 +679,7 @@ export default function Home({
     };
 
     fetchNewAndTrendingFeed();
-  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t]);
+  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t, lang]);
 
   useEffect(() => {
     const fetchExtraFeeds = async () => {
@@ -727,12 +736,15 @@ export default function Home({
         setHistoryFeedError("");
         setPickupFeedError("");
         setTrendingTagsError("");
+        const feedParams = new URLSearchParams();
+        feedParams.set("limit", "8");
+        if (["en", "zh-cn", "zh-tw", "ko"].includes(lang)) feedParams.set("lang", lang);
         const [resHistory, resPickups, resTrendingTags] = await Promise.all([
-          fetch(`${API_BASE}/api/feed/history?limit=8`, {
+          fetch(`${API_BASE}/api/feed/history?${feedParams.toString()}`, {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
           }),
-          fetch(`${API_BASE}/api/feed/pickups?limit=8`, {
+          fetch(`${API_BASE}/api/feed/pickups?${feedParams.toString()}`, {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
           }),
@@ -794,7 +806,7 @@ export default function Home({
       }
     };
     fetchExtraFeeds();
-  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t]);
+  }, [location.search, query, excludeQuery, tag, sort, ageLimit, creativeType, t, lang]);
 
   useEffect(() => {
     const fetchRecommended = async () => {

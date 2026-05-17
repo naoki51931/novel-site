@@ -1,0 +1,8 @@
+NAME             IMAGE                              COMMAND                  SERVICE    CREATED         STATUS                  PORTS
+novel-backend    novel-site-backend                 "uvicorn app.main:ap…"   backend    4 seconds ago   Up Less than a second   
+novel-certbot    certbot/certbot                    "/bin/sh -c 'sleep i…"   certbot    2 months ago    Up 11 days              80/tcp, 443/tcp
+novel-db         mysql:8.0                          "docker-entrypoint.s…"   db         2 months ago    Up 11 days (healthy)    33060/tcp, 0.0.0.0:3307->3306/tcp, [::]:3307->3306/tcp
+novel-frontend   novel-site-frontend                "docker-entrypoint.s…"   frontend   2 seconds ago   Up Less than a second   3000/tcp
+novel-nginx      nginx:1.27-alpine                  "/docker-entrypoint.…"   nginx      13 days ago     Up 11 days              0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp
+novel-redis      redis:7-alpine                     "docker-entrypoint.s…"   redis      2 months ago    Up 11 days              6379/tcp
+novel-weaviate   semitechnologies/weaviate:1.24.8   "/bin/weaviate --hos…"   weaviate   2 months ago    Up 11 days              0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp

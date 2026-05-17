@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink";
 import SupportPanel from "../components/SupportPanel";
@@ -9,6 +9,7 @@ import { getApiBase } from "../lib/apiBase";
 import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
 
 const API_BASE = getApiBase();
+const EPISODE_SCROLL_STORAGE_KEY_PREFIX = "episode_scroll_position_v1_";
 const FREE_READING_SCHEDULE = {
   ja: "無料開放時間: 平日17:00-19:00 / 土日祝14:00-19:00（JST）",
   en: "Free reading hours: Weekdays 17:00-19:00 / Weekends & holidays 14:00-19:00 (JST)",
@@ -83,15 +84,29 @@ export default function EpisodeDetail() {
   const [episode, setEpisode] = useState<EpisodeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [episodeLoadStatus, setEpisodeLoadStatus] = useState<number | null>(null);
   const [comments, setComments] = useState<EpisodeComment[]>([]);
   const [commentBody, setCommentBody] = useState("");
   const [myUserId, setMyUserId] = useState<number | string | null>(null);
   const [ageConfirmRequired, setAgeConfirmRequired] = useState(false);
   const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [savedScrollPosition, setSavedScrollPosition] = useState<number | null>(null);
+  const [resumeNotice, setResumeNotice] = useState("");
+  const resumeNoticeTimerRef = useRef<number | null>(null);
+  const restoredEpisodeIdRef = useRef("");
 
   // ★ いいね / 閲覧数
   const [likeCount, setLikeCount] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
+
+  const getEpisodeScrollStorageKey = (episodeId: string | number | null | undefined) =>
+    `${EPISODE_SCROLL_STORAGE_KEY_PREFIX}${episodeId ?? ""}`;
+  const readSavedScrollPosition = (episodeId: string | number | null | undefined) => {
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem(getEpisodeScrollStorageKey(episodeId));
+    const nextPosition = raw == null ? Number.NaN : Number(raw);
+    return Number.isFinite(nextPosition) && nextPosition > 0 ? nextPosition : null;
+  };
 
   const countChars = (value: string | null | undefined) => (value || "").length;
   const summarizeText = (text: string | null | undefined, limit = 200) => {
@@ -109,6 +124,21 @@ export default function EpisodeDetail() {
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [comments]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setSavedScrollPosition(readSavedScrollPosition(id));
+    setResumeNotice("");
+    restoredEpisodeIdRef.current = "";
+  }, [id]);
+
+  useEffect(() => {
+    return () => {
+      if (resumeNoticeTimerRef.current != null) {
+        window.clearTimeout(resumeNoticeTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!episode) return undefined;
@@ -314,11 +344,13 @@ export default function EpisodeDetail() {
       try {
         setLoading(true);
         setError("");
+        setEpisodeLoadStatus(null);
 
         const token = localStorage.getItem("token");
         const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
         const res = await fetch(API_BASE + "/api/episodes/" + id, { headers: authHeaders });
         if (!res.ok) {
+          setEpisodeLoadStatus(res.status);
           throw new Error(
             t(
               { ja: "エピソードの取得に失敗しました ({{status}})", en: "Failed to load episode ({{status}})" },
@@ -422,6 +454,67 @@ export default function EpisodeDetail() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !episode?.id) return;
+
+    setSavedScrollPosition(readSavedScrollPosition(episode.id));
+
+    const key = getEpisodeScrollStorageKey(episode.id);
+    let ticking = false;
+
+    const persistScrollPosition = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        window.localStorage.setItem(key, String(window.scrollY));
+        ticking = false;
+      });
+    };
+
+    window.addEventListener("scroll", persistScrollPosition, { passive: true });
+    window.addEventListener("beforeunload", persistScrollPosition);
+    return () => {
+      window.removeEventListener("scroll", persistScrollPosition);
+      window.removeEventListener("beforeunload", persistScrollPosition);
+      window.localStorage.setItem(key, String(window.scrollY));
+    };
+  }, [episode?.id]);
+
+  const showResumeNotice = () => {
+    setResumeNotice(
+      t({
+        ja: "前回読んでいた位置に移動しました。",
+        en: "Moved to your previous reading position.",
+      })
+    );
+    if (resumeNoticeTimerRef.current != null) {
+      window.clearTimeout(resumeNoticeTimerRef.current);
+    }
+    resumeNoticeTimerRef.current = window.setTimeout(() => {
+      setResumeNotice("");
+      resumeNoticeTimerRef.current = null;
+    }, 5000);
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !episode?.id || savedScrollPosition == null) return;
+    if (savedScrollPosition <= 120) return;
+
+    const episodeId = String(episode.id);
+    if (restoredEpisodeIdRef.current === episodeId) return;
+
+    restoredEpisodeIdRef.current = episodeId;
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: savedScrollPosition, behavior: "auto" });
+      showResumeNotice();
+    });
+  }, [episode?.id, savedScrollPosition, t]);
+
+  const handleScrollToTop = () => {
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const handlePostComment = async () => {
     const token = localStorage.getItem("token");
@@ -541,6 +634,24 @@ export default function EpisodeDetail() {
     return (
       <div>
         <p style={{ color: "red" }}>{error}</p>
+        {episodeLoadStatus === 403 && (
+          <p>
+            {t(
+              {
+                ja: "生年月日が未登録の可能性があります。",
+                en: "Your birth date may not be registered.",
+              }
+            )}{" "}
+            <Link to="/mypage/settings">
+              {t(
+                {
+                  ja: "マイページ設定で生年月日を登録してください。",
+                  en: "Register your birth date in My Page settings.",
+                }
+              )}
+            </Link>
+          </p>
+        )}
         <button className="btn btn-border" onClick={handleBackToNovel}>
           {t({ ja: "戻る", en: "Back" })}
         </button>
@@ -992,6 +1103,50 @@ export default function EpisodeDetail() {
           <button className="btn btn-border" onClick={handleSubscribe}>
             {t({ ja: "課金して続きを読む", en: "Subscribe to read full" })}
           </button>
+        </div>
+      )}
+
+      {resumeNotice && savedScrollPosition != null && savedScrollPosition > 120 && (
+        <div
+          style={{
+            position: "fixed",
+            left: 16,
+            right: 16,
+            bottom: 16,
+            zIndex: 30,
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              width: "min(100%, 640px)",
+              padding: 12,
+              border: "1px solid rgba(0,0,0,0.12)",
+              borderRadius: 12,
+              background: "rgba(255,255,255,0.96)",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.18)",
+              backdropFilter: "blur(8px)",
+              pointerEvents: "auto",
+            }}
+          >
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleScrollToTop}
+            >
+              {t({ ja: "先頭に戻る", en: "Back to top" })}
+            </button>
+            </div>
+            <div style={{ fontSize: "0.9rem", color: "#666" }}>
+              {resumeNotice}
+            </div>
+          </div>
         </div>
       )}
 

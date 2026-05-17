@@ -15,6 +15,7 @@ import StripeReturn from "./legacy-pages/StripeReturn";
 import Login from "./legacy-pages/Login";
 import OAuthCallback from "./legacy-pages/OAuthCallback";
 import Mypage from "./legacy-pages/Mypage";
+import ViewHistoryPage from "./legacy-pages/ViewHistoryPage";
 import UserPage from "./legacy-pages/UserPage";
 import AINovelPage from "./legacy-pages/AINovelPage";
 import AiLogsPage from "./legacy-pages/AiLogsPage";
@@ -34,6 +35,7 @@ import AdminDashboard from "./legacy-pages/AdminDashboard";
 import AdminUsers from "./legacy-pages/AdminUsers";
 import AdminAiJobs from "./legacy-pages/AdminAiJobs";
 import AdminI18nJobs from "./legacy-pages/AdminI18nJobs";
+import AdminAiLogs from "./legacy-pages/AdminAiLogs";
 import SupportReturn from "./legacy-pages/SupportReturn";
 import SupportPlans from "./legacy-pages/SupportPlans";
 import StripePriceIdManual from "./legacy-pages/StripePriceIdManual";
@@ -969,6 +971,7 @@ export default function App() {
             }
           />
           <Route path="/mypage" element={<Mypage />} />
+          <Route path="/me/view-history" element={<ViewHistoryPage />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
           <Route path="/author/dashboard" element={<AuthorDashboard />} />
@@ -981,6 +984,7 @@ export default function App() {
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/admin/ai-jobs" element={<AdminAiJobs />} />
+          <Route path="/admin/ai-logs" element={<AdminAiLogs />} />
           <Route path="/admin/i18n-jobs" element={<AdminI18nJobs />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />

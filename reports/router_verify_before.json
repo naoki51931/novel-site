@@ -1,0 +1,1256 @@
+{
+  "generated_at": "2026-05-06T07:57:17.234454+00:00",
+  "main_py": "backend/app/main.py",
+  "main_py_line_count": 26041,
+  "total_route_entries": 116,
+  "remaining_app_route_functions": 116,
+  "completed_groups": [
+    "admin",
+    "ai_chat",
+    "ai_novel",
+    "auth",
+    "episodes",
+    "payments"
+  ],
+  "pending_group_counts": {
+    "other": 44,
+    "novels": 16,
+    "me": 10,
+    "ai_misc": 7,
+    "feed": 7,
+    "tags": 7,
+    "public": 4,
+    "dms": 3,
+    "board": 2,
+    "i18n": 2,
+    "search": 2,
+    "series": 1
+  },
+  "groups": {
+    "other": {
+      "count": 44,
+      "functions": [
+        {
+          "function_name": "public_create_contact_message",
+          "start_line": 6036,
+          "paths": [
+            "/api/contact/messages"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "list_series_overview",
+          "start_line": 18604,
+          "paths": [
+            "/api/series"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_trending_tags",
+          "start_line": 18841,
+          "paths": [
+            "/api/trending-tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_public_author",
+          "start_line": 20417,
+          "paths": [
+            "/api/authors/{author_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_public_author_novels",
+          "start_line": 20544,
+          "paths": [
+            "/api/authors/{author_id}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_author_stats",
+          "start_line": 20672,
+          "paths": [
+            "/api/authors/{author_id}/stats"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_author_favorite_tags",
+          "start_line": 20725,
+          "paths": [
+            "/api/authors/{author_id}/favorite-tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "prerender_novel_page",
+          "start_line": 22309,
+          "paths": [
+            "/prerender/novels/{novel_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "prerender_episode_page",
+          "start_line": 22420,
+          "paths": [
+            "/prerender/episodes/{episode_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "share_episode_page",
+          "start_line": 22556,
+          "paths": [
+            "/share/episodes/{episode_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "share_episode_og_image",
+          "start_line": 22674,
+          "paths": [
+            "/share/episodes/{episode_id}/og-image.png"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "indexnow_key_file",
+          "start_line": 23668,
+          "paths": [
+            "/{indexnow_key_file}.txt"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_main_xml",
+          "start_line": 23920,
+          "paths": [
+            "/sitemap-main.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_static_xml",
+          "start_line": 23927,
+          "paths": [
+            "/sitemap-static.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_novels_xml",
+          "start_line": 23935,
+          "paths": [
+            "/sitemap-novels.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_episodes_xml",
+          "start_line": 23943,
+          "paths": [
+            "/sitemap-episodes.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_authors_xml",
+          "start_line": 23951,
+          "paths": [
+            "/sitemap-authors.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_tags_xml",
+          "start_line": 23959,
+          "paths": [
+            "/sitemap-tags.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_index_xml",
+          "start_line": 23967,
+          "paths": [
+            "/sitemap-index.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "sitemap_xml",
+          "start_line": 23996,
+          "paths": [
+            "/sitemap.xml"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "robots_txt",
+          "start_line": 24026,
+          "paths": [
+            "/robots.txt"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_author_dashboard",
+          "start_line": 25028,
+          "paths": [
+            "/api/author/dashboard"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_author_novel_daily_metrics",
+          "start_line": 25056,
+          "paths": [
+            "/api/author/dashboard/novels/{novel_id}/daily"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_author_top_novels",
+          "start_line": 25121,
+          "paths": [
+            "/api/author/dashboard/top-novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_profile",
+          "start_line": 25162,
+          "paths": [
+            "/api/users/me"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_me",
+          "start_line": 25175,
+          "paths": [
+            "/api/me"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "update_profile",
+          "start_line": 25182,
+          "paths": [
+            "/api/users/me"
+          ],
+          "methods": [
+            "PUT"
+          ]
+        },
+        {
+          "function_name": "follow_user",
+          "start_line": 25270,
+          "paths": [
+            "/api/users/{user_id}/follow"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unfollow_user",
+          "start_line": 25336,
+          "paths": [
+            "/api/users/{user_id}/follow"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "get_follow_status",
+          "start_line": 25364,
+          "paths": [
+            "/api/users/{user_id}/follow-status"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_followers",
+          "start_line": 25382,
+          "paths": [
+            "/api/users/{user_id}/followers"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_following",
+          "start_line": 25434,
+          "paths": [
+            "/api/users/{user_id}/following"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_push_public_key",
+          "start_line": 25568,
+          "paths": [
+            "/api/push/public_key"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "subscribe_push_notifications",
+          "start_line": 25576,
+          "paths": [
+            "/api/push/subscribe"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unsubscribe_push_notifications",
+          "start_line": 25618,
+          "paths": [
+            "/api/push/unsubscribe"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "register_mobile_push_token",
+          "start_line": 25640,
+          "paths": [
+            "/api/mobile-push/register"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unregister_mobile_push_token",
+          "start_line": 25681,
+          "paths": [
+            "/api/mobile-push/unregister"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "push_debug_log",
+          "start_line": 25701,
+          "paths": [
+            "/api/push/debug"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "list_notifications",
+          "start_line": 25714,
+          "paths": [
+            "/api/notifications"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "unread_notification_count",
+          "start_line": 25754,
+          "paths": [
+            "/api/notifications/unread_count"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "notification_counts",
+          "start_line": 25773,
+          "paths": [
+            "/api/notifications/counts"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "mark_notification_read",
+          "start_line": 25801,
+          "paths": [
+            "/api/notifications/{notification_id}/read"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "mark_all_notifications_read",
+          "start_line": 25825,
+          "paths": [
+            "/api/notifications/read_all"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "delete_notification",
+          "start_line": 25840,
+          "paths": [
+            "/api/notifications/{notification_id}"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        }
+      ]
+    },
+    "novels": {
+      "count": 16,
+      "functions": [
+        {
+          "function_name": "update_novel",
+          "start_line": 16995,
+          "paths": [
+            "/api/novels/{novel_id}"
+          ],
+          "methods": [
+            "PUT"
+          ]
+        },
+        {
+          "function_name": "delete_novel",
+          "start_line": 17189,
+          "paths": [
+            "/api/novels/{novel_id}"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "get_comments",
+          "start_line": 17523,
+          "paths": [
+            "/api/novels/{novel_id}/comments"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "post_comment",
+          "start_line": 17534,
+          "paths": [
+            "/api/novels/{novel_id}/comments"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "get_novel_detail",
+          "start_line": 17635,
+          "paths": [
+            "/api/novels/{novel_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "get_novel_translation",
+          "start_line": 17817,
+          "paths": [
+            "/api/novels/{novel_id}/translations/{lang}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "create_episode",
+          "start_line": 21133,
+          "paths": [
+            "/api/novels/{novel_id}/episodes"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "list_episodes",
+          "start_line": 21582,
+          "paths": [
+            "/api/novels/{novel_id}/episodes"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "generate_novel_summary_candidates",
+          "start_line": 21641,
+          "paths": [
+            "/api/novels/{novel_id}/summary_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_novel_tag_candidates",
+          "start_line": 21677,
+          "paths": [
+            "/api/novels/{novel_id}/tag_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_novel_title_candidates",
+          "start_line": 21713,
+          "paths": [
+            "/api/novels/{novel_id}/title_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "like_novel",
+          "start_line": 24174,
+          "paths": [
+            "/api/novels/{novel_id}/like"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unlike_novel",
+          "start_line": 24261,
+          "paths": [
+            "/api/novels/{novel_id}/like"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "favorite_novel",
+          "start_line": 25862,
+          "paths": [
+            "/api/novels/{novel_id}/favorite"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unfavorite_novel",
+          "start_line": 25903,
+          "paths": [
+            "/api/novels/{novel_id}/favorite"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "delete_comment",
+          "start_line": 25918,
+          "paths": [
+            "/api/novels/{novel_id}/comments/{comment_id}"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        }
+      ]
+    },
+    "admin": {
+      "count": 11,
+      "functions": [
+        {
+          "function_name": "admin_start_i18n_job",
+          "start_line": 16327,
+          "paths": [
+            "/api/admin/i18n/jobs/start"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_list_i18n_jobs",
+          "start_line": 16451,
+          "paths": [
+            "/api/admin/i18n/jobs"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_i18n_job_status",
+          "start_line": 16460,
+          "paths": [
+            "/api/admin/i18n/jobs/{job_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_cancel_i18n_job",
+          "start_line": 16472,
+          "paths": [
+            "/api/admin/i18n/jobs/{job_id}/cancel"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_retranslate_remaining_i18n",
+          "start_line": 16487,
+          "paths": [
+            "/api/admin/i18n/retranslate_remaining"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_delete_board_post",
+          "start_line": 17498,
+          "paths": [
+            "/api/admin/board/posts/{post_id}"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_urls",
+          "start_line": 23310,
+          "paths": [
+            "/api/admin/indexing/urls"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_submit",
+          "start_line": 23402,
+          "paths": [
+            "/api/admin/indexing/submit"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_carryover",
+          "start_line": 23531,
+          "paths": [
+            "/api/admin/indexing/carryover"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "admin_indexing_carryover_clear",
+          "start_line": 23544,
+          "paths": [
+            "/api/admin/indexing/carryover"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "admin_indexnow_submit",
+          "start_line": 23677,
+          "paths": [
+            "/api/admin/indexnow/submit"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    },
+    "me": {
+      "count": 10,
+      "functions": [
+        {
+          "function_name": "list_my_tag_follows",
+          "start_line": 18509,
+          "paths": [
+            "/api/me/tag-follows"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_my_scheduled_episodes",
+          "start_line": 21446,
+          "paths": [
+            "/api/me/scheduled-episodes"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_my_favorites",
+          "start_line": 24442,
+          "paths": [
+            "/api/me/favorites"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_my_ai_chat_favorites",
+          "start_line": 24492,
+          "paths": [
+            "/api/me/ai/chat/favorites"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "record_my_view_history",
+          "start_line": 24557,
+          "paths": [
+            "/api/me/view-history/record"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "list_my_novel_view_history",
+          "start_line": 24604,
+          "paths": [
+            "/api/me/view-history/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_my_public_ai_chat_view_history",
+          "start_line": 24643,
+          "paths": [
+            "/api/me/view-history/ai-public-chats"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_my_ai_chat_usage_history",
+          "start_line": 24680,
+          "paths": [
+            "/api/me/ai/chat/usage-history"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_my_novel_analytics",
+          "start_line": 24726,
+          "paths": [
+            "/api/me/analytics/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_my_novel_analytics",
+          "start_line": 24847,
+          "paths": [
+            "/api/me/analytics/novels/{novel_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "ai_misc": {
+      "count": 7,
+      "functions": [
+        {
+          "function_name": "generate_tag_candidates",
+          "start_line": 6758,
+          "paths": [
+            "/api/ai/tag_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_summary_candidates",
+          "start_line": 6776,
+          "paths": [
+            "/api/ai/summary_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_title_candidate",
+          "start_line": 6799,
+          "paths": [
+            "/api/ai/title_candidate"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "generate_title_candidates",
+          "start_line": 6817,
+          "paths": [
+            "/api/ai/title_candidates"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "ai_chat",
+          "start_line": 12432,
+          "paths": [
+            "/api/ai/chat"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "extract_ai_character_terms",
+          "start_line": 14879,
+          "paths": [
+            "/api/ai/character_terms"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "get_my_ai_logs",
+          "start_line": 26012,
+          "paths": [
+            "/api/ai/logs/me"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "feed": {
+      "count": 7,
+      "functions": [
+        {
+          "function_name": "list_following_feed",
+          "start_line": 18646,
+          "paths": [
+            "/api/feed/following"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_following_tags_feed",
+          "start_line": 18682,
+          "paths": [
+            "/api/feed/following-tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_history_feed",
+          "start_line": 18748,
+          "paths": [
+            "/api/feed/history"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_pickups_feed",
+          "start_line": 18795,
+          "paths": [
+            "/api/feed/pickups"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_new_feed",
+          "start_line": 18967,
+          "paths": [
+            "/api/feed/new"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_trending_feed",
+          "start_line": 18990,
+          "paths": [
+            "/api/feed/trending"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_recommended_feed",
+          "start_line": 19036,
+          "paths": [
+            "/api/feed/recommended"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "tags": {
+      "count": 7,
+      "functions": [
+        {
+          "function_name": "list_tags",
+          "start_line": 18045,
+          "paths": [
+            "/api/tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_tag_detail",
+          "start_line": 18095,
+          "paths": [
+            "/api/tags/{tag_name}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_tag_novels",
+          "start_line": 18200,
+          "paths": [
+            "/api/tags/{tag_name}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_related_tags",
+          "start_line": 18327,
+          "paths": [
+            "/api/tags/{tag_name}/related"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "follow_tag",
+          "start_line": 18395,
+          "paths": [
+            "/api/tags/{tag_name}/follow"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "unfollow_tag",
+          "start_line": 18437,
+          "paths": [
+            "/api/tags/{tag_name}/follow"
+          ],
+          "methods": [
+            "DELETE"
+          ]
+        },
+        {
+          "function_name": "read_tag_follow_status",
+          "start_line": 18475,
+          "paths": [
+            "/api/tags/{tag_name}/follow-status"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "public": {
+      "count": 4,
+      "functions": [
+        {
+          "function_name": "list_public_novels",
+          "start_line": 19357,
+          "paths": [
+            "/api/public/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "read_public_user",
+          "start_line": 20376,
+          "paths": [
+            "/api/public/users/{username}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_public_user_novels",
+          "start_line": 20434,
+          "paths": [
+            "/api/public/users/{username}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "list_public_user_favorites",
+          "start_line": 20568,
+          "paths": [
+            "/api/public/users/{username}/favorites"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "dms": {
+      "count": 3,
+      "functions": [
+        {
+          "function_name": "create_dm_thread",
+          "start_line": 20774,
+          "paths": [
+            "/api/dms"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "read_dm_thread",
+          "start_line": 20816,
+          "paths": [
+            "/api/dms/{thread_id}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "create_dm_message",
+          "start_line": 20899,
+          "paths": [
+            "/api/dms/{thread_id}/messages"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    },
+    "board": {
+      "count": 2,
+      "functions": [
+        {
+          "function_name": "list_board_posts",
+          "start_line": 17305,
+          "paths": [
+            "/api/board/posts"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "create_board_post",
+          "start_line": 17338,
+          "paths": [
+            "/api/board/posts"
+          ],
+          "methods": [
+            "POST"
+          ]
+        }
+      ]
+    },
+    "i18n": {
+      "count": 2,
+      "functions": [
+        {
+          "function_name": "i18n_translate",
+          "start_line": 15580,
+          "paths": [
+            "/api/i18n/translate"
+          ],
+          "methods": [
+            "POST"
+          ]
+        },
+        {
+          "function_name": "i18n_dictionary",
+          "start_line": 16297,
+          "paths": [
+            "/api/i18n/dictionary/{target_lang}"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "search": {
+      "count": 2,
+      "functions": [
+        {
+          "function_name": "search_public_users",
+          "start_line": 19802,
+          "paths": [
+            "/api/search/users"
+          ],
+          "methods": [
+            "GET"
+          ]
+        },
+        {
+          "function_name": "search_public_tags",
+          "start_line": 19852,
+          "paths": [
+            "/api/search/tags"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    },
+    "series": {
+      "count": 1,
+      "functions": [
+        {
+          "function_name": "list_series_novels",
+          "start_line": 18534,
+          "paths": [
+            "/api/series/{series_name}/novels"
+          ],
+          "methods": [
+            "GET"
+          ]
+        }
+      ]
+    }
+  }
+}

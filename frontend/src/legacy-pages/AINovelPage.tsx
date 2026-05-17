@@ -2,7 +2,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { getStoredLanguage, translate, useI18n } from "../lib/i18n";
-import { applyPolishReplacement, buildPolishPrompt } from "../lib/aiPolish.mjs";
+import {
+  applyPolishReplacement,
+  buildPolishPrompt,
+  describePolishIntensity,
+} from "../lib/aiPolish.mjs";
 
 /**
  * 既存プロジェクトで JWT をどこに保存しているかに合わせてここを調整する
@@ -21,8 +25,14 @@ const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 const AI_NOVEL_SEGMENT_PREFS_KEY = "ai_novel_segment_prefs_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
 const DEFAULT_AI_NOVEL_MODEL = "google/gemini-3-flash-preview";
+const AI_NOVEL_RETRY_SETTINGS_VERSION = 2;
+const DEFAULT_RETRY_MODE = true;
+const DEFAULT_RETRY_MAX = 30;
+const MAX_RETRY_MAX = 9999;
 const REVISION_CHUNK_MAX_CHARS = 3200;
+const COMMENT_REVISION_LIVE_PREVIEW_CHUNK_MAX_CHARS = 1200;
 const COMMENT_REVISION_OUTPUT_RETRY_MAX = 5;
+const COMMENT_REVISION_LIVE_PREVIEW_LINGER_MS = 15000;
 const SEGMENT_TARGET_CHARS = 2000;
 const SEGMENT_COUNT_MIN = 1;
 const SEGMENT_COUNT_MAX = 30;
@@ -60,6 +70,27 @@ function makeSegmentPlanItem(index: any) {
     id: `seg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${index}`,
     instruction: "",
   };
+}
+
+function normalizeRetryMax(value: any) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_RETRY_MAX;
+  return Math.max(0, Math.min(MAX_RETRY_MAX, parsed));
+}
+
+function normalizeDraftRetrySettings(draft: any) {
+  const version = Number.parseInt(String(draft?.retrySettingsVersion ?? 0), 10) || 0;
+  const retryMode = typeof draft?.retryMode === "boolean" ? draft.retryMode : DEFAULT_RETRY_MODE;
+  const retryMax = normalizeRetryMax(
+    typeof draft?.retryMax === "number" ? draft.retryMax : DEFAULT_RETRY_MAX
+  );
+  if (version < AI_NOVEL_RETRY_SETTINGS_VERSION && retryMode === false && retryMax === 2) {
+    return {
+      retryMode: DEFAULT_RETRY_MODE,
+      retryMax: DEFAULT_RETRY_MAX,
+    };
+  }
+  return { retryMode, retryMax };
 }
 
 function savePendingAiPost(data: any) {
@@ -253,25 +284,63 @@ function buildLineDiffSegments(beforeText: any, afterText: any) {
     }
   }
 
-  const unchangedAfterIndexes = new Set();
   let i = 0;
   let j = 0;
+  const segments: any[] = [];
   while (i < n && j < m) {
     if (beforeLines[i] === afterLines[j]) {
-      unchangedAfterIndexes.add(j);
+      segments.push({
+        text: j === afterLines.length - 1 && i === beforeLines.length - 1 ? afterLines[j] : `${afterLines[j]}\n`,
+        changed: false,
+        kind: "unchanged",
+      });
       i += 1;
       j += 1;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      segments.push({
+        text: `- ${beforeLines[i]}\n`,
+        changed: true,
+        kind: "removed",
+      });
       i += 1;
     } else {
+      segments.push({
+        text: `${j === afterLines.length - 1 ? `+ ${afterLines[j]}` : `+ ${afterLines[j]}\n`}`,
+        changed: true,
+        kind: "added",
+      });
       j += 1;
     }
   }
 
-  return afterLines.map((line: any, idx: any) => ({
-    text: idx === afterLines.length - 1 ? line : `${line}\n`,
-    changed: !unchangedAfterIndexes.has(idx),
-  }));
+  while (i < n) {
+    segments.push({
+      text: `- ${beforeLines[i]}${i === n - 1 ? "" : "\n"}`,
+      changed: true,
+      kind: "removed",
+    });
+    i += 1;
+  }
+
+  while (j < m) {
+    segments.push({
+      text: `${j === m - 1 ? `+ ${afterLines[j]}` : `+ ${afterLines[j]}\n`}`,
+      changed: true,
+      kind: "added",
+    });
+    j += 1;
+  }
+
+  return segments;
+}
+
+function getCommentDiffTint(depth: any, fadeEnabled: any) {
+  if (!fadeEnabled) {
+    return "rgba(197, 48, 48, 1)";
+  }
+  const level = Math.max(1, Number(depth) || 1);
+  const alpha = Math.max(0.28, 0.96 - (level - 1) * 0.14);
+  return `rgba(197, 48, 48, ${alpha})`;
 }
 
 function splitTextForRevision(text: any, maxChars = 7000) {
@@ -524,8 +593,8 @@ export default function AINovelPage() {
   const [length, setLength] = useState("medium");
   const [model, setModel] = useState(DEFAULT_AI_NOVEL_MODEL);
   const [isR18, setIsR18] = useState(false);
-  const [retryMode, setRetryMode] = useState(false);
-  const [retryMax, setRetryMax] = useState(2);
+  const [retryMode, setRetryMode] = useState(DEFAULT_RETRY_MODE);
+  const [retryMax, setRetryMax] = useState(DEFAULT_RETRY_MAX);
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [activeRetryMax, setActiveRetryMax] = useState<number | null>(null);
   const [chunkedGenerationEnabled, setChunkedGenerationEnabled] = useState(false);
@@ -568,6 +637,13 @@ export default function AINovelPage() {
   const [commentRevisionDiffSegments, setCommentRevisionDiffSegments] = useState<any[]>([]);
   const [commentRevisionUndoStack, setCommentRevisionUndoStack] = useState<any[]>([]);
   const [commentRevisionHasActiveDiff, setCommentRevisionHasActiveDiff] = useState(false);
+  const [commentRevisionLivePreviewEnabled, setCommentRevisionLivePreviewEnabled] = useState(false);
+  const [commentRevisionLivePreviewBody, setCommentRevisionLivePreviewBody] = useState("");
+  const [commentRevisionLiveDiffSegments, setCommentRevisionLiveDiffSegments] = useState<any[]>([]);
+  const [commentRevisionLiveProgress, setCommentRevisionLiveProgress] = useState<any>({
+    completed: 0,
+    total: 0,
+  });
   const [error, setError] = useState("");
   const [quotaError, setQuotaError] = useState("");
   const [premiumError, setPremiumError] = useState("");
@@ -646,6 +722,16 @@ export default function AINovelPage() {
   const effectiveCommentRevisionModelSource = aiCommentRevisionModel
     ? t({ ja: "マイページ設定", en: "My Page setting" })
     : t({ ja: "AI小説ページの現在モデル", en: "Current AI novel page model" });
+  const committedCommentDiffDepth = Math.max(1, commentRevisionUndoStack.length);
+  const liveCommentDiffDepth = Math.max(1, commentRevisionUndoStack.length + 1);
+  const committedCommentDiffColor = getCommentDiffTint(
+    committedCommentDiffDepth,
+    commentRevisionLivePreviewEnabled
+  );
+  const liveCommentDiffColor = getCommentDiffTint(
+    liveCommentDiffDepth,
+    commentRevisionLivePreviewEnabled
+  );
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -668,6 +754,7 @@ export default function AINovelPage() {
   const hasUserInputRef = useRef(false);
   const segmentPrefsLoadedRef = useRef(false);
   const chunkedProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const commentRevisionLivePreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingJob, setPendingJob] = useState<any>(null);
   const hasAuthToken = Boolean(getAuthToken());
   const markUserInput = () => {
@@ -707,7 +794,13 @@ export default function AINovelPage() {
   };
 
   const resetChunkedGenerateRetryContext = () => {
-    resetChunkedGenerateRetryContext();
+    chunkedGenerateRetryRef.current = {
+      enabled: false,
+      attempts: 0,
+      max: 0,
+      endpoint: "",
+      requestBody: null,
+    };
   };
 
   const startChunkedProgress = (count: any) => {
@@ -728,11 +821,36 @@ export default function AINovelPage() {
     }, 1000);
   };
 
+  const clearCommentRevisionLivePreviewTimer = () => {
+    if (commentRevisionLivePreviewTimerRef.current) {
+      clearTimeout(commentRevisionLivePreviewTimerRef.current);
+      commentRevisionLivePreviewTimerRef.current = null;
+    }
+  };
+
+  const resetCommentRevisionLivePreview = () => {
+    clearCommentRevisionLivePreviewTimer();
+    setCommentRevisionLivePreviewBody("");
+    setCommentRevisionLiveDiffSegments([]);
+    setCommentRevisionLiveProgress({ completed: 0, total: 0 });
+  };
+
+  const lingerCommentRevisionLivePreview = () => {
+    clearCommentRevisionLivePreviewTimer();
+    commentRevisionLivePreviewTimerRef.current = setTimeout(() => {
+      setCommentRevisionLivePreviewBody("");
+      setCommentRevisionLiveDiffSegments([]);
+      setCommentRevisionLiveProgress({ completed: 0, total: 0 });
+      commentRevisionLivePreviewTimerRef.current = null;
+    }, COMMENT_REVISION_LIVE_PREVIEW_LINGER_MS);
+  };
+
   useEffect(() => () => {
     if (chunkedProgressTimerRef.current) {
       clearInterval(chunkedProgressTimerRef.current);
       chunkedProgressTimerRef.current = null;
     }
+    clearCommentRevisionLivePreviewTimer();
   }, []);
 
   useEffect(() => {
@@ -952,8 +1070,9 @@ export default function AINovelPage() {
     if (typeof draft.length === "string") setLength(draft.length);
     if (typeof draft.model === "string") setModel(draft.model);
     if (typeof draft.isR18 === "boolean") setIsR18(draft.isR18);
-    if (typeof draft.retryMode === "boolean") setRetryMode(draft.retryMode);
-    if (typeof draft.retryMax === "number") setRetryMax(draft.retryMax);
+    const normalizedRetry = normalizeDraftRetrySettings(draft);
+    setRetryMode(normalizedRetry.retryMode);
+    setRetryMax(normalizedRetry.retryMax);
     if (typeof draft.chunkedGenerationEnabled === "boolean") {
       setChunkedGenerationEnabled(draft.chunkedGenerationEnabled);
     }
@@ -1039,6 +1158,9 @@ export default function AINovelPage() {
     if (typeof draft.commentRevisionHasActiveDiff === "boolean") {
       setCommentRevisionHasActiveDiff(draft.commentRevisionHasActiveDiff);
     }
+    if (typeof draft.commentRevisionLivePreviewEnabled === "boolean") {
+      setCommentRevisionLivePreviewEnabled(draft.commentRevisionLivePreviewEnabled);
+    }
   };
 
   const buildDraftPayload = () => ({
@@ -1051,6 +1173,7 @@ export default function AINovelPage() {
     isR18,
     retryMode,
     retryMax,
+    retrySettingsVersion: AI_NOVEL_RETRY_SETTINGS_VERSION,
     chunkedGenerationEnabled,
     chunkedGenerationCount,
     chunkedGenerationPlans,
@@ -1075,6 +1198,7 @@ export default function AINovelPage() {
         ? commentRevisionUndoStack[commentRevisionUndoStack.length - 1]
         : "",
     commentRevisionHasActiveDiff,
+    commentRevisionLivePreviewEnabled,
     saved_at: new Date().toISOString(),
   });
 
@@ -1153,6 +1277,40 @@ export default function AINovelPage() {
     setLoading(false);
     setRetryAttempts(0);
     setActiveRetryMax(null);
+  };
+
+  const applyChunkedProgressPayload = (payload: any) => {
+    const normalized = normalizeAINovelResponse(payload || {});
+    const meta = normalized?.chunked_generation;
+    if (!meta?.enabled) return;
+    if (chunkedProgressTimerRef.current) {
+      clearInterval(chunkedProgressTimerRef.current);
+      chunkedProgressTimerRef.current = null;
+    }
+    const totalBlocks = clampSegmentCount(meta.total_blocks || chunkedGenerationCount || 1);
+    const completedBlocks = Math.max(0, Math.min(totalBlocks, Number(meta.completed_blocks || 0)));
+    const currentBlock = Math.max(
+      1,
+      Math.min(totalBlocks, Number(meta.current_block || completedBlocks || 1))
+    );
+    const percent = Math.max(1, Math.min(100, Number(meta.percent || 0)));
+    setChunkedProgressActive(!meta.done);
+    setChunkedProgressBlock(currentBlock);
+    setChunkedCompletedBlocks(completedBlocks);
+    setChunkedProgressPercent(percent);
+    if (String(normalized?.body || "").trim()) {
+      setResult({
+        generated_title:
+          normalized?.generated_title || titleHint || t({ ja: "生成された小説", en: "Generated Novel" }),
+        body: normalized.body,
+      });
+    }
+    if (typeof normalized?.guest_remaining === "number") {
+      setGuestRemaining(normalized.guest_remaining);
+    }
+    if (typeof normalized?.user_remaining === "number") {
+      setUserRemaining(normalized.user_remaining);
+    }
   };
 
   const retryChunkedGenerateForInvalidOutput = async (issue: any) => {
@@ -1290,6 +1448,9 @@ export default function AINovelPage() {
       if (typeof data?.retry_max === "number") {
         setActiveRetryMax(data.retry_max);
       }
+      if (job?.kind === "generate" && data?.response?.chunked_generation?.enabled) {
+        applyChunkedProgressPayload(data.response);
+      }
       if (data.status === "succeeded") {
         if (job?.kind === "generate") {
           const outputIssue = getGenerateOutputIssue(data.response || {});
@@ -1331,6 +1492,9 @@ export default function AINovelPage() {
         return;
       }
       if (data.status === "failed") {
+        if (job?.kind === "generate" && data?.response?.chunked_generation?.enabled) {
+          applyChunkedProgressPayload(data.response);
+        }
         if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
           const titleText =
             job?.kind === "continuation"
@@ -1605,8 +1769,8 @@ export default function AINovelPage() {
     setLength("medium");
     setModel(DEFAULT_AI_NOVEL_MODEL);
     setIsR18(false);
-    setRetryMode(false);
-    setRetryMax(2);
+    setRetryMode(DEFAULT_RETRY_MODE);
+    setRetryMax(DEFAULT_RETRY_MAX);
     setChunkedGenerationEnabled(false);
     setChunkedGenerationCount(2);
     setChunkedGenerationPlans([makeSegmentPlanItem(1), makeSegmentPlanItem(2)]);
@@ -1790,6 +1954,7 @@ export default function AINovelPage() {
     revisionComments,
     commentRevisionUndoStack,
     commentRevisionHasActiveDiff,
+    commentRevisionLivePreviewEnabled,
   ]);
 
   useEffect(() => {
@@ -1846,6 +2011,7 @@ export default function AINovelPage() {
     revisionComments,
     commentRevisionUndoStack,
     commentRevisionHasActiveDiff,
+    commentRevisionLivePreviewEnabled,
   ]);
 
   useEffect(() => {
@@ -2463,17 +2629,7 @@ export default function AINovelPage() {
     const chunkTotal = Number(options?.chunkTotal || 0);
     const sourceChars = Number(options?.sourceChars || 0);
     const isChunkedRevision = chunkTotal > 1 && chunkIndex >= 1;
-    const level = Math.min(100, Math.max(0, Number(polishIntensity) || 0));
-    const strengthText =
-      level <= 20
-        ? "極めて軽い添削（誤字・表記ゆれ中心）"
-        : level <= 40
-        ? "軽めの添削（重複や違和感を軽く調整）"
-        : level <= 60
-        ? "標準の添削（読みやすさを中心に整える）"
-        : level <= 80
-        ? "強めのリライト（文の組み替えや表現の刷新も可）"
-        : "非常に強いリライト（構成の再整理まで許可）";
+    const { level, strengthText } = describePolishIntensity(polishIntensity);
     const r18Note = params.isR18
       ? "成人向けの内容を許可します。性的描写を含めても構いません。"
       : "一般向けの内容にし、露骨な性描写や過度な暴力描写は避けてください。";
@@ -2502,7 +2658,7 @@ export default function AINovelPage() {
         ? `分量を極端に削らないでください。出力文字数は入力本文（約${sourceChars}文字）の 85%〜120% を目安にしてください。`
         : "分量を極端に削らないでください。要点だけに短縮せず、本文の情報量を維持してください。",
       "省略記号（…）などで内容を飛ばさず、本文を最後まで改稿してください。",
-      `添削の強さ: ${strengthText}`,
+      `添削の強さ: ${strengthText} (${level}/100)`,
       level >= 70
         ? "必要なら対象箇所内で文の並び替えや言い回しの大きな変更も行ってください。対象外は変更しないでください。"
         : "対象箇所以外の大幅な改変や新規の内容追加は避けてください。",
@@ -2583,6 +2739,7 @@ export default function AINovelPage() {
     setLastRevisionTargetInfo(null);
     setRetryAttempts(0);
     setActiveRetryMax(Boolean(params.retryMode) ? Number(params.retryMax || 0) : 0);
+    resetCommentRevisionLivePreview();
     setError("");
     setQuotaError("");
     setPremiumError("");
@@ -2634,7 +2791,8 @@ export default function AINovelPage() {
             const relEnd = Number(targetData?.end);
             const targetText = String(targetData?.target_text || "");
             if (
-              Number.isFinite(relStart)
+              normalizedScope === "selection"
+              && Number.isFinite(relStart)
               && Number.isFinite(relEnd)
               && relStart >= 0
               && relEnd > relStart
@@ -2834,7 +2992,13 @@ export default function AINovelPage() {
         return revisedChunk;
       };
 
-      const chunks = splitTextForRevision(targetBody, REVISION_CHUNK_MAX_CHARS);
+      const revisionChunkMaxChars = commentRevisionLivePreviewEnabled
+        ? COMMENT_REVISION_LIVE_PREVIEW_CHUNK_MAX_CHARS
+        : REVISION_CHUNK_MAX_CHARS;
+      const chunks = splitTextForRevision(targetBody, revisionChunkMaxChars);
+      if (commentRevisionLivePreviewEnabled) {
+        setCommentRevisionLiveProgress({ completed: 0, total: chunks.length });
+      }
       const useGlobalRetryAcrossChunks =
         normalizedScope === "full"
         && chunks.length > 1
@@ -2881,6 +3045,23 @@ export default function AINovelPage() {
           }
         }
         revisedParts.push(revisedChunk);
+        if (commentRevisionLivePreviewEnabled) {
+          const provisionalTargetBody = revisedParts
+            .concat(chunks.slice(chunkIndex + 1).map((pendingChunk: any) => pendingChunk.text))
+            .join("");
+          const provisionalFullBody =
+            targetContext && typeof targetContext.start === "number" && typeof targetContext.end === "number"
+              ? applyPolishReplacement(
+                  targetContext.fullText,
+                  targetContext.start,
+                  targetContext.end,
+                  provisionalTargetBody
+                )
+              : provisionalTargetBody;
+          setCommentRevisionLivePreviewBody(provisionalFullBody);
+          setCommentRevisionLiveDiffSegments(buildLineDiffSegments(generatedFullBody, provisionalFullBody));
+          setCommentRevisionLiveProgress({ completed: chunkIndex + 1, total: chunks.length });
+        }
       }
       const revisedBody = revisedParts.join("");
 
@@ -2901,6 +3082,7 @@ export default function AINovelPage() {
       setCommentRevisionUndoStack((prev: any) => [...prev, generatedFullBody]);
       setCommentRevisionDiffSegments(buildLineDiffSegments(generatedFullBody, nextFullBody));
       setCommentRevisionHasActiveDiff(true);
+      lingerCommentRevisionLivePreview();
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
         try {
           new Notification(
@@ -2966,6 +3148,7 @@ export default function AINovelPage() {
     setCommentRevisionUndoStack((prev: any) => prev.slice(0, -1));
     setCommentRevisionDiffSegments([]);
     setCommentRevisionHasActiveDiff(false);
+    resetCommentRevisionLivePreview();
     setRevisionComments((prev: any) => [
       ...prev,
       {
@@ -3061,6 +3244,9 @@ export default function AINovelPage() {
     setCommentRevisionUndoStack([]);
     setCommentRevisionDiffSegments([]);
     setCommentRevisionHasActiveDiff(false);
+    setCommentRevisionLivePreviewBody("");
+    setCommentRevisionLiveDiffSegments([]);
+    setCommentRevisionLiveProgress({ completed: 0, total: 0 });
     setHasContinuationAttempted(false);
     setRedoContinuationArmed(false);
 
@@ -3126,8 +3312,6 @@ export default function AINovelPage() {
     };
     const prompt = isEditMode && baseBodyForEdit
       ? buildEditPrompt(baseBodyForEdit, params)
-      : useChunkedGeneration
-      ? buildSegmentedNovelPrompt(params, activeChunkPlans, SEGMENT_TARGET_CHARS)
       : null;
     const requestBody = {
       title_hint: titleHint || null,
@@ -3140,138 +3324,21 @@ export default function AINovelPage() {
       prompt,
       retry_mode: retryMode,
       retry_max: retryMax,
+      ...(useChunkedGeneration
+        ? {
+            chunked_generation_enabled: true,
+            chunked_generation_count: activeChunkCount,
+            chunked_generation_plans: activeChunkPlans.map((item: any) => ({
+              instruction: String(item?.instruction || ""),
+            })),
+          }
+        : {}),
     };
     if (useChunkedGeneration) {
       chunkedGenerateRetryRef.current = {
         ...chunkedGenerateRetryRef.current,
         requestBody,
       };
-      let combinedChunkText = "";
-      const generatedChunkBlocks: GeneratedChunkBlock[] = [];
-      let finalTitle = "";
-      try {
-        startChunkedProgress(activeChunkCount);
-        setRetryAttempts(0);
-        setActiveRetryMax(null);
-        for (let blockIdx = 0; blockIdx < activeChunkCount; blockIdx += 1) {
-          const blockInstruction = activeChunkPlans[blockIdx]?.instruction || "";
-          setChunkedProgressBlock(blockIdx + 1);
-          setChunkedCompletedBlocks(blockIdx);
-          while (true) {
-            const chunkPrompt = buildChunkBlockPrompt(
-              params,
-              blockInstruction,
-              blockIdx,
-              activeChunkCount,
-              combinedChunkText,
-              generatedChunkBlocks,
-              SEGMENT_TARGET_CHARS
-            );
-            const chunkBodyPayload = {
-              ...requestBody,
-              prompt: chunkPrompt,
-              length: String(SEGMENT_TARGET_CHARS),
-            };
-            const blockJobId = await requestGenerateJob(endpoint, token, chunkBodyPayload);
-            const blockPayload = await pollGenerateJobUntilDone(blockJobId, token);
-            const outputIssue = getGenerateOutputIssue(blockPayload || {});
-            if (outputIssue) {
-              setError(
-                t(
-                  {
-                    ja: "第{{block}}ブロックの出力が不正（{{issue}}）のため再生成しています...",
-                    en: "Block {{block}} output was invalid ({{issue}}). Retrying...",
-                  },
-                  { block: blockIdx + 1, issue: String(outputIssue || "unknown") }
-                )
-              );
-              continue;
-            }
-            const normalizedBlock = normalizeAINovelResponse(blockPayload || {});
-            const nextChunkBody = String(normalizedBlock?.body || "").trim();
-            if (!nextChunkBody) {
-              setError(
-                t(
-                  {
-                    ja: "第{{block}}ブロックの出力が空だったため再生成しています...",
-                    en: "Block {{block}} output was empty. Retrying...",
-                  },
-                  { block: blockIdx + 1 }
-                )
-              );
-              continue;
-            }
-            if (!finalTitle) {
-              finalTitle = String(normalizedBlock?.generated_title || "").trim();
-            }
-            combinedChunkText = combinedChunkText
-              ? `${combinedChunkText}\n\n${nextChunkBody}`
-              : nextChunkBody;
-            generatedChunkBlocks.push({
-              index: blockIdx + 1,
-              instruction: blockInstruction,
-              body: nextChunkBody,
-            });
-            setResult({
-              generated_title: finalTitle || titleHint || t({ ja: "生成された小説", en: "Generated Novel" }),
-              body: combinedChunkText,
-            });
-            if (typeof normalizedBlock?.guest_remaining === "number") {
-              setGuestRemaining(normalizedBlock.guest_remaining);
-            }
-            if (typeof normalizedBlock?.user_remaining === "number") {
-              setUserRemaining(normalizedBlock.user_remaining);
-            }
-            setChunkedCompletedBlocks(blockIdx + 1);
-            setChunkedProgressPercent(Math.min(95, Math.round(((blockIdx + 1) / activeChunkCount) * 100)));
-            break;
-          }
-        }
-        stopChunkedProgress(true);
-        setLastGenerateParams(params);
-        setRetryAttempts(0);
-        setActiveRetryMax(null);
-        setError("");
-        setLoading(false);
-        resetChunkedGenerateRetryContext();
-      } catch (err: any) {
-        console.error(err);
-        setLoading(false);
-        setChunkedProgressActive(false);
-        resetChunkedGenerateRetryContext();
-        if (combinedChunkText.trim()) {
-          setResult((prev: any) => ({
-            ...(prev || {}),
-            generated_title:
-              (prev?.generated_title || finalTitle || titleHint || t({ ja: "生成された小説", en: "Generated Novel" })),
-            body: combinedChunkText,
-          }));
-          const baseMessage =
-            err?.message ||
-            t({ ja: "分割生成中にエラーが発生しました。", en: "An error occurred during chunked generation." });
-          setError(
-            t(
-              {
-                ja: "途中まで生成した本文を表示しています。理由: {{reason}}",
-                en: "Showing partially generated text. Reason: {{reason}}",
-              },
-              { reason: baseMessage }
-            )
-          );
-        } else if (err?.code === "premium") {
-          setPremiumError(err.message);
-        } else if (err?.code === "quota") {
-          setQuotaError(err.message);
-        } else if (err?.code === "auth_expired") {
-          setError(err.message);
-          setTimeout(() => navigate("/login"), 800);
-        } else {
-          setError(
-            err?.message || t({ ja: "生成中にエラーが発生しました。", en: "An error occurred during generation." })
-          );
-        }
-      }
-      return;
     }
 
     try {
@@ -5092,13 +5159,13 @@ export default function AINovelPage() {
             <input
               type="number"
               min={0}
-              max={99}
+              max={MAX_RETRY_MAX}
               value={retryMax}
               onChange={(e: any) => {
                 markUserInput();
                 const next = Number.parseInt(e.target.value, 10);
                 if (!Number.isFinite(next)) return;
-                const clamped = Math.max(0, Math.min(99, next));
+                const clamped = Math.max(0, Math.min(MAX_RETRY_MAX, next));
                 setRetryMax(clamped);
               }}
               style={{ width: "120px", marginLeft: "0.5rem", padding: "0.4rem" }}
@@ -5702,6 +5769,37 @@ export default function AINovelPage() {
                 <strong style={{ color: "var(--text-color)" }}>{effectiveCommentRevisionModel}</strong>
                 {` (${effectiveCommentRevisionModelSource})`}
               </div>
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.45rem",
+                  marginBottom: "0.6rem",
+                  fontSize: "0.85rem",
+                  color: "var(--text-color)",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={commentRevisionLivePreviewEnabled}
+                  onChange={(e: any) => setCommentRevisionLivePreviewEnabled(Boolean(e.target.checked))}
+                />
+                <span>
+                  {t({
+                    ja: "コメント修正中にライブ差分を表示し、修正を重ねるほど赤字を薄くする",
+                    en: "Show live diff during comment revision and fade red as revisions stack",
+                  })}
+                </span>
+              </label>
+              {commentRevisionLivePreviewEnabled && (
+                <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginBottom: "0.6rem" }}>
+                  {t({
+                    ja: "ライブプレビューON時は約1200文字ごとに細かく分割してAIへ送り、返ってきた順に差分を更新します。",
+                    en: "When live preview is ON, the text is split into about 1200-char chunks and the diff updates as each AI response returns.",
+                  })}
+                </div>
+              )}
               <div
                 style={{
                   maxHeight: "180px",
@@ -5810,6 +5908,64 @@ export default function AINovelPage() {
                 </button>
               </div>
             </div>
+            {commentRevisionLivePreviewEnabled && commentRevisionLiveDiffSegments.length > 0 && (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  borderRadius: "6px",
+                  border: "1px solid #f8b4b4",
+                  backgroundColor: "#fff5f5",
+                }}
+              >
+                <div style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>
+                  {revisingByComment
+                    ? t({ ja: "コメント修正の処理中プレビュー", en: "Comment revision in-progress preview" })
+                    : t({ ja: "コメント修正の直前プレビュー", en: "Latest comment revision preview" })}
+                </div>
+                <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.4rem" }}>
+                  {revisingByComment
+                    ? t(
+                        {
+                          ja: "修正中です。進捗: {{completed}} / {{total}}",
+                          en: "Revision in progress. Progress: {{completed}} / {{total}}",
+                        },
+                        {
+                          completed: String(commentRevisionLiveProgress.completed || 0),
+                          total: String(commentRevisionLiveProgress.total || 0),
+                        }
+                      )
+                    : t({
+                        ja: "修正完了後もしばらくこのプレビューを表示しています。",
+                        en: "This preview stays visible for a short time after completion.",
+                      })}
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginBottom: "0.4rem" }}>
+                  {t({ ja: "プレビュー文字数", en: "Preview chars" })}: {countChars(commentRevisionLivePreviewBody)}
+                </div>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    backgroundColor: "var(--ai-result-bg)",
+                    padding: "0.6rem",
+                    borderRadius: "6px",
+                    border: "1px solid var(--border)",
+                    maxHeight: "240px",
+                    overflowY: "auto",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {commentRevisionLiveDiffSegments.map((seg: any, idx: any) => (
+                    <span
+                      key={`comment-live-diff-${idx}`}
+                      style={seg.changed ? { color: liveCommentDiffColor, fontWeight: 700 } : undefined}
+                    >
+                      {seg.text}
+                    </span>
+                  ))}
+                </pre>
+              </div>
+            )}
             {commentRevisionHasActiveDiff && commentRevisionDiffSegments.length > 0 && (
               <div
                 style={{
@@ -5824,8 +5980,8 @@ export default function AINovelPage() {
                 </div>
                 <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.4rem" }}>
                   {t({
-                    ja: "変更された行は赤文字で表示されます。",
-                    en: "Changed lines are shown in red.",
+                    ja: "変更行は赤字で表示され、追加は「+」、削除は「-」で表示されます。",
+                    en: "Changed lines are shown in red. Additions use '+' and deletions use '-'.",
                   })}
                 </div>
                 <pre
@@ -5844,7 +6000,7 @@ export default function AINovelPage() {
                   {commentRevisionDiffSegments.map((seg: any, idx: any) => (
                     <span
                       key={`comment-diff-${idx}`}
-                      style={seg.changed ? { color: "#c53030", fontWeight: 700 } : undefined}
+                      style={seg.changed ? { color: committedCommentDiffColor, fontWeight: 700 } : undefined}
                     >
                       {seg.text}
                     </span>

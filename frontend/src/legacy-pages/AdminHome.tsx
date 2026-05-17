@@ -279,30 +279,31 @@ export default function AdminHome() {
         {indexingInspectionError && (
           <div style={{ color: "#a16207", marginBottom: 8 }}>{indexingInspectionError}</div>
         )}
-        <button
-          type="button"
-          className="btn btn-border"
-          onClick={handleLoadIndexingUrls}
-          disabled={indexingLoading}
-        >
-          {indexingLoading
-            ? t({ ja: "URL一覧を取得中...", en: "Loading URLs..." })
-            : t({ ja: "公開URL一覧を取得", en: "Load public URLs" })}
-        </button>
-        <button
-          type="button"
-          className="btn btn-border"
-          onClick={handleSubmitAllIndexing}
-          disabled={indexingSubmitting}
-          style={{ marginLeft: 8 }}
-        >
-          {indexingSubmitting
-            ? t({ ja: "送信中...", en: "Submitting..." })
-            : t({
-                ja: "未登録ページ優先でインデックス登録送信",
-                en: "Submit to indexing (prioritize unindexed)",
-              })}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={handleLoadIndexingUrls}
+            disabled={indexingLoading}
+          >
+            {indexingLoading
+              ? t({ ja: "URL一覧を取得中...", en: "Loading URLs..." })
+              : t({ ja: "公開URL一覧を取得", en: "Load public URLs" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={handleSubmitAllIndexing}
+            disabled={indexingSubmitting}
+          >
+            {indexingSubmitting
+              ? t({ ja: "送信中...", en: "Submitting..." })
+              : t({
+                  ja: "未登録ページ優先でインデックス登録送信",
+                  en: "Submit to indexing (prioritize unindexed)",
+                })}
+          </button>
+        </div>
         <div style={{ marginTop: 10, fontSize: 13, color: "var(--muted-text)" }}>
           {t(
             { ja: "1日あたり送信上限: {{count}}", en: "Daily submit limit: {{count}}" },
@@ -333,17 +334,18 @@ export default function AdminHome() {
               )}
             </span>
           ) : null}
-          <button
-            type="button"
-            className="btn btn-border"
-            onClick={handleClearIndexingCarryover}
-            disabled={indexingCarryoverClearing || !indexingCarryoverCount}
-            style={{ marginLeft: 8 }}
-          >
-            {indexingCarryoverClearing
-              ? t({ ja: "削除中...", en: "Clearing..." })
-              : t({ ja: "繰越を削除", en: "Clear carryover" })}
-          </button>
+          <span style={{ display: "inline-flex", marginLeft: 8, verticalAlign: "middle" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleClearIndexingCarryover}
+              disabled={indexingCarryoverClearing || !indexingCarryoverCount}
+            >
+              {indexingCarryoverClearing
+                ? t({ ja: "削除中...", en: "Clearing..." })
+                : t({ ja: "繰越を削除", en: "Clear carryover" })}
+            </button>
+          </span>
         </div>
         {indexingCarryoverUrls.length > 0 && (
           <div style={{ marginTop: 6, maxHeight: 100, overflowY: "auto", fontSize: 12, color: "var(--muted-text)" }}>
@@ -446,29 +448,34 @@ export default function AdminHome() {
       <a href="#admin-contact" style={{ display: "inline-block", marginBottom: 12 }}>
         {t({ ja: "お問い合わせへ", en: "Go to Contact" })}
       </a>
-      <Link className="btn btn-border" to="/admin/payouts">
-        {t({ ja: "精算管理へ", en: "Go to Payouts" })}
-      </Link>
-      <Link className="btn btn-border" to="/admin/dashboard" style={{ marginLeft: 8 }}>
-        {t({ ja: "支援/振込ダッシュボードへ", en: "Go to Support & Payout Dashboard" })}
-      </Link>
-      <Link className="btn btn-border" to="/admin/users" style={{ marginLeft: 8 }}>
-        {t({ ja: "ユーザー管理へ", en: "Go to Users" })}
-      </Link>
-      <Link className="btn btn-border" to="/admin/ai-jobs" style={{ marginLeft: 8 }}>
-        {t({ ja: "AIジョブ管理へ", en: "Go to AI Jobs" })}
-      </Link>
-      <Link className="btn btn-border" to="/admin/i18n-jobs" style={{ marginLeft: 8 }}>
-        {t({ ja: "UI多言語化ジョブへ", en: "Go to UI I18N Jobs" })}
-      </Link>
-      <button
-        type="button"
-        className="btn btn-border"
-        onClick={handleLogout}
-        style={{ marginLeft: 8 }}
-      >
-        {t({ ja: "ログアウト", en: "Log out" })}
-      </button>
+      <div style={{ display: "grid", gap: 10, maxWidth: "100%", marginTop: 12 }}>
+        <Link className="btn btn-border" to="/admin/payouts" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "精算管理へ", en: "Go to Payouts" })}
+        </Link>
+        <Link className="btn btn-border" to="/admin/dashboard" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "支援/振込ダッシュボードへ", en: "Go to Support & Payout Dashboard" })}
+        </Link>
+        <Link className="btn btn-border" to="/admin/users" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "ユーザー管理へ", en: "Go to Users" })}
+        </Link>
+        <Link className="btn btn-border" to="/admin/ai-jobs" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "AIジョブ管理へ", en: "Go to AI Jobs" })}
+        </Link>
+        <Link className="btn btn-border" to="/admin/ai-logs" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "AI利用履歴へ", en: "Go to AI Usage History" })}
+        </Link>
+        <Link className="btn btn-border" to="/admin/i18n-jobs" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "UI多言語化ジョブへ", en: "Go to UI I18N Jobs" })}
+        </Link>
+        <button
+          type="button"
+          className="btn btn-border"
+          onClick={handleLogout}
+          style={{ display: "block", maxWidth: "100%", textAlign: "center" }}
+        >
+          {t({ ja: "ログアウト", en: "Log out" })}
+        </button>
+      </div>
     </div>
   );
 }
