@@ -48,8 +48,15 @@ def update_episode(
     payload: dict = Body(...),
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.update_episode(episode_id=episode_id, background_tasks=background_tasks, request=request, payload=payload, db=db)
+    from ..services.episodes_core_service import update_episode_service
+
+    return update_episode_service(
+        episode_id=episode_id,
+        background_tasks=background_tasks,
+        request=request,
+        payload=payload,
+        db=db,
+    )
 
 @router.post("/api/episodes/{episode_id}/unschedule")
 def unschedule_episode(
@@ -57,8 +64,9 @@ def unschedule_episode(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.unschedule_episode(episode_id=episode_id, request=request, db=db)
+    from ..services.episodes_core_service import unschedule_episode_service
+
+    return unschedule_episode_service(episode_id=episode_id, request=request, db=db)
 
 @router.delete("/api/episodes/{episode_id}")
 def delete_episode(
@@ -67,8 +75,9 @@ def delete_episode(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.delete_episode(episode_id=episode_id, background_tasks=background_tasks, request=request, db=db)
+    from ..services.episodes_core_service import delete_episode_service
+
+    return delete_episode_service(episode_id=episode_id, background_tasks=background_tasks, request=request, db=db)
 
 @router.post("/api/episodes/{episode_id}/title_candidates")
 async def generate_episode_title_candidates(
@@ -76,8 +85,9 @@ async def generate_episode_title_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return await legacy.generate_episode_title_candidates(episode_id=episode_id, request=request, db=db)
+    from ..services.episode_assets_service import generate_episode_title_candidates_service
+
+    return await generate_episode_title_candidates_service(episode_id=episode_id, request=request, db=db)
 
 @router.delete("/api/episodes/{episode_id}/cover-image")
 def delete_episode_cover_image(
@@ -85,8 +95,9 @@ def delete_episode_cover_image(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.delete_episode_cover_image(episode_id=episode_id, request=request, db=db)
+    from ..services.episode_assets_service import delete_episode_cover_image_service
+
+    return delete_episode_cover_image_service(episode_id=episode_id, request=request, db=db)
 
 @router.post("/api/episodes/{episode_id}/cover-image")
 async def upload_episode_cover_image(
@@ -95,8 +106,9 @@ async def upload_episode_cover_image(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return await legacy.upload_episode_cover_image(episode_id=episode_id, request=request, file=file, db=db)
+    from ..services.episode_assets_service import upload_episode_cover_image_service
+
+    return await upload_episode_cover_image_service(episode_id=episode_id, request=request, file=file, db=db)
 
 @router.post("/api/episodes/{episode_id}/illusts")
 async def upload_episode_illust(
@@ -108,8 +120,17 @@ async def upload_episode_illust(
     meta_tags: str = Form(""),
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return await legacy.upload_episode_illust(episode_id=episode_id, request=request, file=file, caption=caption, illust_tag=illust_tag, meta_tags=meta_tags, db=db)
+    from ..services.episode_assets_service import upload_episode_illust_service
+
+    return await upload_episode_illust_service(
+        episode_id=episode_id,
+        request=request,
+        file=file,
+        caption=caption,
+        illust_tag=illust_tag,
+        meta_tags=meta_tags,
+        db=db,
+    )
 
 @router.delete("/api/episodes/{episode_id}/illusts/{illust_id}")
 def delete_episode_illust(
@@ -118,8 +139,9 @@ def delete_episode_illust(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.delete_episode_illust(episode_id=episode_id, illust_id=illust_id, request=request, db=db)
+    from ..services.episode_assets_service import delete_episode_illust_service
+
+    return delete_episode_illust_service(episode_id=episode_id, illust_id=illust_id, request=request, db=db)
 
 @router.get("/api/episodes/{episode_id}/edit")
 def get_episode_for_edit(
@@ -127,8 +149,9 @@ def get_episode_for_edit(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_episode_for_edit(episode_id=episode_id, request=request, db=db)
+    from ..services.episodes_core_service import get_episode_for_edit_service
+
+    return get_episode_for_edit_service(episode_id=episode_id, request=request, db=db)
 
 @router.get("/api/episodes/{episode_id}")
 def get_episode(
@@ -136,8 +159,9 @@ def get_episode(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_episode(episode_id=episode_id, request=request, db=db)
+    from ..services.episodes_core_service import get_episode_service
+
+    return get_episode_service(episode_id=episode_id, request=request, db=db)
 
 @router.get("/api/episodes/{episode_id}/translations/{lang}")
 def get_episode_translation(
@@ -146,8 +170,9 @@ def get_episode_translation(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_episode_translation(episode_id=episode_id, lang=lang, request=request, db=db)
+    from ..services.episodes_core_service import get_episode_translation_service
+
+    return get_episode_translation_service(episode_id=episode_id, lang=lang, request=request, db=db)
 
 @router.post("/api/episodes/{episode_id}/like")
 def like_episode(
@@ -155,8 +180,9 @@ def like_episode(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.like_episode(episode_id=episode_id, request=request, db=db)
+    from ..services.engagement_service import like_episode_service
+
+    return like_episode_service(episode_id=episode_id, request=request, db=db)
 
 @router.delete("/api/episodes/{episode_id}/like")
 def unlike_episode(
@@ -164,8 +190,9 @@ def unlike_episode(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.unlike_episode(episode_id=episode_id, request=request, db=db)
+    from ..services.engagement_service import unlike_episode_service
+
+    return unlike_episode_service(episode_id=episode_id, request=request, db=db)
 
 @router.delete("/api/episodes/{episode_id}/comments/{comment_id}")
 def delete_episode_comment(

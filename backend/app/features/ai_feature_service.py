@@ -539,6 +539,24 @@ async def generate_ai_novel_service(req, request, response, db):
         resp.retry_attempts = retry_attempts
         resp.retry_max = retry_max if retry_enabled else 0
 
+        parts = [req.title_hint, req.genre, req.characters, req.tone]
+        prompt_summary = " / ".join([p for p in parts if p])[:200] if any(parts) else None
+        model_used = (
+            getattr(resp, "model", None)
+            or getattr(req, "model", None)
+            or os.getenv("OPENAI_MODEL_TEXT", "gpt-4.1-mini")
+        )
+        model_log = legacy._format_ai_log_model(provider, model_used)
+        tokens_used = getattr(resp, "used_tokens", None)
+        log = legacy.models.AIGenerateLog(
+            guest_id=guest_id,
+            prompt_summary=prompt_summary,
+            tokens_used=tokens_used,
+            model=model_log,
+        )
+        db.add(log)
+        db.commit()
+
         usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
         usage.last_used_at = legacy.datetime.utcnow()
         db.add(usage)

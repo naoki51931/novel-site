@@ -1,15 +1,205 @@
 # novel-site
 
-FastAPI + React + MySQL + nginx + Docker で構成した小説投稿サイトです。
+FastAPI + Next.js + MySQL + nginx + Docker Compose で構成した小説投稿サイトです。
 
 ## 技術スタック
 
-- Backend: FastAPI (Python) + Uvicorn
-- Frontend: React + Vite
+- Backend: FastAPI (Python 3.12) + Uvicorn + SQLAlchemy
+- Frontend: Next.js 16 + React 19
 - DB: MySQL 8.0
-- Web: nginx
+- Cache / Rate Limit: Redis 7
+- Vector Store: Weaviate
+- Web / Reverse Proxy: nginx
 - SSL: Let's Encrypt (certbot)
 - Orchestration: Docker Compose
+
+## アーキテクチャ図
+
+```mermaid
+flowchart LR
+    User[Web / Mobile User]
+    Bot[Search Bot / Crawler]
+    App[iOS / Android WebView App]
+    Nginx[nginx<br/>TLS termination / reverse proxy]
+    Frontend[Next.js frontend<br/>SSR + client routing]
+    Backend[FastAPI backend<br/>REST API / prerender / jobs]
+    MySQL[(MySQL 8.0)]
+    Redis[(Redis)]
+    Weaviate[(Weaviate)]
+    Stripe[Stripe]
+    OAuth[Google / X OAuth]
+    Mail[SMTP / Mail]
+    Push[Web Push / Firebase]
+    AI[OpenAI / OpenRouter / DeepSeek / Image API]
+
+    User --> Nginx
+    Bot --> Nginx
+    App --> Nginx
+    Nginx --> Frontend
+    Nginx --> Backend
+    Frontend --> Backend
+    Backend --> MySQL
+    Backend --> Redis
+    Backend --> Weaviate
+    Backend --> Stripe
+    Backend --> OAuth
+    Backend --> Mail
+    Backend --> Push
+    Backend --> AI
+    Bot -->|/share, /prerender, sitemap| Backend
+```
+
+## ER図
+
+主要テーブルに絞った ER 図です。実際のスキーマは `backend/app/models.py` と `backend/app/main.py` の `ensure_*` を参照してください。
+
+```mermaid
+erDiagram
+    USERS ||--o{ NOVELS : writes
+    NOVELS ||--o{ EPISODES : contains
+    NOVELS ||--o{ NOVEL_TRANSLATIONS : translated_to
+    EPISODES ||--o{ EPISODE_TRANSLATIONS : translated_to
+    EPISODES ||--o{ EPISODE_ILLUSTS : has
+
+    USERS ||--o{ USER_FOLLOWS : follows
+    USERS ||--o{ TAG_FOLLOWS : follows
+    TAGS ||--o{ TAG_FOLLOWS : followed
+
+    NOVELS ||--o{ NOVEL_TAGS : tagged
+    TAGS ||--o{ NOVEL_TAGS : attached
+    EPISODES ||--o{ EPISODE_TAGS : tagged
+    TAGS ||--o{ EPISODE_TAGS : attached
+
+    USERS ||--o{ NOVEL_LIKES : likes
+    NOVELS ||--o{ NOVEL_LIKES : liked
+    USERS ||--o{ NOVEL_FAVORITES : favorites
+    NOVELS ||--o{ NOVEL_FAVORITES : favorited
+    USERS ||--o{ NOVEL_COMMENTS : comments
+    NOVELS ||--o{ NOVEL_COMMENTS : receives
+    USERS ||--o{ EPISODE_LIKES : likes
+    EPISODES ||--o{ EPISODE_LIKES : liked
+    USERS ||--o{ EPISODE_COMMENTS : comments
+    EPISODES ||--o{ EPISODE_COMMENTS : receives
+
+    USERS ||--o{ SUPPORT_PLANS : owns
+    USERS ||--o{ SUPPORTS : supports
+    USERS ||--o{ MEMBERSHIPS : subscribes
+    SUPPORT_PLANS ||--o{ MEMBERSHIPS : used_by
+    MEMBERSHIPS ||--o{ MEMBERSHIP_INVOICES : billed
+    USERS ||--|| AUTHOR_BALANCES : has
+    USERS ||--|| AUTHORS_PAYOUT_PROFILES : configures
+    USERS ||--o{ PAYOUTS : receives
+    PAYOUTS ||--o{ PAYOUT_ITEMS : contains
+
+    USERS ||--o{ AI_CHAT_CHARACTERS : owns
+    AI_CHAT_CHARACTERS ||--o{ AI_CHAT_MESSAGES : has
+    AI_CHAT_MESSAGES ||--o| AI_CHAT_TURN_FEEDBACK : evaluated_by
+    USERS ||--o{ AI_MEMORY_ITEMS : stores
+    USERS ||--o{ AI_GENERATE_LOGS : generates
+    USERS ||--o{ AI_CHAT_TOKEN_USAGE_LOGS : consumes
+
+    USERS ||--o{ DIRECT_MESSAGE_THREADS : joins
+    DIRECT_MESSAGE_THREADS ||--o{ DIRECT_MESSAGES : has
+    USERS ||--o{ NOTIFICATIONS : receives
+    USERS ||--o{ USER_VIEW_HISTORIES : views
+```
+
+### テーブルの見方
+
+- コンテンツ中核: `users`, `novels`, `episodes`, `tags`, `novel_tags`, `episode_tags`
+- 反応 / ソーシャル: `novel_likes`, `novel_favorites`, `novel_comments`, `episode_likes`, `episode_comments`, `user_follows`, `tag_follows`, `notifications`, `direct_message_*`
+- 課金 / 精算: `support_plans`, `supports`, `memberships`, `membership_invoices`, `author_balances`, `payouts`, `payout_items`, `authors_payout_profiles`
+- AI / 補助: `ai_generate_logs`, `ai_novel_jobs`, `ai_novel_drafts`, `ai_chat_*`, `ai_memory_items`, `ui_i18n_*`
+
+## API構成
+
+現状は `backend/app/main.py` に大きめの API 実装が残りつつ、`backend/app/routers/` と `backend/app/features/` へ段階的に分割している構成です。
+
+```mermaid
+flowchart TB
+    Client[Client / Frontend / Mobile]
+    Nginx[nginx]
+    FastAPI[FastAPI app.main]
+
+    Client --> Nginx --> FastAPI
+
+    FastAPI --> Auth[/Auth<br/>/api/auth/*]
+    FastAPI --> Public[/Public novels / authors<br/>/api/public/*]
+    FastAPI --> Novels[/Novels / Episodes / Tags / Series<br/>/api/novels/* /api/episodes/* /api/tags/* /api/series/*]
+    FastAPI --> Feed[/Discovery / Feed / Search<br/>/api/feed/* /api/search/* /api/trending-tags]
+    FastAPI --> Me[/Me / Dashboard / Notifications<br/>/api/me/* /api/author/dashboard*]
+    FastAPI --> Social[/Comments / DM / Board / Follow]
+    FastAPI --> Billing[/Stripe / Support / Membership / Payout]
+    FastAPI --> AI[/AI novel / AI chat / i18n]
+    FastAPI --> Admin[/Admin / Indexing / i18n jobs<br/>/api/admin/*]
+    FastAPI --> Seo[/Prerender / Share / Sitemap / robots.txt]
+```
+
+### API レイヤ
+
+- エントリポイント: `backend/app/main.py`
+- ルータ集約: `backend/app/features/__init__.py`
+- ルータ群: `backend/app/routers/`, `backend/app/features/*_routes.py`
+- サービス層: `backend/app/services/`, `backend/app/features/*_service.py`
+- リポジトリ層: `backend/app/repositories/`
+- モデル / スキーマ: `backend/app/models.py`, `backend/app/schemas.py`
+
+### 主な API 群
+
+- 認証 / OAuth / 2FA: `/api/auth/*`
+- 公開小説 / 作者 / 検索: `/api/public/*`, `/api/search/*`
+- 小説 / エピソード / タグ / シリーズ: `/api/novels/*`, `/api/episodes/*`, `/api/tags/*`, `/api/series/*`
+- フィード / レコメンド / トレンド: `/api/feed/*`, `/api/trending-tags`
+- コメント / DM / 掲示板: `/api/dms*`, `/api/board/*`, 各 `comments` エンドポイント
+- 支援 / Stripe / 振込: `/api/supports/*`, `/api/memberships/*`, `/api/stripe/*`, `/api/authors/me/*`
+- AI 小説 / AI チャット / 翻訳: `/api/ai/*`, `/api/i18n/*`
+- 管理 / SEO / indexing: `/api/admin/*`, `/sitemap*.xml`, `/robots.txt`, `/share/*`, `/prerender/*`
+
+## インフラ構成
+
+`docker-compose.yml` ベースの常用構成です。
+
+```mermaid
+flowchart LR
+    Internet[Internet]
+    Certbot[certbot]
+    Nginx[nginx :80/:443]
+    Frontend[frontend<br/>Next.js standalone :3000]
+    Backend[backend<br/>FastAPI :8000]
+    DB[(db<br/>MySQL :3306)]
+    Redis[(redis)]
+    Weaviate[(weaviate :8080)]
+    Static[(./static, ./uploads)]
+
+    Internet --> Nginx
+    Certbot -->|HTTP-01 / cert files| Nginx
+    Nginx --> Frontend
+    Nginx --> Backend
+    Nginx --- Static
+    Frontend --> Backend
+    Backend --> DB
+    Backend --> Redis
+    Backend --> Weaviate
+    Backend --- Static
+```
+
+### 配信経路
+
+- `nginx` が HTTPS 終端とリバースプロキシを担当
+- 通常の画面遷移は `frontend` の Next.js へ転送
+- `/api/*` は `backend` の FastAPI へ転送
+- `/share/*`, `/sitemap*.xml`, `/robots.txt`, bot 向け `/prerender/*` も `backend` が返却
+- `/static/*`, `/uploads/*` は nginx からボリュームを直接配信
+
+### コンテナの役割
+
+- `db`: MySQL 本体。永続化は `db-data`
+- `backend`: FastAPI, バッチ起動, Prisma ではなく SQLAlchemy + 手動 `ensure_*`
+- `frontend`: Next.js standalone サーバー
+- `redis`: レート制限や一部キャッシュの保存先。未使用時はプロセス内メモリへフォールバック可能
+- `weaviate`: AI チャットメモリや特徴量検索用のベクトルストア
+- `nginx`: TLS, ルーティング, 静的配信
+- `certbot`: 証明書更新用
 
 ## 主な機能（現状）
 
@@ -61,7 +251,7 @@ FastAPI + React + MySQL + nginx + Docker で構成した小説投稿サイトで
 ## ディレクトリ構成（抜粋）
 
 - `backend/` FastAPI アプリ
-- `frontend/` React + Vite
+- `frontend/` Next.js アプリ
 - `nginx/` nginx 設定・証明書関連
 - `static/episode_images/` エピソード画像
 - `docker-compose.yml` 本番想定構成
@@ -86,14 +276,14 @@ docker compose up --build
 # docker compose -f docker-compose.free.yml up --build
 ```
 
-`frontend/dist` を nginx が配信するため、フロント変更後はビルドが必要です。
+フロント変更後は Next.js の再ビルドが必要です。
 
 ```bash
 cd frontend
 npm install
 npm run build
 cd ..
-docker compose restart nginx
+docker compose up --build -d frontend nginx
 ```
 
 ## Backend / Frontend 単体起動

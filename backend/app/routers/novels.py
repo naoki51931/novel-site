@@ -37,8 +37,16 @@ def update_novel(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.novels_write_service import update_novel_service
+
     payload_model = _parse_payload(legacy.schemas.NovelUpdate, payload)
-    return legacy.update_novel(novel_id=novel_id, payload=payload_model, request=request, background_tasks=background_tasks, db=db)
+    return update_novel_service(
+        novel_id=novel_id,
+        payload=payload_model,
+        request=request,
+        background_tasks=background_tasks,
+        db=db,
+    )
 
 @router.delete("/api/novels/{novel_id}")
 def delete_novel(
@@ -47,8 +55,9 @@ def delete_novel(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.delete_novel(novel_id=novel_id, background_tasks=background_tasks, request=request, db=db)
+    from ..services.novels_write_service import delete_novel_service
+
+    return delete_novel_service(novel_id=novel_id, background_tasks=background_tasks, request=request, db=db)
 
 @router.get("/api/novels/{novel_id}/comments")
 def get_comments(
@@ -77,8 +86,9 @@ def get_novel_detail(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_novel_detail(novel_id=novel_id, request=request, db=db)
+    from ..services.novels_read_service import get_novel_detail_service
+
+    return get_novel_detail_service(novel_id=novel_id, request=request, db=db)
 
 @router.get("/api/novels/{novel_id}/translations/{lang}")
 def get_novel_translation(
@@ -87,8 +97,9 @@ def get_novel_translation(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_novel_translation(novel_id=novel_id, lang=lang, request=request, db=db)
+    from ..services.novels_read_service import get_novel_translation_service
+
+    return get_novel_translation_service(novel_id=novel_id, lang=lang, request=request, db=db)
 
 @router.post("/api/novels/{novel_id}/episodes")
 def create_episode(
@@ -99,8 +110,16 @@ def create_episode(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.episodes_write_service import create_episode_service
+
     payload_model = _parse_payload(legacy.schemas.EpisodeCreate, payload)
-    return legacy.create_episode(novel_id=novel_id, payload=payload_model, background_tasks=background_tasks, request=request, db=db)
+    return create_episode_service(
+        novel_id=novel_id,
+        payload=payload_model,
+        background_tasks=background_tasks,
+        request=request,
+        db=db,
+    )
 
 @router.get("/api/novels/{novel_id}/episodes")
 def list_episodes(
@@ -108,8 +127,9 @@ def list_episodes(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_episodes(novel_id=novel_id, request=request, db=db)
+    from ..services.novels_read_service import list_episodes_service
+
+    return list_episodes_service(novel_id=novel_id, request=request, db=db)
 
 @router.post("/api/novels/{novel_id}/summary_candidates")
 async def generate_novel_summary_candidates(
@@ -144,8 +164,9 @@ def like_novel(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.like_novel(novel_id=novel_id, request=request, db=db)
+    from ..services.engagement_service import like_novel_service
+
+    return like_novel_service(novel_id=novel_id, request=request, db=db)
 
 @router.delete("/api/novels/{novel_id}/like")
 def unlike_novel(
@@ -153,8 +174,9 @@ def unlike_novel(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.unlike_novel(novel_id=novel_id, request=request, db=db)
+    from ..services.engagement_service import unlike_novel_service
+
+    return unlike_novel_service(novel_id=novel_id, request=request, db=db)
 
 @router.post("/api/novels/{novel_id}/favorite")
 def favorite_novel(
@@ -162,8 +184,9 @@ def favorite_novel(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.favorite_novel(novel_id=novel_id, request=request, db=db)
+    from ..services.engagement_service import favorite_novel_service
+
+    return favorite_novel_service(novel_id=novel_id, request=request, db=db)
 
 @router.delete("/api/novels/{novel_id}/favorite")
 def unfavorite_novel(
@@ -171,8 +194,9 @@ def unfavorite_novel(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.unfavorite_novel(novel_id=novel_id, request=request, db=db)
+    from ..services.engagement_service import unfavorite_novel_service
+
+    return unfavorite_novel_service(novel_id=novel_id, request=request, db=db)
 
 @router.delete("/api/novels/{novel_id}/comments/{comment_id}")
 def delete_comment(

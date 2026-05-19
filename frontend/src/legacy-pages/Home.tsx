@@ -1044,6 +1044,7 @@ export default function Home({
       ),
     });
   }
+  const showSearchResultCount = activeFilterChips.length > 0;
 
   const applyNovelUpdate = (novelId: number | string, updater: (item: HomeNovel) => HomeNovel) => {
     setNovels((prev) =>
@@ -2194,7 +2195,17 @@ export default function Home({
 
       {!rankingOnly && (
         <section style={{ marginBottom: 24 }}>
-          <h3 className="section-heading-title">{t({ ja: "新着作品", en: "New Works" })}</h3>
+          <h3 className="section-heading-title">
+            {t({ ja: "新着作品", en: "New Works" })}
+            {showSearchResultCount ? (
+              <span style={{ marginLeft: 8, fontSize: "0.9em", color: "var(--muted-text)" }}>
+                {t(
+                  { ja: "（{{count}}件）", en: "({{count}})" },
+                  { count: String(novelsVisible.length) }
+                )}
+              </span>
+            ) : null}
+          </h3>
           <div className="novel-grid">
             {novelsVisible.map((novel) => (
               <NovelCard

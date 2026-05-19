@@ -234,16 +234,18 @@ def read_profile(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.read_profile(request=request, db=db)
+    from ..services.profile_service import read_profile_service
+
+    return read_profile_service(request=request, db=db)
 
 @router.get("/api/me")
 def read_me(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.read_me(request=request, db=db)
+    from ..services.profile_service import read_me_service
+
+    return read_me_service(request=request, db=db)
 
 @router.put("/api/users/me")
 def update_profile(
@@ -252,8 +254,10 @@ def update_profile(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.profile_service import update_profile_service
+
     payload_model = _parse_payload(legacy.schemas.ProfileUpdate, payload)
-    return legacy.update_profile(payload=payload_model, request=request, db=db)
+    return update_profile_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/users/{user_id}/follow")
 def follow_user(
@@ -261,7 +265,7 @@ def follow_user(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.follow_service import follow_user_service
+    from ..services.engagement_service import follow_user_service
 
     return follow_user_service(user_id=user_id, request=request, db=db)
 
@@ -271,7 +275,7 @@ def unfollow_user(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.follow_service import unfollow_user_service
+    from ..services.engagement_service import unfollow_user_service
 
     return unfollow_user_service(user_id=user_id, request=request, db=db)
 
@@ -281,7 +285,7 @@ def get_follow_status(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.follow_service import get_follow_status_service
+    from ..services.engagement_service import get_follow_status_service
 
     return get_follow_status_service(user_id=user_id, request=request, db=db)
 
@@ -293,7 +297,7 @@ def list_followers(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0)
 ):
-    from ..features.follow_service import list_followers_service
+    from ..services.engagement_service import list_followers_service
 
     return list_followers_service(user_id=user_id, request=request, db=db, limit=limit, offset=offset)
 
@@ -305,15 +309,16 @@ def list_following(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0)
 ):
-    from ..features.follow_service import list_following_service
+    from ..services.engagement_service import list_following_service
 
     return list_following_service(user_id=user_id, request=request, db=db, limit=limit, offset=offset)
 
 @router.get("/api/push/public_key")
 def get_push_public_key(
 ):
-    from .. import main as legacy
-    return legacy.get_push_public_key()
+    from ..services.notification_service import get_push_public_key_service
+
+    return get_push_public_key_service()
 
 @router.post("/api/push/subscribe")
 def subscribe_push_notifications(
@@ -322,8 +327,10 @@ def subscribe_push_notifications(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.notification_service import subscribe_push_notifications_service
+
     payload_model = _parse_payload(legacy.PushSubscriptionPayload, payload)
-    return legacy.subscribe_push_notifications(payload=payload_model, request=request, db=db)
+    return subscribe_push_notifications_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/push/unsubscribe")
 def unsubscribe_push_notifications(
@@ -332,8 +339,10 @@ def unsubscribe_push_notifications(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.notification_service import unsubscribe_push_notifications_service
+
     payload_model = _parse_payload(legacy.PushUnsubscribePayload, payload)
-    return legacy.unsubscribe_push_notifications(payload=payload_model, request=request, db=db)
+    return unsubscribe_push_notifications_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/mobile-push/register")
 def register_mobile_push_token(
@@ -342,8 +351,10 @@ def register_mobile_push_token(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.notification_service import register_mobile_push_token_service
+
     payload_model = _parse_payload(legacy.MobilePushRegisterPayload, payload)
-    return legacy.register_mobile_push_token(payload=payload_model, request=request, db=db)
+    return register_mobile_push_token_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/mobile-push/unregister")
 def unregister_mobile_push_token(
@@ -352,8 +363,10 @@ def unregister_mobile_push_token(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.notification_service import unregister_mobile_push_token_service
+
     payload_model = _parse_payload(legacy.MobilePushUnregisterPayload, payload)
-    return legacy.unregister_mobile_push_token(payload=payload_model, request=request, db=db)
+    return unregister_mobile_push_token_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/push/debug")
 def push_debug_log(
@@ -362,8 +375,10 @@ def push_debug_log(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.notification_service import push_debug_log_service
+
     payload_model = _parse_payload(legacy.PushDebugPayload, payload)
-    return legacy.push_debug_log(payload=payload_model, request=request, db=db)
+    return push_debug_log_service(payload=payload_model, request=request, db=db)
 
 @router.get("/api/notifications")
 def list_notifications(
@@ -375,8 +390,17 @@ def list_notifications(
     group: str = Query("all"),
     notif_type: str | None = Query(None)
 ):
-    from .. import main as legacy
-    return legacy.list_notifications(request=request, db=db, limit=limit, offset=offset, unread_only=unread_only, group=group, notif_type=notif_type)
+    from ..services.notification_service import list_notifications_service
+
+    return list_notifications_service(
+        request=request,
+        db=db,
+        limit=limit,
+        offset=offset,
+        unread_only=unread_only,
+        group=group,
+        notif_type=notif_type,
+    )
 
 @router.get("/api/notifications/unread_count")
 def unread_notification_count(
@@ -384,8 +408,9 @@ def unread_notification_count(
     db: Session = Depends(get_db),
     group: str = Query("all")
 ):
-    from .. import main as legacy
-    return legacy.unread_notification_count(request=request, db=db, group=group)
+    from ..services.notification_service import unread_notification_count_service
+
+    return unread_notification_count_service(request=request, db=db, group=group)
 
 @router.get("/api/notifications/counts")
 def notification_counts(
@@ -393,8 +418,9 @@ def notification_counts(
     db: Session = Depends(get_db),
     unread_only: bool = Query(False)
 ):
-    from .. import main as legacy
-    return legacy.notification_counts(request=request, db=db, unread_only=unread_only)
+    from ..services.notification_service import notification_counts_service
+
+    return notification_counts_service(request=request, db=db, unread_only=unread_only)
 
 @router.post("/api/notifications/{notification_id}/read")
 def mark_notification_read(
@@ -402,16 +428,18 @@ def mark_notification_read(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.mark_notification_read(notification_id=notification_id, request=request, db=db)
+    from ..services.notification_service import mark_notification_read_service
+
+    return mark_notification_read_service(notification_id=notification_id, request=request, db=db)
 
 @router.post("/api/notifications/read_all")
 def mark_all_notifications_read(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.mark_all_notifications_read(request=request, db=db)
+    from ..services.notification_service import mark_all_notifications_read_service
+
+    return mark_all_notifications_read_service(request=request, db=db)
 
 @router.delete("/api/notifications/{notification_id}")
 def delete_notification(
@@ -419,6 +447,7 @@ def delete_notification(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.delete_notification(notification_id=notification_id, request=request, db=db)
+    from ..services.notification_service import delete_notification_service
+
+    return delete_notification_service(notification_id=notification_id, request=request, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: OTHER

@@ -46,21 +46,18 @@ def list_my_favorites(
     lang: Optional[str] = Query(default=None),
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_my_favorites(
-        request=request,
-        background_tasks=background_tasks,
-        lang=lang,
-        db=db,
-    )
+    from ..services.favorites_service import list_my_favorites_service
+
+    return list_my_favorites_service(request=request, db=db)
 
 @router.get("/api/me/ai/chat/favorites")
 def list_my_ai_chat_favorites(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_my_ai_chat_favorites(request=request, db=db)
+    from ..services.favorites_service import list_my_ai_chat_favorites_service
+
+    return list_my_ai_chat_favorites_service(request=request, db=db)
 
 @router.post("/api/me/view-history/record")
 def record_my_view_history(
@@ -69,8 +66,10 @@ def record_my_view_history(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.view_history_service import record_my_view_history_service
+
     payload_model = _parse_payload(legacy.ViewHistoryRecordRequest, payload)
-    return legacy.record_my_view_history(payload=payload_model, request=request, db=db)
+    return record_my_view_history_service(payload=payload_model, request=request, db=db)
 
 @router.get("/api/me/view-history/novels")
 def list_my_novel_view_history(
@@ -79,8 +78,9 @@ def list_my_novel_view_history(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    from .. import main as legacy
-    return legacy.list_my_novel_view_history(request=request, db=db, limit=limit, offset=offset)
+    from ..services.view_history_service import list_my_novel_view_history_service
+
+    return list_my_novel_view_history_service(request=request, db=db, limit=limit, offset=offset)
 
 @router.get("/api/me/view-history/ai-public-chats")
 def list_my_public_ai_chat_view_history(
@@ -88,8 +88,9 @@ def list_my_public_ai_chat_view_history(
     db: Session = Depends(get_db),
     limit: int = Query(default=50, ge=1, le=200)
 ):
-    from .. import main as legacy
-    return legacy.list_my_public_ai_chat_view_history(request=request, db=db, limit=limit)
+    from ..services.view_history_service import list_my_public_ai_chat_view_history_service
+
+    return list_my_public_ai_chat_view_history_service(request=request, db=db, limit=limit)
 
 @router.get("/api/me/ai/chat/usage-history")
 def list_my_ai_chat_usage_history(
@@ -97,8 +98,9 @@ def list_my_ai_chat_usage_history(
     db: Session = Depends(get_db),
     limit: int = Query(default=50, ge=1, le=200)
 ):
-    from .. import main as legacy
-    return legacy.list_my_ai_chat_usage_history(request=request, db=db, limit=limit)
+    from ..services.ai_chat_usage_service import list_my_ai_chat_usage_history_service
+
+    return list_my_ai_chat_usage_history_service(request=request, db=db, limit=limit)
 
 @router.get("/api/me/analytics/novels")
 def list_my_novel_analytics(
@@ -106,8 +108,9 @@ def list_my_novel_analytics(
     db: Session = Depends(get_db),
     month: Optional[str] = Query(None)
 ):
-    from .. import main as legacy
-    return legacy.list_my_novel_analytics(request=request, db=db, month=month)
+    from ..services.novel_analytics_service import list_my_novel_analytics_service
+
+    return list_my_novel_analytics_service(request=request, db=db, month=month)
 
 @router.get("/api/me/analytics/novels/{novel_id}")
 def read_my_novel_analytics(
@@ -116,6 +119,7 @@ def read_my_novel_analytics(
     db: Session = Depends(get_db),
     month: Optional[str] = Query(None)
 ):
-    from .. import main as legacy
-    return legacy.read_my_novel_analytics(novel_id=novel_id, request=request, db=db, month=month)
+    from ..services.novel_analytics_service import read_my_novel_analytics_service
+
+    return read_my_novel_analytics_service(novel_id=novel_id, request=request, db=db, month=month)
 # END AUTO-GENERATED ROUTER WRAPPERS: ME
