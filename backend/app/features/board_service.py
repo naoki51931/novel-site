@@ -30,6 +30,7 @@ def list_board_posts_service(request, db, limit):
 
 def create_board_post_service(request, payload, db):
     from .. import main as legacy
+    from .. import notification_helpers
 
     site_key = legacy.resolve_site_key(request)
     current_count = (
@@ -122,7 +123,7 @@ def create_board_post_service(request, payload, db):
     if demo_user:
         admin_title = "掲示板に新規投稿がありました"
         admin_body = f"{actor_name}が投稿しました: {title_snippet}\n{body_snippet}"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=demo_user.id,
             notif_type="board_post_new",
@@ -141,7 +142,7 @@ def create_board_post_service(request, payload, db):
     if should_notify_previous_user and previous_user_id is not None:
         prev_title = "あなたの投稿の直後に新規投稿がありました"
         prev_body = f"{actor_name}が投稿しました: {title_snippet}\n{body_snippet}"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=previous_user_id,
             notif_type="board_post_followup",
@@ -163,7 +164,7 @@ def create_board_post_service(request, payload, db):
             f"本文: {body_snippet}\n\n"
             f"{legacy.FRONTEND_ORIGIN.rstrip('/')}{link_url}"
         )
-        legacy.send_notification_email(demo_user.email, demo_mail_subject, demo_mail_body)
+        notification_helpers.send_notification_email(demo_user.email, demo_mail_subject, demo_mail_body)
     if should_notify_previous_user and previous_user_id is not None:
         prev_mail_subject = "あなたの投稿の直後に新規投稿がありました"
         prev_mail_body = (
@@ -171,7 +172,7 @@ def create_board_post_service(request, payload, db):
             f"タイトル: {title_snippet}\n"
             f"本文: {body_snippet}"
         )
-        legacy.send_notification_email_if_enabled(
+        notification_helpers.send_notification_email_if_enabled(
             db,
             user_id=previous_user_id,
             title=prev_mail_subject,

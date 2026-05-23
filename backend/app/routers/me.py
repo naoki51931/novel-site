@@ -28,16 +28,18 @@ def list_my_tag_follows(
     db: Session = Depends(get_db),
     limit: int = Query(100, ge=1, le=300)
 ):
-    from .. import main as legacy
-    return legacy.list_my_tag_follows(request=request, db=db, limit=limit)
+    from ..services.me_service import list_my_tag_follows_service
+
+    return list_my_tag_follows_service(request=request, db=db, limit=limit)
 
 @router.get("/api/me/scheduled-episodes")
 def list_my_scheduled_episodes(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_my_scheduled_episodes(request=request, db=db)
+    from ..services.me_service import list_my_scheduled_episodes_service
+
+    return list_my_scheduled_episodes_service(request=request, db=db)
 
 @router.get("/api/me/favorites")
 def list_my_favorites(

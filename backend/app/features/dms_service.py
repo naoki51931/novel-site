@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from .. import notification_helpers
+
 
 def create_dm_thread_service(payload, request, db):
     from .. import main as legacy
@@ -158,7 +160,7 @@ def create_dm_message_service(thread_id, payload, request, db):
     db.add(msg)
     db.add(thread)
     if recipient_id != user.id:
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=recipient_id,
             notif_type="dm_message",
@@ -172,7 +174,7 @@ def create_dm_message_service(thread_id, payload, request, db):
     db.refresh(msg)
     if recipient_id != user.id:
         try:
-            legacy.send_fcm_push_to_user(
+            notification_helpers.send_fcm_push_to_user(
                 db,
                 user_id=recipient_id,
                 title=title,
@@ -183,7 +185,7 @@ def create_dm_message_service(thread_id, payload, request, db):
         except Exception as e:
             print(f"[fcm] dm_message send failed recipient_id={recipient_id} err={e!r}")
         try:
-            legacy.send_web_push_to_user(
+            notification_helpers.send_web_push_to_user(
                 db,
                 user_id=recipient_id,
                 title=title,
@@ -193,7 +195,7 @@ def create_dm_message_service(thread_id, payload, request, db):
             )
         except Exception as e:
             print(f"[webpush] dm_message send failed recipient_id={recipient_id} err={e!r}")
-        legacy.send_notification_email_if_enabled(
+        notification_helpers.send_notification_email_if_enabled(
             db,
             user_id=recipient_id,
             title=title,

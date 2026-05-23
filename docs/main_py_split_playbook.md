@@ -17,6 +17,179 @@
 
 ## 進捗メモ
 
+2026-05-23 時点:
+
+- `main.py` は `11,058` 行。
+- 手順書の開始時 `27,281` 行から `16,223` 行削減。
+- 直近の区切りでは、`route 本体の移設` フェーズから `共通 helper 退避` フェーズへ明確に移った。
+
+今回までに追加で完了した主な移行:
+
+- `ai_chat`
+  - `access`
+  - service 化済み route 群の router 集約
+  - `/api/ai/chat`
+  - `/api/ai/chat/generate_image`
+- `ai_novel`
+  - `episode continue`
+- `helpers`
+  - DB bootstrap 群
+  - Redis/cache helper 群
+  - rate-limit / abuse helper 群
+  - reCAPTCHA / Google CSE helper 群
+  - admin auth helper 群
+  - sitemap / indexnow / public indexing helper 群
+
+今回追加で作成・更新した主なモジュール:
+
+- `backend/app/schemas_ai_chat.py`
+- `backend/app/services/ai_novel_service.py`
+- `backend/app/db_bootstrap.py`
+- `backend/app/cache_helpers.py`
+- `backend/app/rate_limit_helpers.py`
+- `backend/app/external_service_helpers.py`
+- `backend/app/admin_auth_helpers.py`
+- `backend/app/public_indexing_helpers.py`
+
+再開地点メモ:
+
+- `main.py` の大きい route 本体はかなり減り、残りは `Google indexing / Search Console token・publish helper`、`mail / dashboard / notification`、一部の domain helper が中心。
+- `public indexing` は helper 化済みだが、`Google indexing` 本体の credential / publish / quota 判定まではまだ `main.py` に残る。
+- 次の一手は `Google indexing / Search Console` helper の module 化か、`notification / mail / dashboard` のような副作用 helper 群の退避が自然。
+- 現状は `Phase 4` の後半から `Phase 5` の helper 整理フェーズに入っていると見てよい。
+
+2026-05-23 時点:
+
+- `main.py` は `14,880` 行。
+- `cleanup` として、`board` の重複 route 本体を `main.py` から削除し、router mount を回帰テストで固定した。
+- 次の 1 ドメインとして、service 化済みだった `ai_jobs / ai_novel_drafts` の route 本体を `main.py` から外した。
+- 続けて `ai_novel` のうち service 化済みだった `remaining / auto-fill` も `main.py` から外した。
+- 続けて `story-agent` も dedicated service/router へ移し、`main.py` から route 本体を外した。
+- `.venv` で `test_ai_jobs_service.py`, `test_ai_novel_drafts_service.py`, `test_feed_refactor.py` を通して mount と service 回帰を確認した。
+
+今回までに追加で完了した主な移行:
+
+- `cleanup`
+  - `board posts` の重複 route 本体を `main.py` から削除
+- `ai_novel`
+  - `ai jobs`
+  - `ai novel draft / drafts`
+  - `remaining`
+  - `auto-fill`
+  - `story-agent`
+
+再開地点メモ:
+
+- `ai_novel` の `episode continue` はまだ `main.py` に本体が残る。
+- `ai_chat/access` には既存 router があるが、他の `ai_chat` route と同居しているため、二重 mount を避けるには切り出し単位を分ける必要がある。
+- `ai_chat` は service 呼び出しへ寄っている route もあるが、schema と helper が `main.py` に密集しているため、次回も小さく分けて進める。
+- `main.py` には引き続き既存未コミット差分が混在しているため、巻き戻さず差分を足していく。
+
+2026-05-20 時点:
+
+- `main.py` は `17,898` 行。
+- 直近の区切りまでで `19,392 -> 17,898`、開始時 `27,281` 行から `9,383` 行削減。
+- `Phase 3` 後半から `Phase 4` の入口を継続。`public / search / tags / me / i18n / ai_misc` の薄い route 本体整理が進んだ。
+
+今回までに追加で完了した主な移行:
+
+- `public`
+  - `public novels`
+- `search`
+  - `users`
+  - `tags`
+- `series`
+  - `series novels`
+- `me`
+  - `tag follows`
+  - `scheduled episodes`
+- `tags`
+  - `list / detail / novels / related`
+  - `follow / unfollow / follow-status`
+- `i18n`
+  - `translate`
+  - `dictionary`
+- `ai_misc`
+  - `tag candidates`
+  - `summary candidates`
+  - `title candidate`
+  - `title candidates`
+  - `character terms`
+- `cleanup`
+  - `dms` は router/service 側に移行済みだった重複 route 本体を `main.py` から削除
+  - `novels/{novel_id}` と `novels/{novel_id}/episodes` の孤立 decorator を除去
+
+再開地点メモ:
+
+- `feed` は endpoint 数に対して `_serialize_feed_novels_for_user` などの shared helper 依存がまだ重い。
+- `auth` の OAuth は router 側は service 化済みだが、service 本体はまだ `legacy.oauth_*` を呼ぶ薄い wrapper。
+- `ai_misc` は `chat / story-agent / continue / jobs / drafts` がまだ重い本体として残っている。
+- `main.py` には helper 群と、重い `feed / ai_chat / auth oauth / ai novel` 系がまだ多く残っている。
+- 再開時は `feed` のような重い塊に入る前に、`main.py` 側の helper 退避か、service 化済み route の重複除去を優先してよい。
+
+2026-05-20 時点:
+
+- `main.py` は `19,392` 行。
+- 直近の区切りまでで `19,938 -> 19,392`、開始時 `27,281` 行から `7,889` 行削減。
+- `Phase 3` 後半から `Phase 4` の入口に入っている。
+
+今回までに追加で完了した主な移行:
+
+- `novels` 残り `summary / tag / title candidates`
+- `comments`
+- `public profile`
+- `author dashboard`
+- `auth` 本体
+  - `register / login / password reset / login start/verify`
+  - OAuth helper 本体は `main.py` に残しつつ router は service 経由化
+- `payments`
+  - `supports checkout`
+  - `support plans`
+  - `memberships checkout`
+  - `ai chat / ai novel addon checkout`
+  - `author balance / payout profile`
+  - `stripe checkout / webhook`
+- `admin payouts`
+  - `supports timeline`
+  - `payouts timeline / list / preview / generate`
+  - `author payout profile`
+  - `mark paid / mark failed`
+- `admin`
+  - `auth`
+  - `contact messages`
+  - `users`
+  - `ai chat token consumers timeline`
+  - `ai logs`
+  - `email test all users`
+  - `user novels`
+  - `delete user`
+  - `i18n jobs`
+  - `i18n retranslate remaining`
+  - `board delete`
+  - `translations backfill`
+  - `indexing urls / submit / carryover`
+  - `indexnow submit`
+- `public`
+  - `contact messages`
+- `ai_misc`
+  - `ai logs me`
+- `other`
+  - `series overview`
+  - `trending tags`
+  - `prerender novels / episodes`
+  - `share episode / og-image`
+  - `indexnow key file`
+  - `sitemap main/static/novels/episodes/authors/tags/index`
+  - `robots.txt`
+
+再開地点メモ:
+
+- `payments` は router 上の主要 legacy route 本体を外し終わった。
+- `admin` は `payouts` slice まで service 化済み。
+- `admin auth / contact / users / ai logs / i18n / board delete / translations backfill / indexing` の route 本体も `main.py` から外し終わった。
+- `main.py` には `public novels`, `ai_misc` の候補生成・chat 本体、helper 群がまだ多く残っている。
+- この時点でも `main.py` には今回の分割対象とは別の既存未コミット差分が混在しているため、再開時も巻き戻さずに続行する。
+
 2026-05-19 時点:
 
 - `main.py` は `24,177` 行。
@@ -44,16 +217,15 @@
 現在の評価:
 
 - `Phase 0`: 実質完了
-- `Phase 1`: `novels`, `episodes`, `me`, `other` は大きく前進。`auth`, `payments`, `admin` は未着手が多い
+- `Phase 1`: `novels`, `episodes`, `me`, `other`, `auth`, `payments` は大きく前進。`admin` は `payouts` を除き未着手が多い
 - `Phase 2`: 主要対象はほぼ着手済み
-- `Phase 3`: `novels`, `episodes` は進行中。`comments`, `author dashboard`, `public profile` はまだ残る
+- `Phase 3`: `novels`, `episodes`, `comments`, `author dashboard`, `public profile` は主要 endpoint を移行済み
+- `Phase 4`: `payments` は主要 endpoint を移行済み。`admin` は着手中
 
 次の優先候補:
 
-1. `novels` の残り `summary/tag/title candidates`
-2. `comments`
-3. `public profile` / `author dashboard`
-4. `auth` / `payments`
+1. `public / ai_misc` の legacy wrapper 解消
+2. `main.py` helper 群の共通 module 退避
 
 ## 最終形の目安
 

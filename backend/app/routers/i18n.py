@@ -27,13 +27,16 @@ def i18n_translate(
     payload: dict
 ):
     from .. import main as legacy
+    from ..services.i18n_service import i18n_translate_service
+
     payload_model = _parse_payload(legacy.I18nTranslateRequest, payload)
-    return legacy.i18n_translate(payload=payload_model)
+    return i18n_translate_service(payload=payload_model)
 
 @router.get("/api/i18n/dictionary/{target_lang}")
 def i18n_dictionary(
     target_lang: str
 ):
-    from .. import main as legacy
-    return legacy.i18n_dictionary(target_lang=target_lang)
+    from ..services.i18n_service import i18n_dictionary_service
+
+    return i18n_dictionary_service(target_lang=target_lang)
 # END AUTO-GENERATED ROUTER WRAPPERS: I18N

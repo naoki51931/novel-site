@@ -4458,6 +4458,39 @@ export default function AINovelPage() {
         </p>
       )}
 
+      {!isEditMode && !isContinueMode && (
+        <section
+          style={{
+            marginBottom: "1.25rem",
+            padding: "0.9rem 1rem",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            backgroundColor: "var(--ai-result-surface)",
+          }}
+        >
+          <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.6rem" }}>
+            {t({ ja: "AI小説生成・R18小説生成に対応", en: "AI novel generation with R18 support" })}
+          </h2>
+          <p style={{ margin: "0 0 0.45rem", color: "var(--muted-text)", lineHeight: 1.7 }}>
+            {t({
+              ja: "Lexis の AI小説生成では、一般向けの物語作成だけでなく、R18小説生成や官能小説生成を想定した下書き作成にも対応しています。タイトル案、ジャンル、登場人物、文体を入れて、長編の叩き台や短編の導入をまとめて作れます。",
+              en: "Lexis supports both general AI novel generation and R18-oriented draft generation.",
+            })}
+          </p>
+          <p style={{ margin: "0 0 0.45rem", color: "var(--muted-text)", lineHeight: 1.7 }}>
+            {t({
+              ja: "R18 を有効にすると、成人向け表現を含む小説の構成案や続き生成にも使えます。生成後はそのまま投稿せず、必要に応じてご自身で確認・編集してから公開してください。",
+              en: "When R18 is enabled, you can also draft adult-oriented scenes and continuations.",
+            })}
+          </p>
+          <ul style={{ margin: 0, paddingLeft: "1.2rem", color: "var(--muted-text)", lineHeight: 1.7 }}>
+            <li>{t({ ja: "AI小説生成: プロット、導入、会話、地の文をまとめて生成", en: "AI novel generation: plot, opening, dialogue, and prose" })}</li>
+            <li>{t({ ja: "R18小説生成: 年齢区分を切り替えて成人向けの表現方針を調整", en: "R18 novel generation: tune adult-expression direction with age rating" })}</li>
+            <li>{t({ ja: "続き生成: 既存エピソードの続きや次の2000文字単位の展開を作成", en: "Continuation: generate the next section of an existing episode" })}</li>
+          </ul>
+        </section>
+      )}
+
       {typeof guestRemaining === "number" && (
         <div
           style={{

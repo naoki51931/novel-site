@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from .. import author_dashboard_helpers
 from ..repositories import novels_read_repository as repo
 
 
@@ -71,7 +72,7 @@ def get_novel_detail_service(*, novel_id: int, request: Request, db: Session):
 
     episode_updated_map: dict[int, datetime] = {}
     episode_ids = [int(ep.id) for ep in episodes if int(getattr(ep, "id", 0) or 0) > 0]
-    if episode_ids and legacy._table_has_column(db, "episodes", "updated_at"):
+    if episode_ids and author_dashboard_helpers._table_has_column(db, "episodes", "updated_at"):
         updated_rows = db.execute(
             legacy.text(
                 """

@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import notification_helpers
 from ..repositories import engagement_repository as repo
 
 
@@ -35,7 +36,7 @@ def like_novel_service(*, novel_id: int, request: Request, db: Session):
     if novel.author_id != user.id:
         title = "小説にいいねが付きました"
         notif_body = f"「{novel.title}」にいいねしました"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=novel.author_id,
             notif_type="novel_like",
@@ -53,7 +54,7 @@ def like_novel_service(*, novel_id: int, request: Request, db: Session):
     db.commit()
     if novel.author_id != user.id and title and notif_body:
         try:
-            legacy.send_web_push_to_user(
+            notification_helpers.send_web_push_to_user(
                 db,
                 user_id=novel.author_id,
                 title=title,
@@ -63,7 +64,7 @@ def like_novel_service(*, novel_id: int, request: Request, db: Session):
             )
         except Exception as exc:
             print(f"[webpush] novel_like send failed user_id={novel.author_id} err={exc!r}")
-        legacy.send_notification_email_if_enabled(
+        notification_helpers.send_notification_email_if_enabled(
             db,
             user_id=novel.author_id,
             title=title,
@@ -113,7 +114,7 @@ def like_episode_service(*, episode_id: int, request: Request, db: Session):
     if novel and novel.author_id != user.id:
         title = "エピソードにいいねが付きました"
         notif_body = f"「{episode.title or f'EP#{episode_id}'}」にいいねしました"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=novel.author_id,
             notif_type="episode_like",
@@ -130,7 +131,7 @@ def like_episode_service(*, episode_id: int, request: Request, db: Session):
     db.commit()
     if novel and novel.author_id != user.id and title and notif_body:
         try:
-            legacy.send_web_push_to_user(
+            notification_helpers.send_web_push_to_user(
                 db,
                 user_id=novel.author_id,
                 title=title,
@@ -140,7 +141,7 @@ def like_episode_service(*, episode_id: int, request: Request, db: Session):
             )
         except Exception as exc:
             print(f"[webpush] episode_like send failed user_id={novel.author_id} err={exc!r}")
-        legacy.send_notification_email_if_enabled(
+        notification_helpers.send_notification_email_if_enabled(
             db,
             user_id=novel.author_id,
             title=title,
@@ -188,7 +189,7 @@ def favorite_novel_service(*, novel_id: int, request: Request, db: Session):
     if novel.author_id and novel.author_id != user.id:
         title = "小説がブックマークされました"
         notif_body = f"「{novel.title}」をブックマークしました"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=novel.author_id,
             notif_type="novel_favorite",
@@ -201,7 +202,7 @@ def favorite_novel_service(*, novel_id: int, request: Request, db: Session):
     legacy.invalidate_public_list_caches()
     if novel.author_id and novel.author_id != user.id and title and notif_body:
         try:
-            legacy.send_web_push_to_user(
+            notification_helpers.send_web_push_to_user(
                 db,
                 user_id=novel.author_id,
                 title=title,
@@ -256,7 +257,7 @@ def follow_user_service(*, user_id: int, request: Request, db: Session):
         repo.create_user_follow(db, follower_user_id=user.id, followed_user_id=user_id)
         title = "フォローされました"
         notif_body = "あなたをフォローしました"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=user_id,
             notif_type="user_follow",
@@ -271,7 +272,7 @@ def follow_user_service(*, user_id: int, request: Request, db: Session):
     legacy.invalidate_public_list_caches()
 
     try:
-        legacy.send_web_push_to_user(
+        notification_helpers.send_web_push_to_user(
             db,
             user_id=user_id,
             title="フォローされました",

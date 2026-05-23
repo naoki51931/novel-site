@@ -29,8 +29,10 @@ async def generate_tag_candidates(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.ai_misc_service import generate_tag_candidates_service
+
     payload_model = _parse_payload(legacy.TagCandidatesRequest, payload)
-    return await legacy.generate_tag_candidates(payload=payload_model, request=request, db=db)
+    return await generate_tag_candidates_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/summary_candidates")
 async def generate_summary_candidates(
@@ -39,8 +41,10 @@ async def generate_summary_candidates(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.ai_misc_service import generate_summary_candidates_service
+
     payload_model = _parse_payload(legacy.SummaryCandidatesRequest, payload)
-    return await legacy.generate_summary_candidates(payload=payload_model, request=request, db=db)
+    return await generate_summary_candidates_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/title_candidate")
 async def generate_title_candidate(
@@ -49,8 +53,10 @@ async def generate_title_candidate(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.ai_misc_service import generate_title_candidate_service
+
     payload_model = _parse_payload(legacy.TitleCandidateRequest, payload)
-    return await legacy.generate_title_candidate(payload=payload_model, request=request, db=db)
+    return await generate_title_candidate_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/title_candidates")
 async def generate_title_candidates(
@@ -59,8 +65,10 @@ async def generate_title_candidates(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.ai_misc_service import generate_title_candidates_service
+
     payload_model = _parse_payload(legacy.TitleCandidatesRequest, payload)
-    return await legacy.generate_title_candidates(payload=payload_model, request=request, db=db)
+    return await generate_title_candidates_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/chat")
 async def ai_chat(
@@ -78,8 +86,10 @@ async def extract_ai_character_terms(
     payload: dict
 ):
     from .. import main as legacy
+    from ..services.ai_misc_service import extract_ai_character_terms_service
+
     payload_model = _parse_payload(legacy.AICharacterTermExtractRequest, payload)
-    return await legacy.extract_ai_character_terms(payload=payload_model)
+    return await extract_ai_character_terms_service(payload=payload_model)
 
 @router.get("/api/ai/logs/me")
 def get_my_ai_logs(
@@ -87,6 +97,7 @@ def get_my_ai_logs(
     limit: int = 50,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_my_ai_logs(request=request, limit=limit, db=db)
+    from ..services.ai_chat_usage_service import get_my_ai_logs_service
+
+    return get_my_ai_logs_service(request=request, limit=limit, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: AI_MISC

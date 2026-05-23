@@ -29,8 +29,9 @@ def search_public_users(
     q: str = Query(..., min_length=1, max_length=50),
     limit: int = Query(8, ge=1, le=20)
 ):
-    from .. import main as legacy
-    return legacy.search_public_users(request=request, db=db, q=q, limit=limit)
+    from ..services.search_service import search_public_users_service
+
+    return search_public_users_service(request=request, db=db, q=q, limit=limit)
 
 @router.get("/api/search/tags")
 def search_public_tags(
@@ -39,6 +40,7 @@ def search_public_tags(
     q: str = Query(..., min_length=1, max_length=50),
     limit: int = Query(8, ge=1, le=20)
 ):
-    from .. import main as legacy
-    return legacy.search_public_tags(request=request, db=db, q=q, limit=limit)
+    from ..services.search_service import search_public_tags_service
+
+    return search_public_tags_service(request=request, db=db, q=q, limit=limit)
 # END AUTO-GENERATED ROUTER WRAPPERS: SEARCH

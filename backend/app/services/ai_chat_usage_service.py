@@ -22,3 +22,26 @@ def list_my_ai_chat_usage_history_service(*, request: Request, db: Session, limi
         )
         for row in rows
     ]
+
+
+def get_my_ai_logs_service(*, request: Request, db: Session, limit: int):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    logs = (
+        db.query(legacy.models.AIGenerateLog)
+        .filter(legacy.models.AIGenerateLog.user_id == user.id)
+        .order_by(legacy.models.AIGenerateLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": log.id,
+            "created_at": log.created_at,
+            "prompt_summary": log.prompt_summary,
+            "tokens_used": log.tokens_used,
+            "model": log.model,
+        }
+        for log in logs
+    ]

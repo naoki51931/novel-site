@@ -91,7 +91,7 @@ function installSiteKeyFetchHeader(siteKey: SiteKey) {
 
 function applyGlobalButtonClasses() {
   if (typeof document === "undefined") return;
-  document.querySelectorAll("a:not(.btn-border), button:not(.btn-border)").forEach((el) => {
+  document.querySelectorAll("a:not(.btn-border):not(.text-link), button:not(.btn-border)").forEach((el) => {
     el.classList.add("btn", "btn-border");
   });
 }

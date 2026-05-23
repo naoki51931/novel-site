@@ -1,6 +1,7 @@
 from fastapi import Request
 from sqlalchemy.orm import Session
 
+from .. import public_chat_helpers
 from ..repositories import favorites_repository as repo
 
 
@@ -63,7 +64,9 @@ def list_my_ai_chat_favorites_service(*, request: Request, db: Session):
             {
                 "id": int(character.id),
                 "name": str(character.name or ""),
-                "personality": legacy._trim_public_character_intro(getattr(character, "personality", None)),
+                "personality": public_chat_helpers._trim_public_character_intro(
+                    getattr(character, "personality", None)
+                ),
                 "author_username": author_username,
                 "published_at": character.published_at.isoformat() if getattr(character, "published_at", None) else None,
                 "image_url": getattr(character, "image_url", None),

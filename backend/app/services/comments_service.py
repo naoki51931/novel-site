@@ -1,3 +1,6 @@
+from .. import notification_helpers
+
+
 def get_comments_service(novel_id, request, db):
     from .. import main as legacy
 
@@ -36,7 +39,7 @@ def post_comment_service(novel_id, payload, request, db):
         snippet = legacy._truncate_text(body, 120)
         notif_body = f"「{novel.title}」にコメント: {snippet}"
         link_url = f"/novels/{novel.id}#comment-{int(comment.id)}"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=novel.author_id,
             notif_type="novel_comment",
@@ -48,7 +51,7 @@ def post_comment_service(novel_id, payload, request, db):
     db.commit()
     db.refresh(comment)
     if novel.author_id != user.id:
-        legacy.send_notification_email_if_enabled(
+        notification_helpers.send_notification_email_if_enabled(
             db,
             user_id=novel.author_id,
             title=title,
@@ -98,7 +101,7 @@ def post_episode_comment_service(episode_id, payload, request, db):
         episode_title = episode.title or f"EP#{episode_id}"
         notif_body = f"「{episode_title}」にコメント: {snippet}"
         link_url = f"/episodes/{episode.id}#comment-{int(comment.id)}"
-        legacy.create_notification(
+        notification_helpers.create_notification(
             db,
             user_id=novel.author_id,
             notif_type="episode_comment",
@@ -110,7 +113,7 @@ def post_episode_comment_service(episode_id, payload, request, db):
     db.commit()
     db.refresh(comment)
     if novel and novel.author_id != user.id:
-        legacy.send_notification_email_if_enabled(
+        notification_helpers.send_notification_email_if_enabled(
             db,
             user_id=novel.author_id,
             title=title,

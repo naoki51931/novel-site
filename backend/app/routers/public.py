@@ -35,16 +35,29 @@ def list_public_novels(
     lang: str | None = None,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_public_novels(request=request, background_tasks=background_tasks, q=q, exclude=exclude, tag=tag, sort=sort, age_limit=age_limit, creative_type=creative_type, lang=lang, db=db)
+    from ..services.public_novels_service import list_public_novels_service
+
+    return list_public_novels_service(
+        request=request,
+        background_tasks=background_tasks,
+        q=q,
+        exclude=exclude,
+        tag=tag,
+        sort=sort,
+        age_limit=age_limit,
+        creative_type=creative_type,
+        lang=lang,
+        db=db,
+    )
 
 @router.get("/api/public/users/{username}")
 def read_public_user(
     username: str,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.read_public_user(username=username, db=db)
+    from ..services.public_profile_service import read_public_user_service
+
+    return read_public_user_service(username=username, db=db)
 
 @router.get("/api/public/users/{username}/novels")
 def list_public_user_novels(
@@ -53,8 +66,9 @@ def list_public_user_novels(
     db: Session = Depends(get_db),
     sort: str = Query("latest")
 ):
-    from .. import main as legacy
-    return legacy.list_public_user_novels(username=username, request=request, db=db, sort=sort)
+    from ..services.public_profile_service import list_public_user_novels_service
+
+    return list_public_user_novels_service(username=username, request=request, db=db, sort=sort)
 
 @router.get("/api/public/users/{username}/favorites")
 def list_public_user_favorites(
@@ -62,6 +76,7 @@ def list_public_user_favorites(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_public_user_favorites(username=username, request=request, db=db)
+    from ..services.public_profile_service import list_public_user_favorites_service
+
+    return list_public_user_favorites_service(username=username, request=request, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: PUBLIC

@@ -27,44 +27,40 @@ def list_following_feed(
     request: Request,
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
-    lang: str | None = None,
-    background_tasks: BackgroundTasks = None,
 ):
-    from .. import main as legacy
-    return legacy.list_following_feed(request=request, background_tasks=background_tasks, db=db, limit=limit, lang=lang)
+    from ..features.feed_service import list_following_feed_service
+
+    return list_following_feed_service(request=request, db=db, limit=limit)
 
 @router.get("/api/feed/following-tags")
 def list_following_tags_feed(
     request: Request,
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
-    lang: str | None = None,
-    background_tasks: BackgroundTasks = None,
 ):
-    from .. import main as legacy
-    return legacy.list_following_tags_feed(request=request, background_tasks=background_tasks, db=db, limit=limit, lang=lang)
+    from ..features.feed_service import list_following_tags_feed_service
+
+    return list_following_tags_feed_service(request=request, db=db, limit=limit)
 
 @router.get("/api/feed/history")
 def list_history_feed(
     request: Request,
     db: Session = Depends(get_db),
     limit: int = Query(12, ge=1, le=50),
-    lang: str | None = None,
-    background_tasks: BackgroundTasks = None,
 ):
-    from .. import main as legacy
-    return legacy.list_history_feed(request=request, background_tasks=background_tasks, db=db, limit=limit, lang=lang)
+    from ..features.feed_service import list_history_feed_service
+
+    return list_history_feed_service(request=request, db=db, limit=limit)
 
 @router.get("/api/feed/pickups")
 def list_pickups_feed(
     request: Request,
     db: Session = Depends(get_db),
     limit: int = Query(8, ge=1, le=30),
-    lang: str | None = None,
-    background_tasks: BackgroundTasks = None,
 ):
-    from .. import main as legacy
-    return legacy.list_pickups_feed(request=request, background_tasks=background_tasks, db=db, limit=limit, lang=lang)
+    from ..features.feed_service import list_pickups_feed_service
+
+    return list_pickups_feed_service(request=request, db=db, limit=limit)
 
 @router.get("/api/feed/new")
 def list_new_feed(
@@ -74,8 +70,15 @@ def list_new_feed(
     limit: int = Query(20, ge=1, le=100),
     lang: str | None = None,
 ):
-    from .. import main as legacy
-    return legacy.list_new_feed(request=request, background_tasks=background_tasks, db=db, limit=limit, lang=lang)
+    from ..features.feed_service import list_new_feed_service
+
+    return list_new_feed_service(
+        request=request,
+        background_tasks=background_tasks,
+        db=db,
+        limit=limit,
+        lang=lang,
+    )
 
 @router.get("/api/feed/trending")
 def list_trending_feed(
@@ -85,8 +88,15 @@ def list_trending_feed(
     limit: int = Query(20, ge=1, le=100),
     lang: str | None = None,
 ):
-    from .. import main as legacy
-    return legacy.list_trending_feed(request=request, background_tasks=background_tasks, db=db, limit=limit, lang=lang)
+    from ..features.feed_service import list_trending_feed_service
+
+    return list_trending_feed_service(
+        request=request,
+        background_tasks=background_tasks,
+        db=db,
+        limit=limit,
+        lang=lang,
+    )
 
 @router.get("/api/feed/recommended")
 def list_recommended_feed(
@@ -96,6 +106,13 @@ def list_recommended_feed(
     lang: str | None = None,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.list_recommended_feed(request=request, background_tasks=background_tasks, limit=limit, lang=lang, db=db)
+    from ..features.feed_service import list_recommended_feed_service
+
+    return list_recommended_feed_service(
+        request=request,
+        background_tasks=background_tasks,
+        limit=limit,
+        lang=lang,
+        db=db,
+    )
 # END AUTO-GENERATED ROUTER WRAPPERS: FEED

@@ -29,6 +29,7 @@ def list_series_novels(
     db: Session = Depends(get_db),
     limit: int = Query(60, ge=1, le=120)
 ):
-    from .. import main as legacy
-    return legacy.list_series_novels(series_name=series_name, request=request, db=db, limit=limit)
+    from ..services.other_service import list_series_novels_service
+
+    return list_series_novels_service(series_name=series_name, request=request, db=db, limit=limit)
 # END AUTO-GENERATED ROUTER WRAPPERS: SERIES

@@ -14,7 +14,12 @@ const BACKEND_ORIGIN = (
 ).replace(/\/+$/, "");
 const STATIC_PAGE_SEO: Record<
   string,
-  { title: string; description: string; ogType?: "website" | "book" | "article" | "profile" }
+  {
+    title: string;
+    description: string;
+    ogType?: "website" | "book" | "article" | "profile";
+    keywords?: string[];
+  }
 > = {
   "/ranking": {
     title: "小説ランキング",
@@ -49,16 +54,35 @@ const STATIC_PAGE_SEO: Record<
     description: "小説投稿サイトLexisへのお問い合わせページです。",
   },
   "/ai-novel": {
-    title: "AI小説",
-    description: "AIを使った小説生成と執筆支援のページです。",
+    title: "AI小説生成・R18小説生成",
+    description:
+      "AI小説生成ができるLexisのページです。R18小説生成、官能小説生成、物語の続き生成、執筆支援に対応しています。",
+    keywords: [
+      "AI小説",
+      "AI小説生成",
+      "小説生成AI",
+      "R18小説生成",
+      "官能小説生成",
+      "AI 官能小説",
+      "物語 生成",
+      "執筆支援",
+    ],
   },
   "/ai_chat": {
     title: "AIチャット",
     description: "キャラクターと会話できるAIチャットページです。",
   },
   "/ai_chat/lp": {
-    title: "AIチャット",
-    description: "LexisのAIチャット機能を紹介するページです。キャラクター会話をすぐに始められます。",
+    title: "AIチャット・R18チャット",
+    description:
+      "LexisのAIチャット紹介ページです。R18設定対応のAIチャットや、会話からAI小説化する機能を確認できます。",
+    keywords: [
+      "AIチャット",
+      "R18チャット",
+      "18禁チャット",
+      "AI小説化",
+      "会話から小説生成",
+    ],
   },
   "/ai_chat/howto": {
     title: "AIチャットの使い方",
@@ -93,6 +117,7 @@ type BuildMetadataParams = {
   canonical?: string;
   ogType?: "website" | "book" | "article" | "profile";
   noIndex?: boolean;
+  keywords?: string[];
 };
 
 function decodeHtml(value: unknown) {
@@ -245,10 +270,12 @@ function buildMetadata({
   canonical,
   ogType = "website",
   noIndex = false,
+  keywords,
 }: BuildMetadataParams): Metadata {
   return {
     title,
     description,
+    keywords,
     alternates: canonical ? { canonical } : undefined,
     robots: {
       index: !noIndex,
@@ -374,6 +401,7 @@ export async function generateMetadata({ params }: RouteProps): Promise<Metadata
       description: staticSeo.description,
       canonical,
       ogType: staticSeo.ogType || "website",
+      keywords: staticSeo.keywords,
     });
   }
 
@@ -441,6 +469,38 @@ async function buildJsonLd(pathParts: string[]): Promise<Record<string, unknown>
       name: `${tagName}小説一覧`,
       url: `${origin}/tags/${encodeURIComponent(tagName)}`,
       about: tagName,
+    };
+  }
+
+  if (pathParts.length === 1 && pathParts[0] === "ai-novel") {
+    return {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      name: "AI小説生成・R18小説生成",
+      url: `${origin}/ai-novel`,
+      description:
+        "AI小説生成、R18小説生成、官能小説生成、続き生成、執筆支援ができるページです。",
+      keywords: [
+        "AI小説生成",
+        "R18小説生成",
+        "官能小説生成",
+        "小説生成AI",
+        "執筆支援",
+      ].join(", "),
+      about: ["AI小説生成", "R18小説生成", "官能小説生成"],
+    };
+  }
+
+  if (pathParts.length === 2 && pathParts[0] === "ai_chat" && pathParts[1] === "lp") {
+    return {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      name: "AIチャット・R18チャット",
+      url: `${origin}/ai_chat/lp`,
+      description:
+        "R18設定対応のAIチャットと、会話ログからAI小説化できる機能を紹介するページです。",
+      keywords: ["AIチャット", "R18チャット", "18禁チャット", "AI小説化"].join(", "),
+      about: ["AIチャット", "R18チャット", "AI小説化"],
     };
   }
 

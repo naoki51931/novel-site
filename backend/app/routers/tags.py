@@ -28,8 +28,9 @@ def list_tags(
     db: Session = Depends(get_db),
     limit: int = Query(100, ge=1, le=300)
 ):
-    from .. import main as legacy
-    return legacy.list_tags(request=request, db=db, limit=limit)
+    from ..services.tags_service import list_tags_service
+
+    return list_tags_service(request=request, db=db, limit=limit)
 
 @router.get("/api/tags/{tag_name}")
 def read_tag_detail(
@@ -37,8 +38,9 @@ def read_tag_detail(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.read_tag_detail(tag_name=tag_name, request=request, db=db)
+    from ..services.tags_service import read_tag_detail_service
+
+    return read_tag_detail_service(tag_name=tag_name, request=request, db=db)
 
 @router.get("/api/tags/{tag_name}/novels")
 def list_tag_novels(
@@ -49,8 +51,9 @@ def list_tag_novels(
     limit: int = Query(60, ge=1, le=120),
     offset: int = Query(0, ge=0)
 ):
-    from .. import main as legacy
-    return legacy.list_tag_novels(tag_name=tag_name, request=request, db=db, sort=sort, limit=limit, offset=offset)
+    from ..services.tags_service import list_tag_novels_service
+
+    return list_tag_novels_service(tag_name=tag_name, request=request, db=db, sort=sort, limit=limit, offset=offset)
 
 @router.get("/api/tags/{tag_name}/related")
 def list_related_tags(
@@ -59,8 +62,9 @@ def list_related_tags(
     db: Session = Depends(get_db),
     limit: int = Query(12, ge=1, le=50)
 ):
-    from .. import main as legacy
-    return legacy.list_related_tags(tag_name=tag_name, request=request, db=db, limit=limit)
+    from ..services.tags_service import list_related_tags_service
+
+    return list_related_tags_service(tag_name=tag_name, request=request, db=db, limit=limit)
 
 @router.post("/api/tags/{tag_name}/follow")
 def follow_tag(
@@ -68,8 +72,9 @@ def follow_tag(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.follow_tag(tag_name=tag_name, request=request, db=db)
+    from ..services.tags_service import follow_tag_service
+
+    return follow_tag_service(tag_name=tag_name, request=request, db=db)
 
 @router.delete("/api/tags/{tag_name}/follow")
 def unfollow_tag(
@@ -77,8 +82,9 @@ def unfollow_tag(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.unfollow_tag(tag_name=tag_name, request=request, db=db)
+    from ..services.tags_service import unfollow_tag_service
+
+    return unfollow_tag_service(tag_name=tag_name, request=request, db=db)
 
 @router.get("/api/tags/{tag_name}/follow-status")
 def read_tag_follow_status(
@@ -86,6 +92,7 @@ def read_tag_follow_status(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.read_tag_follow_status(tag_name=tag_name, request=request, db=db)
+    from ..services.tags_service import read_tag_follow_status_service
+
+    return read_tag_follow_status_service(tag_name=tag_name, request=request, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: TAGS

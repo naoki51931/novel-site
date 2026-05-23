@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .. import models
+from .. import notification_helpers
 from ..repositories import notification_repository as repo
 
 
@@ -63,19 +64,19 @@ def _require_current_user(request: Request, db: Session):
 
 
 def get_push_public_key_service():
-    from .. import main as legacy
-
     return {
-        "enabled": legacy.is_webpush_configured(),
-        "public_key": legacy.WEBPUSH_VAPID_PUBLIC_KEY if legacy.is_webpush_configured() else "",
+        "enabled": notification_helpers.is_webpush_configured(),
+        "public_key": (
+            notification_helpers.WEBPUSH_VAPID_PUBLIC_KEY
+            if notification_helpers.is_webpush_configured()
+            else ""
+        ),
     }
 
 
 def subscribe_push_notifications_service(*, payload, request: Request, db: Session):
-    from .. import main as legacy
-
     user = _require_current_user(request, db)
-    if not legacy.is_webpush_configured():
+    if not notification_helpers.is_webpush_configured():
         raise HTTPException(503, "Web Push is not configured")
 
     endpoint = (payload.endpoint or "").strip()

@@ -65,7 +65,7 @@ def get_comments(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.comments_service import get_comments_service
+    from ..services.comments_service import get_comments_service
 
     return get_comments_service(novel_id=novel_id, request=request, db=db)
 
@@ -76,7 +76,7 @@ def post_comment(
     request: Request = None,
     db: Session = Depends(get_db)
 ):
-    from ..features.comments_service import post_comment_service
+    from ..services.comments_service import post_comment_service
 
     return post_comment_service(novel_id=novel_id, payload=payload, request=request, db=db)
 
@@ -137,8 +137,9 @@ async def generate_novel_summary_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return await legacy.generate_novel_summary_candidates(novel_id=novel_id, request=request, db=db)
+    from ..services.novel_assets_service import generate_novel_summary_candidates_service
+
+    return await generate_novel_summary_candidates_service(novel_id=novel_id, request=request, db=db)
 
 @router.post("/api/novels/{novel_id}/tag_candidates")
 async def generate_novel_tag_candidates(
@@ -146,8 +147,9 @@ async def generate_novel_tag_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return await legacy.generate_novel_tag_candidates(novel_id=novel_id, request=request, db=db)
+    from ..services.novel_assets_service import generate_novel_tag_candidates_service
+
+    return await generate_novel_tag_candidates_service(novel_id=novel_id, request=request, db=db)
 
 @router.post("/api/novels/{novel_id}/title_candidates")
 async def generate_novel_title_candidates(
@@ -155,8 +157,9 @@ async def generate_novel_title_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return await legacy.generate_novel_title_candidates(novel_id=novel_id, request=request, db=db)
+    from ..services.novel_assets_service import generate_novel_title_candidates_service
+
+    return await generate_novel_title_candidates_service(novel_id=novel_id, request=request, db=db)
 
 @router.post("/api/novels/{novel_id}/like")
 def like_novel(
@@ -205,7 +208,7 @@ def delete_comment(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.comments_service import delete_comment_service
+    from ..services.comments_service import delete_comment_service
 
     return delete_comment_service(novel_id=novel_id, comment_id=comment_id, request=request, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: NOVELS

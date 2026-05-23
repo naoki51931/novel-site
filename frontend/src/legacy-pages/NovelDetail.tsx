@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import TagChipLink from "../components/TagChipLink";
@@ -18,6 +19,7 @@ const API_BASE = getApiBase();
 const TRANSLATABLE_LANGS = new Set(["en", "zh-cn", "zh-tw", "ko"]);
 const GUIDE_CREATED_NOVEL_ID_KEY = "onboarding_created_novel_id_v1";
 const NOVEL_SUMMARY_MAX_CHARS = 500;
+const URL_RE = /https?:\/\/[^\s<>"')]+/g;
 
 type NovelTag = { id?: number | string | null; name?: string | null };
 type Episode = {
@@ -68,6 +70,39 @@ type Novel = {
   tag_names?: Array<string | null | undefined> | null;
   episodes?: Episode[] | null;
 };
+
+function renderTextWithLinks(text: string) {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(URL_RE)) {
+    const url = match[0];
+    const index = match.index ?? 0;
+    if (lastIndex < index) {
+      nodes.push(text.slice(lastIndex, index));
+    }
+    nodes.push(
+      <a
+        key={`${url}-${index}`}
+        className="text-link"
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          color: "#2563eb",
+          textDecoration: "underline",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {url}
+      </a>
+    );
+    lastIndex = index + url.length;
+  }
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes;
+}
 
 export default function NovelDetail() {
   const { id } = useParams(); // novel_id
@@ -993,9 +1028,11 @@ export default function NovelDetail() {
             lineHeight: 1.6,
           }}
         >
-          {isSummaryExpanded || novel.description.length <= NOVEL_SUMMARY_MAX_CHARS
-            ? novel.description
-            : `${novel.description.slice(0, NOVEL_SUMMARY_MAX_CHARS)}...`}
+          {renderTextWithLinks(
+            isSummaryExpanded || novel.description.length <= NOVEL_SUMMARY_MAX_CHARS
+              ? novel.description
+              : `${novel.description.slice(0, NOVEL_SUMMARY_MAX_CHARS)}...`
+          )}
           {novel.description.length > NOVEL_SUMMARY_MAX_CHARS && (
             <div style={{ marginTop: 8 }}>
               <button

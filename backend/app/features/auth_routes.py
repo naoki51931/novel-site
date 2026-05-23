@@ -9,5 +9,7 @@ router = APIRouter()
 @router.post('/api/auth/login')
 def login(payload: dict, db: Session = Depends(get_db)):
     from .. import main as legacy
+    from ..services.auth_service import login_service
+
     model_payload = legacy.UserLogin(**payload)
-    return legacy.login(model_payload, db=db)
+    return login_service(payload=model_payload, db=db)

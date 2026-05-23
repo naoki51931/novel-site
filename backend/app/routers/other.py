@@ -27,8 +27,10 @@ def public_create_contact_message(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
+    from ..services.public_contact_service import public_create_contact_message_service
+
     payload_model = _parse_payload(legacy.PublicContactRequest, payload)
-    return legacy.public_create_contact_message(request=request, payload=payload_model, db=db)
+    return public_create_contact_message_service(request=request, payload=payload_model, db=db)
 
 @router.get("/api/series")
 def list_series_overview(
@@ -37,8 +39,9 @@ def list_series_overview(
     q: str | None = Query(default=None),
     limit: int = Query(30, ge=1, le=100)
 ):
-    from .. import main as legacy
-    return legacy.list_series_overview(request=request, db=db, q=q, limit=limit)
+    from ..services.other_service import list_series_overview_service
+
+    return list_series_overview_service(request=request, db=db, q=q, limit=limit)
 
 @router.get("/api/trending-tags")
 def list_trending_tags(
@@ -47,16 +50,18 @@ def list_trending_tags(
     days: int = Query(7, ge=1, le=31),
     limit: int = Query(20, ge=1, le=100)
 ):
-    from .. import main as legacy
-    return legacy.list_trending_tags(request=request, db=db, days=days, limit=limit)
+    from ..services.other_service import list_trending_tags_service
+
+    return list_trending_tags_service(request=request, db=db, days=days, limit=limit)
 
 @router.get("/api/authors/{author_id}")
 def read_public_author(
     author_id: int,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.read_public_author(author_id=author_id, db=db)
+    from ..services.public_profile_service import read_public_author_service
+
+    return read_public_author_service(author_id=author_id, db=db)
 
 @router.get("/api/authors/{author_id}/novels")
 def list_public_author_novels(
@@ -65,8 +70,9 @@ def list_public_author_novels(
     db: Session = Depends(get_db),
     sort: str = Query("latest")
 ):
-    from .. import main as legacy
-    return legacy.list_public_author_novels(author_id=author_id, request=request, db=db, sort=sort)
+    from ..services.public_profile_service import list_public_author_novels_service
+
+    return list_public_author_novels_service(author_id=author_id, request=request, db=db, sort=sort)
 
 @router.get("/api/authors/{author_id}/stats")
 def get_author_stats(
@@ -74,8 +80,9 @@ def get_author_stats(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_author_stats(author_id=author_id, request=request, db=db)
+    from ..services.public_profile_service import get_author_stats_service
+
+    return get_author_stats_service(author_id=author_id, request=request, db=db)
 
 @router.get("/api/authors/{author_id}/favorite-tags")
 def get_author_favorite_tags(
@@ -84,8 +91,9 @@ def get_author_favorite_tags(
     db: Session = Depends(get_db),
     limit: int = Query(12, ge=1, le=50)
 ):
-    from .. import main as legacy
-    return legacy.get_author_favorite_tags(author_id=author_id, request=request, db=db, limit=limit)
+    from ..services.public_profile_service import get_author_favorite_tags_service
+
+    return get_author_favorite_tags_service(author_id=author_id, request=request, db=db, limit=limit)
 
 @router.get("/prerender/novels/{novel_id}")
 def prerender_novel_page(
@@ -93,8 +101,9 @@ def prerender_novel_page(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.prerender_novel_page(novel_id=novel_id, request=request, db=db)
+    from ..services.other_pages_service import prerender_novel_page_service
+
+    return prerender_novel_page_service(novel_id=novel_id, request=request, db=db)
 
 @router.get("/prerender/episodes/{episode_id}")
 def prerender_episode_page(
@@ -102,8 +111,9 @@ def prerender_episode_page(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.prerender_episode_page(episode_id=episode_id, request=request, db=db)
+    from ..services.other_pages_service import prerender_episode_page_service
+
+    return prerender_episode_page_service(episode_id=episode_id, request=request, db=db)
 
 @router.get("/share/episodes/{episode_id}")
 def share_episode_page(
@@ -111,8 +121,9 @@ def share_episode_page(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.share_episode_page(episode_id=episode_id, request=request, db=db)
+    from ..services.other_pages_service import share_episode_page_service
+
+    return share_episode_page_service(episode_id=episode_id, request=request, db=db)
 
 @router.get("/share/episodes/{episode_id}/og-image.png")
 def share_episode_og_image(
@@ -120,94 +131,106 @@ def share_episode_og_image(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.share_episode_og_image(episode_id=episode_id, request=request, db=db)
+    from ..services.other_pages_service import share_episode_og_image_service
+
+    return share_episode_og_image_service(episode_id=episode_id, request=request, db=db)
 
 @router.get("/{indexnow_key_file}.txt")
 def indexnow_key_file(
     indexnow_key_file: str
 ):
-    from .. import main as legacy
-    return legacy.indexnow_key_file(indexnow_key_file=indexnow_key_file)
+    from ..services.other_pages_service import indexnow_key_file_service
+
+    return indexnow_key_file_service(indexnow_key_file=indexnow_key_file)
 
 @router.get("/sitemap-main.xml")
 def sitemap_main_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_main_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_main_xml_service
+
+    return sitemap_main_xml_service(request=request, db=db)
 
 @router.get("/sitemap-static.xml")
 def sitemap_static_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_static_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_static_xml_service
+
+    return sitemap_static_xml_service(request=request, db=db)
 
 @router.get("/sitemap-novels.xml")
 def sitemap_novels_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_novels_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_novels_xml_service
+
+    return sitemap_novels_xml_service(request=request, db=db)
 
 @router.get("/sitemap-episodes.xml")
 def sitemap_episodes_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_episodes_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_episodes_xml_service
+
+    return sitemap_episodes_xml_service(request=request, db=db)
 
 @router.get("/sitemap-authors.xml")
 def sitemap_authors_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_authors_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_authors_xml_service
+
+    return sitemap_authors_xml_service(request=request, db=db)
 
 @router.get("/sitemap-tags.xml")
 def sitemap_tags_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_tags_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_tags_xml_service
+
+    return sitemap_tags_xml_service(request=request, db=db)
 
 @router.get("/sitemap-index.xml")
 def sitemap_index_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_index_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_index_xml_service
+
+    return sitemap_index_xml_service(request=request, db=db)
 
 @router.get("/sitemap.xml")
 def sitemap_xml(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.sitemap_xml(request=request, db=db)
+    from ..services.other_pages_service import sitemap_xml_service
+
+    return sitemap_xml_service(request=request, db=db)
 
 @router.get("/robots.txt")
 def robots_txt(
     request: Request
 ):
-    from .. import main as legacy
-    return legacy.robots_txt(request=request)
+    from ..services.other_pages_service import robots_txt_service
+
+    return robots_txt_service(request=request)
 
 @router.get("/api/author/dashboard")
 def get_author_dashboard(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
-    return legacy.get_author_dashboard(request=request, db=db)
+    from ..services.author_dashboard_service import get_author_dashboard_service
+
+    return get_author_dashboard_service(request=request, db=db)
 
 @router.get("/api/author/dashboard/novels/{novel_id}/daily")
 def get_author_novel_daily_metrics(
@@ -216,8 +239,9 @@ def get_author_novel_daily_metrics(
     db: Session = Depends(get_db),
     days: int = Query(default=30, ge=1, le=365)
 ):
-    from .. import main as legacy
-    return legacy.get_author_novel_daily_metrics(novel_id=novel_id, request=request, db=db, days=days)
+    from ..services.author_dashboard_service import get_author_novel_daily_metrics_service
+
+    return get_author_novel_daily_metrics_service(novel_id=novel_id, request=request, db=db, days=days)
 
 @router.get("/api/author/dashboard/top-novels")
 def get_author_top_novels(
@@ -226,8 +250,9 @@ def get_author_top_novels(
     limit: int = Query(default=10, ge=1, le=100),
     sort: str = Query(default="views")
 ):
-    from .. import main as legacy
-    return legacy.get_author_top_novels(request=request, db=db, limit=limit, sort=sort)
+    from ..services.author_dashboard_service import get_author_top_novels_service
+
+    return get_author_top_novels_service(request=request, db=db, limit=limit, sort=sort)
 
 @router.get("/api/users/me")
 def read_profile(

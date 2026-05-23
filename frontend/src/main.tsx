@@ -91,7 +91,7 @@ applySiteBranding();
 // すべての <a> と <button> に自動で btn btn-border を付ける
 function applyGlobalButtonClasses() {
   document
-    .querySelectorAll("a:not(.btn-border), button:not(.btn-border)")
+    .querySelectorAll("a:not(.btn-border):not(.text-link), button:not(.btn-border)")
     .forEach((el) => {
       el.classList.add("btn", "btn-border");
     });

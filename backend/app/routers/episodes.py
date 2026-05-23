@@ -25,7 +25,7 @@ def get_episode_comments(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.comments_service import get_episode_comments_service
+    from ..services.comments_service import get_episode_comments_service
 
     return get_episode_comments_service(episode_id=episode_id, request=request, db=db)
 
@@ -36,7 +36,7 @@ def post_episode_comment(
     request: Request = None,
     db: Session = Depends(get_db)
 ):
-    from ..features.comments_service import post_episode_comment_service
+    from ..services.comments_service import post_episode_comment_service
 
     return post_episode_comment_service(episode_id=episode_id, payload=payload, request=request, db=db)
 
@@ -201,7 +201,7 @@ def delete_episode_comment(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from ..features.comments_service import delete_episode_comment_service
+    from ..services.comments_service import delete_episode_comment_service
 
     return delete_episode_comment_service(episode_id=episode_id, comment_id=comment_id, request=request, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: EPISODES

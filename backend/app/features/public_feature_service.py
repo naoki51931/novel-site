@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from .. import public_chat_helpers
+
 
 def list_public_ai_chat_characters_service(request, q, limit, offset, db):
     from .. import main as legacy
@@ -144,7 +146,7 @@ def list_public_ai_chat_characters_service(request, q, limit, offset, db):
 
     output: list = []
     for item, username in rows:
-        if legacy._is_public_chat_r18(item) and not can_view_r18:
+        if public_chat_helpers._is_public_chat_r18(item) and not can_view_r18:
             continue
         item_id = int(item.id)
         rec = public_recommendation_map.get(profile_key_map.get(item_id, ""), {})
@@ -154,7 +156,7 @@ def list_public_ai_chat_characters_service(request, q, limit, offset, db):
             legacy.AIChatPublicCharacterListItem(
                 id=item_id,
                 name=str(item.name or ""),
-                personality=legacy._trim_public_character_intro(item.personality),
+                personality=public_chat_helpers._trim_public_character_intro(item.personality),
                 image_url=str(getattr(item, "image_url", "") or "").strip() or None,
                 is_r18=bool(getattr(item, "is_r18", False)),
                 recommendation_score=blended_score,
@@ -182,6 +184,7 @@ def list_public_ai_chat_characters_service(request, q, limit, offset, db):
 
 def list_recommended_public_novels_service(request, background_tasks, limit, lang, db):
     from .. import main as legacy
+    from ..services.public_novels_service import list_public_novels_service
 
     site_key = legacy.resolve_site_key(request)
     target_language = None
@@ -194,7 +197,7 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
 
     user = legacy.get_optional_current_user_soft(request, db)
     if not user:
-        return legacy.list_public_novels(
+        return list_public_novels_service(
             request=request,
             background_tasks=background_tasks,
             sort="new",

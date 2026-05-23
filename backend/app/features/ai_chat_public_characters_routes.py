@@ -15,8 +15,9 @@ def list_public_ai_chat_characters(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    from .. import main as legacy
-    return legacy.list_public_ai_chat_characters(
+    from .public_feature_service import list_public_ai_chat_characters_service
+
+    return list_public_ai_chat_characters_service(
         request=request,
         q=q,
         limit=limit,

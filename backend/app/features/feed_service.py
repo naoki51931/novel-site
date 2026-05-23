@@ -11,6 +11,266 @@ def _normalize_feed_lang(legacy, lang):
         return None
 
 
+def _serialize_feed_novels_for_user(
+    legacy,
+    db,
+    *,
+    user,
+    novels,
+    site_key,
+    target_language=None,
+    background_tasks=None,
+):
+    if not novels:
+        return []
+
+    novel_ids = [int(n.id) for n in novels]
+    cover_map = legacy._build_public_cover_map(db, novel_ids, site_key)
+    latest_episode_activity_map = legacy._build_public_latest_episode_activity_map(db, novel_ids, site_key)
+    comment_count_map = legacy._build_public_comment_count_map(db, novel_ids, site_key)
+    char_counts = legacy.get_novel_char_counts(db, novel_ids, public_only=True)
+    favorite_rows = (
+        db.query(legacy.models.NovelFavorite.novel_id, legacy.func.count(legacy.models.NovelFavorite.id))
+        .filter(legacy.models.NovelFavorite.novel_id.in_(novel_ids))
+        .group_by(legacy.models.NovelFavorite.novel_id)
+        .all()
+    )
+    favorite_counts = {int(novel_id): int(count or 0) for novel_id, count in favorite_rows}
+    liked_ids = set()
+    favorited_ids = set()
+    if user:
+        liked_ids = {
+            int(nid)
+            for (nid,) in db.query(legacy.models.NovelLike.novel_id)
+            .filter(
+                legacy.models.NovelLike.user_id == user.id,
+                legacy.models.NovelLike.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+        favorited_ids = {
+            int(nid)
+            for (nid,) in db.query(legacy.models.NovelFavorite.novel_id)
+            .filter(
+                legacy.models.NovelFavorite.user_id == user.id,
+                legacy.models.NovelFavorite.novel_id.in_(novel_ids),
+            )
+            .all()
+        }
+    translated_cards = legacy._resolve_public_novel_card_translations(
+        db,
+        novels=novels,
+        target_language=target_language,
+        background_tasks=background_tasks,
+    )
+    return [
+        {
+            "id": int(novel.id),
+            "title": str(translated_cards.get(int(novel.id), {}).get("title", novel.title) or ""),
+            "description": str(translated_cards.get(int(novel.id), {}).get("description", novel.description) or ""),
+            "created_at": novel.created_at,
+            "author_id": int(novel.author_id),
+            "author_username": novel.author.username if novel.author else None,
+            "tag_names": translated_cards.get(int(novel.id), {}).get("tag_names") or [
+                nt.tag.name
+                for nt in (getattr(novel, "novel_tags", []) or [])
+                if getattr(nt, "tag", None) is not None
+            ],
+            "view_count": int(getattr(novel, "view_count", 0) or 0),
+            "like_count": int(getattr(novel, "like_count", 0) or 0),
+            "favorite_count": int(favorite_counts.get(int(novel.id), 0)),
+            "comment_count": int(comment_count_map.get(int(novel.id), 0) or 0),
+            "total_char_count": int(char_counts.get(int(novel.id), 0) or 0),
+            "age_limit": str(getattr(novel, "age_limit", "all") or "all"),
+            "creative_type": str(getattr(novel, "creative_type", "original") or "original"),
+            "is_liked": int(novel.id) in liked_ids,
+            "is_favorited": int(novel.id) in favorited_ids,
+            "cover_image_url": cover_map.get(int(novel.id)),
+            "latest_episode_activity_at": latest_episode_activity_map.get(int(novel.id)),
+            "latest_episode_created_at": latest_episode_activity_map.get(int(novel.id)),
+        }
+        for novel in novels
+    ]
+
+
+def list_following_feed_service(request, db, limit):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    site_key = legacy.resolve_site_key(request)
+    user_age = legacy.calc_age(getattr(user, "birth_date", None))
+    followed_author_ids = [
+        int(uid)
+        for (uid,) in db.query(legacy.models.UserFollow.followed_user_id)
+        .filter(legacy.models.UserFollow.follower_user_id == user.id)
+        .all()
+        if int(uid or 0) > 0
+    ]
+    if not followed_author_ids:
+        return []
+
+    q = (
+        db.query(legacy.models.Novel)
+        .options(
+            legacy.selectinload(legacy.models.Novel.author),
+            legacy.selectinload(legacy.models.Novel.novel_tags).selectinload(legacy.models.NovelTag.tag),
+        )
+        .filter(legacy.models.Novel.site_key == site_key)
+        .filter(legacy.models.Novel.is_public == True)
+        .filter(legacy.models.Novel.author_id.in_(followed_author_ids))
+    )
+    q = legacy._apply_public_novel_age_filter(q, user_age)
+    novels = q.order_by(legacy.models.Novel.created_at.desc(), legacy.models.Novel.id.desc()).limit(limit).all()
+    if not novels:
+        return []
+    return _serialize_feed_novels_for_user(legacy, db, user=user, novels=novels, site_key=site_key)
+
+
+def list_following_tags_feed_service(request, db, limit):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    site_key = legacy.resolve_site_key(request)
+    user_age = legacy.calc_age(getattr(user, "birth_date", None))
+    followed_tag_ids = [
+        int(tag_id)
+        for (tag_id,) in db.query(legacy.models.TagFollow.tag_id)
+        .filter(legacy.models.TagFollow.user_id == int(user.id))
+        .all()
+        if int(tag_id or 0) > 0
+    ]
+    if not followed_tag_ids:
+        return []
+
+    id_rows = (
+        db.query(legacy.models.Novel.id, legacy.models.Novel.created_at)
+        .join(legacy.models.NovelTag, legacy.models.NovelTag.novel_id == legacy.models.Novel.id)
+        .filter(legacy.models.Novel.site_key == site_key)
+        .filter(legacy.models.Novel.is_public == True)
+        .filter(legacy.models.NovelTag.tag_id.in_(followed_tag_ids))
+    )
+    id_rows = legacy._apply_public_novel_age_filter(id_rows, user_age)
+    id_rows = (
+        id_rows.order_by(legacy.models.Novel.created_at.desc(), legacy.models.Novel.id.desc())
+        .limit(max(limit * 4, limit))
+        .all()
+    )
+    ordered_ids = []
+    seen_ids = set()
+    for novel_id, _ in id_rows:
+        nid = int(novel_id or 0)
+        if nid <= 0 or nid in seen_ids:
+            continue
+        ordered_ids.append(nid)
+        seen_ids.add(nid)
+        if len(ordered_ids) >= int(limit):
+            break
+    if not ordered_ids:
+        return []
+
+    novels = (
+        db.query(legacy.models.Novel)
+        .options(
+            legacy.selectinload(legacy.models.Novel.author),
+            legacy.selectinload(legacy.models.Novel.novel_tags).selectinload(legacy.models.NovelTag.tag),
+        )
+        .filter(legacy.models.Novel.id.in_(ordered_ids))
+        .all()
+    )
+    by_id = {int(n.id): n for n in novels}
+    ordered_novels = [by_id[nid] for nid in ordered_ids if nid in by_id]
+    if not ordered_novels:
+        return []
+    return _serialize_feed_novels_for_user(legacy, db, user=user, novels=ordered_novels, site_key=site_key)
+
+
+def list_history_feed_service(request, db, limit):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    site_key = legacy.resolve_site_key(request)
+    user_age = legacy.calc_age(getattr(user, "birth_date", None))
+    rows = (
+        db.query(legacy.models.UserViewHistory.target_id)
+        .filter(legacy.models.UserViewHistory.user_id == int(user.id))
+        .filter(legacy.models.UserViewHistory.target_type == "novel")
+        .filter(legacy.models.UserViewHistory.site_key == site_key)
+        .order_by(legacy.models.UserViewHistory.last_viewed_at.desc(), legacy.models.UserViewHistory.id.desc())
+        .limit(max(int(limit) * 3, int(limit)))
+        .all()
+    )
+    ordered_ids = []
+    seen = set()
+    for (target_id,) in rows:
+        nid = int(target_id or 0)
+        if nid <= 0 or nid in seen:
+            continue
+        ordered_ids.append(nid)
+        seen.add(nid)
+        if len(ordered_ids) >= int(limit):
+            break
+    if not ordered_ids:
+        return []
+    q = (
+        db.query(legacy.models.Novel)
+        .options(
+            legacy.selectinload(legacy.models.Novel.author),
+            legacy.selectinload(legacy.models.Novel.novel_tags).selectinload(legacy.models.NovelTag.tag),
+        )
+        .filter(legacy.models.Novel.id.in_(ordered_ids))
+        .filter(legacy.models.Novel.site_key == site_key)
+        .filter(legacy.models.Novel.is_public == True)
+    )
+    q = legacy._apply_public_novel_age_filter(q, user_age)
+    novels = q.all()
+    by_id = {int(n.id): n for n in novels}
+    ordered_novels = [by_id[nid] for nid in ordered_ids if nid in by_id]
+    return _serialize_feed_novels_for_user(legacy, db, user=user, novels=ordered_novels, site_key=site_key)
+
+
+def list_pickups_feed_service(request, db, limit):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    site_key = legacy.resolve_site_key(request)
+    user_age = legacy.calc_age(getattr(user, "birth_date", None))
+    since = date.today() - timedelta(days=30)
+    metric_subq = (
+        db.query(
+            legacy.models.NovelDailyMetric.novel_id.label("novel_id"),
+            legacy.func.coalesce(legacy.func.sum(legacy.models.NovelDailyMetric.view_count), 0).label("views30"),
+            legacy.func.coalesce(legacy.func.sum(legacy.models.NovelDailyMetric.like_count), 0).label("likes30"),
+            legacy.func.coalesce(legacy.func.sum(legacy.models.NovelDailyMetric.favorite_count), 0).label("favorites30"),
+        )
+        .filter(legacy.models.NovelDailyMetric.date >= since)
+        .group_by(legacy.models.NovelDailyMetric.novel_id)
+        .subquery()
+    )
+    q = (
+        db.query(legacy.models.Novel)
+        .outerjoin(metric_subq, metric_subq.c.novel_id == legacy.models.Novel.id)
+        .options(
+            legacy.selectinload(legacy.models.Novel.author),
+            legacy.selectinload(legacy.models.Novel.novel_tags).selectinload(legacy.models.NovelTag.tag),
+        )
+        .filter(legacy.models.Novel.site_key == site_key)
+        .filter(legacy.models.Novel.is_public == True)
+        .order_by(
+            (
+                legacy.func.coalesce(metric_subq.c.likes30, 0) * 4
+                + legacy.func.coalesce(metric_subq.c.favorites30, 0) * 6
+                + legacy.func.coalesce(metric_subq.c.views30, 0)
+            ).desc(),
+            legacy.models.Novel.created_at.desc(),
+            legacy.models.Novel.id.desc(),
+        )
+        .limit(limit)
+    )
+    q = legacy._apply_public_novel_age_filter(q, user_age)
+    novels = q.all()
+    return _serialize_feed_novels_for_user(legacy, db, user=user, novels=novels, site_key=site_key)
+
+
 def list_new_feed_service(request, background_tasks, db, limit, lang=None):
     from .. import main as legacy
 
@@ -29,7 +289,8 @@ def list_new_feed_service(request, background_tasks, db, limit, lang=None):
     )
     q = legacy._apply_public_novel_age_filter(q, user_age)
     novels = q.order_by(legacy.models.Novel.created_at.desc(), legacy.models.Novel.id.desc()).limit(limit).all()
-    return legacy._serialize_feed_novels_for_user(
+    return _serialize_feed_novels_for_user(
+        legacy,
         db,
         user=user,
         novels=novels,
@@ -80,7 +341,8 @@ def list_trending_feed_service(request, background_tasks, db, limit, lang=None):
     )
     q = legacy._apply_public_novel_age_filter(q, user_age)
     novels = q.limit(limit).all()
-    return legacy._serialize_feed_novels_for_user(
+    return _serialize_feed_novels_for_user(
+        legacy,
         db,
         user=user,
         novels=novels,
@@ -375,7 +637,7 @@ def list_recommended_feed_service(request, background_tasks, limit, lang, db):
         )
         selected = [novel for _, novel, _ in scored[: int(limit)]]
         if selected:
-            payload = legacy._serialize_feed_novels_for_user(db, user=user, novels=selected, site_key=site_key)
+            payload = _serialize_feed_novels_for_user(legacy, db, user=user, novels=selected, site_key=site_key)
             reason_map = {
                 int(getattr(novel, "id", 0)): {
                     "recommendation_score": float(score),
