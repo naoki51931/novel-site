@@ -168,8 +168,7 @@ class ProfileRead(BaseModel):
     ai_comment_revision_model: Optional[str] = None
     ai_story_agent_visible: Optional[bool] = True
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ProfileUpdate(BaseModel):

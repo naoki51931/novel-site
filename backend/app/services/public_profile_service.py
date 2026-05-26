@@ -45,7 +45,7 @@ def read_public_author_service(*, author_id: int, db: Session):
 
     if author_id <= 0:
         raise HTTPException(400, "author_id が不正です")
-    author = db.query(legacy.models.User).get(author_id)
+    author = db.get(legacy.models.User, author_id)
     if not author:
         raise HTTPException(404, "ユーザーが存在しません")
     return read_public_user_service(username=str(author.username or ""), db=db)
@@ -157,7 +157,7 @@ def list_public_author_novels_service(*, author_id: int, request: Request, db: S
 
     if author_id <= 0:
         raise HTTPException(400, "author_id が不正です")
-    author = db.query(legacy.models.User).get(author_id)
+    author = db.get(legacy.models.User, author_id)
     if not author:
         raise HTTPException(404, "ユーザーが存在しません")
     return list_public_user_novels_service(
@@ -272,7 +272,7 @@ def get_author_stats_service(*, author_id: int, request: Request, db: Session):
     from .. import main as legacy
 
     site_key = legacy.resolve_site_key(request)
-    author = db.query(legacy.models.User).get(author_id)
+    author = db.get(legacy.models.User, author_id)
     if not author:
         raise HTTPException(404, "ユーザーが存在しません")
     try:
@@ -322,7 +322,7 @@ def get_author_favorite_tags_service(*, author_id: int, request: Request, db: Se
     from .. import main as legacy
 
     site_key = legacy.resolve_site_key(request)
-    author = db.query(legacy.models.User).get(author_id)
+    author = db.get(legacy.models.User, author_id)
     if not author:
         raise HTTPException(404, "ユーザーが存在しません")
     try:

@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from fastapi import HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from ..time_utils import utcnow
 
 
 def admin_supports_timeline_service(
@@ -153,7 +154,7 @@ def admin_payouts_timeline_service(*, request: Request, db: Session, days: int):
             "status": payout.status,
             "period_start": payout.period_start.isoformat(),
             "period_end": payout.period_end.isoformat(),
-            "created_at": payout.created_at.isoformat() if payout.created_at else None,
+            "created_at": legacy.to_jst_isoformat(payout.created_at),
         }
         for payout, username in upcoming_rows
     ]
@@ -172,7 +173,7 @@ def admin_payouts_timeline_service(*, request: Request, db: Session, days: int):
             "author_user_id": payout.author_user_id,
             "username": username,
             "amount_yen": payout.amount_yen,
-            "paid_at": payout.paid_at.isoformat() if payout.paid_at else None,
+            "paid_at": legacy.to_jst_isoformat(payout.paid_at),
             "period_start": payout.period_start.isoformat(),
             "period_end": payout.period_end.isoformat(),
         }
@@ -216,7 +217,7 @@ def admin_list_payouts_service(*, request: Request, db: Session, status: str | N
                 "status": payout.status,
                 "period_start": payout.period_start.isoformat(),
                 "period_end": payout.period_end.isoformat(),
-                "created_at": payout.created_at.isoformat() if payout.created_at else None,
+                "created_at": legacy.to_jst_isoformat(payout.created_at),
             }
             for payout, username in rows
         ]
@@ -228,7 +229,7 @@ def admin_author_payout_profile_service(*, author_user_id: int, request: Request
 
     legacy.require_admin(request)
     profile = legacy.get_or_create_payout_profile(db, author_user_id)
-    user = db.query(legacy.models.User).get(author_user_id)
+    user = db.get(legacy.models.User, author_user_id)
     if not user:
         raise HTTPException(404, "ユーザーが見つかりません")
     return {
@@ -452,12 +453,12 @@ def mark_payout_paid_service(*, payout_id: int, req, request: Request, db: Sessi
     from .. import main as legacy
 
     legacy.require_admin(request)
-    payout = db.query(legacy.models.Payout).get(payout_id)
+    payout = db.get(legacy.models.Payout, payout_id)
     if not payout:
         raise HTTPException(404, "payout が見つかりません")
 
     payout.status = "paid"
-    payout.paid_at = datetime.utcnow()
+    payout.paid_at = utcnow()
     if req.note is not None:
         payout.note = req.note
     db.add(payout)
@@ -469,7 +470,7 @@ def mark_payout_failed_service(*, payout_id: int, req, request: Request, db: Ses
     from .. import main as legacy
 
     legacy.require_admin(request)
-    payout = db.query(legacy.models.Payout).get(payout_id)
+    payout = db.get(legacy.models.Payout, payout_id)
     if not payout:
         raise HTTPException(404, "payout が見つかりません")
 

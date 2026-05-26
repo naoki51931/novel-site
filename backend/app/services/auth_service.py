@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .. import auth_mail_helpers
+from ..time_utils import utcnow
 
 
 def start_register_email_verification_service(*, payload, request: Request, db: Session):
@@ -19,7 +20,7 @@ def start_register_email_verification_service(*, payload, request: Request, db: 
         legacy._record_register_email_start_attempt(rate_limit_key, cooldown_key)
         return {"ok": True, "expires_minutes": legacy.REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES}
 
-    now = datetime.utcnow()
+    now = utcnow()
     db.query(legacy.models.RegisterEmailVerificationToken).filter(
         legacy.models.RegisterEmailVerificationToken.email == email,
         legacy.models.RegisterEmailVerificationToken.consumed == False,
@@ -69,7 +70,7 @@ def register_user_service(*, payload, db: Session):
     if exists:
         raise HTTPException(400, "そのメールアドレスは既に使われています")
 
-    now = datetime.utcnow()
+    now = utcnow()
     code_hash = legacy._hash_register_email_code(email, email_code)
     verification = (
         db.query(legacy.models.RegisterEmailVerificationToken)
@@ -120,7 +121,7 @@ def password_reset_request_service(*, payload, db: Session):
     if not user:
         return {"ok": True}
 
-    now = datetime.utcnow()
+    now = utcnow()
     db.query(legacy.models.PasswordResetToken).filter(
         legacy.models.PasswordResetToken.user_id == user.id,
         legacy.models.PasswordResetToken.consumed == False,
@@ -154,7 +155,7 @@ def password_reset_confirm_service(*, payload, db: Session):
     if not (payload.new_password or "").strip():
         raise HTTPException(400, "新しいパスワードを入力してください")
 
-    now = datetime.utcnow()
+    now = utcnow()
     record = (
         db.query(legacy.models.PasswordResetToken)
         .filter(
@@ -168,7 +169,7 @@ def password_reset_confirm_service(*, payload, db: Session):
     if not record:
         raise HTTPException(400, "トークンが無効か期限切れです")
 
-    user = db.query(legacy.models.User).get(record.user_id)
+    user = db.get(legacy.models.User, record.user_id)
     if not user:
         raise HTTPException(400, "ユーザーが見つかりません")
 
@@ -501,7 +502,7 @@ def login_start_service(*, payload, request: Request, db: Session):
     legacy._clear_login_start_failure(failure_key)
 
     if bool(getattr(user, "email_address_invalid", False)):
-        now_utc = datetime.utcnow()
+        now_utc = utcnow()
         skip_until = getattr(user, "email_2fa_skip_until", None)
         if not skip_until:
             skip_until = now_utc + timedelta(days=60)
@@ -522,7 +523,7 @@ def login_start_service(*, payload, request: Request, db: Session):
     legacy._enforce_login_start_send_cooldown(send_cooldown_key)
 
     user.two_factor_code = f"{legacy.secrets.randbelow(1000000):06d}"
-    user.two_factor_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    user.two_factor_expires_at = utcnow() + timedelta(minutes=10)
     db.add(user)
     db.commit()
     auth_mail_helpers.send_2fa_email(user.email, user.two_factor_code)
@@ -536,7 +537,7 @@ def login_verify_service(*, payload, db: Session):
     user = legacy.get_user_by_username(db, payload.username)
     if not user or not user.two_factor_code:
         raise HTTPException(400, "認証コードが無効です")
-    if user.two_factor_expires_at and user.two_factor_expires_at < datetime.utcnow():
+    if user.two_factor_expires_at and user.two_factor_expires_at < utcnow():
         raise HTTPException(400, "認証コードの有効期限が切れています")
     if user.two_factor_code != payload.code:
         raise HTTPException(400, "認証コードが正しくありません")

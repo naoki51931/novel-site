@@ -90,7 +90,7 @@ def create_novel_favorite(db: Session, *, novel_id: int, user_id: int) -> models
 
 
 def get_user_by_id(db: Session, *, user_id: int) -> models.User | None:
-    return db.query(models.User).get(user_id)
+    return db.get(models.User, user_id)
 
 
 def find_user_follow(

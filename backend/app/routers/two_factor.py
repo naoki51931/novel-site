@@ -4,13 +4,14 @@ import threading
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean
 from sqlalchemy.orm import Session
 
 from ..database import Base, engine, get_db
 from ..models import User
 from .auth import create_access_token  # 既存のJWT作成関数を利用する想定
 from ..email_utils import send_login_code_email
+from ..time_utils import UTCDateTime as DateTime, utcnow
 
 
 # ============================
@@ -23,7 +24,7 @@ class EmailLoginToken(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), index=True, nullable=False)
     code = Column(String(20), nullable=False)  # 簡易に平文保存（本番で気になるならハッシュ化も可）
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     consumed = Column(Boolean, default=False, nullable=False)
 
@@ -80,7 +81,7 @@ def request_email_code(payload: EmailCodeRequest, db: Session = Depends(get_db))
     user = db.query(User).filter(User.email == payload.email).first()  # User に email カラムがある想定
 
     if user:
-        now = datetime.utcnow()
+        now = utcnow()
         code = _generate_code()
         token = EmailLoginToken(
             email=payload.email,
@@ -104,7 +105,7 @@ def login_with_email_code(payload: EmailCodeVerify, db: Session = Depends(get_db
     email + 6桁コードで JWT を発行する。
     """
     ensure_email_login_token_table()
-    now = datetime.utcnow()
+    now = utcnow()
     token = (
         db.query(EmailLoginToken)
         .filter(

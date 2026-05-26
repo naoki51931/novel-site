@@ -4,7 +4,7 @@ from .. import models
 
 
 def get_user_by_id(db: Session, *, user_id: int) -> models.User | None:
-    return db.query(models.User).get(user_id)
+    return db.get(models.User, user_id)
 
 
 def find_user_by_username_except_id(

@@ -1,8 +1,9 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, Enum, Date, UniqueConstraint, Float, Index
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, Enum, Date, UniqueConstraint, Float, Index
 from sqlalchemy.dialects.mysql import LONGTEXT as MYSQL_LONGTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
+from .time_utils import UTCDateTime as DateTime
 
 LONGTEXT = MYSQL_LONGTEXT().with_variant(Text(), "sqlite")
 

@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from .. import notification_helpers
+from ..time_utils import utcnow
 
 
 def create_dm_thread_service(payload, request, db):
@@ -10,7 +11,7 @@ def create_dm_thread_service(payload, request, db):
     target = None
 
     if payload.target_user_id is not None:
-        target = db.query(legacy.models.User).get(int(payload.target_user_id))
+        target = db.get(legacy.models.User, int(payload.target_user_id))
     elif payload.target_username:
         target = legacy.get_user_by_username(db, payload.target_username.strip())
     else:
@@ -46,7 +47,7 @@ def read_dm_thread_service(thread_id, request, db):
     from .. import main as legacy
 
     user = legacy.require_current_user(request, db)
-    thread = db.query(legacy.models.DirectMessageThread).get(thread_id)
+    thread = db.get(legacy.models.DirectMessageThread, thread_id)
     if not thread:
         raise legacy.HTTPException(404, "DMが見つかりません")
 
@@ -69,7 +70,7 @@ def read_dm_thread_service(thread_id, request, db):
         .order_by(legacy.models.DirectMessage.created_at.asc(), legacy.models.DirectMessage.id.asc())
         .all()
     )
-    now = datetime.utcnow()
+    now = utcnow()
     needs_commit = False
     for msg in messages:
         if msg.recipient_user_id is None:
@@ -126,7 +127,7 @@ def create_dm_message_service(thread_id, payload, request, db):
     from .. import main as legacy
 
     user = legacy.require_current_user(request, db)
-    thread = db.query(legacy.models.DirectMessageThread).get(thread_id)
+    thread = db.get(legacy.models.DirectMessageThread, thread_id)
     if not thread:
         raise legacy.HTTPException(404, "DMが見つかりません")
     if user.id not in (thread.user1_id, thread.user2_id):
@@ -156,7 +157,7 @@ def create_dm_message_service(thread_id, payload, request, db):
         body=body,
         is_read=False,
     )
-    thread.updated_at = datetime.utcnow()
+    thread.updated_at = utcnow()
     db.add(msg)
     db.add(thread)
     if recipient_id != user.id:

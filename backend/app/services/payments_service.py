@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from .. import notification_helpers
+from ..time_utils import utcnow
 
 
 def supports_checkout_service(*, req, request: Request, db: Session):
@@ -14,7 +15,7 @@ def supports_checkout_service(*, req, request: Request, db: Session):
     if req.amount_yen <= 0:
         raise HTTPException(400, "支援金額が不正です")
 
-    author = db.query(legacy.models.User).get(req.author_user_id)
+    author = db.get(legacy.models.User, req.author_user_id)
     if not author:
         raise HTTPException(404, "作者が見つかりません")
 
@@ -163,7 +164,7 @@ def update_support_plan_service(*, plan_id: int, payload, request: Request, db: 
     from .. import main as legacy
 
     user = legacy.require_current_user(request, db)
-    plan = db.query(legacy.models.SupportPlan).get(plan_id)
+    plan = db.get(legacy.models.SupportPlan, plan_id)
     if not plan or plan.author_user_id != user.id:
         raise HTTPException(404, "プランが見つかりません")
 
@@ -230,7 +231,7 @@ def deactivate_support_plan_service(*, plan_id: int, request: Request, db: Sessi
     from .. import main as legacy
 
     user = legacy.require_current_user(request, db)
-    plan = db.query(legacy.models.SupportPlan).get(plan_id)
+    plan = db.get(legacy.models.SupportPlan, plan_id)
     if not plan or plan.author_user_id != user.id:
         raise HTTPException(404, "プランが見つかりません")
     plan.is_active = False
@@ -251,7 +252,7 @@ def activate_support_plan_service(*, plan_id: int, request: Request, db: Session
     from .. import main as legacy
 
     user = legacy.require_current_user(request, db)
-    plan = db.query(legacy.models.SupportPlan).get(plan_id)
+    plan = db.get(legacy.models.SupportPlan, plan_id)
     if not plan or plan.author_user_id != user.id:
         raise HTTPException(404, "プランが見つかりません")
     duplicate = (
@@ -286,7 +287,7 @@ def memberships_checkout_service(*, req, request: Request, db: Session):
     if not legacy.STRIPE_SECRET_KEY:
         raise HTTPException(500, "STRIPE_SECRET_KEY 未設定")
     supporter = legacy.require_current_user(request, db)
-    plan = db.query(legacy.models.SupportPlan).get(req.plan_id)
+    plan = db.get(legacy.models.SupportPlan, req.plan_id)
     if not plan or not getattr(plan, "is_active", False):
         raise HTTPException(404, "支援プランが見つかりません")
     if plan.author_user_id != req.author_user_id:
@@ -461,7 +462,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
             return None
         return datetime.utcfromtimestamp(int(ts))
 
-    now = datetime.utcnow()
+    now = utcnow()
 
     if event_type == "checkout.session.completed":
         meta_type = metadata.get("type")
@@ -488,7 +489,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
                 print("[stripe] ai_chat_addon: user_id missing", metadata)
                 return {"ok": True, "skipped": True}
 
-            user = db.query(legacy.models.User).get(user_id)
+            user = db.get(legacy.models.User, user_id)
             if not user:
                 print("[stripe] ai_chat_addon: user not found", user_id)
                 return {"ok": True, "skipped": True}
@@ -542,7 +543,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
                 print("[stripe] ai_novel_addon: user_id missing", metadata)
                 return {"ok": True, "skipped": True}
 
-            user = db.query(legacy.models.User).get(user_id)
+            user = db.get(legacy.models.User, user_id)
             if not user:
                 print("[stripe] ai_novel_addon: user not found", user_id)
                 return {"ok": True, "skipped": True}
@@ -624,7 +625,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
             supporter_user_id = support.supporter_user_id
             supporter_name = "支援者"
             if supporter_user_id:
-                supporter = db.query(legacy.models.User).get(supporter_user_id)
+                supporter = db.get(legacy.models.User, supporter_user_id)
                 if supporter and supporter.username:
                     supporter_name = supporter.username
             link_url = "/me/creator"
@@ -772,7 +773,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
         )
         db.add(invoice)
         legacy.apply_author_balance_delta(db, author_user_id, delta_available=share_yen)
-        supporter = db.query(legacy.models.User).get(supporter_user_id) if supporter_user_id else None
+        supporter = db.get(legacy.models.User, supporter_user_id) if supporter_user_id else None
         supporter_name = supporter.username if supporter and supporter.username else "支援者"
         title = "月額支援の支払いが完了しました"
         notif_body = f"{supporter_name}の月額支援が更新されました（{int(amount_paid)}円）"
@@ -806,7 +807,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
             )
             if invoice and invoice.status != "refunded":
                 invoice.status = "refunded"
-                membership = db.query(legacy.models.Membership).get(invoice.membership_id)
+                membership = db.get(legacy.models.Membership, invoice.membership_id)
                 if membership:
                     legacy.apply_author_balance_delta(
                         db, membership.author_user_id, delta_available=-invoice.author_share_yen
@@ -898,7 +899,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
     if raw_uid is not None:
         try:
             user_id = int(raw_uid)
-            user = db.query(legacy.models.User).get(user_id)
+            user = db.get(legacy.models.User, user_id)
         except Exception as e:
             print("stripe webhook: invalid client_reference_id:", raw_uid, repr(e))
 
@@ -926,7 +927,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
             user.stripe_customer_id = customer_id
         if subscription_id:
             user.stripe_subscription_id = subscription_id
-        user.premium_checked_at = datetime.utcnow()
+        user.premium_checked_at = utcnow()
         db.add(user)
         db.commit()
         legacy.invalidate_user_cache(user_id=user.id, username=user.username)
@@ -940,7 +941,7 @@ async def stripe_webhook_service(*, request: Request, stripe_signature: str | No
             user.stripe_customer_id = customer_id
         if subscription_id:
             user.stripe_subscription_id = subscription_id
-        user.premium_checked_at = datetime.utcnow()
+        user.premium_checked_at = utcnow()
         db.add(user)
         db.commit()
         legacy.invalidate_user_cache(user_id=user.id, username=user.username)
