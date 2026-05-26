@@ -34,8 +34,8 @@ def list_my_ai_jobs_service(*, request, response, db):
             "id": job.id,
             "status": job.status,
             "job_type": job.job_type,
-            "created_at": job.created_at.isoformat() if job.created_at else None,
-            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "created_at": legacy.to_jst_isoformat(job.created_at),
+            "started_at": legacy.to_jst_isoformat(job.started_at),
         }
         for job in jobs
     ]
@@ -45,7 +45,10 @@ def get_ai_job_status_service(*, job_id, request, response, db):
     from .. import main as legacy
 
     legacy._kill_expired_ai_jobs(db)
-    job = db.query(legacy.models.AINovelJob).get(job_id)
+    if hasattr(db, "get"):
+        job = db.get(legacy.models.AINovelJob, job_id)
+    else:
+        job = db.query(legacy.models.AINovelJob).get(job_id)
     if not job:
         raise legacy.HTTPException(status_code=404, detail="ジョブが見つかりません。")
 
@@ -82,7 +85,7 @@ def kill_my_ai_jobs_service(*, request, db):
     from .. import main as legacy
 
     user = legacy.require_current_user(request, db)
-    now = legacy.datetime.utcnow()
+    now = legacy.utcnow()
     killed = (
         db.query(legacy.models.AINovelJob)
         .filter(legacy.models.AINovelJob.user_id == user.id)
@@ -107,7 +110,7 @@ def kill_selected_my_ai_jobs_service(*, payload, request, db):
     job_ids = _payload_job_ids(payload)
     if not job_ids:
         return {"killed": 0}
-    now = legacy.datetime.utcnow()
+    now = legacy.utcnow()
     killed = (
         db.query(legacy.models.AINovelJob)
         .filter(legacy.models.AINovelJob.user_id == user.id)
@@ -143,8 +146,8 @@ def list_all_ai_jobs_service(*, request, db):
             "user_id": job.user_id,
             "status": job.status,
             "job_type": job.job_type,
-            "created_at": job.created_at.isoformat() if job.created_at else None,
-            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "created_at": legacy.to_jst_isoformat(job.created_at),
+            "started_at": legacy.to_jst_isoformat(job.started_at),
         }
         for job in jobs
     ]
@@ -157,7 +160,7 @@ def kill_selected_ai_jobs_service(*, payload, request, db):
     job_ids = _payload_job_ids(payload)
     if not job_ids:
         return {"killed": 0}
-    now = legacy.datetime.utcnow()
+    now = legacy.utcnow()
     killed = (
         db.query(legacy.models.AINovelJob)
         .filter(legacy.models.AINovelJob.id.in_(job_ids))
@@ -179,7 +182,7 @@ def kill_all_ai_jobs_service(*, request, db):
     from .. import main as legacy
 
     legacy.require_admin(request)
-    now = legacy.datetime.utcnow()
+    now = legacy.utcnow()
     killed = (
         db.query(legacy.models.AINovelJob)
         .filter(legacy.models.AINovelJob.status.in_(["pending", "running"]))

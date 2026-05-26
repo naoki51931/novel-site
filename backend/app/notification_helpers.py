@@ -200,7 +200,7 @@ def send_notification_email_if_enabled(
     body: str | None = None,
     link_url: str | None = None,
 ) -> None:
-    user = db.query(models.User).get(user_id)
+    user = db.get(models.User, user_id)
     if not user or not getattr(user, "email_notifications_enabled", True):
         return
     if not user.email:
@@ -700,3 +700,117 @@ def notify_recommended_users_new_novel(
         notified_count += 1
     if notified_count > 0:
         db.commit()
+
+
+def _background_notify_episode_published(
+    novel_id: int,
+    episode_id: int,
+    site_key: str,
+    *,
+    session_local: Any,
+    logger: Any,
+) -> None:
+    legacy = _legacy()
+    db = session_local()
+    try:
+        novel = (
+            db.query(models.Novel)
+            .filter(models.Novel.id == novel_id, models.Novel.site_key == site_key)
+            .first()
+        )
+        episode = (
+            db.query(models.Episode)
+            .filter(models.Episode.id == episode_id, models.Episode.site_key == site_key)
+            .first()
+        )
+        if not novel or not episode:
+            return
+        if legacy.is_episode_draft(episode):
+            return
+        notify_favorited_users_episode_published(db, novel=novel, episode=episode)
+        notify_followers_author_new_episode(db, novel=novel, episode=episode)
+        db.commit()
+    except Exception as e:
+        logger.warning(
+            "bg notify failed novel_id=%s episode_id=%s err=%r",
+            novel_id,
+            episode_id,
+            e,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def _notify_ai_job_user(
+    db: Session,
+    *,
+    user_id: int | None,
+    job_type: str,
+    succeeded: bool,
+    error_message: str | None = None,
+    print_fn: Any = print,
+) -> None:
+    if not user_id:
+        return
+
+    is_continuation = job_type == "episode_continue"
+    if succeeded:
+        title = "AI生成が完了しました"
+        notif_body = (
+            "続き生成が完了しました。結果を確認できます。"
+            if is_continuation
+            else "AI小説生成が完了しました。結果を確認できます。"
+        )
+        notif_type = "ai_generation_done"
+    else:
+        title = "AI生成が失敗しました"
+        reason = (error_message or "").strip()
+        if len(reason) > 160:
+            reason = reason[:159] + "..."
+        base = "続き生成に失敗しました。" if is_continuation else "AI小説生成に失敗しました。"
+        notif_body = f"{base} {reason}".strip() if reason else base
+        notif_type = "ai_generation_failed"
+
+    link_url = "/ai-novel" if is_continuation else "/ai-logs"
+    try:
+        create_notification(
+            db,
+            user_id=user_id,
+            notif_type=notif_type,
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            actor_user_id=None,
+        )
+        db.commit()
+    except Exception as e:
+        print_fn(f"[ai-job] failed to create notification user_id={user_id}, err={e!r}")
+        db.rollback()
+        return
+
+    if succeeded:
+        try:
+            send_notification_email_if_enabled(
+                db,
+                user_id=user_id,
+                title=title,
+                body=notif_body,
+                link_url=link_url,
+            )
+        except Exception as e:
+            print_fn(f"[ai-job] failed to send email notification user_id={user_id}, err={e!r}")
+    try:
+        send_web_push_to_user(
+            db,
+            user_id=user_id,
+            title=title,
+            body=notif_body,
+            link_url=link_url,
+            tag="ai-generation",
+        )
+    except Exception as e:
+        print_fn(f"[ai-job] failed to send web push user_id={user_id}, err={e!r}")

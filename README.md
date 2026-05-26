@@ -13,6 +13,13 @@ FastAPI + Next.js + MySQL + nginx + Docker Compose で構成した小説投稿�
 - SSL: Let's Encrypt (certbot)
 - Orchestration: Docker Compose
 
+## 時刻の扱い
+
+- バックエンド内部の日時は `UTC` の timezone-aware を基準に扱います。
+- DB 保存時は互換性のため UTC に正規化して保存します。
+- ユーザー向け表示は `JST (Asia/Tokyo)` に寄せる方針です。
+- 旧実装由来で、一部 API / 管理画面にはまだ UTC 表示が残る可能性があります。日時表示を触る変更では `README.md` と `AGENTS.md` のこの方針に合わせて統一してください。
+
 ## アーキテクチャ図
 
 ```mermaid

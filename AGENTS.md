@@ -36,6 +36,14 @@ Codex で作業するときの要点と入口をまとめます。
 - マイグレーションツールは未導入。`backend/app/main.py` の `ensure_*` が起動時にカラム補完する前提。
 - schema/models を変えたら DB の `ALTER TABLE` も必要。
 
+## 時刻運用
+
+- バックエンド内部の比較・保存前処理は `UTC` の timezone-aware を基準にする。
+- DB 互換のため、保存時は UTC に正規化して扱う。
+- ユーザー向け表示時刻は `JST (Asia/Tokyo)` を優先する。
+- `datetime.utcnow()` は使わず、時刻 helper を経由する。
+- 既存コードには UTC 表示が残る箇所がありうるため、日時を返す API や管理画面を触るときは表示境界で JST へ変換されているか確認する。
+
 ## 編集の指針
 
 - フロントは `frontend/dist` を手で触らず、`frontend/src` を変更して `npm run build`。
