@@ -89,11 +89,13 @@ export function applySeoMeta({
   title,
   description,
   canonicalPath,
+  keywords = [],
   ogType = DEFAULT_OG_TYPE,
   imageUrl = "",
   robots = "index,follow",
   twitterCard = DEFAULT_TWITTER_CARD,
   jsonLd = [],
+  alternateLanguages = [],
 }) {
   if (typeof document === "undefined" || typeof window === "undefined") {
     return () => {};
@@ -101,12 +103,16 @@ export function applySeoMeta({
 
   const cleanTitle = asText(title);
   const cleanDescription = buildSeoDescription(description);
+  const cleanKeywords = Array.isArray(keywords)
+    ? keywords.map((keyword) => asText(keyword)).filter(Boolean).join(", ")
+    : asText(keywords);
   const canonicalUrl = toAbsoluteUrl(canonicalPath || window.location.href);
   const ogImage = toAbsoluteUrl(imageUrl);
 
   const previousTitle = document.title;
 
   const { el: descMeta, created: descCreated } = ensureMetaByName("description");
+  const { el: keywordsMeta, created: keywordsCreated } = ensureMetaByName("keywords");
   const { el: robotsMeta, created: robotsCreated } = ensureMetaByName("robots");
   const { el: googlebotMeta, created: googlebotCreated } = ensureMetaByName("googlebot");
   const { el: bingbotMeta, created: bingbotCreated } = ensureMetaByName("bingbot");
@@ -126,6 +132,7 @@ export function applySeoMeta({
 
   const states = [
     [descMeta, rememberAttr(descMeta, "content"), descCreated],
+    [keywordsMeta, rememberAttr(keywordsMeta, "content"), keywordsCreated],
     [robotsMeta, rememberAttr(robotsMeta, "content"), robotsCreated],
     [googlebotMeta, rememberAttr(googlebotMeta, "content"), googlebotCreated],
     [bingbotMeta, rememberAttr(bingbotMeta, "content"), bingbotCreated],
@@ -143,6 +150,8 @@ export function applySeoMeta({
 
   if (cleanTitle) document.title = cleanTitle;
   descMeta.setAttribute("content", cleanDescription);
+  if (cleanKeywords) keywordsMeta.setAttribute("content", cleanKeywords);
+  else keywordsMeta.removeAttribute("content");
   robotsMeta.setAttribute("content", robots);
   googlebotMeta.setAttribute("content", robots);
   bingbotMeta.setAttribute("content", robots);
@@ -175,6 +184,22 @@ export function applySeoMeta({
     }
   }
 
+  const alternateLinks = [];
+  if (Array.isArray(alternateLanguages)) {
+    for (const alternate of alternateLanguages) {
+      const hrefLang = asText(alternate?.hrefLang);
+      const href = toAbsoluteUrl(alternate?.href);
+      if (!hrefLang || !href) continue;
+      const link = document.createElement("link");
+      link.setAttribute("rel", "alternate");
+      link.setAttribute("hreflang", hrefLang);
+      link.setAttribute("href", href);
+      link.setAttribute("data-seo-alternate", "1");
+      document.head.appendChild(link);
+      alternateLinks.push(link);
+    }
+  }
+
   return () => {
     document.title = previousTitle;
     for (const [el, state, created] of states) {
@@ -187,6 +212,9 @@ export function applySeoMeta({
     }
     for (const script of jsonLdScripts) {
       script.remove();
+    }
+    for (const link of alternateLinks) {
+      link.remove();
     }
   };
 }

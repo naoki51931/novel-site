@@ -14,6 +14,14 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..schemas_ai_chat import (
+    AIChatRequest,
+    SummaryCandidatesRequest,
+    TagCandidatesRequest,
+    TitleCandidateRequest,
+    TitleCandidatesRequest,
+)
+from ..schemas_ai_novel_legacy import AICharacterTermExtractRequest
 
 
 def _parse_payload(model_cls, payload: dict):
@@ -28,10 +36,9 @@ async def generate_tag_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
     from ..services.ai_misc_service import generate_tag_candidates_service
 
-    payload_model = _parse_payload(legacy.TagCandidatesRequest, payload)
+    payload_model = _parse_payload(TagCandidatesRequest, payload)
     return await generate_tag_candidates_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/summary_candidates")
@@ -40,10 +47,9 @@ async def generate_summary_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
     from ..services.ai_misc_service import generate_summary_candidates_service
 
-    payload_model = _parse_payload(legacy.SummaryCandidatesRequest, payload)
+    payload_model = _parse_payload(SummaryCandidatesRequest, payload)
     return await generate_summary_candidates_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/title_candidate")
@@ -52,10 +58,9 @@ async def generate_title_candidate(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
     from ..services.ai_misc_service import generate_title_candidate_service
 
-    payload_model = _parse_payload(legacy.TitleCandidateRequest, payload)
+    payload_model = _parse_payload(TitleCandidateRequest, payload)
     return await generate_title_candidate_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/title_candidates")
@@ -64,10 +69,9 @@ async def generate_title_candidates(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
     from ..services.ai_misc_service import generate_title_candidates_service
 
-    payload_model = _parse_payload(legacy.TitleCandidatesRequest, payload)
+    payload_model = _parse_payload(TitleCandidatesRequest, payload)
     return await generate_title_candidates_service(payload=payload_model, request=request, db=db)
 
 @router.post("/api/ai/chat")
@@ -78,17 +82,16 @@ async def ai_chat(
     db: Session = Depends(get_db)
 ):
     from .. import main as legacy
-    req_model = _parse_payload(legacy.AIChatRequest, req)
+    req_model = _parse_payload(AIChatRequest, req)
     return await legacy.ai_chat(req=req_model, request=request, response=response, db=db)
 
 @router.post("/api/ai/character_terms")
 async def extract_ai_character_terms(
     payload: dict
 ):
-    from .. import main as legacy
     from ..services.ai_misc_service import extract_ai_character_terms_service
 
-    payload_model = _parse_payload(legacy.AICharacterTermExtractRequest, payload)
+    payload_model = _parse_payload(AICharacterTermExtractRequest, payload)
     return await extract_ai_character_terms_service(payload=payload_model)
 
 @router.get("/api/ai/logs/me")

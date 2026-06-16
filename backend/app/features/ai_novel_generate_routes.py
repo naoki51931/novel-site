@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from ..ai_novel import AINovelRequest
 from ..database import get_db
+from ..features.ai_feature_service import generate_ai_novel_service
 from ..services.ai_novel_service import generate_ai_episode_continue_service
 
 
@@ -16,8 +17,12 @@ async def generate_ai_novel(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    from .. import main as legacy
-    return await legacy.generate_ai_novel(req, request=request, response=response, db=db)
+    return await generate_ai_novel_service(
+        req=req,
+        request=request,
+        response=response,
+        db=db,
+    )
 
 
 @router.post('/api/ai/episodes/{episode_id}/continue')

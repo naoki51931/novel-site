@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from .. import notification_helpers
 from ..repositories import notification_repository as repo
+from ..time_utils import utcnow
 
 
 REACTION_NOTIFICATION_TYPES = {
@@ -25,6 +26,10 @@ UPDATE_NOTIFICATION_TYPES = {
     "tag_follow_new",
     "favorite_update",
     "recommended_novel_new",
+}
+AI_BULK_DELETABLE_NOTIFICATION_TYPES = {
+    "ai_generation_done",
+    "ai_generation_failed",
 }
 
 
@@ -132,7 +137,7 @@ def register_mobile_push_token_service(*, payload, request: Request, db: Session
         existing.platform = platform
         existing.device_id = (payload.device_id or "").strip()[:128] or None
         existing.app_version = (payload.app_version or "").strip()[:64] or None
-        existing.last_seen_at = datetime.utcnow()
+        existing.last_seen_at = utcnow()
         db.add(existing)
     else:
         db.add(
@@ -142,7 +147,7 @@ def register_mobile_push_token_service(*, payload, request: Request, db: Session
                 token=token_value,
                 device_id=(payload.device_id or "").strip()[:128] or None,
                 app_version=(payload.app_version or "").strip()[:64] or None,
-                last_seen_at=datetime.utcnow(),
+                last_seen_at=utcnow(),
             )
         )
     db.commit()
@@ -258,3 +263,17 @@ def delete_notification_service(*, notification_id: int, request: Request, db: S
     db.delete(notif)
     db.commit()
     return {"ok": True}
+
+
+def delete_notifications_by_type_service(*, notif_type: str, request: Request, db: Session):
+    user = _require_current_user(request, db)
+    normalized = str(notif_type or "").strip()
+    if normalized not in AI_BULK_DELETABLE_NOTIFICATION_TYPES:
+        raise HTTPException(400, "この通知タイプは一括削除できません")
+    deleted = repo.delete_notifications_for_user_by_type(
+        db,
+        user_id=user.id,
+        notif_type=normalized,
+    )
+    db.commit()
+    return {"ok": True, "deleted": deleted, "notif_type": normalized}

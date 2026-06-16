@@ -54,6 +54,29 @@ def list_trending_tags(
 
     return list_trending_tags_service(request=request, db=db, days=days, limit=limit)
 
+
+@router.get("/api/seo-pages/{slug}")
+def read_public_seo_page(
+    slug: str,
+    db: Session = Depends(get_db)
+):
+    from ..services.seo_pages_service import get_public_seo_page_service
+
+    return get_public_seo_page_service(slug=slug, db=db)
+
+@router.get("/api/api-spec.md")
+def read_api_spec_markdown():
+    from ..services.other_pages_service import read_api_spec_markdown_service
+
+    return read_api_spec_markdown_service()
+
+
+@router.get("/api/api-spec.en.md")
+def read_api_spec_markdown_en():
+    from ..services.other_pages_service import read_api_spec_markdown_en_service
+
+    return read_api_spec_markdown_en_service()
+
 @router.get("/api/authors/{author_id}")
 def read_public_author(
     author_id: int,
@@ -135,6 +158,16 @@ def share_episode_og_image(
 
     return share_episode_og_image_service(episode_id=episode_id, request=request, db=db)
 
+@router.get("/ogp/novel/{novel_id}.png")
+def novel_og_image(
+    novel_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..services.other_pages_service import novel_og_image_service
+
+    return novel_og_image_service(novel_id=novel_id, request=request, db=db)
+
 @router.get("/{indexnow_key_file}.txt")
 def indexnow_key_file(
     indexnow_key_file: str
@@ -196,6 +229,15 @@ def sitemap_tags_xml(
     from ..services.other_pages_service import sitemap_tags_xml_service
 
     return sitemap_tags_xml_service(request=request, db=db)
+
+@router.get("/sitemap-seo-pages.xml")
+def sitemap_seo_pages_xml(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..services.other_pages_service import sitemap_seo_pages_xml_service
+
+    return sitemap_seo_pages_xml_service(request=request, db=db)
 
 @router.get("/sitemap-index.xml")
 def sitemap_index_xml(
@@ -475,4 +517,15 @@ def delete_notification(
     from ..services.notification_service import delete_notification_service
 
     return delete_notification_service(notification_id=notification_id, request=request, db=db)
+
+
+@router.delete("/api/notifications/type/{notif_type}")
+def delete_notifications_by_type(
+    notif_type: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..services.notification_service import delete_notifications_by_type_service
+
+    return delete_notifications_by_type_service(notif_type=notif_type, request=request, db=db)
 # END AUTO-GENERATED ROUTER WRAPPERS: OTHER

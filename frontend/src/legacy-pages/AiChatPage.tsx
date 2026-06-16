@@ -17,13 +17,14 @@ const AI_CHAT_GUEST_DRAFT_LAST_DOWNLOAD_AT_KEY = "ai_chat_guest_draft_last_downl
 const AI_CHAT_GUEST_DRAFT_DOWNLOAD_INTERVAL_MS = 60 * 60 * 1000;
 const AI_CHAT_SELECTED_CHARACTER_ID_KEY = "ai_chat_selected_character_id_v1";
 const AI_CHAT_CHARACTER_DRAFT_PREFIX = "ai_chat_character_draft_v1:";
+const AI_CHAT_CAST_STATE_KEY = "ai_chat_cast_state_v1";
 const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
 const MYPAGE_SHOW_R18_STORAGE_KEY = "mypage_show_r18";
 const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"];
 const PREVIEW_BUBBLE_COUNT = 3;
 const APPEARANCE_SECTION_HEADER = "【見た目設定】";
 const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
-const DEFAULT_AI_CHAT_MODEL = "gpt-5-mini";
+const DEFAULT_AI_CHAT_MODEL = "google/gemini-2.5-flash";
 const DEMO02_AI_CHAT_MODEL = "google/gemini-3-flash-preview";
 const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 768px)";
 const RECOMMENDED_MODEL_VALUES = new Set([
@@ -213,6 +214,15 @@ type CastCharacter = {
   personality: string;
   appearance: string;
   relationship: string;
+  fanfic_mode: boolean;
+  speech_gender: SpeechGender;
+};
+
+type StoredMainCharacter = {
+  selected_id: string;
+  name: string;
+  personality: string;
+  appearance: string;
   fanfic_mode: boolean;
   speech_gender: SpeechGender;
 };
@@ -551,6 +561,82 @@ function normalizeSpeechGender(value: unknown): SpeechGender {
   return "auto";
 }
 
+function normalizeStoredCastCharacter(item: unknown, index: number): CastCharacter | null {
+  if (!item || typeof item !== "object") return null;
+  const record = item as Record<string, unknown>;
+  const key = String(record.key || "").trim() || ("cast-restored-" + index + "-" + Date.now());
+  return {
+    key,
+    saved_id: String(record.saved_id || "").trim(),
+    name: String(record.name || ""),
+    personality: String(record.personality || ""),
+    appearance: String(record.appearance || ""),
+    relationship: String(record.relationship || ""),
+    fanfic_mode: record.fanfic_mode === false ? false : true,
+    speech_gender: normalizeSpeechGender(record.speech_gender),
+  };
+}
+
+function normalizeStoredMainCharacter(raw: unknown): StoredMainCharacter | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  return {
+    selected_id: String(record.selected_id || record.selectedCharacterId || "").trim(),
+    name: String(record.name || ""),
+    personality: String(record.personality || ""),
+    appearance: String(record.appearance || ""),
+    fanfic_mode: record.fanfic_mode === true,
+    speech_gender: normalizeSpeechGender(record.speech_gender),
+  };
+}
+
+function loadStoredCastState() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(AI_CHAT_CAST_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const record = parsed as Record<string, unknown>;
+    const casts = (Array.isArray(record.castCharacters) ? record.castCharacters : [])
+      .map((item, idx) => normalizeStoredCastCharacter(item, idx))
+      .filter(Boolean) as CastCharacter[];
+    const castKeys = new Set(casts.map((cast) => cast.key));
+    const normalizeSpeakerKey = (value: unknown, fallback: string) => {
+      const key = String(value || "").trim();
+      if (key === "you" || key === "main" || castKeys.has(key)) return key;
+      return fallback;
+    };
+    const normalizeSpeakerKeys = (value: unknown, fallback: string[]) => {
+      const rows = Array.isArray(value) ? value : fallback;
+      const keys = rows
+        .map((row) => String(row || "").trim())
+        .filter((key) => key === "main" || castKeys.has(key));
+      return Array.from(new Set(keys)).slice(0, 30);
+    };
+    const relationshipMapRaw = record.castRelationshipSelectMap && typeof record.castRelationshipSelectMap === "object"
+      ? record.castRelationshipSelectMap as Record<string, unknown>
+      : {};
+    const castRelationshipSelectMap: Record<string, string> = {};
+    Object.entries(relationshipMapRaw).forEach(([key, value]) => {
+      if (!castKeys.has(key)) return;
+      const text = String(value || "").trim();
+      if (text) castRelationshipSelectMap[key] = text;
+    });
+    return {
+      mainCharacter: normalizeStoredMainCharacter(record.mainCharacter),
+      castCharacters: casts,
+      userSpeakerKey: normalizeSpeakerKey(record.userSpeakerKey, "you"),
+      randomSpeakerKeys: normalizeSpeakerKeys(record.randomSpeakerKeys, ["main"]),
+      autoRandomSpeakerKeys: normalizeSpeakerKeys(record.autoRandomSpeakerKeys, ["main"]),
+      autoCharacterMode: record.autoCharacterMode === true,
+      castRelationshipSelectMap,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function truncateText(text: unknown, max = 56) {
   const normalized = compactText(text);
   if (!normalized) return "";
@@ -830,23 +916,25 @@ export default function AiChatPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
+  const initialCastState = useMemo(() => loadStoredCastState(), []);
   const [model, setModel] = useState(() =>
     isDemo02UserLocal() ? DEMO02_AI_CHAT_MODEL : DEFAULT_AI_CHAT_MODEL
   );
+  const [profileAiChatModelLoaded, setProfileAiChatModelLoaded] = useState(false);
   const [recommendedModelsOnly, setRecommendedModelsOnly] = useState(() => isDemo02UserLocal());
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
-    return localStorage.getItem(AI_CHAT_CHARACTER_NAME_KEY) || "";
+    return initialCastState?.mainCharacter?.name || localStorage.getItem(AI_CHAT_CHARACTER_NAME_KEY) || "";
   });
   const [personality, setPersonality] = useState(() => {
     if (typeof window === "undefined") return "";
-    return localStorage.getItem(AI_CHAT_PERSONALITY_KEY) || "";
+    return initialCastState?.mainCharacter?.personality || localStorage.getItem(AI_CHAT_PERSONALITY_KEY) || "";
   });
   const [appearance, setAppearance] = useState(() => {
     if (typeof window === "undefined") return "";
-    return localStorage.getItem(AI_CHAT_APPEARANCE_KEY) || "";
+    return initialCastState?.mainCharacter?.appearance || localStorage.getItem(AI_CHAT_APPEARANCE_KEY) || "";
   });
-  const [mainSpeechGender, setMainSpeechGender] = useState<SpeechGender>("auto");
+  const [mainSpeechGender, setMainSpeechGender] = useState<SpeechGender>(() => initialCastState?.mainCharacter?.speech_gender || "auto");
   const [mode, setMode] = useState("say");
   const [autoDialogue, setAutoDialogue] = useState(false);
   const [longReply, setLongReply] = useState(false);
@@ -866,18 +954,22 @@ export default function AiChatPage() {
     if (v === null) return false; // default: unchecked
     return v === "1" || v === "true";
   });
-  const [fanficMode, setFanficMode] = useState(false);
+  const [fanficMode, setFanficMode] = useState(() => initialCastState?.mainCharacter?.fanfic_mode || false);
   const [augmentLoading, setAugmentLoading] = useState(false);
   const [augmentNotes, setAugmentNotes] = useState("");
-  const [castCharacters, setCastCharacters] = useState<CastCharacter[]>([]);
-  const [userSpeakerKey, setUserSpeakerKey] = useState("you");
-  const [randomSpeakerKeys, setRandomSpeakerKeys] = useState(["main"]);
-  const [autoCharacterMode, setAutoCharacterMode] = useState(false);
-  const [autoRandomSpeakerKeys, setAutoRandomSpeakerKeys] = useState(["main"]);
+  const [castCharacters, setCastCharacters] = useState<CastCharacter[]>(() => initialCastState?.castCharacters || []);
+  const [userSpeakerKey, setUserSpeakerKey] = useState(() => initialCastState?.userSpeakerKey || "you");
+  const [randomSpeakerKeys, setRandomSpeakerKeys] = useState(() => initialCastState?.randomSpeakerKeys || ["main"]);
+  const [autoCharacterMode, setAutoCharacterMode] = useState(() => initialCastState?.autoCharacterMode || false);
+  const [autoRandomSpeakerKeys, setAutoRandomSpeakerKeys] = useState(() => initialCastState?.autoRandomSpeakerKeys || ["main"]);
   const [input, setInput] = useState("");
   const [selectedCharacterId, setSelectedCharacterId] = useState(() => {
     if (typeof window === "undefined") return "";
-    return String(localStorage.getItem(AI_CHAT_SELECTED_CHARACTER_ID_KEY) || "").trim();
+    return String(
+      initialCastState?.mainCharacter?.selected_id
+        || localStorage.getItem(AI_CHAT_SELECTED_CHARACTER_ID_KEY)
+        || ""
+    ).trim();
   });
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (typeof window !== "undefined") {
@@ -908,6 +1000,7 @@ export default function AiChatPage() {
   const [characterImageFile, setCharacterImageFile] = useState<File | null>(null);
   const [characterImageUploading, setCharacterImageUploading] = useState(false);
   const [charactersLoading, setCharactersLoading] = useState(false);
+  const [charactersLoaded, setCharactersLoaded] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [chatAccess, setChatAccess] = useState<any>(null);
   const [engagementSummary, setEngagementSummary] = useState<any>(null);
@@ -942,7 +1035,7 @@ export default function AiChatPage() {
       return [];
     }
   });
-  const [castRelationshipSelectMap, setCastRelationshipSelectMap] = useState<Record<string, string>>({});
+  const [castRelationshipSelectMap, setCastRelationshipSelectMap] = useState<Record<string, string>>(() => initialCastState?.castRelationshipSelectMap || {});
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia(MOBILE_VIEWPORT_MEDIA_QUERY).matches;
@@ -954,6 +1047,8 @@ export default function AiChatPage() {
   const guestDraftBackupDoneRef = useRef(false);
   const chatImageInputRef = useRef<HTMLInputElement | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveInFlightRef = useRef<Promise<void> | null>(null);
+  const deletingMessagesRef = useRef(false);
   const lastAutoSavedSignatureRef = useRef("");
   const visibleAiModels = useMemo(
     () => (recommendedModelsOnly ? AI_MODELS.filter((m) => RECOMMENDED_MODEL_VALUES.has(m.value)) : AI_MODELS),
@@ -1029,6 +1124,34 @@ export default function AiChatPage() {
     setRecommendedModelsOnly(true);
     setModel(DEMO02_AI_CHAT_MODEL);
   }, [authToken]);
+
+  useEffect(() => {
+    const token = getStoredAuthToken();
+    if (!token || profileAiChatModelLoaded || isDemo02UserLocal()) return;
+    let cancelled = false;
+    fetch("/api/users/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return res.json().catch(() => null);
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const preferredModel = String(data?.ai_chat_model || "").trim();
+        if (preferredModel) {
+          setRecommendedModelsOnly(false);
+          setModel(preferredModel);
+        }
+        setProfileAiChatModelLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setProfileAiChatModelLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, profileAiChatModelLoaded]);
 
   useEffect(() => {
     const preset = getAiChatPresetFromLocation(location);
@@ -2540,6 +2663,33 @@ export default function AiChatPage() {
   }, [selectedCharacterId]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(
+        AI_CHAT_CAST_STATE_KEY,
+        JSON.stringify({
+          mainCharacter: {
+            selected_id: String(selectedCharacterId || "").trim(),
+            name: String(characterName || ""),
+            personality: String(personality || ""),
+            appearance: String(appearance || ""),
+            fanfic_mode: !!fanficMode,
+            speech_gender: normalizeSpeechGender(mainSpeechGender),
+          },
+          castCharacters,
+          userSpeakerKey,
+          randomSpeakerKeys,
+          autoCharacterMode,
+          autoRandomSpeakerKeys,
+          castRelationshipSelectMap,
+        })
+      );
+    } catch {
+      return;
+    }
+  }, [selectedCharacterId, characterName, personality, appearance, fanficMode, mainSpeechGender, castCharacters, userSpeakerKey, randomSpeakerKeys, autoCharacterMode, autoRandomSpeakerKeys, castRelationshipSelectMap]);
+
+  useEffect(() => {
     const split = splitPersonalityAndAppearance(personality);
     if (!split.appearanceText) return;
     if (!appearance) setAppearance(split.appearanceText);
@@ -2724,12 +2874,14 @@ export default function AiChatPage() {
   useEffect(() => {
     if (!authToken) {
       setSavedCharacters([]);
+      setCharactersLoaded(false);
       setSelectedCharacterId("");
       return;
     }
 
     (async () => {
       try {
+        setCharactersLoaded(false);
         setCharactersLoading(true);
         const res = await fetch("/api/ai/chat/characters", {
           headers: { Authorization: `Bearer ${authToken}` },
@@ -2754,6 +2906,7 @@ export default function AiChatPage() {
         );
       } finally {
         setCharactersLoading(false);
+        setCharactersLoaded(true);
       }
     })();
   }, [authToken, t]);
@@ -2906,6 +3059,7 @@ export default function AiChatPage() {
 
   useEffect(() => {
     if (!authToken) return;
+    if (!charactersLoaded) return;
     if (!selectedCharacterId) return;
     const exists = savedCharacters.some((c) => c.id === selectedCharacterId);
     if (exists) return;
@@ -2913,7 +3067,7 @@ export default function AiChatPage() {
     setMessages([]);
     setLastRequest(null);
     setResendDraft("");
-  }, [authToken, savedCharacters, selectedCharacterId]);
+  }, [authToken, charactersLoaded, savedCharacters, selectedCharacterId]);
 
   useEffect(() => {
     if (!authToken || typeof window === "undefined") return undefined;
@@ -3538,43 +3692,32 @@ export default function AiChatPage() {
       const isDoMode = data?.mode === "do";
       const sayText = String(data?.say || "").trim();
       const extras = Array.isArray(data?.extra_messages) ? data.extra_messages : [];
-      setMessages((prev: any) => {
-        if (!isDoMode) {
-          const next = [...prev, { id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() }];
-          extras.forEach((m: any) => {
-            const c = String(m?.content || "").trim();
-            if (!c) return;
-            next.push({
-              id: null,
-              role: "assistant",
-              mode: m?.mode === "do" ? "do" : "say",
-              is_auto_dialogue: true,
-              content: c,
-              speaker_name: characterNameAtSend ?? characterName,
-              model_name: String(data?.model || activeModel || "").trim(),
-            });
-          });
-          return next;
-        }
-        const next = [...prev, { id: null, role: "assistant", mode: "do", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() }];
+      const assistantMessages: any[] = [];
+      if (!isDoMode) {
+        assistantMessages.push({ id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() });
+      } else {
+        assistantMessages.push({ id: null, role: "assistant", mode: "do", is_auto_dialogue: false, content: reply, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() });
         if (sayText) {
-          next.push({ id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: sayText, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() });
+          assistantMessages.push({ id: null, role: "assistant", mode: "say", is_auto_dialogue: false, content: sayText, speaker_name: characterNameAtSend ?? characterName, model_name: String(data?.model || activeModel || "").trim() });
         }
-        extras.forEach((m: any) => {
-          const c = String(m?.content || "").trim();
-          if (!c) return;
-          next.push({
-            id: null,
-            role: "assistant",
-            mode: m?.mode === "do" ? "do" : "say",
-            is_auto_dialogue: true,
-            content: c,
-            speaker_name: characterNameAtSend ?? characterName,
-            model_name: String(data?.model || activeModel || "").trim(),
-          });
+      }
+      extras.forEach((m: any) => {
+        const c = String(m?.content || "").trim();
+        if (!c) return;
+        assistantMessages.push({
+          id: null,
+          role: "assistant",
+          mode: m?.mode === "do" ? "do" : "say",
+          is_auto_dialogue: true,
+          content: c,
+          speaker_name: characterNameAtSend ?? characterName,
+          model_name: String(data?.model || activeModel || "").trim(),
         });
-        return next;
       });
+      setMessages((prev: any) => [...prev, ...assistantMessages]);
+      if (selectedCharacterId && token) {
+        await fetchServerChatMessages();
+      }
     } catch (e: any) {
       const failedText = String(text || "").trim();
       if (failedText) {
@@ -3874,13 +4017,22 @@ export default function AiChatPage() {
       if (!target) return;
       const confirmed = window.confirm(
         t({
-          ja: "選択したメッセージ以降を削除します。GPTの返信も削除されます。よろしいですか？",
-          en: "Delete from selected message onward, including GPT replies. Continue?",
+          ja: "選択したメッセージ以降を削除します。GPTの返信も削除されます。削除しますか？",
+          en: "Delete from selected message onward, including GPT replies?",
         })
       );
       if (!confirmed) return;
 
       const token = getStoredAuthToken();
+
+      deletingMessagesRef.current = true;
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      if (autoSaveInFlightRef.current) {
+        await autoSaveInFlightRef.current.catch(() => undefined);
+      }
 
       let messageId = target?.id ?? null;
       if (writableSelectedCharacterId && token && messageId == null) {
@@ -3900,12 +4052,18 @@ export default function AiChatPage() {
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(
-            data?.detail ||
-              t({ ja: "メッセージ削除に失敗しました。", en: "Failed to delete messages." })
-          );
+          const detail = String(data?.detail || "").trim();
+          if (res.status === 404 && detail.includes("対象メッセージ")) {
+            await fetchServerChatMessages();
+          } else {
+            throw new Error(
+              detail ||
+                t({ ja: "メッセージ削除に失敗しました。", en: "Failed to delete messages." })
+            );
+          }
+        } else {
+          await fetchServerChatMessages();
         }
-        await fetchServerChatMessages();
       } else if (writableSelectedCharacterId && token && messageId == null) {
         throw new Error(t({ ja: "履歴の同期に失敗しました。少し待ってから再度お試しください。", en: "Failed to sync history. Please try again." }));
       }
@@ -3917,6 +4075,8 @@ export default function AiChatPage() {
         e?.message ||
           t({ ja: "メッセージ削除中にエラーが発生しました。", en: "Failed to delete messages." })
       );
+    }).finally(() => {
+      deletingMessagesRef.current = false;
     });
   };
 
@@ -4002,24 +4162,6 @@ export default function AiChatPage() {
       return;
     }
 
-    const localDraft = loadCharacterChatDraft(readableSelectedCharacterId);
-    const localMessages = Array.isArray(localDraft?.messages)
-      ? localDraft.messages.map(normalizeStoredGuestMessage).filter(Boolean).slice(-500)
-      : [];
-    if (localMessages.length) {
-      setMessages(localMessages);
-      const lastUser = [...localMessages].reverse().find(
-        (m: any) => m?.role === "user" && !parseGeneratedImageMessageContent(String(m?.content || ""))
-      );
-      if (lastUser) {
-        const text = String(lastUser.content || "");
-        const lastMode = lastUser?.mode === "do" ? "do" : "say";
-        setLastRequest({ text, mode: lastMode });
-        setResendDraft(text);
-        setResendMode(lastMode);
-      }
-    }
-
     (async () => {
       try {
         setMessagesLoading(true);
@@ -4090,6 +4232,7 @@ export default function AiChatPage() {
     if (!writableSelectedCharacterId) return undefined;
     if (!authToken) return undefined;
     if (messagesLoading) return undefined;
+    if (messages.some((m: any) => m?.id != null)) return undefined;
 
     const importMessages = buildGuestImportMessages(messages);
     const signature = JSON.stringify(importMessages);
@@ -4097,30 +4240,41 @@ export default function AiChatPage() {
       return undefined;
     }
 
-    autoSaveTimerRef.current = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/import`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              messages: importMessages,
-              replace_existing: true,
-            }),
-          }
-        );
-        if (res.ok) {
-          lastAutoSavedSignatureRef.current = signature;
-        }
-      } catch {
-        // Keep chat UX stable even when autosave fails transiently.
-      } finally {
+    autoSaveTimerRef.current = setTimeout(() => {
+      if (deletingMessagesRef.current) {
         autoSaveTimerRef.current = null;
+        return;
       }
+      let run!: Promise<void>;
+      run = (async () => {
+        try {
+          const res = await fetch(
+            `/api/ai/chat/characters/${encodeURIComponent(writableSelectedCharacterId)}/messages/import`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify({
+                messages: importMessages,
+                replace_existing: true,
+              }),
+            }
+          );
+          if (res.ok && !deletingMessagesRef.current) {
+            lastAutoSavedSignatureRef.current = signature;
+          }
+        } catch {
+          // Keep chat UX stable even when autosave fails transiently.
+        } finally {
+          if (autoSaveInFlightRef.current === run) {
+            autoSaveInFlightRef.current = null;
+          }
+          autoSaveTimerRef.current = null;
+        }
+      })();
+      autoSaveInFlightRef.current = run;
     }, 700);
 
     return () => {
@@ -4283,6 +4437,9 @@ export default function AiChatPage() {
     : undefined;
   const characterBackgroundImageUrl = resolveImageUrl(selectedCharacter?.image_url);
 
+  const aiChatBasePath = location.pathname.startsWith("/en/") ? "/en/ai_chat" : "/ai_chat";
+  const aiNovelPath = location.pathname.startsWith("/en/") ? "/en/ai-novel" : "/ai-novel";
+
   return (
     <>
       {characterBackgroundImageUrl && (
@@ -4317,11 +4474,11 @@ export default function AiChatPage() {
     <div className="ai-chat-page" style={{ maxWidth: 960, margin: "0 auto", position: "relative", zIndex: 1 }}>
       <div style={topNavRowStyle}>
         <Link to="/" className="btn btn-border" style={topNavButtonStyle}>{t({ ja: "トップへ", en: "Home" })}</Link>
-        <Link to="/ai_chat/lp" className="btn btn-border" style={topNavButtonStyle}>
+        <Link to={`${aiChatBasePath}/lp`} className="btn btn-border" style={topNavButtonStyle}>
           {t({ ja: "AIチャットLP", en: "AI Chat LP" })}
         </Link>
-        <Link to="/ai-novel" className="btn btn-border" style={topNavButtonStyle}>{t({ ja: "AI小説", en: "AI Novel" })}</Link>
-        <Link to="/ai_chat/howto" className="btn btn-border" style={topNavButtonStyle}>
+        <Link to={aiNovelPath} className="btn btn-border" style={topNavButtonStyle}>{t({ ja: "AI小説", en: "AI Novel" })}</Link>
+        <Link to={`${aiChatBasePath}/howto`} className="btn btn-border" style={topNavButtonStyle}>
           {t({ ja: "使い方", en: "How to Use" })}
         </Link>
         <button
@@ -4335,7 +4492,7 @@ export default function AiChatPage() {
             ? t({ ja: "書き出し中...", en: "Exporting..." })
             : t({ ja: "先頭からAI小説化して書き出す", en: "Convert full chat to AI novel" })}
         </button>
-        <Link to="/ai_chat/public" className="btn btn-border" style={topNavButtonStyle}>
+        <Link to={`${aiChatBasePath}/public`} className="btn btn-border" style={topNavButtonStyle}>
           {t({ ja: "公開チャット検索", en: "Public Chat Search" })}
         </Link>
       </div>
@@ -4740,8 +4897,8 @@ export default function AiChatPage() {
           </select>
           <div style={{ marginTop: 6, fontSize: "0.86rem", color: "#5f6675" }}>
             {t({
-              ja: "性格設定の読み込みを含むAI処理は、ここで選択したモデルを使用します。",
-              en: "AI actions including personality loading use the model selected here.",
+              ja: "初期値はマイページ設定のAIチャットモデルです。性格設定の読み込みを含むAI処理は、ここで選択したモデルを使用します。",
+              en: "The initial value comes from your My Page AI chat model. AI actions including personality loading use the model selected here.",
             })}
           </div>
         </label>

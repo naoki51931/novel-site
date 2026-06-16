@@ -15,6 +15,7 @@ from .weaviate_client import (
     search_memory_ids,
     upsert_memory,
 )
+from ..time_utils import UTC_MIN, utcnow
 
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,8 @@ def expires_at_from_days(days: int | None) -> datetime | None:
     if days is None:
         return None
     if days <= 0:
-        return datetime.utcnow()
-    return datetime.utcnow() + timedelta(days=int(days))
+        return utcnow()
+    return utcnow() + timedelta(days=int(days))
 
 
 def resolve_scope(character_id: int | None = None) -> tuple[str, int | None]:
@@ -194,7 +195,7 @@ def retrieve_memories(
             )
         )
     rows = q.all()
-    now = datetime.utcnow()
+    now = utcnow()
     rows = [r for r in rows if r.is_active and (r.expires_at is None or r.expires_at > now)]
 
     filtered: list[models.AIMemoryItem] = []
@@ -211,7 +212,7 @@ def retrieve_memories(
         return (
             category_priority,
             float(item.importance or 0),
-            item.updated_at or datetime.min,
+            item.updated_at or UTC_MIN,
         )
 
     filtered.sort(key=_rank, reverse=True)

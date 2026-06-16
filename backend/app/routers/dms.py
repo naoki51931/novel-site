@@ -34,6 +34,16 @@ def create_dm_thread(
     payload_model = _parse_payload(legacy.schemas.DirectMessageThreadCreate, payload)
     return create_dm_thread_service(payload=payload_model, request=request, db=db)
 
+
+@router.get("/api/dms")
+def list_dm_threads(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..features.dms_service import list_dm_threads_service
+
+    return list_dm_threads_service(request=request, db=db)
+
 @router.get("/api/dms/{thread_id}")
 def read_dm_thread(
     thread_id: int,

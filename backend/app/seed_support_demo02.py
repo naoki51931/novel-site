@@ -3,6 +3,7 @@ from datetime import datetime
 
 from app.database import SessionLocal
 from app import models
+from app.time_utils import utcnow
 
 
 def main() -> None:
@@ -29,7 +30,7 @@ def main() -> None:
             print(f"exists support id={existing.id}")
             return
 
-        session_id = f"test_support_demo02_4500_{int(datetime.utcnow().timestamp())}"
+        session_id = f"test_support_demo02_4500_{int(utcnow().timestamp())}"
         support = models.Support(
             supporter_user_id=None,
             author_user_id=user.id,
@@ -41,7 +42,7 @@ def main() -> None:
             status="paid",
             stripe_checkout_session_id=session_id,
             stripe_payment_intent_id=f"pi_{session_id}",
-            paid_at=datetime.utcnow(),
+            paid_at=utcnow(),
         )
         session.add(support)
 

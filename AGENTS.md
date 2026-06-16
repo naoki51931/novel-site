@@ -89,9 +89,11 @@ Codex で作業するときの要点と入口をまとめます。
 
 ## 反映時のハマりどころ
 
+- この環境の反映ビルドは、原則として次の compose override 一式で実行する。
+  `docker compose -f docker-compose.yml -f docker-compose.agefree.yml -f docker-compose.free.yml up -d --build`
 - `docker compose build backend` はイメージ更新のみ。稼働中コンテナへは未反映。
-- 反映には必ず `docker compose up --build -d backend`（または recreate）を実行する。
-- フロント修正後は `frontend/dist` へビルドし、`docker compose restart nginx` で配信反映。
+- 個別サービスだけを確認した後でも、最終反映は上記の compose override 一式で行う。
+- フロントは Next.js の standalone コンテナ配信。`frontend/src` を変更したら上記 compose コマンドで frontend を再ビルド・再作成する。
 
 ## API 防御強化の優先順（2026-05）
 

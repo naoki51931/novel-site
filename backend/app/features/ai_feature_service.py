@@ -5,6 +5,8 @@ import os
 import re
 import time
 
+from ..ai_novel import AINovelJobCreateResponse
+
 
 async def generate_episode_assist_candidates_service(payload, request, db):
     from .. import main as legacy
@@ -558,7 +560,7 @@ async def generate_ai_novel_service(req, request, response, db):
         db.commit()
 
         usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
-        usage.last_used_at = legacy.datetime.utcnow()
+        usage.last_used_at = legacy.utcnow()
         db.add(usage)
         db.commit()
 
@@ -638,7 +640,7 @@ async def create_ai_novel_job_service(req, request, response, db):
         guest_id = legacy.get_or_set_ai_guest_id(request, response)
         usage = legacy.require_guest_ai_quota(db, guest_id)
         usage.generate_count = int(getattr(usage, "generate_count", 0) or 0) + 1
-        usage.last_used_at = legacy.datetime.utcnow()
+        usage.last_used_at = legacy.utcnow()
         db.add(usage)
         db.commit()
 
@@ -652,7 +654,7 @@ async def create_ai_novel_job_service(req, request, response, db):
         db.commit()
         db.refresh(job)
         asyncio.create_task(legacy._run_ai_job(job.id))
-        return legacy.AINovelJobCreateResponse(job_id=job.id, status=job.status)
+        return AINovelJobCreateResponse(job_id=job.id, status=job.status)
 
     assert user is not None
     legacy._reserve_ai_novel_generation_slot(db, user)
@@ -667,4 +669,4 @@ async def create_ai_novel_job_service(req, request, response, db):
     db.commit()
     db.refresh(job)
     asyncio.create_task(legacy._run_ai_job(job.id))
-    return legacy.AINovelJobCreateResponse(job_id=job.id, status=job.status)
+    return AINovelJobCreateResponse(job_id=job.id, status=job.status)

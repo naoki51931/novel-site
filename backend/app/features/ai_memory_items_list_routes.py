@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..services.ai_memory_service import list_ai_memory_items_service
 
 
 router = APIRouter()
@@ -16,8 +17,7 @@ def list_ai_memory_items(
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    from .. import main as legacy
-    return legacy.list_ai_memory_items(
+    return list_ai_memory_items_service(
         request=request,
         scope=scope,
         scope_id=scope_id,

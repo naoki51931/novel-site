@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from .. import notification_helpers
+from ..time_utils import utcnow
 
 
 def admin_create_contact_message_service(*, request: Request, payload, db: Session):
@@ -93,7 +94,7 @@ def admin_ai_chat_token_consumers_timeline_service(
 
     legacy.require_admin(request)
 
-    now = datetime.utcnow()
+    now = utcnow()
     start_dt = datetime.combine((now - timedelta(days=days - 1)).date(), datetime.min.time())
     end_dt = datetime.combine(now.date(), datetime.max.time())
     date_keys = [(start_dt + timedelta(days=i)).date().isoformat() for i in range(days)]
@@ -223,7 +224,7 @@ def admin_send_test_email_all_users_service(*, request: Request, db: Session):
         raise HTTPException(400, "SMTP設定が不足しています")
 
     users = db.query(legacy.models.User).order_by(legacy.models.User.id.asc()).all()
-    now_text = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    now_text = utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     subject = "【テスト送信】登録メールアドレス確認"
     body = (
         "このメールは登録メールアドレスの疎通確認テストです。\n"
@@ -262,7 +263,7 @@ def admin_send_test_email_all_users_service(*, request: Request, db: Session):
             invalid_address_count += 1
             invalid_user_ids.append(int(user.id))
             user.email_address_invalid = True
-            user.email_2fa_skip_until = datetime.utcnow() + timedelta(days=60)
+            user.email_2fa_skip_until = utcnow() + timedelta(days=60)
             db.add(user)
             legacy.invalidate_user_cache(user_id=user.id, username=user.username)
             continue

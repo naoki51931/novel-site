@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import jwt
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
+from .time_utils import utcnow
 
 
 def _legacy():
@@ -15,7 +16,7 @@ def create_admin_token(username: str) -> str:
     legacy = _legacy()
     if not legacy.ADMIN_JWT_SECRET:
         raise HTTPException(500, "ADMIN_JWT_SECRET 未設定")
-    expire = datetime.utcnow() + timedelta(minutes=legacy.ADMIN_JWT_EXPIRES_MINUTES)
+    expire = utcnow() + timedelta(minutes=legacy.ADMIN_JWT_EXPIRES_MINUTES)
     payload = {"role": "admin", "sub": username, "exp": expire}
     return jwt.encode(payload, legacy.ADMIN_JWT_SECRET, algorithm=legacy.ALGORITHM)
 

@@ -13,10 +13,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import author_dashboard_helpers, google_indexing_helpers, main, models, notification_helpers
+from app.time_utils import utcnow
 from app.ai_novel import AINovelRequest, AINovelResponse
 from app.features.ai_feature_service import generate_ai_novel_service
 from app.services.episodes_core_service import update_episode_service
 from app.services.episodes_write_service import create_episode_service
+from app.services import episodes_core_service, episodes_write_service
 from app.services.comments_service import (
     delete_episode_comment_service,
     post_comment_service,
@@ -31,11 +33,19 @@ from app.services.novel_assets_service import (
     generate_novel_tag_candidates_service,
     generate_novel_title_candidates_service,
 )
+from app.services.novels_read_service import (
+    get_novel_detail_service,
+    list_episodes_service,
+)
+from app.services import novels_read_service, novels_write_service
+from app.services import auth_service as auth_service_module
+from app.services import payments_service as payments_service_module
 from app.services.novels_write_service import update_novel_service
 from app.services.public_profile_service import (
     get_author_stats_service,
     read_public_user_service,
 )
+from app.services import public_profile_service as public_profile_service_module
 from app.services.admin_payouts_service import (
     admin_supports_timeline_service,
     mark_payout_failed_service,
@@ -184,11 +194,11 @@ def test_create_episode_service_persists_episode_tags_and_illusts(monkeypatch):
 
         _install_common_legacy_patches(monkeypatch)
         _install_tag_helper(monkeypatch)
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: user)
-        monkeypatch.setattr(main, "assert_premium_user", lambda user, message: None)
-        monkeypatch.setattr(main, "resolve_episode_publish_mode", lambda *args, **kwargs: "public")
+        monkeypatch.setattr(episodes_write_service, "require_current_user", lambda request, db: user)
+        monkeypatch.setattr(episodes_write_service, "assert_premium_user", lambda user, message: None)
+        monkeypatch.setattr(episodes_write_service, "resolve_episode_publish_mode", lambda *args, **kwargs: "public")
         monkeypatch.setattr(
-            main,
+            episodes_write_service,
             "apply_episode_publish_mode",
             lambda episode, publish_mode, scheduled_publish_at: (
                 setattr(episode, "status", "public"),
@@ -196,13 +206,23 @@ def test_create_episode_service_persists_episode_tags_and_illusts(monkeypatch):
                 setattr(episode, "scheduled_publish_at", scheduled_publish_at),
             ),
         )
-        monkeypatch.setattr(main, "is_episode_draft", lambda episode: not bool(getattr(episode, "is_public", False)))
-        monkeypatch.setattr(main, "_is_episode_indexable_for_search", lambda episode, novel: True)
+        monkeypatch.setattr(episodes_write_service, "is_episode_draft", lambda episode: not bool(getattr(episode, "is_public", False)))
+        monkeypatch.setattr(episodes_write_service, "_is_episode_indexable_for_search", lambda episode, novel: True)
         monkeypatch.setattr(
-            main,
+            episodes_write_service,
             "_enqueue_indexnow_urls",
             lambda **kwargs: enqueued.append((kwargs["event"], kwargs["urls"])),
         )
+        monkeypatch.setattr(episodes_write_service, "_request_origin", lambda request, fallback: "https://example.com")
+        monkeypatch.setattr(episodes_write_service, "FRONTEND_ORIGIN", "https://example.com")
+        monkeypatch.setattr(episodes_write_service, "AUTO_TRANSLATION_REQUIRED", False)
+        monkeypatch.setattr(episodes_write_service, "_background_upsert_episode_and_novel_translation", lambda episode_id: None)
+        monkeypatch.setattr(episodes_write_service, "_background_notify_episode_published", lambda novel_id, episode_id, site_key: None)
+        monkeypatch.setattr(episodes_write_service, "resolve_site_key", lambda request: "main")
+        monkeypatch.setattr(episodes_write_service, "normalize_language", lambda value: value or "ja")
+        monkeypatch.setattr(episodes_write_service, "normalize_illust_tag", lambda value: (value or "").strip() or None)
+        monkeypatch.setattr(episodes_write_service, "normalize_meta_tags", lambda value: value)
+        monkeypatch.setattr(episodes_write_service, "serialize_meta_tags", lambda value: value)
 
         payload = SimpleNamespace(
             title="episode title",
@@ -259,19 +279,25 @@ def test_update_episode_service_updates_content_and_tags(monkeypatch):
 
         _install_common_legacy_patches(monkeypatch)
         _install_tag_helper(monkeypatch)
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: user)
-        monkeypatch.setattr(main, "get_episode_in_site_or_404", lambda db, request, episode_id: db.get(models.Episode, episode_id))
-        monkeypatch.setattr(main, "get_novel_in_site_or_404", lambda db, request, novel_id: db.get(models.Novel, novel_id))
-        monkeypatch.setattr(main, "resolve_episode_publish_mode", lambda *args, **kwargs: None)
-        monkeypatch.setattr(main, "apply_episode_publish_mode", lambda episode, publish_mode, scheduled_publish_at: None)
-        monkeypatch.setattr(main, "assert_premium_user", lambda user, message: None)
-        monkeypatch.setattr(main, "is_episode_draft", lambda episode: not bool(getattr(episode, "is_public", False)))
-        monkeypatch.setattr(main, "_is_episode_indexable_for_search", lambda episode, novel: True)
+        monkeypatch.setattr(episodes_core_service, "require_current_user", lambda request, db: user)
+        monkeypatch.setattr(episodes_core_service, "get_episode_in_site_or_404", lambda db, request, episode_id: db.get(models.Episode, episode_id))
+        monkeypatch.setattr(episodes_core_service, "get_novel_in_site_or_404", lambda db, request, novel_id: db.get(models.Novel, novel_id))
+        monkeypatch.setattr(episodes_core_service, "resolve_episode_publish_mode", lambda *args, **kwargs: None)
+        monkeypatch.setattr(episodes_core_service, "apply_episode_publish_mode", lambda episode, publish_mode, scheduled_publish_at: None)
+        monkeypatch.setattr(episodes_core_service, "assert_premium_user", lambda user, message: None)
+        monkeypatch.setattr(episodes_core_service, "is_episode_draft", lambda episode: not bool(getattr(episode, "is_public", False)))
+        monkeypatch.setattr(episodes_core_service, "_is_episode_indexable_for_search", lambda episode, novel: True)
         monkeypatch.setattr(
-            main,
+            episodes_core_service,
             "_enqueue_indexnow_urls",
             lambda **kwargs: enqueued.append((kwargs["event"], kwargs["urls"])),
         )
+        monkeypatch.setattr(episodes_core_service, "_request_origin", lambda request, fallback: "https://example.com")
+        monkeypatch.setattr(episodes_core_service, "FRONTEND_ORIGIN", "https://example.com")
+        monkeypatch.setattr(episodes_core_service, "AUTO_TRANSLATION_REQUIRED", False)
+        monkeypatch.setattr(episodes_core_service, "_background_upsert_episode_and_novel_translation", lambda episode_id: None)
+        monkeypatch.setattr(episodes_core_service, "_background_notify_episode_published", lambda novel_id, episode_id, site_key: None)
+        monkeypatch.setattr(episodes_core_service, "normalize_language", lambda value: value or "ja")
 
         updated = update_episode_service(
             episode_id=episode.id,
@@ -305,13 +331,22 @@ def test_update_novel_service_updates_fields_and_tags(monkeypatch):
         enqueued = []
 
         _install_common_legacy_patches(monkeypatch)
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: user)
-        monkeypatch.setattr(main, "_is_novel_indexable_for_search", lambda novel: bool(getattr(novel, "is_public", False)))
+        monkeypatch.setattr(novels_write_service, "require_current_user", lambda request, db: user)
+        monkeypatch.setattr(novels_write_service, "_is_novel_indexable_for_search", lambda novel: bool(getattr(novel, "is_public", False)))
         monkeypatch.setattr(
-            main,
+            novels_write_service,
             "_enqueue_indexnow_urls",
             lambda **kwargs: enqueued.append((kwargs["event"], kwargs["urls"])),
         )
+        monkeypatch.setattr(novels_write_service, "_request_origin", lambda request, fallback: "https://example.com")
+        monkeypatch.setattr(novels_write_service, "FRONTEND_ORIGIN", "https://example.com")
+        monkeypatch.setattr(novels_write_service, "AUTO_TRANSLATION_REQUIRED", False)
+        monkeypatch.setattr(novels_write_service, "_background_upsert_novel_translation", lambda novel_id: None)
+        monkeypatch.setattr(novels_write_service, "invalidate_public_list_caches", lambda: None)
+        monkeypatch.setattr(novels_write_service, "notify_recommended_users_new_novel", lambda db, novel: None)
+        monkeypatch.setattr(novels_write_service, "notify_followers_author_new_novel", lambda db, novel: None)
+        monkeypatch.setattr(novels_write_service, "notify_tag_followers_new_novel", lambda db, novel: None)
+        monkeypatch.setattr(novels_write_service, "resolve_site_key", lambda request: "main")
 
         payload = SimpleNamespace(
             language="ja",
@@ -345,6 +380,68 @@ def test_update_novel_service_updates_fields_and_tags(monkeypatch):
         assert len(db.query(models.NovelTag).filter(models.NovelTag.novel_id == novel.id).all()) == 2
         assert enqueued == [("urlUpdated", [f"https://example.com/novels/{novel.id}"])]
         assert len(background_tasks.tasks) == 1
+    finally:
+        db.close()
+
+
+def test_get_novel_detail_service_includes_episode_view_counts(monkeypatch):
+    db = _make_session()
+    try:
+        author = _make_user(db, "author")
+        novel = _make_novel(db, author.id, view_count=12)
+        episode = _make_episode(db, novel.id, title="ep1", view_count=34, is_public=True, status="public")
+
+        monkeypatch.setattr(novels_read_service, "require_current_user", lambda request, db: author)
+        monkeypatch.setattr(novels_read_service, "resolve_site_key", lambda request: "main")
+        monkeypatch.setattr(novels_read_service, "enqueue_novel_view", lambda novel_id: None)
+        monkeypatch.setattr(novels_read_service, "record_user_view_history", lambda db, **kwargs: None)
+        monkeypatch.setattr(novels_read_service, "AGE_RESTRICTION_DISABLED", False)
+        monkeypatch.setattr(novels_read_service, "calc_age", lambda birth_date: 20)
+        monkeypatch.setattr(novels_read_service, "is_effective_premium_user", lambda user: True)
+        monkeypatch.setattr(novels_read_service, "_is_free_reading_time", lambda: False)
+        monkeypatch.setattr(novels_read_service, "get_episode_number", lambda episode: episode.episode_number)
+        monkeypatch.setattr(novels_read_service, "truncate_for_free", lambda body: f"truncated:{body}")
+        monkeypatch.setattr(novels_read_service, "get_novel_char_counts", lambda db, novel_ids, public_only=False: {novel.id: 123})
+        monkeypatch.setattr(author_dashboard_helpers, "_table_has_column", lambda db, table_name, column_name: False)
+
+        out = get_novel_detail_service(
+            novel_id=novel.id,
+            request=_request(f"/api/novels/{novel.id}"),
+            db=db,
+        )
+
+        assert out["view_count"] == 13
+        assert len(out["episodes"]) == 1
+        assert out["episodes"][0]["id"] == episode.id
+        assert out["episodes"][0]["view_count"] == 34
+    finally:
+        db.close()
+
+
+def test_list_episodes_service_includes_episode_view_counts(monkeypatch):
+    db = _make_session()
+    try:
+        author = _make_user(db, "author")
+        novel = _make_novel(db, author.id)
+        first = _make_episode(db, novel.id, title="ep1", episode_number=1, view_count=5, is_public=True, status="public")
+        second = _make_episode(db, novel.id, title="ep2", episode_number=2, view_count=8, is_public=True, status="public")
+
+        monkeypatch.setattr(novels_read_service, "require_current_user", lambda request, db: author)
+        monkeypatch.setattr(novels_read_service, "resolve_site_key", lambda request: "main")
+        monkeypatch.setattr(novels_read_service, "publish_scheduled_episodes", lambda db, site_key=None: None)
+        monkeypatch.setattr(novels_read_service, "is_effective_premium_user", lambda user: True)
+        monkeypatch.setattr(novels_read_service, "_is_free_reading_time", lambda: False)
+        monkeypatch.setattr(novels_read_service, "get_episode_number", lambda episode: episode.episode_number)
+        monkeypatch.setattr(novels_read_service, "truncate_for_free", lambda body: f"truncated:{body}")
+
+        out = list_episodes_service(
+            novel_id=novel.id,
+            request=_request(f"/api/novels/{novel.id}/episodes"),
+            db=db,
+        )
+
+        assert [item["id"] for item in out] == [first.id, second.id]
+        assert [item["view_count"] for item in out] == [5, 8]
     finally:
         db.close()
 
@@ -537,8 +634,12 @@ def test_read_public_user_service_returns_cached_profile(monkeypatch):
         user = _make_user(db, "author")
         cached_payload = {"id": user.id, "username": user.username, "cached": True}
 
-        monkeypatch.setattr(main, "build_public_cache_key", lambda namespace, payload: f"{namespace}:{payload['username']}")
-        monkeypatch.setattr(main, "redis_json_get", lambda key: cached_payload)
+        monkeypatch.setattr(
+            public_profile_service_module,
+            "build_public_cache_key",
+            lambda namespace, payload: f"{namespace}:{payload['username']}",
+        )
+        monkeypatch.setattr(public_profile_service_module, "redis_json_get", lambda key: cached_payload)
 
         out = read_public_user_service(username="author", db=db)
 
@@ -557,10 +658,10 @@ def test_get_author_stats_service_aggregates_public_counts(monkeypatch):
         db.add(models.NovelFavorite(user_id=author.id, novel_id=novel2.id))
         db.commit()
 
-        monkeypatch.setattr(main, "resolve_site_key", lambda request: "main")
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: None)
-        monkeypatch.setattr(main, "_apply_public_novel_age_filter", lambda query, viewer_age: query)
-        monkeypatch.setattr(main, "get_follow_counts", lambda db, user_id: (8, 2))
+        monkeypatch.setattr(public_profile_service_module, "resolve_site_key", lambda request: "main")
+        monkeypatch.setattr(public_profile_service_module, "require_current_user", lambda request, db: None)
+        monkeypatch.setattr(public_profile_service_module, "_apply_public_novel_age_filter", lambda query, viewer_age: query)
+        monkeypatch.setattr(public_profile_service_module, "get_follow_counts", lambda db, user_id: (8, 2))
 
         out = get_author_stats_service(author_id=author.id, request=_request(f"/api/authors/{author.id}/stats"), db=db)
 
@@ -630,11 +731,11 @@ def test_login_service_returns_access_token(monkeypatch):
         db.add(user)
         db.commit()
 
-        monkeypatch.setattr(main, "get_user_by_username", lambda db, username: user)
-        monkeypatch.setattr(main, "verify_password", lambda plain, hashed: plain == "secret" and hashed == "hashed")
-        monkeypatch.setattr(main, "revalidate_premium_on_login", lambda user, db: None)
-        monkeypatch.setattr(main, "cache_user_payload", lambda user: None)
-        monkeypatch.setattr(main, "create_access_token", lambda data: f"token-for-{data['sub']}")
+        monkeypatch.setattr(auth_service_module, "get_user_by_username", lambda db, username: user)
+        monkeypatch.setattr(auth_service_module, "verify_password", lambda plain, hashed: plain == "secret" and hashed == "hashed")
+        monkeypatch.setattr(auth_service_module, "revalidate_premium_on_login", lambda user, db: None)
+        monkeypatch.setattr(auth_service_module, "cache_user_payload", lambda user: None)
+        monkeypatch.setattr(auth_service_module, "create_access_token", lambda data: f"token-for-{data['sub']}")
 
         out = login_service(payload=main.UserLogin(username="author", password="secret"), db=db)
 
@@ -656,15 +757,15 @@ def test_password_reset_confirm_service_updates_password_and_consumes_token(monk
             user_id=user.id,
             email="author@example.com",
             token_hash="hashed-token",
-            created_at=datetime.utcnow(),
-            expires_at=datetime.utcnow() + timedelta(minutes=10),
+            created_at=utcnow(),
+            expires_at=utcnow() + timedelta(minutes=10),
             consumed=False,
         )
         db.add(reset)
         db.commit()
 
-        monkeypatch.setattr(main, "_hash_reset_token", lambda token: "hashed-token" if token == raw_token else "other")
-        monkeypatch.setattr(main, "hash_password", lambda password: f"hashed:{password}")
+        monkeypatch.setattr(auth_service_module, "hash_reset_token", lambda token: "hashed-token" if token == raw_token else "other")
+        monkeypatch.setattr(auth_service_module, "hash_password", lambda password: f"hashed:{password}")
 
         out = password_reset_confirm_service(
             payload=main.PasswordResetConfirm(token=raw_token, new_password="new-secret"),
@@ -684,7 +785,7 @@ def test_create_support_plan_service_creates_default_name(monkeypatch):
     db = _make_session()
     try:
         user = _make_user(db, "author")
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: user)
+        monkeypatch.setattr(payments_service_module, "require_current_user", lambda request, db: user)
 
         payload = main.SupportPlanCreate(name="", amount_yen=500, stripe_price_id="price_123")
         out = create_support_plan_service(payload=payload, request=_request("/api/authors/me/support_plans"), db=db)
@@ -701,10 +802,14 @@ def test_get_author_balance_service_uses_profile_and_next_month(monkeypatch):
     db = _make_session()
     try:
         user = _make_user(db, "author")
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: user)
-        monkeypatch.setattr(main, "get_or_create_author_balance", lambda db, user_id: SimpleNamespace(available_yen=1200, pending_yen=3400))
+        monkeypatch.setattr(payments_service_module, "require_current_user", lambda request, db: user)
         monkeypatch.setattr(
-            main,
+            payments_service_module,
+            "get_or_create_author_balance",
+            lambda db, user_id: SimpleNamespace(available_yen=1200, pending_yen=3400),
+        )
+        monkeypatch.setattr(
+            payments_service_module,
             "get_or_create_payout_profile",
             lambda db, user_id: SimpleNamespace(payout_minimum_yen=2500, payout_enabled=True),
         )
@@ -724,12 +829,12 @@ def test_stripe_checkout_service_returns_checkout_url(monkeypatch):
     db = _make_session()
     try:
         user = _make_user(db, "premium-user")
-        monkeypatch.setattr(main, "STRIPE_SECRET_KEY", "sk_test")
-        monkeypatch.setattr(main, "STRIPE_PRICE_ID", "price_premium")
-        monkeypatch.setattr(main, "FRONTEND_ORIGIN", "https://example.com")
-        monkeypatch.setattr(main, "require_current_user", lambda request, db: user)
+        monkeypatch.setattr(payments_service_module, "STRIPE_SECRET_KEY", "sk_test")
+        monkeypatch.setattr(payments_service_module, "STRIPE_PRICE_ID", "price_premium")
+        monkeypatch.setattr(payments_service_module, "FRONTEND_ORIGIN", "https://example.com")
+        monkeypatch.setattr(payments_service_module, "require_current_user", lambda request, db: user)
         monkeypatch.setattr(
-            main,
+            payments_service_module,
             "_create_checkout_session_with_customer_fallback",
             lambda db, user, **kwargs: SimpleNamespace(url="https://checkout.example/session"),
         )
@@ -750,9 +855,9 @@ def test_stripe_webhook_service_marks_support_paid(monkeypatch):
         emails = []
         balance_deltas = []
 
-        monkeypatch.setattr(main, "STRIPE_WEBHOOK_SECRET", "whsec_test")
+        monkeypatch.setattr(payments_service_module, "STRIPE_WEBHOOK_SECRET", "whsec_test")
         monkeypatch.setattr(
-            main.stripe.Webhook,
+            payments_service_module.stripe.Webhook,
             "construct_event",
             lambda payload, sig_header, secret: {
                 "type": "checkout.session.completed",
@@ -771,9 +876,9 @@ def test_stripe_webhook_service_marks_support_paid(monkeypatch):
                 },
             },
         )
-        monkeypatch.setattr(main, "calc_author_share", lambda amount: (200, 1000))
+        monkeypatch.setattr(payments_service_module, "calc_author_share", lambda amount: (200, 1000))
         monkeypatch.setattr(
-            main,
+            payments_service_module,
             "apply_author_balance_delta",
             lambda db, user_id, delta_available: balance_deltas.append((user_id, delta_available)),
         )
@@ -811,12 +916,86 @@ def test_stripe_webhook_service_marks_support_paid(monkeypatch):
         db.close()
 
 
+def test_stripe_webhook_service_accepts_stripe_like_event_objects(monkeypatch):
+    db = _make_session()
+    try:
+        user = _make_user(db, "premium-target", is_premium=False)
+        invalidated = []
+        cached = []
+
+        class _StripeLikeObject:
+            def __init__(self, **kwargs):
+                self._data = kwargs
+
+            def __getitem__(self, key):
+                return self._data[key]
+
+            def __getattr__(self, key):
+                try:
+                    return self._data[key]
+                except KeyError as exc:
+                    raise AttributeError(key) from exc
+
+        event = _StripeLikeObject(
+            type="checkout.session.completed",
+            data=_StripeLikeObject(
+                object=_StripeLikeObject(
+                    id="cs_premium_123",
+                    customer="cus_123",
+                    subscription="sub_123",
+                    client_reference_id=str(user.id),
+                    metadata=_StripeLikeObject(type="premium", user_id=str(user.id)),
+                )
+            ),
+        )
+
+        monkeypatch.setattr(payments_service_module, "STRIPE_WEBHOOK_SECRET", "whsec_test")
+        monkeypatch.setattr(
+            payments_service_module.stripe.Webhook,
+            "construct_event",
+            lambda payload, sig_header, secret: event,
+        )
+        monkeypatch.setattr(
+            payments_service_module,
+            "invalidate_user_cache",
+            lambda **kwargs: invalidated.append(kwargs),
+        )
+        monkeypatch.setattr(
+            payments_service_module,
+            "cache_user_payload",
+            lambda payload_user: cached.append(payload_user),
+        )
+
+        class _WebhookRequest:
+            async def body(self):
+                return b'{"id":"evt_test"}'
+
+        out = asyncio.run(
+            stripe_webhook_service(
+                request=_WebhookRequest(),
+                stripe_signature="sig_test",
+                db=db,
+            )
+        )
+
+        db.refresh(user)
+        assert out == {"ok": True}
+        assert user.is_premium is True
+        assert user.stripe_customer_id == "cus_123"
+        assert user.stripe_subscription_id == "sub_123"
+        assert user.premium_checked_at is not None
+        assert invalidated == [{"user_id": user.id, "username": "premium-target"}]
+        assert cached == [user]
+    finally:
+        db.close()
+
+
 def test_admin_supports_timeline_service_groups_paid_supports(monkeypatch):
     db = _make_session()
     try:
         author = _make_user(db, "author")
         supporter = _make_user(db, "supporter")
-        paid_at = datetime.utcnow()
+        paid_at = utcnow()
         db.add(
             models.Support(
                 supporter_user_id=supporter.id,
@@ -992,14 +1171,14 @@ def test_admin_get_ai_logs_service_returns_latest_logs(monkeypatch):
             prompt_summary="old",
             tokens_used=10,
             model="m1",
-            created_at=datetime.utcnow() - timedelta(hours=1),
+            created_at=utcnow() - timedelta(hours=1),
         )
         newer = models.AIGenerateLog(
             user_id=user.id,
             prompt_summary="new",
             tokens_used=20,
             model="m2",
-            created_at=datetime.utcnow(),
+            created_at=utcnow(),
         )
         db.add_all([older, newer])
         db.commit()

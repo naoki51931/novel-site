@@ -84,3 +84,15 @@ def mark_all_notifications_read_for_user(db: Session, *, user_id: int) -> int:
         .update({"is_read": True})
         or 0
     )
+
+
+def delete_notifications_for_user_by_type(db: Session, *, user_id: int, notif_type: str) -> int:
+    return int(
+        db.query(models.Notification)
+        .filter(
+            models.Notification.user_id == user_id,
+            models.Notification.type == notif_type,
+        )
+        .delete(synchronize_session=False)
+        or 0
+    )

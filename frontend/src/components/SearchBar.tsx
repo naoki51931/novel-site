@@ -40,6 +40,7 @@ type SearchBarProps = {
     sort: string;
     ageLimit: string;
     creativeType: string;
+    directTagName?: string;
   }) => void;
 };
 
@@ -247,7 +248,8 @@ export default function SearchBar({
     setActiveSuggestIndex(-1);
     if (submit && onSearch) {
       onSearch({
-        query: next,
+        query: item.kind === "tag" ? item.value : next,
+        directTagName: item.kind === "tag" ? item.value : undefined,
         excludeQuery,
         sort,
         ageLimit,
@@ -335,7 +337,7 @@ export default function SearchBar({
                   }}
                   onMouseDown={(e: React.MouseEvent<HTMLButtonElement>) => {
                     e.preventDefault();
-                    handlePickSuggestion(item);
+                    handlePickSuggestion(item, { submit: item.kind === "tag" });
                   }}
                 >
                   <span>{item.label}</span>

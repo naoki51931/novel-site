@@ -2683,7 +2683,11 @@ export default function AINovelPage() {
   const handleReviseByComment = async (scope = "full") => {
     if (polishing || loading || continuing || revisingByComment) return;
     const latestComment = (revisionCommentInput || "").trim();
-    if (!latestComment) {
+    const latestUserCommentFromHistory = [...revisionComments]
+      .reverse()
+      .find((item: any) => item && item.role === "user" && String(item.content || "").trim());
+    const effectiveComment = latestComment || String(latestUserCommentFromHistory?.content || "").trim();
+    if (!effectiveComment) {
       setError(
         t({
           ja: "修正コメントを入力してください。",
@@ -2729,10 +2733,12 @@ export default function AINovelPage() {
       retryMode,
       retryMax,
     };
-    const nextComments = [
-      ...revisionComments,
-      { role: "user", content: latestComment, at: new Date().toISOString() },
-    ];
+    const nextComments = latestComment
+      ? [
+          ...revisionComments,
+          { role: "user", content: effectiveComment, at: new Date().toISOString() },
+        ]
+      : revisionComments;
     setRevisionComments(nextComments);
     setRevisionCommentInput("");
     setRevisingByComment(true);
@@ -4417,7 +4423,7 @@ export default function AINovelPage() {
           ? t({ ja: "AI小説：エピソード編集", en: "AI Novel: Edit an Episode" })
           : isContinueMode
           ? t({ ja: "AI小説：エピソードの続き生成", en: "AI Novel: Continue an Episode" })
-          : t({ ja: "AI小説生成（未ログインは10回まで）", en: "AI Novel Generation (up to 10 for guests)" })}
+          : t({ ja: "AI小説生成・小説生成AI（未ログインは10回まで）", en: "AI Novel Generator and Story Writing AI (up to 10 for guests)" })}
       </h1>
 
       {isEditMode ? (
@@ -4447,13 +4453,13 @@ export default function AINovelPage() {
       ) : (
         <p style={{ marginBottom: "1.5rem", color: "var(--ai-desc-text)" }}>
           {t({
-            ja: "お題や登場人物を入力して、「AI小説を生成する」を押すとお試し小説を生成します。",
-            en: "Enter a theme and characters, then click “Generate AI novel” to create a sample story.",
+            ja: "お題、登場人物、ジャンル、文体を入力して「AI小説を生成する」を押すと、小説生成AIがプロットや会話を含む物語の下書きを作成します。",
+            en: "Enter a theme, characters, genre, and style, then click “Generate AI novel” to use Lexis as an AI novel generator for a story draft with plot, dialogue, and prose.",
           })}
           <br />
           {t({
-            ja: "生成結果は後から自分で編集して、小説やエピソードとして投稿してもOKです。",
-            en: "You can edit the result later and post it as a novel or episode.",
+            ja: "生成結果は編集して、小説やエピソードとして投稿できます。続き生成や執筆支援にも使えます。",
+            en: "You can edit the result, post it as a novel or episode, and use the same writing assistant for continuations.",
           })}
         </p>
       )}
@@ -4469,24 +4475,24 @@ export default function AINovelPage() {
           }}
         >
           <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.6rem" }}>
-            {t({ ja: "AI小説生成・R18小説生成に対応", en: "AI novel generation with R18 support" })}
+            {t({ ja: "AI小説生成・小説生成AI・R18小説生成に対応", en: "AI novel generator, story writing AI, and R18 draft support" })}
           </h2>
           <p style={{ margin: "0 0 0.45rem", color: "var(--muted-text)", lineHeight: 1.7 }}>
             {t({
               ja: "Lexis の AI小説生成では、一般向けの物語作成だけでなく、R18小説生成や官能小説生成を想定した下書き作成にも対応しています。タイトル案、ジャンル、登場人物、文体を入れて、長編の叩き台や短編の導入をまとめて作れます。",
-              en: "Lexis supports both general AI novel generation and R18-oriented draft generation.",
+              en: "Lexis works as an AI novel generator and story writing AI for general fiction, long-form drafts, short story openings, character-driven scenes, and R18 or adult novel draft generation.",
             })}
           </p>
           <p style={{ margin: "0 0 0.45rem", color: "var(--muted-text)", lineHeight: 1.7 }}>
             {t({
               ja: "R18 を有効にすると、成人向け表現を含む小説の構成案や続き生成にも使えます。生成後はそのまま投稿せず、必要に応じてご自身で確認・編集してから公開してください。",
-              en: "When R18 is enabled, you can also draft adult-oriented scenes and continuations.",
+              en: "When R18 is enabled, you can draft adult-oriented story outlines, scenes, and episode continuations. Review and edit generated text before publishing.",
             })}
           </p>
           <ul style={{ margin: 0, paddingLeft: "1.2rem", color: "var(--muted-text)", lineHeight: 1.7 }}>
-            <li>{t({ ja: "AI小説生成: プロット、導入、会話、地の文をまとめて生成", en: "AI novel generation: plot, opening, dialogue, and prose" })}</li>
-            <li>{t({ ja: "R18小説生成: 年齢区分を切り替えて成人向けの表現方針を調整", en: "R18 novel generation: tune adult-expression direction with age rating" })}</li>
-            <li>{t({ ja: "続き生成: 既存エピソードの続きや次の2000文字単位の展開を作成", en: "Continuation: generate the next section of an existing episode" })}</li>
+            <li>{t({ ja: "AI小説生成: プロット、導入、会話、地の文をまとめて生成", en: "AI novel generator: create plot, opening, dialogue, and prose" })}</li>
+            <li>{t({ ja: "R18小説生成: 年齢区分を切り替えて成人向けの表現方針を調整", en: "R18 novel generation: adjust adult draft direction with age rating" })}</li>
+            <li>{t({ ja: "続き生成: 既存エピソードの続きや次の2000文字単位の展開を作成", en: "Episode continuation generator: create the next section of an existing story" })}</li>
           </ul>
         </section>
       )}

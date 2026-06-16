@@ -1,4 +1,5 @@
 import re
+from typing import Any, Callable
 
 import httpx
 
@@ -248,3 +249,200 @@ async def _build_anime_title_candidates_from_sources(
             if len(out) >= limit:
                 break
     return out[:limit]
+
+
+def _collect_novel_feature_docs(
+    db: Any,
+    *,
+    site_key: str,
+    novels: list[Any],
+    feature_name: str,
+    include_episode_content: bool = False,
+    models: Any,
+    compact_text: Callable[[str | None, int], str],
+) -> list[dict[str, Any]]:
+    docs: list[dict[str, Any]] = []
+    for novel in novels:
+        tag_names = [
+            str(getattr(getattr(nt, "tag", None), "name", "") or "").strip()
+            for nt in (getattr(novel, "novel_tags", []) or [])
+            if getattr(nt, "tag", None) is not None
+        ]
+        content_parts = [
+            f"タイトル: {str(getattr(novel, 'title', '') or '').strip()}",
+            f"概要: {str(getattr(novel, 'description', '') or '').strip()}",
+            f"タグ: {', '.join([t for t in tag_names if t])}",
+        ]
+        if include_episode_content:
+            episode_rows = (
+                db.query(models.Episode.title, models.Episode.body)
+                .filter(
+                    models.Episode.novel_id == int(novel.id),
+                    models.Episode.site_key == site_key,
+                    models.Episode.status == "public",
+                    models.Episode.is_public == True,
+                )
+                .order_by(models.Episode.id.asc())
+                .limit(3)
+                .all()
+            )
+            for ep_title, ep_body in episode_rows:
+                snippet = compact_text(str(ep_body or ""), 320)
+                if not snippet:
+                    continue
+                content_parts.append(
+                    f"本文要約断片({str(ep_title or '').strip()[:40]}): {snippet}"
+                )
+        content = compact_text("\n".join([p for p in content_parts if p.strip()]), 3500)
+        if not content:
+            continue
+        docs.append(
+            {
+                "doc_id": f"novel:{int(novel.id)}",
+                "feature": feature_name,
+                "site_key": site_key,
+                "target_id": int(novel.id),
+                "target_type": "novel",
+                "title": str(getattr(novel, "title", "") or ""),
+                "content": content,
+                "is_public": bool(getattr(novel, "is_public", False)),
+                "is_r18": str(getattr(novel, "age_limit", "all") or "all") == "r18",
+            }
+        )
+    return docs
+
+
+def _collect_user_preference_text_for_novels(
+    db: Any,
+    *,
+    user_id: int,
+    site_key: str,
+    models: Any,
+    get_user_favorite_tag_weights: Callable[[Any, int], dict[str, int]],
+    compact_text: Callable[[str | None, int], str],
+) -> str:
+    fav_tags = get_user_favorite_tag_weights(db, user_id)
+    sorted_tags = [name for name, _ in sorted(fav_tags.items(), key=lambda row: row[1], reverse=True)[:8] if name]
+    favorite_titles = [
+        str(row[0] or "").strip()
+        for row in (
+            db.query(models.Novel.title)
+            .join(models.NovelFavorite, models.NovelFavorite.novel_id == models.Novel.id)
+            .filter(models.NovelFavorite.user_id == user_id, models.Novel.site_key == site_key)
+            .order_by(models.NovelFavorite.id.desc())
+            .limit(12)
+            .all()
+        )
+        if str(row[0] or "").strip()
+    ]
+    viewed_ids = [
+        int(row[0])
+        for row in (
+            db.query(models.UserViewHistory.target_id)
+            .filter(
+                models.UserViewHistory.user_id == user_id,
+                models.UserViewHistory.target_type == "novel",
+                models.UserViewHistory.site_key == site_key,
+            )
+            .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+            .limit(12)
+            .all()
+        )
+    ]
+    viewed_titles: list[str] = []
+    if viewed_ids:
+        viewed_titles = [
+            str(row[0] or "").strip()
+            for row in db.query(models.Novel.title).filter(models.Novel.id.in_(viewed_ids)).all()
+            if str(row[0] or "").strip()
+        ]
+    parts: list[str] = []
+    if sorted_tags:
+        parts.append(f"好みタグ: {', '.join(sorted_tags)}")
+    if favorite_titles:
+        parts.append(f"お気に入り作品: {' / '.join(favorite_titles[:6])}")
+    if viewed_titles:
+        parts.append(f"最近読んだ作品: {' / '.join(viewed_titles[:6])}")
+    favorite_novel_ids = [
+        int(row[0])
+        for row in (
+            db.query(models.NovelFavorite.novel_id)
+            .filter(models.NovelFavorite.user_id == user_id)
+            .order_by(models.NovelFavorite.id.desc())
+            .limit(4)
+            .all()
+        )
+    ]
+    if favorite_novel_ids:
+        fav_episode_rows = (
+            db.query(models.Episode.body)
+            .filter(
+                models.Episode.novel_id.in_(favorite_novel_ids),
+                models.Episode.site_key == site_key,
+                models.Episode.status == "public",
+                models.Episode.is_public == True,
+            )
+            .order_by(models.Episode.id.desc())
+            .limit(6)
+            .all()
+        )
+        content_snippets = [
+            compact_text(str(row[0] or ""), 180)
+            for row in fav_episode_rows
+            if compact_text(str(row[0] or ""), 180)
+        ]
+        if content_snippets:
+            parts.append(f"好み本文傾向: {' / '.join(content_snippets[:4])}")
+    return compact_text("\n".join(parts), 1200)
+
+
+def _collect_public_chat_preference_text(
+    db: Any,
+    *,
+    user_id: int,
+    models: Any,
+    compact_text: Callable[[str | None, int], str],
+) -> str:
+    fav_rows = (
+        db.query(models.AIChatCharacter.name, models.AIChatCharacter.personality)
+        .join(
+            models.AIChatCharacterFavorite,
+            models.AIChatCharacterFavorite.character_id == models.AIChatCharacter.id,
+        )
+        .filter(models.AIChatCharacterFavorite.user_id == user_id)
+        .order_by(models.AIChatCharacterFavorite.id.desc())
+        .limit(12)
+        .all()
+    )
+    viewed_ids = [
+        int(row[0])
+        for row in (
+            db.query(models.UserViewHistory.target_id)
+            .filter(
+                models.UserViewHistory.user_id == user_id,
+                models.UserViewHistory.target_type == "ai_public_character",
+            )
+            .order_by(models.UserViewHistory.last_viewed_at.desc(), models.UserViewHistory.id.desc())
+            .limit(12)
+            .all()
+        )
+    ]
+    viewed_rows: list[tuple[str, str | None]] = []
+    if viewed_ids:
+        viewed_rows = [
+            (str(name or "").strip(), compact_text(str(personality or "").strip(), 120))
+            for name, personality in (
+                db.query(models.AIChatCharacter.name, models.AIChatCharacter.personality)
+                .filter(models.AIChatCharacter.id.in_(viewed_ids))
+                .all()
+            )
+            if str(name or "").strip()
+        ]
+    parts: list[str] = []
+    if fav_rows:
+        names = [str(name or "").strip() for name, _ in fav_rows if str(name or "").strip()]
+        if names:
+            parts.append(f"お気に入り公開チャット: {' / '.join(names[:8])}")
+    if viewed_rows:
+        parts.append(f"最近見た公開チャット: {' / '.join([n for n, _ in viewed_rows[:8]])}")
+    return compact_text("\n".join(parts), 1200)

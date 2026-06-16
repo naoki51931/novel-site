@@ -66,3 +66,13 @@ def add_episode_tag(db: Session, *, episode_id: int, tag_id: int) -> models.Epis
     row = models.EpisodeTag(episode_id=episode_id, tag_id=tag_id)
     db.add(row)
     return row
+
+
+def delete_episode_tags(db: Session, *, episode_id: int) -> None:
+    db.query(models.EpisodeTag).filter(models.EpisodeTag.episode_id == episode_id).delete()
+
+
+def replace_episode_tags(db: Session, *, episode_id: int, tag_ids: list[int]) -> None:
+    delete_episode_tags(db, episode_id=episode_id)
+    for tag_id in tag_ids:
+        add_episode_tag(db, episode_id=episode_id, tag_id=tag_id)

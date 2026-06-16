@@ -21,8 +21,9 @@ def list_public_novel_rankings(
     lang: str | None = None,
     db: Session = Depends(get_db),
 ):
-    from .. import main as legacy
-    return legacy.list_public_novel_rankings(
+    from ..services.public_novels_service import list_public_novel_rankings_service
+
+    return list_public_novel_rankings_service(
         request=request,
         background_tasks=background_tasks,
         sort=sort,

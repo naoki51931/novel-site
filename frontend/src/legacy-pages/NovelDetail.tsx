@@ -9,6 +9,7 @@ import { isGoogleCrawler } from "../lib/seo";
 import { getApiBase } from "../lib/apiBase";
 import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
 import { isRecentEpisode } from "../lib/freshness";
+import { formatReadMinutes } from "../lib/readTime";
 import {
   dismissGuideBubble,
   getDismissedGuideBubbles,
@@ -33,6 +34,7 @@ type Episode = {
   updated_at?: string | null;
   view_count?: number | null;
   cover_image_url?: string | null;
+  estimated_read_minutes?: number | null;
 };
 type CommentItem = {
   id: number | string;
@@ -52,6 +54,7 @@ type Novel = {
   created_at?: string | null;
   view_count?: number | null;
   total_char_count?: number | null;
+  estimated_read_minutes?: number | null;
   is_ai_generated?: boolean | null;
   fanfic_source_title?: string | null;
   fanfic_characters?: string | null;
@@ -146,6 +149,7 @@ export default function NovelDetail() {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const safeNovelId = encodeURIComponent(String(id || novel.id || ""));
     const canonicalPath = `/novels/${safeNovelId}`;
+    const ogImagePath = `/ogp/novel/${safeNovelId}.png`;
     const canonicalUrl = `${origin}${canonicalPath}`;
     const pageTitle = t({
       ja: `${novel.title || "無題の小説"}｜小説投稿サイトLexis`,
@@ -200,7 +204,7 @@ export default function NovelDetail() {
       description: pageDescription,
       canonicalPath,
       ogType: "article",
-      imageUrl: novel?.cover_image_url || "/ogp.png",
+      imageUrl: ogImagePath,
       robots,
       jsonLd,
     });
@@ -784,6 +788,7 @@ export default function NovelDetail() {
 
   const episodes = Array.isArray(novel.episodes) ? novel.episodes : [];
   const tags = getNovelTags(novel, episodes);
+  const novelReadMinutesLabel = formatReadMinutes(novel.estimated_read_minutes, t);
   const canShowGuides = isOnboardingGuideEligible();
   const isBubbleVisible = (key: string) => !dismissedBubbles.has(String(key));
   const handleDismissBubble = (e: React.MouseEvent<HTMLElement>, key: string) => {
@@ -942,6 +947,7 @@ export default function NovelDetail() {
         {typeof novel.total_char_count === "number" && (
           <span>{t({ ja: "総文字数", en: "Total chars" })}: {novel.total_char_count}</span>
         )}
+        {novelReadMinutesLabel ? <span>{novelReadMinutesLabel}</span> : null}
         {novel.series_name ? (
           <span>
             {t({ ja: "シリーズ", en: "Series" })}:{" "}
@@ -1172,6 +1178,9 @@ export default function NovelDetail() {
                 {typeof ep.view_count === "number" && (
                   <span>{t({ ja: "閲覧数", en: "Views" })}: {ep.view_count}</span>
                 )}
+                {formatReadMinutes(ep.estimated_read_minutes, t) ? (
+                  <span>{formatReadMinutes(ep.estimated_read_minutes, t)}</span>
+                ) : null}
                 <span>
                   {t({ ja: "文字数", en: "Chars" })}: {countChars(ep.body)}
                 </span>

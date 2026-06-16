@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..schemas_ai_story_agent import StoryAgentRequest
 
 
 router = APIRouter(
@@ -25,10 +26,9 @@ async def generate_story_agent_reply(
     payload: dict,
     db: Session = Depends(get_db),
 ):
-    from .. import main as legacy
     from ..services.ai_story_agent_service import generate_story_agent_reply_service
 
-    payload_model = _parse_payload(legacy.StoryAgentRequest, payload)
+    payload_model = _parse_payload(StoryAgentRequest, payload)
     return await generate_story_agent_reply_service(
         payload=payload_model,
         request=request,

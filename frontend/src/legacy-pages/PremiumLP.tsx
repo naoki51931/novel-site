@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
@@ -17,6 +17,9 @@ export default function PremiumLP() {
   const [error, setError] = useState("");
   const [isPremium, setIsPremium] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
+  const [selectedAmount, setSelectedAmount] = useState(1000);
+  const [moonToken, setMoonToken] = useState("");
+  const [tokenLoading, setTokenLoading] = useState(false);
 
   useEffect(() => {
     const token = getStoredAuthToken();
@@ -45,14 +48,45 @@ export default function PremiumLP() {
     load();
   }, []);
 
-  const yearlyHint = useMemo(() => {
-    const monthly = 1000;
-    const yearly = monthly * 12;
-    return t(
-      { ja: "月{{monthly}}円（年{{yearly}}円）", en: "¥{{monthly}}/month (¥{{yearly}}/year)" },
-      { monthly: monthly.toLocaleString(), yearly: yearly.toLocaleString() }
-    );
-  }, [t]);
+  const plans = [
+    { amount: 1000, label: "¥1,000", name: t({ ja: "月額1000円プラン", en: "¥1,000/month plan" }), moon: false },
+    { amount: 3000, label: "¥3,000", name: t({ ja: "月額3000円プラン", en: "¥3,000/month plan" }), moon: true },
+    { amount: 5000, label: "¥5,000", name: t({ ja: "月額5000円プラン", en: "¥5,000/month plan" }), moon: true },
+  ];
+  const selectedPlanMultiplier = selectedAmount >= 5000 ? 6 : selectedAmount >= 3000 ? 3.5 : 1;
+  const aiNovelDailyLimit = Math.floor(80 * selectedPlanMultiplier);
+  const aiChatTokenLimit = Math.floor(4_000_000 * selectedPlanMultiplier);
+
+
+  const issueMoonToken = async () => {
+    if (tokenLoading) return;
+    setTokenLoading(true);
+    setError("");
+    try {
+      const token = getStoredAuthToken();
+      if (!token) {
+        navigate("/login");
+        return;
+      }
+      const res = await fetch("/api/external/moon-arcana/token", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        navigate("/login");
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(String(data?.detail || t({ ja: "トークン発行に失敗しました。", en: "Failed to issue token." })));
+      }
+      setMoonToken(String(data?.token || ""));
+    } catch (e) {
+      setError(getErrorMessage(e, t({ ja: "トークン発行に失敗しました。", en: "Failed to issue token." })));
+    } finally {
+      setTokenLoading(false);
+    }
+  };
 
   const startCheckout = async () => {
     if (loading) return;
@@ -80,6 +114,7 @@ export default function PremiumLP() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
+        body: JSON.stringify({ amount_yen: selectedAmount }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) {
@@ -127,8 +162,8 @@ export default function PremiumLP() {
         </h2>
         <p style={{ margin: "0 0 14px", color: "#473a23", lineHeight: 1.7 }}>
           {t({
-            ja: "AI小説生成回数やAIチャット利用枠の拡張、全文閲覧など、毎日の執筆と読書を加速させる機能をまとめて利用できます。",
-            en: "Get bundled features like higher AI novel and AI chat limits plus full-text access to speed up your daily writing and reading.",
+            ja: "従来の1000円プランに加えて、3000円プランと5000円プランでは moon-arcana.com の全機能を使えるトークンを発行できます。",
+            en: "The existing ¥1,000 plan remains available, and the ¥3,000 and ¥5,000 plans issue a token for full access to moon-arcana.com.",
           })}
         </p>
 
@@ -142,20 +177,48 @@ export default function PremiumLP() {
         >
           <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
             <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "AI小説生成", en: "AI novel generation" })}</div>
-            <strong>{t({ ja: "1日80回まで", en: "Up to 80 times/day" })}</strong>
+            <strong>{t({ ja: `1日${aiNovelDailyLimit.toLocaleString()}回まで`, en: `Up to ${aiNovelDailyLimit.toLocaleString()} times/day` })}</strong>
           </div>
           <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
             <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "AIチャット", en: "AI chat" })}</div>
-            <strong>{t({ ja: "利用トークン枠を拡張", en: "Expanded token allowance" })}</strong>
+            <strong>{t({ ja: `月${aiChatTokenLimit.toLocaleString()}トークン`, en: `${aiChatTokenLimit.toLocaleString()} tokens/month` })}</strong>
           </div>
           <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
             <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "エピソード閲覧", en: "Episode access" })}</div>
             <strong>{t({ ja: "長文の全文表示", en: "Full long-text view" })}</strong>
           </div>
           <div style={{ border: "1px solid #d4c198", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.7)" }}>
-            <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "決済", en: "Billing" })}</div>
-            <strong>Stripe / {yearlyHint}</strong>
+            <div style={{ fontSize: 12, color: "#5d5039" }}>{t({ ja: "外部サイト連携", en: "External access" })}</div>
+            <strong>{t({ ja: "外部サイトの全機能", en: "Full external-site access" })}</strong>
           </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginBottom: 14 }}>
+          {plans.map((plan) => {
+            const active = selectedAmount === plan.amount;
+            return (
+              <button
+                key={plan.amount}
+                type="button"
+                onClick={() => setSelectedAmount(plan.amount)}
+                disabled={loading || isPremium}
+                style={{
+                  textAlign: "left",
+                  border: active ? "2px solid #2d2010" : "1px solid #d4c198",
+                  borderRadius: 8,
+                  padding: "12px",
+                  background: active ? "#fff7e8" : "rgba(255,255,255,0.72)",
+                  cursor: loading || isPremium ? "default" : "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 800, fontSize: 18 }}>{plan.label}</div>
+                <div style={{ fontSize: 13, color: "#5d5039" }}>{plan.name}</div>
+                <div style={{ fontSize: 12, color: "#5d5039", marginTop: 4 }}>
+                  {plan.moon ? t({ ja: "連携トークン対象", en: "Includes linked-site token" }) : t({ ja: "従来プレミアム", en: "Standard Premium" })}
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -170,7 +233,7 @@ export default function PremiumLP() {
               ? t({ ja: "現在プレミアム会員です", en: "You are Premium" })
               : loading
                 ? t({ ja: "決済ページを準備中...", en: "Preparing checkout..." })
-                : t({ ja: "プレミアム会員になる", en: "Become Premium" })}
+                : t({ ja: `${selectedAmount.toLocaleString()}円プランで登録`, en: `Subscribe to ¥${selectedAmount.toLocaleString()}` })}
           </button>
           <Link to="/mypage" className="btn btn-border" style={{ borderRadius: 8 }}>
             {t({ ja: "マイページで状態確認", en: "Check status on My Page" })}
@@ -180,7 +243,23 @@ export default function PremiumLP() {
               {t({ ja: "いつでもStripe側で解約可能です。", en: "You can cancel anytime via Stripe." })}
             </span>
           )}
+          {isPremium && (
+            <button type="button" className="btn btn-border" onClick={issueMoonToken} disabled={tokenLoading} style={{ borderRadius: 8 }}>
+              {tokenLoading ? t({ ja: "発行中...", en: "Issuing..." }) : t({ ja: "moon-arcana.com用トークンを発行", en: "Issue moon-arcana.com token" })}
+            </button>
+          )}
+          <a href="https://moon-arcana.com" className="btn btn-border" target="_blank" rel="noopener noreferrer" style={{ borderRadius: 8 }}>
+            {t({ ja: "moon-arcana.comへ移動", en: "Go to moon-arcana.com" })}
+          </a>
         </div>
+        {moonToken && (
+          <div style={{ marginTop: 10 }}>
+            <label style={{ display: "block", fontSize: 12, color: "#5d5039", marginBottom: 4 }}>
+              {t({ ja: "moon-arcana.com用トークン", en: "moon-arcana.com token" })}
+            </label>
+            <input readOnly value={moonToken} style={{ width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+          </div>
+        )}
         {error && <p style={{ margin: "10px 0 0", color: "crimson" }}>{error}</p>}
       </section>
 
@@ -200,8 +279,8 @@ export default function PremiumLP() {
             <strong>{t({ ja: "どこから解約できますか？", en: "How can I cancel?" })}</strong>
             <p style={{ margin: "4px 0 0", color: "var(--muted-text)" }}>
               {t({
-                ja: "Stripeの管理画面から解約できます。操作に困った場合はお問い合わせからご連絡ください。",
-                en: "You can cancel from Stripe. If you need help, contact support.",
+                ja: "Stripeの管理画面から解約できます。解約後は moon-arcana.com 用トークンも利用不可になります。",
+                en: "You can cancel from Stripe. After cancellation, the moon-arcana.com token becomes unusable.",
               })}
             </p>
           </div>

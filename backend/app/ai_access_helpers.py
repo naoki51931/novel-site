@@ -211,7 +211,7 @@ def save_ai_log(
 ):
     if user_id is None and not str(guest_id or "").strip():
         return
-    log = models.models.AIGenerateLog(
+    log = models.AIGenerateLog(
         user_id=user_id,
         guest_id=str(guest_id or "").strip()[:64] or None,
         prompt_summary=(str(prompt_summary or "").strip()[:200] or None),
@@ -382,13 +382,18 @@ def _ai_chat_allowed_tokens(
     *,
     is_effective_premium_user: Any,
     ai_chat_premium_included_blocks: int,
+    premium_plan_usage_multiplier_for_user: Any,
     ai_chat_free_tokens: int,
     ai_chat_block_tokens: int,
 ) -> int:
-    premium_included_blocks = ai_chat_premium_included_blocks if is_effective_premium_user(user) else 0
+    is_premium = is_effective_premium_user(user)
     paid_blocks = max(0, int(getattr(user, "ai_chat_paid_blocks", 0) or 0))
-    total_blocks = premium_included_blocks + paid_blocks
-    return max(0, ai_chat_free_tokens) + total_blocks * max(1, ai_chat_block_tokens)
+    if not is_premium:
+        return max(0, ai_chat_free_tokens) + paid_blocks * max(1, ai_chat_block_tokens)
+    premium_included_blocks = max(0, ai_chat_premium_included_blocks)
+    base_tokens = max(0, ai_chat_free_tokens) + premium_included_blocks * max(1, ai_chat_block_tokens)
+    multiplier = max(1.0, float(premium_plan_usage_multiplier_for_user(user) or 1.0))
+    return int(base_tokens * multiplier) + paid_blocks * max(1, ai_chat_block_tokens)
 
 
 def _current_ai_chat_month_key_utc(now: datetime | None = None) -> int:
@@ -422,6 +427,7 @@ def _ensure_ai_chat_access(
     is_effective_premium_user: Any,
     ai_chat_allowed_tokens: Any,
     ai_chat_free_tokens: int,
+    premium_plan_usage_multiplier_for_user: Any,
     ai_chat_premium_included_blocks: int,
     ai_chat_block_tokens: int,
     ai_chat_block_price_yen: int,
@@ -448,7 +454,8 @@ def _ensure_ai_chat_access(
             f"プレミアム登録後は追加で{ai_chat_block_tokens:,}トークンの利用枠が付与されます。"
         )
     else:
-        premium_base = max(0, ai_chat_free_tokens) + max(0, ai_chat_premium_included_blocks) * max(1, ai_chat_block_tokens)
+        multiplier = max(1.0, float(premium_plan_usage_multiplier_for_user(user) or 1.0))
+        premium_base = int((max(0, ai_chat_free_tokens) + max(0, ai_chat_premium_included_blocks) * max(1, ai_chat_block_tokens)) * multiplier)
         over = max(0, used - premium_base)
         consumed_paid_blocks = over // max(1, ai_chat_block_tokens)
         next_required_block = consumed_paid_blocks + 1

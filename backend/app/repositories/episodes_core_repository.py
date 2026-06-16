@@ -97,3 +97,11 @@ def find_episode_translation(db: Session, *, episode_id: int, language: str) -> 
         )
         .first()
     )
+
+
+def delete_episode_comments(db: Session, *, episode_id: int) -> None:
+    db.query(models.EpisodeComment).filter(models.EpisodeComment.episode_id == episode_id).delete()
+
+
+def delete_episode_supports(db: Session, *, episode_id: int) -> None:
+    db.query(models.Support).filter(models.Support.episode_id == episode_id).delete()

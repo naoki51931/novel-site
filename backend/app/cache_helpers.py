@@ -178,6 +178,8 @@ def _build_user_cache_payload(user) -> dict[str, Any]:
         "ai_summary_model": str(getattr(user, "ai_summary_model", "") or "") or None,
         "ai_title_model": str(getattr(user, "ai_title_model", "") or "") or None,
         "ai_tag_model": str(getattr(user, "ai_tag_model", "") or "") or None,
+        "ai_chat_model": str(getattr(user, "ai_chat_model", "") or "") or None,
+        "ai_translation_model": str(getattr(user, "ai_translation_model", "") or "") or None,
         "ai_story_agent_model": str(getattr(user, "ai_story_agent_model", "") or "") or None,
         "ai_comment_revision_model": str(getattr(user, "ai_comment_revision_model", "") or "") or None,
         "ai_story_agent_visible": bool(getattr(user, "ai_story_agent_visible", True)),

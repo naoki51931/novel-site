@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from ..time_utils import utcnow
 
 
 def admin_start_i18n_job_service(*, payload, request: Request, db: Session):
@@ -78,7 +79,7 @@ def admin_start_i18n_job_service(*, payload, request: Request, db: Session):
         raise HTTPException(400, "source_items must be <= 10000")
 
     job_id = secrets.token_hex(8)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     initial_processed = int(resume_from.get("processed_chunks") or 0) if isinstance(resume_from, dict) else 0
     initial_translated = int(resume_from.get("translated_count") or 0) if isinstance(resume_from, dict) else 0
     initial_failed_items = list(resume_from.get("failed_items") or [])[:500] if isinstance(resume_from, dict) else []

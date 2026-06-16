@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from ..time_utils import UTC_MIN, utcnow
 
 
 def _normalize_feed_lang(legacy, lang):
@@ -576,7 +577,7 @@ def list_recommended_feed_service(request, background_tasks, limit, lang, db):
         )
         favorite_counts = {int(nid): int(cnt or 0) for nid, cnt in favorite_rows}
         scored: list[tuple[float, object, dict[str, float]]] = []
-        now = datetime.utcnow()
+        now = utcnow()
         for novel in novels:
             nid = int(novel.id)
             if nid in interacted_ids or nid in recent_viewed_ids:
@@ -632,7 +633,7 @@ def list_recommended_feed_service(request, background_tasks, limit, lang, db):
                 )
             )
         scored.sort(
-            key=lambda x: (x[0], getattr(x[1], "created_at", datetime.min), int(getattr(x[1], "id", 0))),
+            key=lambda x: (x[0], getattr(x[1], "created_at", UTC_MIN), int(getattr(x[1], "id", 0))),
             reverse=True,
         )
         selected = [novel for _, novel, _ in scored[: int(limit)]]

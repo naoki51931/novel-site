@@ -25,6 +25,54 @@ def admin_create_contact_message(payload: dict, request: Request, db: Session = 
     return admin_create_contact_message_service(request=request, payload=model_payload, db=db)
 
 
+@router.get("/api/admin/seo-pages")
+def admin_list_seo_pages(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from ..services.seo_pages_service import list_admin_seo_pages_service
+
+    return list_admin_seo_pages_service(request=request, db=db)
+
+
+@router.get("/api/admin/seo-pages/{page_id}")
+def admin_get_seo_page(
+    page_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from ..services.seo_pages_service import get_admin_seo_page_service
+
+    return get_admin_seo_page_service(page_id=page_id, request=request, db=db)
+
+
+@router.post("/api/admin/seo-pages")
+def admin_create_seo_page(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from .. import main as legacy
+    from ..services.seo_pages_service import create_admin_seo_page_service
+
+    model_payload = _parse_payload(legacy.AdminSEOPageUpsertRequest, payload)
+    return create_admin_seo_page_service(payload=model_payload, request=request, db=db)
+
+
+@router.put("/api/admin/seo-pages/{page_id}")
+def admin_update_seo_page(
+    page_id: int,
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from .. import main as legacy
+    from ..services.seo_pages_service import update_admin_seo_page_service
+
+    model_payload = _parse_payload(legacy.AdminSEOPageUpsertRequest, payload)
+    return update_admin_seo_page_service(page_id=page_id, payload=model_payload, request=request, db=db)
+
+
 @router.get("/api/admin/contact/messages")
 def admin_list_contact_messages(
     request: Request,

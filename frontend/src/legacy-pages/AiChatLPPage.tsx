@@ -1,9 +1,11 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 
 export default function AiChatLPPage() {
   const { t } = useI18n();
-  const aiChatCtaPath = "/ai_chat?ref=ai_chat_lp";
+  const location = useLocation();
+  const aiChatBasePath = location.pathname.startsWith("/en/") ? "/en/ai_chat" : "/ai_chat";
+  const aiChatCtaPath = `${aiChatBasePath}?ref=ai_chat_lp`;
   const subCtaStyle: any = {
     display: "inline-flex",
     alignItems: "center",
@@ -60,10 +62,10 @@ export default function AiChatLPPage() {
           >
             {t({ ja: "今すぐAIチャットで遊ぶ", en: "Start Chat Now" })}
           </Link>
-          <Link to="/ai_chat/howto" className="btn btn-border" style={subCtaStyle}>
+          <Link to={`${aiChatBasePath}/howto`} className="btn btn-border" style={subCtaStyle}>
             {t({ ja: "使い方を見る", en: "View How-To" })}
           </Link>
-          <Link to="/ai_chat/public" className="btn btn-border" style={subCtaStyle}>
+          <Link to={`${aiChatBasePath}/public`} className="btn btn-border" style={subCtaStyle}>
             {t({ ja: "公開チャットを見る", en: "Browse Public Chats" })}
           </Link>
         </div>
@@ -143,7 +145,7 @@ export default function AiChatLPPage() {
           >
             {t({ ja: "3ステップで始める", en: "Start in 3 Steps" })}
           </Link>
-          <Link to="/ai_chat/howto" className="btn btn-border">
+          <Link to={`${aiChatBasePath}/howto`} className="btn btn-border">
             {t({ ja: "詳しい使い方ページへ", en: "Open detailed guide" })}
           </Link>
         </div>

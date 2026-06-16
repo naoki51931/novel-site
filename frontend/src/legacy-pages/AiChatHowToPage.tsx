@@ -1,11 +1,14 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 export default function AiChatHowToPage() {
+  const location = useLocation();
+  const aiChatBasePath = location.pathname.startsWith("/en/") ? "/en/ai_chat" : "/ai_chat";
+
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-        <Link to="/ai_chat" className="btn btn-border">AIチャットへ戻る</Link>
-        <Link to="/ai_chat/public" className="btn btn-border">公開チャット検索</Link>
+        <Link to={aiChatBasePath} className="btn btn-border">AIチャットへ戻る</Link>
+        <Link to={`${aiChatBasePath}/public`} className="btn btn-border">公開チャット検索</Link>
       </div>
 
       <h2>AIチャットの使い方</h2>

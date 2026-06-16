@@ -1,7 +1,37 @@
+from functools import partial
+
+import jwt
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from ..cache_helpers import (
+    _cache_key_user_profile,
+    _normalize_optional_ai_model,
+    cache_user_payload,
+    invalidate_user_cache,
+    redis_json_get,
+)
+from .. import models
 from ..repositories import profile_repository as repo
+from ..runtime_config import ALGORITHM, SECRET_KEY
+from ..user_access_helpers import read_token_user_id, require_current_user
+
+
+_read_token_user_id = partial(
+    read_token_user_id,
+    secret_key=SECRET_KEY,
+    algorithm=ALGORITHM,
+    jwt_module=jwt,
+    http_exception_cls=HTTPException,
+)
+require_current_user = partial(
+    require_current_user,
+    secret_key=SECRET_KEY,
+    algorithm=ALGORITHM,
+    jwt_module=jwt,
+    models=models,
+    http_exception_cls=HTTPException,
+)
 
 
 def _normalize_profile_url(value: str | None) -> str | None:
@@ -17,16 +47,14 @@ def _normalize_profile_url(value: str | None) -> str | None:
 
 
 def read_profile_service(*, request: Request, db: Session):
-    from .. import main as legacy
-
-    uid = legacy._read_token_user_id(request)
-    cached = legacy.redis_json_get(legacy._cache_key_user_profile(uid))
+    uid = _read_token_user_id(request)
+    cached = redis_json_get(_cache_key_user_profile(uid))
     if isinstance(cached, dict):
         return cached
     user = repo.get_user_by_id(db, user_id=uid)
     if not user:
         raise HTTPException(401, "ユーザーが存在しません")
-    return legacy.cache_user_payload(user)
+    return cache_user_payload(user)
 
 
 def read_me_service(*, request: Request, db: Session):
@@ -34,9 +62,7 @@ def read_me_service(*, request: Request, db: Session):
 
 
 def update_profile_service(*, payload, request: Request, db: Session):
-    from .. import main as legacy
-
-    user = legacy.require_current_user(request, db)
+    user = require_current_user(request, db)
     old_username = str(user.username or "")
 
     if payload.username is not None:
@@ -82,24 +108,28 @@ def update_profile_service(*, payload, request: Request, db: Session):
     if payload.profile_x_url is not None:
         user.profile_x_url = _normalize_profile_url(payload.profile_x_url)
     if payload.ai_summary_model is not None:
-        user.ai_summary_model = legacy._normalize_optional_ai_model(payload.ai_summary_model)
+        user.ai_summary_model = _normalize_optional_ai_model(payload.ai_summary_model)
     if payload.ai_title_model is not None:
-        user.ai_title_model = legacy._normalize_optional_ai_model(payload.ai_title_model)
+        user.ai_title_model = _normalize_optional_ai_model(payload.ai_title_model)
     if payload.ai_tag_model is not None:
-        user.ai_tag_model = legacy._normalize_optional_ai_model(payload.ai_tag_model)
+        user.ai_tag_model = _normalize_optional_ai_model(payload.ai_tag_model)
+    if payload.ai_chat_model is not None:
+        user.ai_chat_model = _normalize_optional_ai_model(payload.ai_chat_model)
+    if payload.ai_translation_model is not None:
+        user.ai_translation_model = _normalize_optional_ai_model(payload.ai_translation_model)
     if payload.ai_story_agent_model is not None:
-        user.ai_story_agent_model = legacy._normalize_optional_ai_model(payload.ai_story_agent_model)
+        user.ai_story_agent_model = _normalize_optional_ai_model(payload.ai_story_agent_model)
     if payload.ai_comment_revision_model is not None:
-        user.ai_comment_revision_model = legacy._normalize_optional_ai_model(payload.ai_comment_revision_model)
+        user.ai_comment_revision_model = _normalize_optional_ai_model(payload.ai_comment_revision_model)
     if payload.ai_story_agent_visible is not None:
         user.ai_story_agent_visible = bool(payload.ai_story_agent_visible)
 
     db.add(user)
     db.commit()
     db.refresh(user)
-    legacy.invalidate_user_cache(
+    invalidate_user_cache(
         user_id=user.id,
         username=user.username,
         old_username=old_username if old_username != user.username else None,
     )
-    return legacy.cache_user_payload(user)
+    return cache_user_payload(user)

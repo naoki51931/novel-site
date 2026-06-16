@@ -1,6 +1,8 @@
 from fastapi import HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
+from ..schemas_ai_story_agent import StoryAgentResponse
+
 
 async def generate_story_agent_reply_service(*, payload, request: Request, response: Response, db: Session):
     from .. import main as legacy
@@ -123,7 +125,7 @@ async def generate_story_agent_reply_service(*, payload, request: Request, respo
     user_remaining: int | None = None
     if novel_guest_usage is not None:
         novel_guest_usage.generate_count = int(getattr(novel_guest_usage, "generate_count", 0) or 0) + 1
-        novel_guest_usage.last_used_at = legacy.datetime.utcnow()
+        novel_guest_usage.last_used_at = legacy.utcnow()
         db.add(novel_guest_usage)
         guest_remaining = max(
             0,
@@ -147,7 +149,7 @@ async def generate_story_agent_reply_service(*, payload, request: Request, respo
     legacy._record_ai_chat_tokens(db, user, guest_usage, tokens)
     db.commit()
 
-    return legacy.StoryAgentResponse(
+    return StoryAgentResponse(
         reply=reply,
         characters_append=characters_append,
         title_hint=next_title_hint,

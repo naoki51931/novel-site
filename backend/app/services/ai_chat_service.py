@@ -1095,7 +1095,7 @@ async def ai_chat_service(*, req, request, response, db):
             created_at = getattr(latest_persisted, "created_at", None)
             if created_at is not None:
                 followup_target_msg = latest_persisted
-                followup_latency_seconds = max(0.0, float((legacy.datetime.utcnow() - created_at).total_seconds()))
+                followup_latency_seconds = max(0.0, float((legacy.utcnow() - created_at).total_seconds()))
         mark_r18 = bool(
             r18
             or public_chat_helpers._contains_public_chat_r18_hint(personality)
@@ -1358,9 +1358,9 @@ def _serialize_ai_chat_character_response(legacy, *, db, item, owner_username, v
         is_public=bool(getattr(item, "is_public", False)),
         is_name_duplicate=bool(getattr(item, "is_name_duplicate", False)),
         name_duplicate_index=legacy._compute_ai_chat_name_duplicate_index(db=db, character=item),
-        published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
-        created_at=item.created_at.isoformat() if getattr(item, "created_at", None) else None,
-        updated_at=item.updated_at.isoformat() if getattr(item, "updated_at", None) else None,
+        published_at=legacy.to_jst_isoformat(getattr(item, "published_at", None)),
+        created_at=legacy.to_jst_isoformat(getattr(item, "created_at", None)),
+        updated_at=legacy.to_jst_isoformat(getattr(item, "updated_at", None)),
     )
 
 
@@ -1522,7 +1522,7 @@ def publish_ai_chat_character_service(*, character_id, payload, request, db):
     )
     item.is_r18 = public_chat_helpers._is_public_chat_r18(item, messages=messages_for_scan)
     item.is_public = bool(payload.is_public)
-    item.published_at = legacy.datetime.utcnow() if item.is_public else None
+    item.published_at = legacy.utcnow() if item.is_public else None
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -1553,7 +1553,7 @@ def delete_ai_chat_character_service(*, character_id, request, db):
         except Exception:
             pass
     item.is_deleted = True
-    item.deleted_at = legacy.datetime.utcnow()
+    item.deleted_at = legacy.utcnow()
     item.is_public = False
     item.published_at = None
     db.add(item)
@@ -1606,7 +1606,7 @@ def list_ai_chat_messages_service(*, character_id, request, db):
             ).strip()
             or None,
             message_owner_username=(str(owner_username or "").strip() or None) if is_demo_reader else None,
-            created_at=msg.created_at.isoformat() if getattr(msg, "created_at", None) else None,
+            created_at=legacy.to_jst_isoformat(getattr(msg, "created_at", None)),
         )
         for msg, owner_username in items
     ]
@@ -1786,7 +1786,7 @@ def get_public_ai_chat_character_detail_service(*, character_id, request, db):
         image_url=str(getattr(character, "image_url", "") or "").strip() or None,
         is_r18=bool(getattr(character, "is_r18", False)),
         author_username=str(username or "") if username else None,
-        published_at=character.published_at.isoformat() if getattr(character, "published_at", None) else None,
+        published_at=legacy.to_jst_isoformat(getattr(character, "published_at", None)),
         like_count=int(like_count or 0),
         favorite_count=int(favorite_count or 0),
         is_liked=bool(is_liked),
@@ -1798,7 +1798,7 @@ def get_public_ai_chat_character_detail_service(*, character_id, request, db):
                 mode="do" if msg.mode == "do" else "say",
                 is_auto_dialogue=bool(getattr(msg, "is_auto_dialogue", False)),
                 content=str(msg.content or ""),
-                created_at=msg.created_at.isoformat() if getattr(msg, "created_at", None) else None,
+                created_at=legacy.to_jst_isoformat(getattr(msg, "created_at", None)),
             )
             for msg in messages
         ],
@@ -2041,7 +2041,7 @@ def get_ai_chat_engagement_summary_service(*, character_id, request, db):
     recent_items = [
         legacy.AIChatEngagementSummaryItem(
             id=int(r.id),
-            created_at=r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+            created_at=legacy.to_jst_isoformat(getattr(r, "created_at", None)),
             latency_bucket=str(getattr(r, "latency_bucket", "slow") or "slow"),
             followup_latency_seconds=float(getattr(r, "followup_latency_seconds", 0.0) or 0.0),
             engagement_score=float(getattr(r, "engagement_score", 0.0) or 0.0),
@@ -2104,7 +2104,7 @@ def import_ai_chat_messages_service(*, character_id, payload, request, db):
                 legacy.models.AIChatMessage.is_deleted == False,
             )
             .update(
-                {"is_deleted": True, "deleted_at": legacy.datetime.utcnow()},
+                {"is_deleted": True, "deleted_at": legacy.utcnow()},
                 synchronize_session=False,
             )
             or 0
@@ -2161,19 +2161,20 @@ def delete_ai_chat_messages_from_point_service(*, character_id, message_id, requ
         raise legacy.HTTPException(status_code=404, detail="キャラが見つかりません。")
 
     target = (
-        db.query(legacy.models.AIChatMessage.id)
+        db.query(legacy.models.AIChatMessage.id, legacy.models.AIChatMessage.is_deleted)
         .filter(
             legacy.models.AIChatMessage.id == message_id,
             legacy.models.AIChatMessage.user_id == user.id,
             legacy.models.AIChatMessage.character_id == character_id,
-            legacy.models.AIChatMessage.is_deleted == False,
         )
         .first()
     )
     if not target:
         raise legacy.HTTPException(status_code=404, detail="対象メッセージが見つかりません。")
+    if bool(getattr(target, "is_deleted", False)):
+        return legacy.AIChatMessageDeleteResponse(ok=True, deleted=0)
 
-    now = legacy.datetime.utcnow()
+    now = legacy.utcnow()
     deleted = (
         db.query(legacy.models.AIChatMessage)
         .filter(
@@ -2226,7 +2227,7 @@ def delete_ai_chat_message_image_service(*, character_id, message_id, image_inde
     del images[image_index]
     if not images:
         target.is_deleted = True
-        target.deleted_at = legacy.datetime.utcnow()
+        target.deleted_at = legacy.utcnow()
         db.add(target)
         db.commit()
         return legacy.AIChatMessageImageDeleteResponse(
@@ -2366,7 +2367,7 @@ async def upload_ai_chat_message_images_service(*, character_id, request, files,
         message_id=int(msg.id),
         images=saved_images,
         descriptions=descriptions,
-        created_at=msg.created_at.isoformat() if getattr(msg, "created_at", None) else None,
+        created_at=legacy.to_jst_isoformat(getattr(msg, "created_at", None)),
     )
 
 

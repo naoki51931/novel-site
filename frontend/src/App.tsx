@@ -23,6 +23,7 @@ import AiChatPage from "./legacy-pages/AiChatPage";
 import AiChatPublicPage from "./legacy-pages/AiChatPublicPage";
 import AiChatHowToPage from "./legacy-pages/AiChatHowToPage";
 import AiChatLPPage from "./legacy-pages/AiChatLPPage";
+import DirectMessages from "./legacy-pages/DirectMessages";
 import DirectMessageThread from "./legacy-pages/DirectMessageThread";
 import ResetPassword from "./legacy-pages/ResetPassword";
 import CreatorDashboard from "./legacy-pages/CreatorDashboard";
@@ -49,8 +50,11 @@ import AllSites from "./legacy-pages/AllSites";
 import FanficPage from "./legacy-pages/FanficPage";
 import SeriesPage from "./legacy-pages/SeriesPage";
 import DiscoverPage from "./legacy-pages/DiscoverPage";
+import SeoPage from "./legacy-pages/SeoPage";
+import ApiSpecPage from "./legacy-pages/ApiSpecPage";
+import AdminSeoPages from "./legacy-pages/AdminSeoPages";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBell } from "@fortawesome/free-regular-svg-icons";
+import { faBell, faEnvelope } from "@fortawesome/free-regular-svg-icons";
 import { trackPageView } from "./lib/analytics";
 import { useI18n } from "./lib/i18n";
 import type { Lang } from "./lib/i18n";
@@ -75,7 +79,18 @@ type SearchOptions = {
   sort?: string;
   ageLimit?: string;
   creativeType?: string;
+  directTagName?: string;
 };
+
+function ForcedLanguagePage({ lang, children }: { lang: Lang; children: React.ReactNode }) {
+  const { setLang } = useI18n();
+
+  useEffect(() => {
+    setLang(lang);
+  }, [lang, setLang]);
+
+  return <>{children}</>;
+}
 type NotificationItem = {
   id?: number | null;
   type?: string | null;
@@ -156,6 +171,13 @@ const HEADER_I18N = {
     "zh-tw": "通知中心",
     ko: "알림 센터",
   },
+  dms: {
+    ja: "DM一覧",
+    en: "Direct messages",
+    "zh-cn": "私信列表",
+    "zh-tw": "私訊列表",
+    ko: "DM 목록",
+  },
   openMenu: { ja: "メニューを開く", en: "Open menu", "zh-cn": "打开菜单", "zh-tw": "開啟選單", ko: "메뉴 열기" },
   support: { ja: "支援", en: "Support", "zh-cn": "赞助", "zh-tw": "贊助", ko: "후원" },
   monthlySupport: {
@@ -233,6 +255,7 @@ export default function App() {
   const [creativeType, setCreativeType] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [dmUnreadCount, setDmUnreadCount] = useState(0);
   const [registerVisited, setRegisterVisited] = useState(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -356,6 +379,31 @@ export default function App() {
   const LOGIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
   const currentLangIndex = Math.max(0, LANGUAGE_ORDER.indexOf(lang));
   const nextLang = LANGUAGE_ORDER[(currentLangIndex + 1) % LANGUAGE_ORDER.length];
+  const aiNovelNavPath = lang === "en" ? "/en/ai-novel?mode=new_novel" : "/ai-novel?mode=new_novel";
+  const aiChatNavPath = lang === "en" ? "/en/ai_chat" : "/ai_chat";
+  const handleLanguageSwitch = () => {
+    setLang(nextLang);
+    const localizedPathMap: Record<string, { ja: string; en: string }> = {
+      "/ai-novel": { ja: "/ai-novel", en: "/en/ai-novel" },
+      "/en/ai-novel": { ja: "/ai-novel", en: "/en/ai-novel" },
+      "/ai_chat": { ja: "/ai_chat", en: "/en/ai_chat" },
+      "/en/ai_chat": { ja: "/ai_chat", en: "/en/ai_chat" },
+      "/ai_chat/lp": { ja: "/ai_chat/lp", en: "/en/ai_chat/lp" },
+      "/en/ai_chat/lp": { ja: "/ai_chat/lp", en: "/en/ai_chat/lp" },
+      "/ai_chat/howto": { ja: "/ai_chat/howto", en: "/en/ai_chat/howto" },
+      "/en/ai_chat/howto": { ja: "/ai_chat/howto", en: "/en/ai_chat/howto" },
+      "/ai_chat/public": { ja: "/ai_chat/public", en: "/en/ai_chat/public" },
+      "/en/ai_chat/public": { ja: "/ai_chat/public", en: "/en/ai_chat/public" },
+    };
+    const localizedPath = localizedPathMap[location.pathname];
+    if (!localizedPath) return;
+
+    const nextPath = nextLang === "en" ? localizedPath.en : localizedPath.ja;
+    const nextUrl = `${nextPath}${location.search || ""}${location.hash || ""}`;
+    if (`${location.pathname}${location.search || ""}${location.hash || ""}` !== nextUrl) {
+      navigate(nextUrl, { replace: true });
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -421,7 +469,9 @@ export default function App() {
         path === "/authors" ||
         path === "/all" ||
         path.startsWith("/ai-novel") ||
+        path.startsWith("/en/ai-novel") ||
         path.startsWith("/ai_chat") ||
+        path.startsWith("/en/ai_chat") ||
         path.startsWith("/board") ||
         path.startsWith("/tags/") ||
         path.startsWith("/novels/") ||
@@ -509,6 +559,36 @@ export default function App() {
     };
 
     loadUnreadCount();
+  }, [location.pathname, hasToken]);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("token") || localStorage.getItem("access_token")
+        : null;
+    if (!token) {
+      setDmUnreadCount(0);
+      return;
+    }
+
+    const loadDmUnreadCount = async () => {
+      try {
+        const res = await fetch("/api/dms", {
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (res.status === 401) {
+          setDmUnreadCount(0);
+          return;
+        }
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        setDmUnreadCount(Math.max(0, Number(data?.unread_count) || 0));
+      } catch {
+        // ignore
+      }
+    };
+
+    loadDmUnreadCount();
   }, [location.pathname, hasToken]);
 
   useEffect(() => {
@@ -684,14 +764,14 @@ export default function App() {
             {t(HEADER_I18N.postNovel)}
           </Link>
           <Link
-            to="/ai-novel?mode=new_novel"
+            to={aiNovelNavPath}
             className="nav-link"
             onClick={() => setMenuOpen(false)}
           >
             {t(HEADER_I18N.aiNovel)}
           </Link>
           <Link
-            to="/ai_chat"
+            to={aiChatNavPath}
             className="nav-link"
             style={{ position: "relative", zIndex: 10 }}
             onClick={() => setMenuOpen(false)}
@@ -786,7 +866,7 @@ export default function App() {
           <button
             type="button"
             className="lang-toggle btn btn-border"
-            onClick={() => setLang(nextLang)}
+            onClick={handleLanguageSwitch}
             aria-label={t(HEADER_I18N.switchLang)}
             title={t({
               ja: `${NEXT_LANGUAGE_NAME[lang]?.ja || "English"}へ切り替え`,
@@ -827,6 +907,20 @@ export default function App() {
               </button>
             )}
           </div>
+          <Link
+            to="/dms"
+            className="nav-bell"
+            aria-label={t(HEADER_I18N.dms)}
+            title={t(HEADER_I18N.dms)}
+            onClick={() => setMenuOpen(false)}
+          >
+            <FontAwesomeIcon icon={faEnvelope} />
+            {dmUnreadCount > 0 && (
+              <span className="nav-bell-badge">
+                {dmUnreadCount > 99 ? "99+" : dmUnreadCount}
+              </span>
+            )}
+          </Link>
           <Link
             to="/notifications"
             className="nav-bell"
@@ -895,6 +989,7 @@ export default function App() {
               sort: inputSort,
               ageLimit: inputAgeLimit,
               creativeType: inputCreativeType,
+              directTagName: inputDirectTagName,
             } = searchOptions;
             setMenuOpen(false);
             const q = (inputQuery ?? "").trim();
@@ -902,6 +997,14 @@ export default function App() {
             const sortValue = (inputSort || "new").trim();
             const ageValue = (inputAgeLimit || "").trim();
             const creativeValue = (inputCreativeType || "").trim();
+            const directTagName = (inputDirectTagName || "").trim();
+            if (directTagName) {
+              const params = new URLSearchParams();
+              if (ageValue) params.set("age_limit", ageValue);
+              const suffix = params.toString() ? `?${params.toString()}` : "";
+              navigate(`/tags/${encodeURIComponent(directTagName)}${suffix}`);
+              return;
+            }
             const params = new URLSearchParams();
             if (q) params.set("q", q);
             if (exclude) params.set("exclude", exclude);
@@ -950,6 +1053,9 @@ export default function App() {
           <Route path="/all" element={<AllSites />} />
           <Route path="/tags" element={<TagPage />} />
           <Route path="/tags/:slug" element={<TagPage />} />
+          <Route path="/seo/:slug" element={<SeoPage />} />
+          <Route path="/api-spec" element={<ApiSpecPage docLang="ja" />} />
+          <Route path="/api-spec/en" element={<ApiSpecPage docLang="en" />} />
           <Route path="/series/:slug" element={<SeriesPage />} />
           <Route path="/authors" element={<AuthorLanding />} />
           <Route path="/login" element={<Login />} />
@@ -972,6 +1078,7 @@ export default function App() {
           />
           <Route path="/mypage" element={<Mypage />} />
           <Route path="/me/view-history" element={<ViewHistoryPage />} />
+          <Route path="/dms" element={<DirectMessages />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/me/creator" element={<CreatorDashboard />} />
           <Route path="/author/dashboard" element={<AuthorDashboard />} />
@@ -986,6 +1093,7 @@ export default function App() {
           <Route path="/admin/ai-jobs" element={<AdminAiJobs />} />
           <Route path="/admin/ai-logs" element={<AdminAiLogs />} />
           <Route path="/admin/i18n-jobs" element={<AdminI18nJobs />} />
+          <Route path="/admin/seo-pages" element={<AdminSeoPages />} />
           <Route path="/users/:username" element={<UserPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />
@@ -993,14 +1101,21 @@ export default function App() {
           <Route path="/novels/:id/edit" element={<EditNovel />} />
           <Route path="/novels/:id/episodes/new" element={<NewEpisode />} />
 	  <Route path="/ai-novel" element={<AINovelPage />} />
+	  <Route path="/en/ai-novel" element={<ForcedLanguagePage lang="en"><AINovelPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat" element={<AiChatPage />} />
+	  <Route path="/en/ai_chat" element={<ForcedLanguagePage lang="en"><AiChatPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat/girlfriend" element={<AiChatPage />} />
 	  <Route path="/ai_chat/boyfriend" element={<AiChatPage />} />
 	  <Route path="/ai_chat/lp" element={<AiChatLPPage />} />
+	  <Route path="/en/ai_chat/lp" element={<ForcedLanguagePage lang="en"><AiChatLPPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat/howto" element={<AiChatHowToPage />} />
+	  <Route path="/en/ai_chat/howto" element={<ForcedLanguagePage lang="en"><AiChatHowToPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat/public" element={<AiChatPublicPage />} />
+	  <Route path="/en/ai_chat/public" element={<ForcedLanguagePage lang="en"><AiChatPublicPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat/public/:characterId" element={<AiChatPublicPage />} />
+	  <Route path="/en/ai_chat/public/:characterId" element={<ForcedLanguagePage lang="en"><AiChatPublicPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat/public/:characterId/:slug" element={<AiChatPublicPage />} />
+	  <Route path="/en/ai_chat/public/:characterId/:slug" element={<ForcedLanguagePage lang="en"><AiChatPublicPage /></ForcedLanguagePage>} />
 	  <Route path="/ai-logs" element={<AiLogsPage />} />
           <Route path="/episodes/:id/edit" element={<EditEpisode />} />
           <Route path="/episodes/:id" element={<EpisodeDetail />} />

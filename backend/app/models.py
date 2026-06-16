@@ -32,6 +32,8 @@ class User(Base):
     ai_summary_model = Column(String(120), nullable=True)
     ai_title_model = Column(String(120), nullable=True)
     ai_tag_model = Column(String(120), nullable=True)
+    ai_chat_model = Column(String(120), nullable=True)
+    ai_translation_model = Column(String(120), nullable=True)
     ai_story_agent_model = Column(String(120), nullable=True)
     ai_comment_revision_model = Column(String(120), nullable=True)
     ai_story_agent_visible = Column(Boolean, nullable=False, server_default="1")
@@ -219,6 +221,7 @@ class Novel(Base):
     view_count = Column(Integer, nullable=False, server_default="0")
     like_count = Column(Integer, nullable=False, default=0)
     cover_image_path = Column(String(500), nullable=True)
+    estimated_read_minutes = Column(Integer, nullable=False, server_default="0")
 
     age_limit = Column(age_limit_enum, nullable=False, server_default="all")
     is_ai_generated = Column(Boolean, nullable=False, server_default="0")
@@ -318,6 +321,7 @@ class Episode(Base):
     view_count = Column(Integer, nullable=False, server_default="0")
     like_count = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
+    estimated_read_minutes = Column(Integer, nullable=False, server_default="0")
 
     novel = relationship("Novel", back_populates="episodes")
     episode_tags = relationship(
@@ -373,7 +377,7 @@ class EpisodeTranslation(Base):
     episode_id = Column(Integer, ForeignKey("episodes.id"), nullable=False, index=True)
     language = Column(String(8), nullable=False, index=True)
     title = Column(String(200), nullable=False)
-    body = Column(Text, nullable=True)
+    body = Column(LONGTEXT, nullable=True)
     tag_names = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -589,6 +593,25 @@ class MembershipInvoice(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     membership = relationship("Membership")
+
+
+class ExternalAccessToken(Base):
+    __tablename__ = "external_access_tokens"
+    __table_args__ = (
+        UniqueConstraint("site_key", "user_id", name="uq_external_access_token_site_user"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    site_key = Column(String(64), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_prefix = Column(String(24), nullable=False)
+    is_active = Column(Boolean, nullable=False, server_default="1")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    last_used_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
 
 
 class AuthorBalance(Base):
@@ -1101,6 +1124,21 @@ class AdminContactMessage(Base):
     subject = Column(String(255), nullable=False)
     body = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
+class SEOPage(Base):
+    __tablename__ = "seo_pages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String(190), nullable=False, unique=True, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(String(500), nullable=True)
+    h1 = Column(String(255), nullable=False)
+    body = Column(Text, nullable=False)
+    related_tags = Column(Text, nullable=True)
+    is_published = Column(Boolean, nullable=False, server_default="0", index=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
 
 
 class AIGuestGenerateUsage(Base):

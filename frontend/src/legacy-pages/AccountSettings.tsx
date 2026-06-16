@@ -13,6 +13,7 @@ type BirthDateParts = { year: number; month: number; day: number };
 type ApiValidationIssue = { loc?: unknown[]; msg?: string };
 type AiModelOption = { value: string; labelJa: string; labelEn: string };
 const DEFAULT_MY_PAGE_AI_MODEL = "google/gemini-2.5-flash";
+const DEFAULT_TRANSLATION_AI_MODEL = "google/gemini-3-flash-preview";
 
 const AI_MODEL_OPTIONS: AiModelOption[] = [
   { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
@@ -97,6 +98,8 @@ export default function AccountSettings() {
   const [aiSummaryModel, setAiSummaryModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
   const [aiTitleModel, setAiTitleModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
   const [aiTagModel, setAiTagModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
+  const [aiChatModel, setAiChatModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
+  const [aiTranslationModel, setAiTranslationModel] = useState(DEFAULT_TRANSLATION_AI_MODEL);
   const [aiStoryAgentModel, setAiStoryAgentModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
   const [aiCommentRevisionModel, setAiCommentRevisionModel] = useState(DEFAULT_MY_PAGE_AI_MODEL);
   const [aiStoryAgentVisible, setAiStoryAgentVisible] = useState(true);
@@ -178,6 +181,8 @@ export default function AccountSettings() {
         setAiSummaryModel(data.ai_summary_model || DEFAULT_MY_PAGE_AI_MODEL);
         setAiTitleModel(data.ai_title_model || DEFAULT_MY_PAGE_AI_MODEL);
         setAiTagModel(data.ai_tag_model || DEFAULT_MY_PAGE_AI_MODEL);
+        setAiChatModel(data.ai_chat_model || DEFAULT_MY_PAGE_AI_MODEL);
+        setAiTranslationModel(data.ai_translation_model || DEFAULT_TRANSLATION_AI_MODEL);
         setAiStoryAgentModel(data.ai_story_agent_model || DEFAULT_MY_PAGE_AI_MODEL);
         setAiCommentRevisionModel(data.ai_comment_revision_model || DEFAULT_MY_PAGE_AI_MODEL);
         setAiStoryAgentVisible(data.ai_story_agent_visible !== false);
@@ -231,6 +236,8 @@ export default function AccountSettings() {
           ai_summary_model: aiSummaryModel,
           ai_title_model: aiTitleModel,
           ai_tag_model: aiTagModel,
+          ai_chat_model: aiChatModel,
+          ai_translation_model: aiTranslationModel,
           ai_story_agent_model: aiStoryAgentModel,
           ai_comment_revision_model: aiCommentRevisionModel,
           ai_story_agent_visible: aiStoryAgentVisible,
@@ -373,6 +380,26 @@ export default function AccountSettings() {
                 <select value={aiTagModel} onChange={(e) => setAiTagModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
                   {AI_MODEL_OPTIONS.map((option) => (
                     <option key={`tag-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t({ ja: "AIチャット", en: "AI chat" })}<br />
+                <select value={aiChatModel} onChange={(e) => setAiChatModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`chat-${option.value || "default"}`} value={option.value}>
+                      {t({ ja: option.labelJa, en: option.labelEn })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t({ ja: "翻訳", en: "Translation" })}<br />
+                <select value={aiTranslationModel} onChange={(e) => setAiTranslationModel(e.target.value)} style={{ width: "100%", padding: 4 }}>
+                  {AI_MODEL_OPTIONS.map((option) => (
+                    <option key={`translation-${option.value || "default"}`} value={option.value}>
                       {t({ ja: option.labelJa, en: option.labelEn })}
                     </option>
                   ))}

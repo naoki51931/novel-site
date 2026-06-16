@@ -7,6 +7,7 @@ import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
 import { getApiBase } from "../lib/apiBase";
 import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
+import { formatReadMinutes } from "../lib/readTime";
 
 const API_BASE = getApiBase();
 const EPISODE_SCROLL_STORAGE_KEY_PREFIX = "episode_scroll_position_v1_";
@@ -56,6 +57,7 @@ type EpisodeData = {
   author_id?: number | string | null;
   created_at?: string | null;
   view_count?: number | null;
+  estimated_read_minutes?: number | null;
   like_count?: number | null;
   is_liked?: boolean | null;
   is_public?: boolean | null;
@@ -830,6 +832,7 @@ export default function EpisodeDetail() {
   const nextEpisodeLabel = nextEpisodeTitle
     ? t({ ja: "次のエピソードへ：{{title}}", en: "Next episode: {{title}}" }, { title: nextEpisodeTitle })
     : t({ ja: "次のエピソードへ", en: "Next episode" });
+  const readMinutesLabel = formatReadMinutes(episode.estimated_read_minutes, t);
 
   return (
     <div>
@@ -897,6 +900,7 @@ export default function EpisodeDetail() {
         {typeof episode.view_count === "number" && (
           <span>{t({ ja: "閲覧数", en: "Views" })}: {episode.view_count}</span>
         )}
+        {readMinutesLabel ? <span>{readMinutesLabel}</span> : null}
         <span>{t({ ja: "文字数", en: "Chars" })}: {countChars(episode.body)}</span>
 	<Link
           to={`/ai-novel?episode_id=${episode.id}`}

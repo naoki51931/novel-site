@@ -330,9 +330,9 @@ npm run dev
   - `NOVEL_TRANSLATION_JA_EN_ONLY`
   - `NOVEL_TRANSLATION_ALL_LANGUAGES`
 - フラグは排他的に使う想定。複数 `1` の場合は `ORIGINAL_ONLY > JA_EN_ONLY > ALL_LANGUAGES` の順で優先する。
-- 現在の既定値は原語のみ。
-  - `NOVEL_TRANSLATION_ORIGINAL_ONLY=1`
-  - `NOVEL_TRANSLATION_JA_EN_ONLY=0`
+- 現在の既定値は日本語と英語のみ。
+  - `NOVEL_TRANSLATION_ORIGINAL_ONLY=0`
+  - `NOVEL_TRANSLATION_JA_EN_ONLY=1`
   - `NOVEL_TRANSLATION_ALL_LANGUAGES=0`
 - 翻訳は作者がプレミアム会員のときだけ実行する。
   - 通常の保存時同期翻訳

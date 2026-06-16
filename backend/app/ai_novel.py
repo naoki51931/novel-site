@@ -176,6 +176,11 @@ class AINovelResponse(BaseModel):
     retry_max: int | None = None
 
 
+class AINovelJobCreateResponse(BaseModel):
+    job_id: int
+    status: str
+
+
 # ===== プロンプト組み立て =====
 
 def build_ai_prompt(req: AINovelRequest) -> str:
@@ -835,6 +840,61 @@ async def call_openai_summary_candidates(text: str, model: str | None = None) ->
             continue
         seen.add(cleaned)
         normalized.append(cleaned)
+
+    if not normalized:
+        raise HTTPException(status_code=500, detail="AI から候補が取得できませんでした。")
+
+    return normalized, tokens, effective_model
+
+
+async def call_openai_catch_copy_candidates(
+    text: str,
+    model: str | None = None,
+    suggestions_count: int = 4,
+) -> tuple[list[str], int | None, str]:
+    source_text = (text or "").strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail="本文が空です。")
+
+    effective_model = (model or os.getenv("OPENAI_MODEL_TEXT") or OPENAI_MODEL_TEXT).strip()
+    count = max(2, min(8, int(suggestions_count or 4)))
+    prompt = dedent(
+        f"""
+        以下の作品情報から、クリック率を高めやすい日本語のキャッチコピー候補を{count}個作成してください。
+        条件:
+        - 18〜60文字程度
+        - SNS共有文や SEO description の冒頭にも使いやすい自然な短文
+        - 誇張しすぎず、内容の魅力や読後フックを簡潔に伝える
+        - 候補同士は切り口を少し変える
+        出力は必ず JSON のみ。形式: {{"candidates": ["候補1", "候補2"]}}
+
+        作品情報:
+        {source_text}
+        """
+    ).strip()
+
+    data, tokens, effective_model = await call_ai_json(
+        prompt,
+        model=effective_model,
+        provider=provider_from_model(effective_model),
+        system_instructions="あなたは日本語の編集者兼コピーライターです。必ず JSON のみを返してください。",
+        max_output_tokens=256,
+    )
+
+    candidates = data.get("candidates") if isinstance(data, dict) else None
+    if not isinstance(candidates, list):
+        raise HTTPException(status_code=500, detail="AI 応答の形式が不正です。")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, str):
+            continue
+        cleaned = re.sub(r"\s+", " ", item).strip().strip('"').strip("'")
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned[:80])
 
     if not normalized:
         raise HTTPException(status_code=500, detail="AI から候補が取得できませんでした。")

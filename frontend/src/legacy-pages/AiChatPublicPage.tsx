@@ -95,9 +95,9 @@ function slugifyCharacterName(name: string | null | undefined) {
     .replace(/^-|-$/g, "");
 }
 
-function buildPublicCharacterPath(id: number | string, name: string | null | undefined) {
+function buildPublicCharacterPath(id: number | string, name: string | null | undefined, basePath = "/ai_chat") {
   const slug = slugifyCharacterName(name) || "character";
-  return `/ai_chat/public/${encodeURIComponent(id)}/${encodeURIComponent(slug)}`;
+  return `${basePath}/public/${encodeURIComponent(id)}/${encodeURIComponent(slug)}`;
 }
 
 export default function AiChatPublicPage() {
@@ -226,7 +226,7 @@ export default function AiChatPublicPage() {
       }
       setDetail(normalizedDetail);
       const query = buildUrlSearch(q);
-      const targetPathBase = buildPublicCharacterPath(id, data?.name || name);
+      const targetPathBase = buildPublicCharacterPath(id, data?.name || name, aiChatBasePath);
       const targetPath = query ? `${targetPathBase}?${query}` : targetPathBase;
       if (syncUrl) {
         navigate(targetPath);
@@ -339,11 +339,12 @@ export default function AiChatPublicPage() {
   }, [characterId]);
 
   const visibleItems = showR18 ? items : items.filter((item) => !item?.is_r18);
+  const aiChatBasePath = location.pathname.startsWith("/en/") ? "/en/ai_chat" : "/ai_chat";
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <Link to="/ai_chat" className="btn btn-border">{t({ ja: "AIチャットへ", en: "Go to AI Chat" })}</Link>
+        <Link to={aiChatBasePath} className="btn btn-border">{t({ ja: "AIチャットへ", en: "Go to AI Chat" })}</Link>
         <Link to="/" className="btn btn-border">{t({ ja: "トップへ", en: "Home" })}</Link>
       </div>
 
@@ -470,13 +471,13 @@ export default function AiChatPublicPage() {
           <h3 style={{ marginTop: 0, fontSize: "1.5rem", lineHeight: 1.25 }}>{detail.name}</h3>
           <div style={{ marginBottom: 8 }}>
             <Link
-              to={`${buildPublicCharacterPath(detail.id, detail.name)}${buildUrlSearch(q) ? `?${buildUrlSearch(q)}` : ""}`}
+              to={`${buildPublicCharacterPath(detail.id, detail.name, aiChatBasePath)}${buildUrlSearch(q) ? `?${buildUrlSearch(q)}` : ""}`}
               className="btn btn-border"
             >
               {t({ ja: "この公開チャットへのリンク", en: "Link to this public chat" })}
             </Link>
             <Link
-              to="/ai_chat"
+              to={aiChatBasePath}
               className="btn btn-border"
               style={{ marginLeft: 8 }}
               state={{

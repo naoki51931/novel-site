@@ -5,14 +5,28 @@ from sqlalchemy.orm import Session
 
 from ..features.auth_routes import router as auth_feature_router
 from ..database import get_db
+from ..schemas_api import (
+    AdminLoginRequest,
+    LoginVerify,
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    RegisterEmailStartRequest,
+    UserCreate,
+    UserLogin,
+)
+from ..user_access_helpers import create_access_token as create_access_token_impl
+from ..runtime_config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
+import jwt
 
 
 def create_access_token(data: dict) -> str:
-    from .. import main as legacy
-
-    return legacy.create_access_token(data)
-
-
+    return create_access_token_impl(
+        data,
+        access_token_expire_minutes=ACCESS_TOKEN_EXPIRE_MINUTES,
+        secret_key=SECRET_KEY,
+        algorithm=ALGORITHM,
+        jwt_module=jwt,
+    )
 from .two_factor import router as two_factor_router
 
 
@@ -30,37 +44,33 @@ def _parse_payload(model_cls, payload: dict):
 
 @router.post("/api/auth/register/email/start")
 def start_register_email_verification(payload: dict, request: Request, db: Session = Depends(get_db)):
-    from .. import main as legacy
     from ..services.auth_service import start_register_email_verification_service
 
-    model_payload = _parse_payload(legacy.RegisterEmailStartRequest, payload)
+    model_payload = _parse_payload(RegisterEmailStartRequest, payload)
     return start_register_email_verification_service(payload=model_payload, request=request, db=db)
 
 
 @router.post("/api/auth/register")
 def register_user(payload: dict, db: Session = Depends(get_db)):
-    from .. import main as legacy
     from ..services.auth_service import register_user_service
 
-    model_payload = _parse_payload(legacy.UserCreate, payload)
+    model_payload = _parse_payload(UserCreate, payload)
     return register_user_service(payload=model_payload, db=db)
 
 
 @router.post("/api/auth/password-reset/request")
 def password_reset_request(payload: dict, db: Session = Depends(get_db)):
-    from .. import main as legacy
     from ..services.auth_service import password_reset_request_service
 
-    model_payload = _parse_payload(legacy.PasswordResetRequest, payload)
+    model_payload = _parse_payload(PasswordResetRequest, payload)
     return password_reset_request_service(payload=model_payload, db=db)
 
 
 @router.post("/api/auth/password-reset/confirm")
 def password_reset_confirm(payload: dict, db: Session = Depends(get_db)):
-    from .. import main as legacy
     from ..services.auth_service import password_reset_confirm_service
 
-    model_payload = _parse_payload(legacy.PasswordResetConfirm, payload)
+    model_payload = _parse_payload(PasswordResetConfirm, payload)
     return password_reset_confirm_service(payload=model_payload, db=db)
 
 
@@ -112,10 +122,9 @@ async def oauth_callback(
 
 @router.post("/api/admin/auth/login")
 def admin_login(payload: dict, request: Request, response: Response):
-    from .. import main as legacy
     from ..services.admin_service import admin_login_service
 
-    model_payload = _parse_payload(legacy.AdminLoginRequest, payload)
+    model_payload = _parse_payload(AdminLoginRequest, payload)
     return admin_login_service(payload=model_payload, request=request, response=response)
 
 
@@ -135,17 +144,15 @@ def admin_me(request: Request, response: Response):
 
 @router.post("/api/auth/login/start")
 def login_start(payload: dict, request: Request, db: Session = Depends(get_db)):
-    from .. import main as legacy
     from ..services.auth_service import login_start_service
 
-    model_payload = _parse_payload(legacy.UserLogin, payload)
+    model_payload = _parse_payload(UserLogin, payload)
     return login_start_service(payload=model_payload, request=request, db=db)
 
 
 @router.post("/api/auth/login/verify")
 def login_verify(payload: dict, db: Session = Depends(get_db)):
-    from .. import main as legacy
     from ..services.auth_service import login_verify_service
 
-    model_payload = _parse_payload(legacy.LoginVerify, payload)
+    model_payload = _parse_payload(LoginVerify, payload)
     return login_verify_service(payload=model_payload, db=db)

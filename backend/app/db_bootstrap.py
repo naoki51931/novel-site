@@ -54,6 +54,10 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN ai_title_model VARCHAR(120) NULL")
             if "ai_tag_model" not in existing:
                 alters.append("ADD COLUMN ai_tag_model VARCHAR(120) NULL")
+            if "ai_chat_model" not in existing:
+                alters.append("ADD COLUMN ai_chat_model VARCHAR(120) NULL")
+            if "ai_translation_model" not in existing:
+                alters.append("ADD COLUMN ai_translation_model VARCHAR(120) NULL")
             if "ai_story_agent_model" not in existing:
                 alters.append("ADD COLUMN ai_story_agent_model VARCHAR(120) NULL")
             if "ai_comment_revision_model" not in existing:
@@ -189,11 +193,26 @@ def ensure_episodes_table_columns():
                 alters.append("ADD COLUMN scheduled_publish_at DATETIME NULL")
             if "published_at" not in existing:
                 alters.append("ADD COLUMN published_at DATETIME NULL")
+            if "estimated_read_minutes" not in existing:
+                alters.append("ADD COLUMN estimated_read_minutes INT NOT NULL DEFAULT 0")
             if "body" in existing and existing["body"] != "longtext":
                 alters.append("MODIFY COLUMN body LONGTEXT NULL")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE episodes {clause}"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE episodes
+                    SET estimated_read_minutes =
+                        CASE
+                            WHEN body IS NULL OR CHAR_LENGTH(TRIM(body)) = 0 THEN 0
+                            ELSE GREATEST(1, CEIL(CHAR_LENGTH(REPLACE(REPLACE(REPLACE(body, '\r', ''), '\n', ''), ' ', '')) / 600))
+                        END
+                    WHERE estimated_read_minutes IS NULL OR estimated_read_minutes = 0
+                    """
+                )
+            )
             conn.execute(
                 text(
                     """
@@ -242,7 +261,7 @@ def ensure_episode_translations_table_columns():
             rows = conn.execute(
                 text(
                     """
-                    SELECT COLUMN_NAME
+                    SELECT COLUMN_NAME, DATA_TYPE
                     FROM INFORMATION_SCHEMA.COLUMNS
                     WHERE TABLE_SCHEMA = DATABASE()
                       AND TABLE_NAME = 'episode_translations'
@@ -250,8 +269,13 @@ def ensure_episode_translations_table_columns():
                 )
             ).fetchall()
             existing = {r[0] for r in rows}
+            data_types = {r[0]: str(r[1] or "").strip().lower() for r in rows}
 
             alters: list[str] = []
+            if "body" not in existing:
+                alters.append("ADD COLUMN body LONGTEXT NULL")
+            elif data_types.get("body") != "longtext":
+                alters.append("MODIFY COLUMN body LONGTEXT NULL")
             if "tag_names" not in existing:
                 alters.append("ADD COLUMN tag_names TEXT NULL")
 
@@ -297,9 +321,25 @@ def ensure_novels_table_columns():
                 alters.append("ADD COLUMN series_order INT NULL")
             if "cover_image_path" not in existing:
                 alters.append("ADD COLUMN cover_image_path VARCHAR(500) NULL")
+            if "estimated_read_minutes" not in existing:
+                alters.append("ADD COLUMN estimated_read_minutes INT NOT NULL DEFAULT 0")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE novels {clause}"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE novels n
+                    LEFT JOIN (
+                      SELECT novel_id, COALESCE(SUM(estimated_read_minutes), 0) AS total_minutes
+                      FROM episodes
+                      GROUP BY novel_id
+                    ) e ON e.novel_id = n.id
+                    SET n.estimated_read_minutes = COALESCE(e.total_minutes, 0)
+                    WHERE n.estimated_read_minutes IS NULL OR n.estimated_read_minutes = 0
+                    """
+                )
+            )
     except Exception as e:
         print("[db] ensure_novels_table_columns failed:", repr(e))
 
@@ -606,6 +646,34 @@ def ensure_tag_indexes():
         print("[db] ensure_tag_indexes failed:", repr(e))
 
 
+def ensure_seo_pages_table() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS seo_pages (
+                      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                      slug VARCHAR(190) NOT NULL,
+                      title VARCHAR(255) NOT NULL,
+                      description VARCHAR(500) NULL,
+                      h1 VARCHAR(255) NOT NULL,
+                      body TEXT NOT NULL,
+                      related_tags TEXT NULL,
+                      is_published TINYINT(1) NOT NULL DEFAULT 0,
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                      UNIQUE KEY uq_seo_pages_slug (slug),
+                      KEY idx_seo_pages_published (is_published),
+                      KEY idx_seo_pages_updated_at (updated_at)
+                    )
+                    """
+                )
+            )
+    except Exception as e:
+        print("[db] ensure_seo_pages_table failed:", repr(e))
+
+
 def run_db_bootstrap() -> None:
     ensure_all_tables_exist()
     ensure_users_table_columns()
@@ -621,3 +689,4 @@ def run_db_bootstrap() -> None:
     ensure_ai_chat_tables()
     ensure_ai_memory_items_table_columns()
     ensure_tag_indexes()
+    ensure_seo_pages_table()

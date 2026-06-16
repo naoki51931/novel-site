@@ -199,6 +199,7 @@ from .schemas_api import (
     AdminIndexNowSubmitOut,
     AdminIndexNowSubmitRequest,
     AdminLoginRequest,
+    AdminSEOPageUpsertRequest,
     AdminStripePremiumSyncByEmailRequest,
     AdminStripePremiumSyncByEmailResponse,
     AdminUserDeleteOut,
@@ -335,6 +336,7 @@ from .stripe_helpers import (
     _stripe_subscription_is_active as _stripe_subscription_is_active_impl,
     _stripe_subscription_is_monthly as _stripe_subscription_is_monthly_impl,
     cancel_stripe_subscription_for_admin_delete as cancel_stripe_subscription_for_admin_delete_impl,
+    premium_plan_usage_multiplier_for_user as premium_plan_usage_multiplier_for_user_impl,
     revalidate_premium_on_login as revalidate_premium_on_login_impl,
     verify_premium_with_stripe as verify_premium_with_stripe_impl,
 )
@@ -601,6 +603,7 @@ from .ai_novel import (
     assert_openrouter_model_allowed_for_pricing,
     build_ai_prompt,
     call_ai_json,
+    call_openai_catch_copy_candidates,
     call_openai_novel_api,
     call_openrouter_novel_api,
     call_deepseek_novel_api,
@@ -629,6 +632,7 @@ from .ai.weaviate_features import (
     upsert_feature_docs,
 )
 from .features import include_feature_routers
+from .features.public_feature_service import list_recommended_public_novels_service
 
 try:
     from PIL import Image, ImageOps  # type: ignore
@@ -806,6 +810,8 @@ globals().update(
         register_email_verify_expire_minutes=REGISTER_EMAIL_VERIFY_EXPIRE_MINUTES,
         oauth_state_expire_minutes=OAUTH_STATE_EXPIRE_MINUTES,
         stripe_secret_key=STRIPE_SECRET_KEY,
+        stripe_price_id_3000=STRIPE_PRICE_ID_3000,
+        stripe_price_id_5000=STRIPE_PRICE_ID_5000,
         platform_fee_rate=PLATFORM_FEE_RATE,
         force_all_premium=FORCE_ALL_PREMIUM,
         force_premium_usernames=FORCE_PREMIUM_USERNAMES,
@@ -856,6 +862,7 @@ globals().update(
         find_active_monthly_subscription_by_email_impl=_find_active_monthly_subscription_by_email_impl,
         verify_premium_with_stripe_impl=verify_premium_with_stripe_impl,
         cancel_stripe_subscription_for_admin_delete_impl=cancel_stripe_subscription_for_admin_delete_impl,
+        premium_plan_usage_multiplier_for_user_impl=premium_plan_usage_multiplier_for_user_impl,
         translation_author_is_premium_impl=_translation_author_is_premium_impl,
         can_translate_novel_impl=_can_translate_novel_impl,
         can_translate_episode_impl=_can_translate_episode_impl,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from .cache_helpers import get_redis_client, redis_delete, redis_json_get, redis_json_set
 from .external_service_helpers import GOOGLE_INDEXING_CARRYOVER_KEY, GOOGLE_INDEXING_CARRYOVER_TTL_SEC
+from .time_utils import utcnow
 
 
 _indexing_carryover_fallback_urls: list[str] = []
@@ -42,6 +43,8 @@ def _classify_indexing_page_type(path: str) -> str:
         return "novel"
     if normalized.startswith("/tags/"):
         return "tag"
+    if normalized.startswith("/seo/"):
+        return "seo"
     return "other"
 
 
@@ -100,7 +103,7 @@ def _get_indexing_carryover_urls() -> list[str]:
 def _set_indexing_carryover_urls(urls: list[str]) -> None:
     global _indexing_carryover_fallback_urls, _indexing_carryover_fallback_updated_at
     cleaned = _dedupe_urls_keep_order(urls)
-    updated_at = datetime.utcnow().isoformat()
+    updated_at = utcnow().isoformat()
     payload = {"urls": cleaned, "updated_at": updated_at}
     if get_redis_client():
         if cleaned:
@@ -128,6 +131,8 @@ def _indexing_importance_weight(page_type: str) -> float:
         return 0.75
     if page_type == "tag":
         return 0.60
+    if page_type == "seo":
+        return 0.65
     if page_type in ("ai_chat_lp", "ai_chat_howto"):
         return 0.60
     if page_type in ("home", "ai_chat", "ai_chat_public"):
@@ -146,7 +151,7 @@ def _calc_indexing_priority_score(
     views_score = min(30.0, math.log10(safe_views + 1) * 10.0)
     recency_score = 0.0
     if isinstance(lastmod, datetime):
-        ref_now = datetime.now(lastmod.tzinfo) if lastmod.tzinfo else datetime.utcnow()
+        ref_now = datetime.now(lastmod.tzinfo) if lastmod.tzinfo else utcnow()
         days = max(0, (ref_now - lastmod).days)
         if days <= 3:
             recency_score = 15.0
@@ -183,6 +188,7 @@ def _sitemap_split_url_items_for_site(db: Session, *, base: str, site_key: str) 
         "episodes": [],
         "authors": [],
         "tags": [],
+        "seo_pages": [],
     }
 
     novels = (
@@ -259,8 +265,8 @@ def _sitemap_split_url_items_for_site(db: Session, *, base: str, site_key: str) 
             }
         )
 
-    tag_names = set()
-    novel_tag_rows = (
+    public_tag_names = set()
+    public_tag_rows = (
         db.query(legacy.models.Tag.name)
         .join(legacy.models.NovelTag, legacy.models.NovelTag.tag_id == legacy.models.Tag.id)
         .join(legacy.models.Novel, legacy.models.Novel.id == legacy.models.NovelTag.novel_id)
@@ -271,16 +277,64 @@ def _sitemap_split_url_items_for_site(db: Session, *, base: str, site_key: str) 
         .distinct()
         .all()
     )
-    for (name,) in novel_tag_rows:
+    for (name,) in public_tag_rows:
         if name:
-            tag_names.add(name)
-    for name in sorted(tag_names):
+            public_tag_names.add(name)
+
+    r18_tag_names = set()
+    r18_tag_rows = (
+        db.query(legacy.models.Tag.name)
+        .join(legacy.models.NovelTag, legacy.models.NovelTag.tag_id == legacy.models.Tag.id)
+        .join(legacy.models.Novel, legacy.models.Novel.id == legacy.models.NovelTag.novel_id)
+        .filter(legacy.models.Novel.site_key == site_key)
+        .filter(legacy.models.Novel.is_public == True)
+        .filter(legacy.models.Novel.status == "public")
+        .filter(legacy.models.Novel.age_limit == "r18")
+        .distinct()
+        .all()
+    )
+    for (name,) in r18_tag_rows:
+        if name:
+            r18_tag_names.add(name)
+
+    for name in sorted(public_tag_names):
         split["tags"].append(
             {
                 "url": f"{base}/tags/{quote(name)}",
                 "lastmod": None,
                 "view_count": 0,
                 "page_type": "tag",
+            }
+        )
+    for name in sorted(r18_tag_names):
+        split["tags"].append(
+            {
+                "url": f"{base}/tags/{quote(name)}?age_limit=r18",
+                "lastmod": None,
+                "view_count": 0,
+                "page_type": "tag",
+            }
+        )
+
+    seo_pages = (
+        db.query(
+            legacy.models.SEOPage.slug,
+            legacy.models.SEOPage.updated_at,
+        )
+        .filter(legacy.models.SEOPage.is_published == True)
+        .order_by(legacy.models.SEOPage.id.asc())
+        .all()
+    )
+    for slug, updated_at in seo_pages:
+        clean_slug = str(slug or "").strip()
+        if not clean_slug:
+            continue
+        split["seo_pages"].append(
+            {
+                "url": f"{base}/seo/{quote(clean_slug)}",
+                "lastmod": updated_at,
+                "view_count": 0,
+                "page_type": "seo",
             }
         )
     return split
@@ -290,7 +344,7 @@ def build_public_page_url_items(db: Session) -> list[dict]:
     legacy = _legacy()
     base = legacy.FRONTEND_ORIGIN.rstrip("/")
     split = _sitemap_split_url_items_for_site(db, base=base, site_key=legacy.SITE_KEY_DEFAULT)
-    return [*split["static"], *split["novels"], *split["episodes"], *split["authors"], *split["tags"]]
+    return [*split["static"], *split["novels"], *split["episodes"], *split["authors"], *split["tags"], *split["seo_pages"]]
 
 
 def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
@@ -299,7 +353,7 @@ def build_public_page_urls(db: Session) -> list[tuple[str, Optional[datetime]]]:
 
 def build_public_page_url_items_for_site(db: Session, *, base: str, site_key: str) -> list[dict]:
     split = _sitemap_split_url_items_for_site(db, base=base, site_key=site_key)
-    return [*split["static"], *split["novels"], *split["episodes"], *split["authors"], *split["tags"]]
+    return [*split["static"], *split["novels"], *split["episodes"], *split["authors"], *split["tags"], *split["seo_pages"]]
 
 
 def build_public_page_urls_for_site(
@@ -607,4 +661,5 @@ def _sitemap_index_entries_for_site(db: Session, *, base: str, site_key: str) ->
         (f"{base}/sitemap-episodes.xml", _max_lastmod(split.get("episodes", []))),
         (f"{base}/sitemap-authors.xml", _max_lastmod(split.get("authors", []))),
         (f"{base}/sitemap-tags.xml", _max_lastmod(split.get("tags", []))),
+        (f"{base}/sitemap-seo-pages.xml", _max_lastmod(split.get("seo_pages", []))),
     ]

@@ -18,7 +18,7 @@ def get_ai_novel_draft_service(*, request, db):
     updated_at = getattr(user, "ai_novel_draft_updated_at", None)
     return {
         "draft": payload,
-        "updated_at": updated_at.isoformat() if updated_at else None,
+        "updated_at": legacy.to_jst_isoformat(updated_at),
     }
 
 
@@ -29,12 +29,12 @@ def save_ai_novel_draft_service(*, payload, request, db):
     draft_payload = _payload_value(payload, "draft") or {}
     raw = legacy.json.dumps(draft_payload, ensure_ascii=True)
     user.ai_novel_draft_json = raw
-    user.ai_novel_draft_updated_at = legacy.datetime.utcnow()
+    user.ai_novel_draft_updated_at = legacy.utcnow()
     db.add(user)
     db.commit()
     return {
         "draft": draft_payload,
-        "updated_at": user.ai_novel_draft_updated_at.isoformat(),
+        "updated_at": legacy.to_jst_isoformat(user.ai_novel_draft_updated_at),
     }
 
 
@@ -52,8 +52,8 @@ def list_ai_novel_drafts_service(*, request, db):
         {
             "id": d.id,
             "title": d.title,
-            "updated_at": d.updated_at.isoformat() if d.updated_at else None,
-            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "updated_at": legacy.to_jst_isoformat(d.updated_at),
+            "created_at": legacy.to_jst_isoformat(d.created_at),
         }
         for d in drafts
     ]
@@ -80,8 +80,8 @@ def create_ai_novel_draft_service(*, payload, request, db):
         "id": draft.id,
         "title": draft.title,
         "draft": draft_payload,
-        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
-        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": legacy.to_jst_isoformat(draft.updated_at),
+        "created_at": legacy.to_jst_isoformat(draft.created_at),
     }
 
 
@@ -105,8 +105,8 @@ def get_ai_novel_draft_slot_service(*, draft_id, request, db):
         "id": draft.id,
         "title": draft.title,
         "draft": payload,
-        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
-        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": legacy.to_jst_isoformat(draft.updated_at),
+        "created_at": legacy.to_jst_isoformat(draft.created_at),
     }
 
 
@@ -135,8 +135,8 @@ def update_ai_novel_draft_service(*, draft_id, payload, request, db):
         "id": draft.id,
         "title": draft.title,
         "draft": draft_payload,
-        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
-        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": legacy.to_jst_isoformat(draft.updated_at),
+        "created_at": legacy.to_jst_isoformat(draft.created_at),
     }
 
 

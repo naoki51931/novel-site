@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import TagChipLink from "./TagChipLink";
 import { hasRecentEpisodeActivity } from "../lib/freshness";
+import { formatReadMinutes } from "../lib/readTime";
 
 type TranslateFn = (messages: Record<string, string>, vars?: Record<string, string | number>) => string;
 
@@ -21,6 +22,7 @@ type NovelCardNovel = {
   favorite_count?: number | null;
   view_count?: number | null;
   total_char_count?: number | null;
+  estimated_read_minutes?: number | null;
   created_at?: string | null;
   is_liked?: boolean | null;
   is_favorited?: boolean | null;
@@ -80,6 +82,7 @@ export default function NovelCard({
     description.length > descriptionMax ? `${description.slice(0, descriptionMax)}...` : description;
   const coverUrl = resolveCoverUrl(apiBase, novel?.cover_image_url);
   const showFreshBadge = hasRecentEpisodeActivity(novel, 7);
+  const readMinutesLabel = formatReadMinutes(novel?.estimated_read_minutes, t);
 
   return (
     <article className="novel-card-ui">
@@ -116,6 +119,7 @@ export default function NovelCard({
         ) : null}
 
         <div className="novel-card-stats">
+          {readMinutesLabel ? <span>{readMinutesLabel}</span> : null}
           <span>{t({ ja: "LIKE", en: "Likes" })}: {novel.like_count ?? 0}</span>
           <span>{t({ ja: "コメント", en: "Comments" })}: {novel.comment_count ?? 0}</span>
           <span>{t({ ja: "お気に入り", en: "Favorites" })}: {novel.favorite_count ?? 0}</span>

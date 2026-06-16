@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from .. import public_chat_helpers
+from ..time_utils import UTC_MIN
 
 
 def list_public_ai_chat_characters_service(request, q, limit, offset, db):
@@ -163,7 +164,7 @@ def list_public_ai_chat_characters_service(request, q, limit, offset, db):
                 recommendation_samples=blended_samples,
                 is_recommended=bool(blended_samples >= 2 and blended_score >= 0.42),
                 author_username=str(username or "") if username else None,
-                published_at=item.published_at.isoformat() if getattr(item, "published_at", None) else None,
+                published_at=legacy.to_jst_isoformat(getattr(item, "published_at", None)),
                 like_count=like_counts.get(item_id, 0),
                 favorite_count=favorite_counts.get(item_id, 0),
                 is_liked=item_id in liked_ids,
@@ -302,7 +303,7 @@ def list_recommended_public_novels_service(request, background_tasks, limit, lan
         scored,
         key=lambda item: (
             -((item[0] * 1.0) + (semantic_score_map.get(int(item[1].id), 0.0) * 8.0)),
-            -(getattr(item[1], "created_at", datetime.min) or datetime.min).timestamp(),
+            -(getattr(item[1], "created_at", UTC_MIN) or UTC_MIN).timestamp(),
             -item[1].id,
         ),
     )[:limit]

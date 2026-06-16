@@ -26,10 +26,10 @@ def _parse_payload(model_cls, payload: dict):
 def i18n_translate(
     payload: dict
 ):
-    from .. import main as legacy
+    from ..i18n_runtime import I18nTranslateRequest
     from ..services.i18n_service import i18n_translate_service
 
-    payload_model = _parse_payload(legacy.I18nTranslateRequest, payload)
+    payload_model = _parse_payload(I18nTranslateRequest, payload)
     return i18n_translate_service(payload=payload_model)
 
 @router.get("/api/i18n/dictionary/{target_lang}")

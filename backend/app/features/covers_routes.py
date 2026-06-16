@@ -22,6 +22,7 @@ from ..repositories.cover_repository import (
     mark_cover_generation_succeeded,
 )
 from ..services.cover_generator import CoverImageConfig, build_cover_prompt, build_public_image_url, generate_cover_image
+from ..time_utils import utcnow
 
 router = APIRouter()
 
@@ -148,7 +149,7 @@ def generate_cover(
             image_path=saved.image_path,
             prompt_used=str(saved.prompt or ""),
             model=str(saved.model or cfg.model),
-            created_at=saved.created_at or datetime.utcnow(),
+            created_at=saved.created_at or utcnow(),
         )
     except HTTPException:
         raise
@@ -186,7 +187,7 @@ def get_cover_history(
             prompt=str(row.prompt or ""),
             model=str(row.model or ""),
             error_message=row.error_message,
-            created_at=row.created_at or datetime.utcnow(),
+            created_at=row.created_at or utcnow(),
         )
         for row in rows
     ]

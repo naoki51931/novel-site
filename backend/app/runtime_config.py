@@ -59,11 +59,18 @@ if STRIPE_USE_TEST:
     STRIPE_SECRET_KEY = os.getenv("STRIPE_TEST_SECRET_KEY", "") or os.getenv("STRIPE_SECRET_KEY", "")
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_TEST_WEBHOOK_SECRET", "") or os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_PRICE_ID = os.getenv("STRIPE_TEST_PRICE_ID", "") or os.getenv("STRIPE_PRICE_ID", "")
+    STRIPE_PRICE_ID_1000 = os.getenv("STRIPE_TEST_PRICE_ID_1000", "") or os.getenv("STRIPE_PRICE_ID_1000", "") or STRIPE_PRICE_ID
+    STRIPE_PRICE_ID_3000 = os.getenv("STRIPE_TEST_PRICE_ID_3000", "") or os.getenv("STRIPE_PRICE_ID_3000", "")
+    STRIPE_PRICE_ID_5000 = os.getenv("STRIPE_TEST_PRICE_ID_5000", "") or os.getenv("STRIPE_PRICE_ID_5000", "")
 else:
     STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+    STRIPE_PRICE_ID_1000 = os.getenv("STRIPE_PRICE_ID_1000", "") or STRIPE_PRICE_ID
+    STRIPE_PRICE_ID_3000 = os.getenv("STRIPE_PRICE_ID_3000", "")
+    STRIPE_PRICE_ID_5000 = os.getenv("STRIPE_PRICE_ID_5000", "")
 PLATFORM_FEE_RATE = float(os.getenv("PLATFORM_FEE_RATE", "0.2"))
+MOON_ARCANA_ORIGIN = (os.getenv("MOON_ARCANA_ORIGIN", "https://moon-arcana.com") or "").strip().rstrip("/")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")

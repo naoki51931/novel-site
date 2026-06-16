@@ -26,11 +26,12 @@ def _parse_payload(model_cls, payload: dict):
 def list_tags(
     request: Request,
     db: Session = Depends(get_db),
-    limit: int = Query(100, ge=1, le=300)
+    limit: int = Query(100, ge=1, le=300),
+    age_limit: str | None = Query(None)
 ):
     from ..services.tags_service import list_tags_service
 
-    return list_tags_service(request=request, db=db, limit=limit)
+    return list_tags_service(request=request, db=db, limit=limit, age_limit=age_limit)
 
 @router.get("/api/tags/{tag_name}")
 def read_tag_detail(
@@ -48,23 +49,33 @@ def list_tag_novels(
     request: Request,
     db: Session = Depends(get_db),
     sort: str = Query("popular"),
+    age_limit: str | None = Query(None),
     limit: int = Query(60, ge=1, le=120),
     offset: int = Query(0, ge=0)
 ):
     from ..services.tags_service import list_tag_novels_service
 
-    return list_tag_novels_service(tag_name=tag_name, request=request, db=db, sort=sort, limit=limit, offset=offset)
+    return list_tag_novels_service(
+        tag_name=tag_name,
+        request=request,
+        db=db,
+        sort=sort,
+        age_limit=age_limit,
+        limit=limit,
+        offset=offset,
+    )
 
 @router.get("/api/tags/{tag_name}/related")
 def list_related_tags(
     tag_name: str,
     request: Request,
     db: Session = Depends(get_db),
-    limit: int = Query(12, ge=1, le=50)
+    limit: int = Query(12, ge=1, le=50),
+    age_limit: str | None = Query(None)
 ):
     from ..services.tags_service import list_related_tags_service
 
-    return list_related_tags_service(tag_name=tag_name, request=request, db=db, limit=limit)
+    return list_related_tags_service(tag_name=tag_name, request=request, db=db, limit=limit, age_limit=age_limit)
 
 @router.post("/api/tags/{tag_name}/follow")
 def follow_tag(

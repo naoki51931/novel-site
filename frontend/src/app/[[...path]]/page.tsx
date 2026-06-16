@@ -4,6 +4,10 @@ import ClientApp from "../../NextClientApp";
 
 export const dynamic = "force-dynamic";
 
+type SeoLang = "ja" | "en" | "zh-cn" | "zh-tw" | "ko";
+type LocalizedText = string | Partial<Record<SeoLang, string>>;
+type LocalizedKeywords = string[] | Partial<Record<SeoLang, string[]>>;
+
 const SITE_NAME = "小説投稿サイトLexis（レクシー/レクシス）";
 const DEFAULT_DESCRIPTION =
   "小説投稿サイトLexis（レクシー/レクシス）。誰でも小説を読めて、作品を投稿できます。恋愛・ファンタジー・SF・ホラーなど幅広いジャンルの作品を公開中。";
@@ -15,10 +19,11 @@ const BACKEND_ORIGIN = (
 const STATIC_PAGE_SEO: Record<
   string,
   {
-    title: string;
-    description: string;
+    title: LocalizedText;
+    description: LocalizedText;
+    absoluteTitle?: LocalizedText;
     ogType?: "website" | "book" | "article" | "profile";
-    keywords?: string[];
+    keywords?: LocalizedKeywords;
   }
 > = {
   "/ranking": {
@@ -54,23 +59,143 @@ const STATIC_PAGE_SEO: Record<
     description: "小説投稿サイトLexisへのお問い合わせページです。",
   },
   "/ai-novel": {
-    title: "AI小説生成・R18小説生成",
+    title: {
+      ja: "AI小説生成・小説生成AI・R18小説生成",
+      en: "AI novel generator, story writing AI, and R18 draft support",
+      "zh-cn": "支持 R18 的 AI 小说生成",
+      "zh-tw": "支援 R18 的 AI 小說生成",
+      ko: "R18 지원 AI 소설 생성",
+    },
+    absoluteTitle: {
+      ja: "AI小説生成・小説生成AI・R18小説生成｜小説投稿サイトLexis（レクシー/レクシス）",
+      en: "AI novel generator, story writing AI, and R18 draft support - Lexis",
+      "zh-cn": "支持 R18 的 AI 小说生成 - Lexis",
+      "zh-tw": "支援 R18 的 AI 小說生成 - Lexis",
+      ko: "R18 지원 AI 소설 생성 - Lexis",
+    },
+    description: {
+      ja: "LexisのAI小説生成ページです。プロット、登場人物、ジャンル、文体を指定して小説生成AIで物語を作成できます。R18小説生成、官能小説の下書き、続き生成、執筆支援にも対応しています。",
+      en: "Use Lexis as an AI novel generator and story writing AI. Create plots, characters, genres, prose, episode continuations, and R18 or adult novel drafts with editing support.",
+      "zh-cn": "这是 Lexis 的 AI 小说生成页面，支持普通故事创作、R18 小说草稿生成、续写与写作辅助。",
+      "zh-tw": "這是 Lexis 的 AI 小說生成頁面，支援一般故事創作、R18 小說草稿生成、續寫與寫作輔助。",
+      ko: "Lexis의 AI 소설 생성 페이지입니다. 일반 소설 작성, R18 초안 생성, 이어쓰기, 집필 보조를 지원합니다.",
+    },
+    keywords: {
+      ja: [
+        "AI小説",
+        "AI小説生成",
+        "小説生成AI",
+        "AI小説メーカー",
+        "AI小説作成",
+        "AI物語生成",
+        "R18小説生成",
+        "官能小説生成",
+        "AI 官能小説",
+        "成人向け小説AI",
+        "物語 生成",
+        "プロット生成",
+        "続き生成",
+        "執筆支援",
+      ],
+      en: [
+        "AI novel",
+        "AI novel generator",
+        "AI novel generation",
+        "AI story generator",
+        "story writing AI",
+        "novel writing AI",
+        "AI fiction writer",
+        "R18 novel generation",
+        "adult novel AI",
+        "adult story generator",
+        "story generator",
+        "plot generator",
+        "episode continuation generator",
+        "writing assistant",
+      ],
+      "zh-cn": [
+        "AI小说",
+        "AI小说生成",
+        "R18小说生成",
+        "成人向小说AI",
+        "故事生成",
+        "写作辅助",
+      ],
+      "zh-tw": [
+        "AI小說",
+        "AI小說生成",
+        "R18小說生成",
+        "成人向小說AI",
+        "故事生成",
+        "寫作輔助",
+      ],
+      ko: [
+        "AI 소설",
+        "AI 소설 생성",
+        "R18 소설 생성",
+        "성인향 소설 AI",
+        "스토리 생성",
+        "집필 보조",
+      ],
+    },
+  },
+  "/en/ai-novel": {
+    title: "AI novel generator, story writing AI, and R18 draft support",
+    absoluteTitle: "AI novel generator, story writing AI, and R18 draft support - Lexis",
     description:
-      "AI小説生成ができるLexisのページです。R18小説生成、官能小説生成、物語の続き生成、執筆支援に対応しています。",
+      "Use Lexis as an AI novel generator and story writing AI. Create plots, characters, genres, prose, episode continuations, and R18 or adult novel drafts with editing support.",
     keywords: [
-      "AI小説",
-      "AI小説生成",
-      "小説生成AI",
-      "R18小説生成",
-      "官能小説生成",
-      "AI 官能小説",
-      "物語 生成",
-      "執筆支援",
+      "AI novel",
+      "AI novel generator",
+      "AI novel generation",
+      "AI story generator",
+      "story writing AI",
+      "novel writing AI",
+      "AI fiction writer",
+      "R18 novel generation",
+      "adult novel AI",
+      "adult story generator",
+      "story generator",
+      "plot generator",
+      "episode continuation generator",
+      "writing assistant",
     ],
   },
   "/ai_chat": {
-    title: "AIチャット",
-    description: "キャラクターと会話できるAIチャットページです。",
+    title: "AIチャット・キャラクターAIチャット・R18チャット",
+    absoluteTitle: "AIチャット・キャラクターAIチャット・R18チャット｜小説投稿サイトLexis（レクシー/レクシス）",
+    description:
+      "LexisのAIチャットページです。キャラクター設定、性格、関係性を作成して会話できます。R18チャット、恋人AIチャット、会話ログからAI小説化する機能にも対応しています。",
+    keywords: [
+      "AIチャット",
+      "キャラクターAIチャット",
+      "R18チャット",
+      "18禁チャット",
+      "恋人AIチャット",
+      "AI彼女",
+      "AI彼氏",
+      "会話AI",
+      "AI小説化",
+      "会話から小説生成",
+    ],
+  },
+  "/en/ai_chat": {
+    title: "AI chat, character AI chat, and R18 chat",
+    absoluteTitle: "AI chat, character AI chat, and R18 chat - Lexis",
+    description:
+      "Use Lexis for AI chat with custom characters, personality settings, relationships, R18 chat options, girlfriend or boyfriend roleplay, and chat-to-novel writing support.",
+    keywords: [
+      "AI chat",
+      "character AI chat",
+      "R18 chat",
+      "adult AI chat",
+      "AI girlfriend chat",
+      "AI boyfriend chat",
+      "roleplay AI chat",
+      "chatbot character",
+      "chat to novel",
+      "AI story from chat",
+    ],
   },
   "/ai_chat/lp": {
     title: "AIチャット・R18チャット",
@@ -109,15 +234,27 @@ const NOINDEX_PATHS = new Set([
 
 type HeaderList = Awaited<ReturnType<typeof headers>>;
 type RouteParams = { path?: string[] };
-type RouteProps = { params: Promise<RouteParams> };
-type SeoData = { title: string; description: string; canonical?: string; ogType?: "website" | "book" | "article" | "profile" };
-type BuildMetadataParams = {
+type RouteSearchParams = Record<string, string | string[] | undefined>;
+type RouteProps = { params: Promise<RouteParams>; searchParams?: Promise<RouteSearchParams> };
+type SeoData = {
   title: string;
   description: string;
   canonical?: string;
   ogType?: "website" | "book" | "article" | "profile";
+  keywords?: string[];
+  imageUrl?: string;
+  languageAlternates?: Record<string, string>;
+};
+type BuildMetadataParams = {
+  title: string;
+  description: string;
+  absoluteTitle?: string;
+  canonical?: string;
+  ogType?: "website" | "book" | "article" | "profile";
   noIndex?: boolean;
   keywords?: string[];
+  imageUrl?: string;
+  languageAlternates?: Record<string, string>;
 };
 
 function decodeHtml(value: unknown) {
@@ -148,6 +285,26 @@ function getOrigin(headerList: HeaderList) {
   return `${proto}://${getHeaderHost(headerList)}`;
 }
 
+function resolveSeoLang(headerList: HeaderList): SeoLang {
+  const raw = String(headerList.get("accept-language") || "").toLowerCase();
+  if (raw.includes("zh-cn") || raw.includes("zh-hans")) return "zh-cn";
+  if (raw.includes("zh-tw") || raw.includes("zh-hant") || raw.includes("zh-hk")) return "zh-tw";
+  if (raw.includes("ko")) return "ko";
+  if (raw.includes("en")) return "en";
+  return "ja";
+}
+
+function resolveLocalizedText(value: LocalizedText, lang: SeoLang): string {
+  if (typeof value === "string") return value;
+  return value[lang] || value.en || value.ja || "";
+}
+
+function resolveLocalizedKeywords(value: LocalizedKeywords | undefined, lang: SeoLang): string[] | undefined {
+  if (!value) return undefined;
+  if (Array.isArray(value)) return value;
+  return value[lang] || value.en || value.ja;
+}
+
 function pathFromParams(params?: RouteParams) {
   return Array.isArray(params?.path) ? params.path.map(String) : [];
 }
@@ -171,6 +328,10 @@ function isTagIndexPath(pathParts: string[]) {
 
 function isTagDetailPath(pathParts: string[]) {
   return pathParts.length === 2 && pathParts[0] === "tags" && !!pathParts[1];
+}
+
+function isSeoPagePath(pathParts: string[]) {
+  return pathParts.length === 2 && pathParts[0] === "seo" && !!pathParts[1];
 }
 
 function parseMetaContent(html: string, selectorName: string) {
@@ -204,6 +365,12 @@ async function fetchFromBackend(
   return res;
 }
 
+async function fetchBackendJson<T = any>(path: string, headerList: HeaderList): Promise<T | null> {
+  const res = await fetchFromBackend(path, headerList);
+  if (!res) return null;
+  return res.json().catch(() => null);
+}
+
 async function getNovelSeo(id: string, headerList: HeaderList): Promise<SeoData | null> {
   const res = await fetchFromBackend(`/prerender/novels/${id}`, headerList);
   if (!res) return null;
@@ -218,6 +385,7 @@ async function getNovelSeo(id: string, headerList: HeaderList): Promise<SeoData 
     description: compactText(description || DEFAULT_DESCRIPTION),
     canonical: decodeHtml(canonical),
     ogType: "book" as const,
+    imageUrl: parseMetaContent(html, "og:image") || `${getOrigin(headerList)}/ogp/novel/${id}.png`,
   };
 }
 
@@ -238,11 +406,22 @@ async function getEpisodeSeo(id: string, headerList: Headers) {
   };
 }
 
-async function getTagSeo(tagName: string, headerList: HeaderList): Promise<SeoData | null> {
+function getFirstSearchParam(searchParams: RouteSearchParams | undefined, key: string) {
+  const value = searchParams?.[key];
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+function stripSiteTitleSuffix(value: unknown) {
+  return String(value || "").replace(/｜小説投稿サイトLexis.*$/, "").trim();
+}
+
+async function getTagSeo(tagName: string, headerList: HeaderList, options: { r18View?: boolean } = {}): Promise<SeoData | null> {
   const encoded = encodeURIComponent(tagName);
+  const r18View = options.r18View === true;
+  const novelsQuery = r18View ? "sort=popular&limit=6&age_limit=r18" : "sort=popular&limit=6";
   const [detailRes, novelsRes] = await Promise.all([
     fetchFromBackend(`/api/tags/${encoded}`, headerList),
-    fetchFromBackend(`/api/tags/${encoded}/novels?sort=popular&limit=6`, headerList),
+    fetchFromBackend(`/api/tags/${encoded}/novels?${novelsQuery}`, headerList),
   ]);
   if (!detailRes) return null;
   const detail = await detailRes.json().catch(() => ({}));
@@ -255,53 +434,92 @@ async function getTagSeo(tagName: string, headerList: HeaderList): Promise<SeoDa
         .slice(0, 3)
     : [];
   const suffix = examples.length ? `代表作: ${examples.join("、")}。` : "";
+  if (r18View) {
+    const apiKeywords: string[] = Array.isArray(detail?.seo_r18_keywords)
+      ? detail.seo_r18_keywords.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+      : [];
+    return {
+      title: stripSiteTitleSuffix(detail?.seo_r18_title || `${tagName}のエロ小説・R18小説一覧`),
+      description: compactText(
+        String(detail?.seo_r18_description || `「${tagName}」タグのR18小説・エロ小説一覧です。${tagName}の成人向け作品を人気順・新着順で探せます。${suffix}`),
+        160
+      ),
+      keywords: apiKeywords.length
+        ? apiKeywords
+        : [tagName, `${tagName} エロ小説`, `エロ小説 ${tagName}`, `${tagName} R18小説`, `R18小説 ${tagName}`, "エロ小説", "R18小説", "成人向け小説"],
+    };
+  }
+  const apiKeywords: string[] = Array.isArray(detail?.seo_keywords)
+    ? detail.seo_keywords.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    : [];
   return {
-    title: `${tagName}小説一覧`,
+    title: stripSiteTitleSuffix(detail?.seo_title || `${tagName}小説一覧`),
     description: compactText(
-      `「${tagName}」タグの小説一覧です。${count ? `${count}件の作品を掲載中。` : ""}人気順・新着順で作品を探せます。${suffix}`,
+      String(detail?.seo_description || `「${tagName}」タグの小説一覧です。${count ? `${count}件の作品を掲載中。` : ""}人気順・新着順で作品を探せます。${suffix}`),
       160
     ),
+    keywords: apiKeywords.length
+      ? apiKeywords
+      : [tagName, `${tagName} 小説`, `${tagName} タグ`, "小説", "Web小説"],
+  };
+}
+
+async function getSeoPageSeo(slug: string, headerList: HeaderList): Promise<SeoData | null> {
+  const data = await fetchBackendJson<any>(`/api/seo-pages/${encodeURIComponent(slug)}`, headerList);
+  if (!data) return null;
+  return {
+    title: String(data?.title || data?.h1 || "SEOページ"),
+    description: compactText(data?.description || data?.body || DEFAULT_DESCRIPTION, 160),
+    canonical: `${getOrigin(headerList)}${String(data?.canonical_path || `/seo/${slug}`)}`,
+    ogType: "website",
   };
 }
 
 function buildMetadata({
   title,
   description,
+  absoluteTitle,
   canonical,
   ogType = "website",
   noIndex = false,
   keywords,
+  imageUrl,
+  languageAlternates,
 }: BuildMetadataParams): Metadata {
+  const resolvedTitle = absoluteTitle || title;
+  const resolvedImageUrl = imageUrl || "/ogp.png";
   return {
-    title,
+    title: absoluteTitle ? { absolute: absoluteTitle } : title,
     description,
     keywords,
-    alternates: canonical ? { canonical } : undefined,
+    alternates: canonical || languageAlternates ? { canonical, languages: languageAlternates } : undefined,
     robots: {
       index: !noIndex,
       follow: !noIndex,
     },
     openGraph: {
-      title,
+      title: resolvedTitle,
       description,
       type: ogType,
       url: canonical,
       siteName: SITE_NAME,
-      images: [{ url: "/ogp.png", width: 1200, height: 630 }],
+      images: [{ url: resolvedImageUrl, width: 1200, height: 630 }],
     },
     twitter: {
       card: "summary_large_image",
-      title,
+      title: resolvedTitle,
       description,
-      images: ["/ogp.png"],
+      images: [resolvedImageUrl],
     },
   };
 }
 
-export async function generateMetadata({ params }: RouteProps): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: RouteProps): Promise<Metadata> {
   const resolvedParams = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const pathParts = pathFromParams(resolvedParams);
   const headerList = await headers();
+  const seoLang = resolveSeoLang(headerList);
   const origin = getOrigin(headerList);
   const canonical = `${origin}${routePath(pathParts)}`;
 
@@ -328,6 +546,7 @@ export async function generateMetadata({ params }: RouteProps): Promise<Metadata
       description: seo.description,
       canonical: seo.canonical || canonical,
       ogType: seo.ogType,
+      imageUrl: seo.imageUrl,
     });
   }
 
@@ -354,12 +573,14 @@ export async function generateMetadata({ params }: RouteProps): Promise<Metadata
       title: "タグ一覧",
       description: "人気タグから小説を探せます。タグ経由で新しい作品と作者に出会えます。",
       canonical,
+      keywords: ["タグ一覧", "小説タグ", "r18", "エロ"],
     });
   }
 
   if (isTagDetailPath(pathParts)) {
     const tagName = decodeURIComponent(pathParts[1]);
-    const seo = await getTagSeo(tagName, headerList);
+    const isR18TagView = getFirstSearchParam(resolvedSearchParams, "age_limit").toLowerCase() === "r18";
+    const seo = await getTagSeo(tagName, headerList, { r18View: isR18TagView });
     if (!seo) {
       return buildMetadata({
         title: "タグが見つかりません",
@@ -371,7 +592,27 @@ export async function generateMetadata({ params }: RouteProps): Promise<Metadata
     return buildMetadata({
       title: seo.title,
       description: seo.description,
-      canonical,
+      canonical: isR18TagView ? `${canonical}?age_limit=r18` : canonical,
+      keywords: seo.keywords,
+    });
+  }
+
+  if (isSeoPagePath(pathParts)) {
+    const slug = decodeURIComponent(pathParts[1]);
+    const seo = await getSeoPageSeo(slug, headerList);
+    if (!seo) {
+      return buildMetadata({
+        title: "ページが見つかりません",
+        description: "指定されたページは見つかりませんでした。",
+        canonical,
+        noIndex: true,
+      });
+    }
+    return buildMetadata({
+      title: seo.title,
+      description: seo.description,
+      canonical: seo.canonical || canonical,
+      ogType: "website",
     });
   }
 
@@ -397,11 +638,20 @@ export async function generateMetadata({ params }: RouteProps): Promise<Metadata
   const staticSeo = STATIC_PAGE_SEO[routePath(pathParts)];
   if (staticSeo) {
     return buildMetadata({
-      title: staticSeo.title,
-      description: staticSeo.description,
+      title: resolveLocalizedText(staticSeo.title, routePath(pathParts) === "/en/ai-novel" || routePath(pathParts) === "/en/ai_chat" ? "en" : routePath(pathParts) === "/ai-novel" || routePath(pathParts) === "/ai_chat" ? "ja" : seoLang),
+      description: resolveLocalizedText(staticSeo.description, routePath(pathParts) === "/en/ai-novel" || routePath(pathParts) === "/en/ai_chat" ? "en" : routePath(pathParts) === "/ai-novel" || routePath(pathParts) === "/ai_chat" ? "ja" : seoLang),
+      absoluteTitle: staticSeo.absoluteTitle
+        ? resolveLocalizedText(staticSeo.absoluteTitle, routePath(pathParts) === "/en/ai-novel" || routePath(pathParts) === "/en/ai_chat" ? "en" : routePath(pathParts) === "/ai-novel" || routePath(pathParts) === "/ai_chat" ? "ja" : seoLang)
+        : undefined,
       canonical,
       ogType: staticSeo.ogType || "website",
-      keywords: staticSeo.keywords,
+      keywords: resolveLocalizedKeywords(staticSeo.keywords, routePath(pathParts) === "/en/ai-novel" || routePath(pathParts) === "/en/ai_chat" ? "en" : routePath(pathParts) === "/ai-novel" || routePath(pathParts) === "/ai_chat" ? "ja" : seoLang),
+      languageAlternates:
+        routePath(pathParts) === "/ai-novel" || routePath(pathParts) === "/en/ai-novel"
+          ? { ja: `${origin}/ai-novel`, en: `${origin}/en/ai-novel`, "x-default": `${origin}/ai-novel` }
+          : routePath(pathParts) === "/ai_chat" || routePath(pathParts) === "/en/ai_chat"
+          ? { ja: `${origin}/ai_chat`, en: `${origin}/en/ai_chat`, "x-default": `${origin}/ai_chat` }
+          : undefined,
     });
   }
 
@@ -434,7 +684,7 @@ function JsonLd({ data }: { data: Record<string, unknown> | null }) {
   );
 }
 
-async function buildJsonLd(pathParts: string[]): Promise<Record<string, unknown> | null> {
+async function buildJsonLd(pathParts: string[], searchParams?: RouteSearchParams): Promise<Record<string, unknown> | null> {
   const headerList = await headers();
   const origin = getOrigin(headerList);
   if (pathParts.length === 0) {
@@ -463,31 +713,212 @@ async function buildJsonLd(pathParts: string[]): Promise<Record<string, unknown>
 
   if (isTagDetailPath(pathParts)) {
     const tagName = decodeURIComponent(pathParts[1]);
+    const isR18TagView = getFirstSearchParam(searchParams, "age_limit").toLowerCase() === "r18";
     return {
       "@context": "https://schema.org",
       "@type": "CollectionPage",
-      name: `${tagName}小説一覧`,
-      url: `${origin}/tags/${encodeURIComponent(tagName)}`,
-      about: tagName,
+      name: isR18TagView ? `${tagName}のエロ小説・R18小説一覧` : `${tagName}小説一覧`,
+      url: `${origin}/tags/${encodeURIComponent(tagName)}${isR18TagView ? "?age_limit=r18" : ""}`,
+      about: isR18TagView ? [tagName, `${tagName} エロ小説`, `エロ小説 ${tagName}`, `${tagName} R18小説`] : tagName,
+      keywords: isR18TagView ? `${tagName}, ${tagName} エロ小説, エロ小説 ${tagName}, ${tagName} R18小説, R18小説 ${tagName}` : `${tagName}, ${tagName} 小説`,
     };
   }
 
-  if (pathParts.length === 1 && pathParts[0] === "ai-novel") {
+  if (isSeoPagePath(pathParts)) {
+    const slug = decodeURIComponent(pathParts[1]);
+    const page = await fetchBackendJson<any>(`/api/seo-pages/${encodeURIComponent(slug)}`, headerList);
+    if (!page) return null;
+    const canonical = `${origin}${String(page?.canonical_path || `/seo/${slug}`)}`;
+    return {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebPage",
+          name: String(page?.title || page?.h1 || "SEOページ"),
+          description: compactText(page?.description || page?.body || "", 200),
+          url: canonical,
+          keywords: Array.isArray(page?.related_tags) ? page.related_tags.join(", ") : "",
+        },
+        {
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: "Home", item: `${origin}/` },
+            { "@type": "ListItem", position: 2, name: String(page?.h1 || page?.title || "SEOページ"), item: canonical },
+          ],
+        },
+      ],
+    };
+  }
+
+  if (isNovelDetailPath(pathParts)) {
+    const novelId = pathParts[1];
+    const novel = await fetchBackendJson<any>(`/api/novels/${novelId}`, headerList);
+    if (!novel) return null;
+    const canonical = `${origin}/novels/${novelId}`;
+    const authorName = String(novel?.author_username || "").trim();
+    const tags = Array.isArray(novel?.tags)
+      ? novel.tags.map((tag: any) => String(tag?.name || "").trim()).filter(Boolean)
+      : [];
+    const description = compactText(novel?.description || "", 200);
+    return {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Book",
+          name: String(novel?.title || "小説詳細"),
+          description,
+          url: canonical,
+          inLanguage: String(novel?.language || "ja"),
+          keywords: tags.join(", "),
+          author: authorName ? { "@type": "Person", name: authorName, url: `${origin}/users/${encodeURIComponent(authorName)}` } : undefined,
+        },
+        {
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: "Home", item: `${origin}/` },
+            { "@type": "ListItem", position: 2, name: String(novel?.title || "小説詳細"), item: canonical },
+          ],
+        },
+      ],
+    };
+  }
+
+  if (isEpisodeDetailPath(pathParts)) {
+    const episodeId = pathParts[1];
+    const episode = await fetchBackendJson<any>(`/api/episodes/${episodeId}`, headerList);
+    if (!episode) return null;
+    const canonical = `${origin}/episodes/${episodeId}`;
+    const novelId = String(episode?.novel_id || "");
+    const novelTitle = String(episode?.novel_title || "作品");
+    const authorName = String(episode?.author_username || "").trim();
+    const tagSource = Array.isArray(episode?.tags) ? episode.tags : Array.isArray(episode?.novel_tags) ? episode.novel_tags : [];
+    const tags = tagSource.map((tag: any) => String(tag?.name || "").trim()).filter(Boolean);
+    const description = compactText(episode?.body || episode?.novel_description || "", 200);
+    return {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Article",
+          headline: String(episode?.title || "エピソード詳細"),
+          description,
+          articleBody: compactText(episode?.body || "", 3000),
+          url: canonical,
+          mainEntityOfPage: canonical,
+          inLanguage: String(episode?.language || "ja"),
+          keywords: tags.join(", "),
+          author: authorName ? { "@type": "Person", name: authorName, url: `${origin}/users/${encodeURIComponent(authorName)}` } : undefined,
+          isPartOf: novelId ? { "@type": "Book", name: novelTitle, url: `${origin}/novels/${novelId}` } : undefined,
+          datePublished: episode?.created_at || undefined,
+        },
+        {
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: "Home", item: `${origin}/` },
+            ...(novelId ? [{ "@type": "ListItem", position: 2, name: novelTitle, item: `${origin}/novels/${novelId}` }] : []),
+            {
+              "@type": "ListItem",
+              position: novelId ? 3 : 2,
+              name: String(episode?.title || "エピソード詳細"),
+              item: canonical,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  if (
+    (pathParts.length === 1 && pathParts[0] === "ai-novel") ||
+    (pathParts.length === 2 && pathParts[0] === "en" && pathParts[1] === "ai-novel")
+  ) {
+    const isEnglishAiNovelPage = pathParts[0] === "en";
     return {
       "@context": "https://schema.org",
       "@type": "WebPage",
-      name: "AI小説生成・R18小説生成",
-      url: `${origin}/ai-novel`,
-      description:
-        "AI小説生成、R18小説生成、官能小説生成、続き生成、執筆支援ができるページです。",
-      keywords: [
-        "AI小説生成",
-        "R18小説生成",
-        "官能小説生成",
-        "小説生成AI",
-        "執筆支援",
-      ].join(", "),
-      about: ["AI小説生成", "R18小説生成", "官能小説生成"],
+      inLanguage: isEnglishAiNovelPage ? "en" : "ja",
+      name: isEnglishAiNovelPage
+        ? "AI novel generator, story writing AI, and R18 draft support"
+        : "AI小説生成・小説生成AI・R18小説生成",
+      alternateName: isEnglishAiNovelPage
+        ? "AI小説生成・小説生成AI・R18小説生成"
+        : "AI novel generator, story writing AI, and R18 draft support",
+      url: isEnglishAiNovelPage ? `${origin}/en/ai-novel` : `${origin}/ai-novel`,
+      description: isEnglishAiNovelPage
+        ? "Use Lexis as an AI novel generator and story writing AI. Create plots, characters, genres, prose, episode continuations, and R18 or adult novel drafts with editing support."
+        : "LexisのAI小説生成ページです。小説生成AIでプロット、登場人物、ジャンル、文体を指定し、物語作成、R18小説生成、官能小説の下書き、続き生成、執筆支援に使えます。",
+      keywords: (isEnglishAiNovelPage
+        ? [
+            "AI novel generator",
+            "AI novel generation",
+            "AI story generator",
+            "story writing AI",
+            "novel writing AI",
+            "AI fiction writer",
+            "adult novel AI",
+            "R18 novel generation",
+            "episode continuation generator",
+            "writing assistant",
+          ]
+        : [
+            "AI小説生成",
+            "小説生成AI",
+            "AI小説メーカー",
+            "AI小説作成",
+            "R18小説生成",
+            "官能小説生成",
+            "プロット生成",
+            "続き生成",
+            "執筆支援",
+          ]).join(", "),
+      about: isEnglishAiNovelPage
+        ? ["AI novel generator", "AI story generator", "story writing AI", "R18 novel generation"]
+        : ["AI小説生成", "小説生成AI", "R18小説生成", "官能小説生成"],
+    };
+  }
+
+  if (
+    (pathParts.length === 1 && pathParts[0] === "ai_chat") ||
+    (pathParts.length === 2 && pathParts[0] === "en" && pathParts[1] === "ai_chat")
+  ) {
+    const isEnglishAiChatPage = pathParts[0] === "en";
+    return {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      inLanguage: isEnglishAiChatPage ? "en" : "ja",
+      name: isEnglishAiChatPage
+        ? "AI chat, character AI chat, and R18 chat"
+        : "AIチャット・キャラクターAIチャット・R18チャット",
+      alternateName: isEnglishAiChatPage
+        ? "AIチャット・キャラクターAIチャット・R18チャット"
+        : "AI chat, character AI chat, and R18 chat",
+      url: isEnglishAiChatPage ? `${origin}/en/ai_chat` : `${origin}/ai_chat`,
+      description: isEnglishAiChatPage
+        ? "Use Lexis for AI chat with custom characters, personality settings, relationships, R18 chat options, girlfriend or boyfriend roleplay, and chat-to-novel writing support."
+        : "LexisのAIチャットページです。キャラクター設定、性格、関係性を作成して会話できます。R18チャット、恋人AIチャット、会話ログからAI小説化する機能にも対応しています。",
+      keywords: (isEnglishAiChatPage
+        ? [
+            "AI chat",
+            "character AI chat",
+            "R18 chat",
+            "adult AI chat",
+            "AI girlfriend chat",
+            "AI boyfriend chat",
+            "roleplay AI chat",
+            "chat to novel",
+          ]
+        : [
+            "AIチャット",
+            "キャラクターAIチャット",
+            "R18チャット",
+            "18禁チャット",
+            "恋人AIチャット",
+            "AI彼女",
+            "AI彼氏",
+            "AI小説化",
+          ]).join(", "),
+      about: isEnglishAiChatPage
+        ? ["AI chat", "character AI chat", "R18 chat", "chat to novel"]
+        : ["AIチャット", "キャラクターAIチャット", "R18チャット", "AI小説化"],
     };
   }
 
@@ -507,10 +938,11 @@ async function buildJsonLd(pathParts: string[]): Promise<Record<string, unknown>
   return null;
 }
 
-export default async function Page({ params }: RouteProps) {
+export default async function Page({ params, searchParams }: RouteProps) {
   const resolvedParams = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const pathParts = pathFromParams(resolvedParams);
-  const jsonLd = await buildJsonLd(pathParts);
+  const jsonLd = await buildJsonLd(pathParts, resolvedSearchParams);
   return (
     <>
       <JsonLd data={jsonLd} />

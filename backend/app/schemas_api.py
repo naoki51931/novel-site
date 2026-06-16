@@ -54,6 +54,14 @@ class AINovelAddonCheckoutRequest(BaseModel):
     units: int = 1
 
 
+class PremiumCheckoutRequest(BaseModel):
+    amount_yen: int | None = None
+
+
+class ExternalTokenVerifyRequest(BaseModel):
+    token: str
+
+
 class PayoutProfileUpdateRequest(BaseModel):
     payout_enabled: bool | None = None
     bank_name: str | None = None
@@ -376,6 +384,40 @@ class AdminUiI18nRetranslateRemainingRequest(BaseModel):
     include_same_as_source: bool = True
     include_kana: bool = True
     dry_run: bool = False
+
+
+class AdminSEOPageUpsertRequest(BaseModel):
+    slug: str
+    title: str
+    description: str | None = None
+    h1: str
+    body: str
+    related_tags: list[str] = Field(default_factory=list)
+    is_published: bool = False
+
+
+class AdminSEOPageOut(BaseModel):
+    id: int
+    slug: str
+    title: str
+    description: str | None = None
+    h1: str
+    body: str
+    related_tags: list[str] = Field(default_factory=list)
+    is_published: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PublicSEOPageOut(BaseModel):
+    slug: str
+    title: str
+    description: str | None = None
+    h1: str
+    body: str
+    related_tags: list[str] = Field(default_factory=list)
+    canonical_path: str
+    og_type: str = "website"
 
 
 class LoginVerify(BaseModel):

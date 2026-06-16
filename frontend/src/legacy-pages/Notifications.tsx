@@ -42,6 +42,7 @@ export default function Notifications() {
   const { t, lang } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [bulkDeletingType, setBulkDeletingType] = useState<string>("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(true);
@@ -254,6 +255,43 @@ export default function Notifications() {
     }
   };
 
+  const handleDeleteByType = async (notifType: "ai_generation_done" | "ai_generation_failed") => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) throw new Error(t({ ja: "ログインが必要です。", en: "Login required." }));
+      setBulkDeletingType(notifType);
+      setError("");
+      setMessage("");
+      const res = await fetch(`/api/notifications/type/${encodeURIComponent(notifType)}`, {
+        method: "DELETE",
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || t({ ja: "一括削除に失敗しました", en: "Failed to bulk delete." }));
+      }
+      const data = await res.json().catch(() => ({}));
+      const deleted = Number(data?.deleted || 0);
+      setMessage(
+        notifType === "ai_generation_done"
+          ? t(
+              { ja: "成功通知を {{count}} 件削除しました。", en: "Deleted {{count}} success notifications." },
+              { count: deleted }
+            )
+          : t(
+              { ja: "失敗通知を {{count}} 件削除しました。", en: "Deleted {{count}} failure notifications." },
+              { count: deleted }
+            )
+      );
+      setPage(0);
+      setReloadTick((v) => v + 1);
+    } catch (e) {
+      setError(getErrorMessage(e, t({ ja: "一括削除に失敗しました", en: "Failed to bulk delete." })));
+    } finally {
+      setBulkDeletingType("");
+    }
+  };
+
   const filterOptions: Array<{ key: NotificationGroup; label: string }> = [
     { key: "all", label: t({ ja: "すべて", en: "All" }) },
     { key: "reaction", label: t({ ja: "反応", en: "Reactions" }) },
@@ -285,6 +323,8 @@ export default function Notifications() {
     membership_paid: t({ ja: "月額支援", en: "Membership" }),
     multilingual_ready: t({ ja: "翻訳対応", en: "Translation" }),
   };
+  const aiDoneCount = notifications.filter((n) => n.type === "ai_generation_done").length;
+  const aiFailedCount = notifications.filter((n) => n.type === "ai_generation_failed").length;
   const getTypeLabel = (type: string | null | undefined) => {
     const key = String(type || "").trim() as NotificationType | "";
     if (!key) return t({ ja: "通知", en: "Notice" });
@@ -298,7 +338,7 @@ export default function Notifications() {
       return `/users/${encodeURIComponent(n.actor_username)}`;
     }
     if (type === "dm_message") {
-      return "/mypage";
+      return "/dms";
     }
     if (
       type === "followed_author_new_novel" ||
@@ -423,6 +463,36 @@ export default function Notifications() {
             {t({ ja: "次へ", en: "Next" })}
           </button>
         </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => handleDeleteByType("ai_generation_done")}
+            disabled={bulkDeletingType !== "" || counts.all <= 0}
+          >
+            {bulkDeletingType === "ai_generation_done"
+              ? t({ ja: "成功通知を削除中...", en: "Deleting success notifications..." })
+              : t({ ja: "成功通知を消す", en: "Delete success notifications" })}
+          </button>
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => handleDeleteByType("ai_generation_failed")}
+            disabled={bulkDeletingType !== "" || counts.all <= 0}
+          >
+            {bulkDeletingType === "ai_generation_failed"
+              ? t({ ja: "失敗通知を削除中...", en: "Deleting failure notifications..." })
+              : t({ ja: "失敗通知を消す", en: "Delete failure notifications" })}
+          </button>
+          <span style={{ fontSize: 12, color: "var(--muted-text)", alignSelf: "center" }}>
+            {t(
+              { ja: "このページ内: 成功 {{done}} 件 / 失敗 {{failed}} 件", en: "On this page: success {{done}} / failed {{failed}}" },
+              { done: aiDoneCount, failed: aiFailedCount }
+            )}
+          </span>
+        </div>
+        {error && <p style={{ color: "red", marginTop: 0 }}>{error}</p>}
+        {message && <p style={{ color: "green", marginTop: 0 }}>{message}</p>}
         {notifications.length === 0 ? (
           <p style={{ margin: 0, color: "var(--muted-text)" }}>
             {activeFilter === "all"

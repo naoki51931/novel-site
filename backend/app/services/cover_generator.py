@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from openai import OpenAI
+from ..time_utils import utcnow
 
 
 @dataclass
@@ -96,7 +97,7 @@ def save_base64_image(
     now: datetime | None = None,
 ) -> str:
     ext = _image_extension(output_format)
-    moment = now or datetime.utcnow()
+    moment = now or utcnow()
     year = f"{moment.year:04d}"
     month = f"{moment.month:02d}"
     target_dir = os.path.join(upload_dir, year, month)

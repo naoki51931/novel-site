@@ -105,7 +105,7 @@ export default function AdminHome() {
       setIndexingLoading(true);
       setIndexingError("");
       setIndexingInspectionError("");
-      const data = await apiFetch("/api/admin/indexing/urls?limit=2000&inspect=1", {
+      const data = await apiFetch("/api/admin/indexing/urls?limit=2000&inspect=0", {
         credentials: "include",
       });
       const items = Array.isArray(data?.items)
@@ -466,6 +466,9 @@ export default function AdminHome() {
         </Link>
         <Link className="btn btn-border" to="/admin/i18n-jobs" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
           {t({ ja: "UI多言語化ジョブへ", en: "Go to UI I18N Jobs" })}
+        </Link>
+        <Link className="btn btn-border" to="/admin/seo-pages" style={{ display: "block", maxWidth: "100%", textAlign: "center" }}>
+          {t({ ja: "SEO LP管理へ", en: "Go to SEO Pages" })}
         </Link>
         <button
           type="button"

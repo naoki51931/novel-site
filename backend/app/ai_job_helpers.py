@@ -221,7 +221,9 @@ def _ai_novel_daily_max_for_user(user: models.User | None) -> int:
     dated_limit = legacy.AI_USER_DAILY_MAX_BY_USERNAME_AND_DATE.get((username, today_key))
     if dated_limit is not None:
         return int(dated_limit)
-    return int(legacy.AI_USER_DAILY_MAX_BY_USERNAME.get(username, legacy.AI_USER_DAILY_MAX))
+    base_max = int(legacy.AI_USER_DAILY_MAX_BY_USERNAME.get(username, legacy.AI_USER_DAILY_MAX))
+    multiplier = max(1.0, float(legacy.premium_plan_usage_multiplier_for_user(user) or 1.0))
+    return int(base_max * multiplier)
 
 
 def _ai_novel_remaining_for_user(db: Session, user: models.User) -> tuple[int, int, int]:

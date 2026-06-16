@@ -14,11 +14,12 @@ router.include_router(public_novels_ranking_router)
 router.include_router(covers_router)
 
 # BEGIN AUTO-GENERATED ROUTER WRAPPERS: NOVELS
-from fastapi import BackgroundTasks, Body, Depends, File, Form, Header, Query, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Body, Depends, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from .. import schemas
 from ..database import get_db
 
 
@@ -36,10 +37,9 @@ def update_novel(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
     from ..services.novels_write_service import update_novel_service
 
-    payload_model = _parse_payload(legacy.schemas.NovelUpdate, payload)
+    payload_model = _parse_payload(schemas.NovelUpdate, payload)
     return update_novel_service(
         novel_id=novel_id,
         payload=payload_model,
@@ -109,10 +109,9 @@ def create_episode(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    from .. import main as legacy
     from ..services.episodes_write_service import create_episode_service
 
-    payload_model = _parse_payload(legacy.schemas.EpisodeCreate, payload)
+    payload_model = _parse_payload(schemas.EpisodeCreate, payload)
     return create_episode_service(
         novel_id=novel_id,
         payload=payload_model,

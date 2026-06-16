@@ -32,6 +32,7 @@ def i18n_translate_service(*, payload):
 
 def i18n_dictionary_service(*, target_lang: str):
     from .. import main as legacy
+    from .. import i18n_runtime
 
     lang = legacy.normalize_language(target_lang)
     if lang not in ("zh-cn", "zh-tw", "ko"):
@@ -50,7 +51,11 @@ def i18n_dictionary_service(*, target_lang: str):
             .order_by(legacy.models.UII18nDictionary.updated_at.desc())
             .first()
         )
-        updated_at = updated_row[0].isoformat() if updated_row and updated_row[0] else legacy._UI_I18N_PUBLISHED_UPDATED_AT
+        updated_at = (
+            legacy.to_jst_isoformat(updated_row[0])
+            if updated_row and updated_row[0]
+            else i18n_runtime.get_ui_i18n_published_updated_at()
+        )
     finally:
         db.close()
     return {

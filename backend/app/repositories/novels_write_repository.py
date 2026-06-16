@@ -12,6 +12,13 @@ def find_novel_in_site(db: Session, *, novel_id: int, site_key: str) -> models.N
     )
 
 
+def create_novel(db: Session, **kwargs) -> models.Novel:
+    novel = models.Novel(**kwargs)
+    db.add(novel)
+    db.flush()
+    return novel
+
+
 def delete_novel_tags(db: Session, *, novel_id: int) -> None:
     db.query(models.NovelTag).filter(models.NovelTag.novel_id == novel_id).delete()
 
@@ -31,6 +38,21 @@ def add_novel_tag(db: Session, *, novel_id: int, tag_id: int) -> models.NovelTag
     row = models.NovelTag(novel_id=novel_id, tag_id=tag_id)
     db.add(row)
     return row
+
+
+def replace_novel_tags(db: Session, *, novel_id: int, tag_names: list[str]) -> list[str]:
+    delete_novel_tags(db, novel_id=novel_id)
+    normalized_tag_names: list[str] = []
+    for raw_name in tag_names:
+        tag_name = (raw_name or "").strip()
+        if not tag_name:
+            continue
+        normalized_tag_names.append(tag_name)
+        tag = find_tag_by_name(db, tag_name=tag_name)
+        if not tag:
+            tag = create_tag(db, tag_name=tag_name)
+        add_novel_tag(db, novel_id=novel_id, tag_id=tag.id)
+    return normalized_tag_names
 
 
 def delete_novel_with_children(db: Session, *, novel_id: int, site_key: str) -> None:

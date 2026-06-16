@@ -164,6 +164,8 @@ class ProfileRead(BaseModel):
     ai_summary_model: Optional[str] = None
     ai_title_model: Optional[str] = None
     ai_tag_model: Optional[str] = None
+    ai_chat_model: Optional[str] = None
+    ai_translation_model: Optional[str] = None
     ai_story_agent_model: Optional[str] = None
     ai_comment_revision_model: Optional[str] = None
     ai_story_agent_visible: Optional[bool] = True
@@ -185,6 +187,8 @@ class ProfileUpdate(BaseModel):
     ai_summary_model: Optional[str] = None
     ai_title_model: Optional[str] = None
     ai_tag_model: Optional[str] = None
+    ai_chat_model: Optional[str] = None
+    ai_translation_model: Optional[str] = None
     ai_story_agent_model: Optional[str] = None
     ai_comment_revision_model: Optional[str] = None
     ai_story_agent_visible: Optional[bool] = None

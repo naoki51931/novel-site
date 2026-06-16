@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from sqlalchemy import func, or_
+
 from .. import notification_helpers
 from ..time_utils import utcnow
 
@@ -40,6 +42,82 @@ def create_dm_thread_service(payload, request, db):
         "user2_id": thread.user2_id,
         "partner_username": target.username,
         "created_at": thread.created_at,
+    }
+
+
+def list_dm_threads_service(request, db):
+    from .. import main as legacy
+
+    user = legacy.require_current_user(request, db)
+    threads = (
+        db.query(legacy.models.DirectMessageThread)
+        .filter(
+            or_(
+                legacy.models.DirectMessageThread.user1_id == user.id,
+                legacy.models.DirectMessageThread.user2_id == user.id,
+            )
+        )
+        .order_by(
+            legacy.models.DirectMessageThread.updated_at.desc(),
+            legacy.models.DirectMessageThread.id.desc(),
+        )
+        .all()
+    )
+
+    items = []
+    unread_total = 0
+    for thread in threads:
+        partner = thread.user1 if thread.user2_id == user.id else thread.user2
+        last_message = (
+            db.query(legacy.models.DirectMessage)
+            .filter(legacy.models.DirectMessage.thread_id == thread.id)
+            .order_by(
+                legacy.models.DirectMessage.created_at.desc(),
+                legacy.models.DirectMessage.id.desc(),
+            )
+            .first()
+        )
+        unread_count = int(
+            db.query(func.count(legacy.models.DirectMessage.id))
+            .filter(
+                legacy.models.DirectMessage.thread_id == thread.id,
+                legacy.models.DirectMessage.recipient_user_id == user.id,
+                legacy.models.DirectMessage.is_read == False,
+            )
+            .scalar()
+            or 0
+        )
+        unread_total += unread_count
+        items.append(
+            {
+                "id": thread.id,
+                "partner_username": partner.username if partner else None,
+                "partner_user_id": partner.id if partner else None,
+                "created_at": thread.created_at,
+                "updated_at": thread.updated_at,
+                "unread_count": unread_count,
+                "last_message": (
+                    {
+                        "id": last_message.id,
+                        "body": last_message.body,
+                        "created_at": last_message.created_at,
+                        "sender_id": last_message.sender_id,
+                        "sender_username": (
+                            last_message.sender.username
+                            if last_message and last_message.sender
+                            else None
+                        ),
+                    }
+                    if last_message
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "threads": items,
+        "current_user_id": user.id,
+        "unread_count": unread_total,
     }
 
 

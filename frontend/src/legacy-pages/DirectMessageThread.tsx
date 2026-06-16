@@ -123,7 +123,7 @@ export default function DirectMessageThread() {
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
-        <Link to="/">{t({ ja: "← トップに戻る", en: "← Back to Home" })}</Link>
+        <Link to="/dms">{t({ ja: "← DM一覧に戻る", en: "← Back to DMs" })}</Link>
       </div>
 
       {error && (

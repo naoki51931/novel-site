@@ -15,8 +15,9 @@ def list_recommended_public_novels(
     lang: str | None = None,
     db: Session = Depends(get_db),
 ):
-    from .. import main as legacy
-    return legacy.list_recommended_public_novels(
+    from ..features.public_feature_service import list_recommended_public_novels_service
+
+    return list_recommended_public_novels_service(
         request=request,
         background_tasks=background_tasks,
         limit=limit,

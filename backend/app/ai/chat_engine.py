@@ -1,4 +1,5 @@
 from datetime import datetime
+from ..time_utils import UTC_MIN, utcnow
 from typing import Any
 
 
@@ -30,7 +31,7 @@ def build_summary_text(history: list[Any], recent_limit: int = 20, max_chars: in
 
 def format_long_term_memories(memories: list[Any], max_items: int = 12) -> str | None:
     prepared: list[tuple[int, float, datetime, str]] = []
-    now = datetime.utcnow()
+    now = utcnow()
     for item in memories:
         is_active = bool(getattr(item, "is_active", False))
         expires_at = getattr(item, "expires_at", None)
@@ -47,7 +48,7 @@ def format_long_term_memories(memories: list[Any], max_items: int = 12) -> str |
         if not text:
             continue
         category_priority = 1 if category in {"boundary", "profile"} else 0
-        updated_at = getattr(item, "updated_at", None) or datetime.min
+        updated_at = getattr(item, "updated_at", None) or UTC_MIN
         prepared.append((category_priority, importance, updated_at, f"- ({category}) {text}"))
     prepared.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
     lines = [row[3] for row in prepared[:max_items]]
