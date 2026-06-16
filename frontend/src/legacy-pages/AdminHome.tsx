@@ -105,7 +105,7 @@ export default function AdminHome() {
       setIndexingLoading(true);
       setIndexingError("");
       setIndexingInspectionError("");
-      const data = await apiFetch("/api/admin/indexing/urls?limit=2000&inspect=0", {
+      const data = await apiFetch("/api/admin/indexing/urls?limit=2000&inspect=1", {
         credentials: "include",
       });
       const items = Array.isArray(data?.items)
