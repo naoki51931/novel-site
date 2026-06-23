@@ -156,6 +156,7 @@ class ProfileRead(BaseModel):
     birth_date: Optional[date] = None
     email_notifications_enabled: Optional[bool] = None
     favorite_visibility: Optional[Literal["public", "private"]] = "public"
+    timezone: Optional[str] = "Asia/Tokyo"
     profile_bio: Optional[str] = None
     profile_icon_url: Optional[str] = None
     profile_header_url: Optional[str] = None
@@ -179,6 +180,7 @@ class ProfileUpdate(BaseModel):
     birth_date: Optional[date] = None
     email_notifications_enabled: Optional[bool] = None
     favorite_visibility: Optional[Literal["public", "private"]] = None
+    timezone: Optional[str] = None
     profile_bio: Optional[str] = None
     profile_icon_url: Optional[str] = None
     profile_header_url: Optional[str] = None

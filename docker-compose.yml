@@ -5,8 +5,9 @@ services:
     image: mysql:8.0
     container_name: novel-db
     restart: unless-stopped
+    command: ["--default-time-zone=+00:00"]
     environment:
-      TZ: Asia/Tokyo
+      TZ: UTC
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
@@ -29,7 +30,7 @@ services:
     container_name: novel-backend
     restart: unless-stopped
     environment:
-      TZ: Asia/Tokyo
+      TZ: UTC
       DB_HOST: db
       DB_USER: ${MYSQL_USER}
       DB_PASS: ${MYSQL_PASSWORD}
@@ -165,7 +166,7 @@ services:
     container_name: novel-frontend
     restart: unless-stopped
     environment:
-      TZ: Asia/Tokyo
+      TZ: UTC
       NEXT_TELEMETRY_DISABLED: "1"
       NEXT_INTERNAL_BACKEND_ORIGIN: http://backend:8000
       NEXT_PUBLIC_BACKEND_ORIGIN: ${NEXT_PUBLIC_BACKEND_ORIGIN:-}
@@ -187,7 +188,7 @@ services:
     container_name: novel-nginx
     restart: unless-stopped
     environment:
-      TZ: Asia/Tokyo
+      TZ: UTC
     depends_on:
       - backend
       - frontend

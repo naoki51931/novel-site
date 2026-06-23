@@ -154,7 +154,7 @@ def admin_payouts_timeline_service(*, request: Request, db: Session, days: int):
             "status": payout.status,
             "period_start": payout.period_start.isoformat(),
             "period_end": payout.period_end.isoformat(),
-            "created_at": legacy.to_jst_isoformat(payout.created_at),
+            "created_at": legacy.to_utc_isoformat(payout.created_at),
         }
         for payout, username in upcoming_rows
     ]
@@ -173,7 +173,7 @@ def admin_payouts_timeline_service(*, request: Request, db: Session, days: int):
             "author_user_id": payout.author_user_id,
             "username": username,
             "amount_yen": payout.amount_yen,
-            "paid_at": legacy.to_jst_isoformat(payout.paid_at),
+            "paid_at": legacy.to_utc_isoformat(payout.paid_at),
             "period_start": payout.period_start.isoformat(),
             "period_end": payout.period_end.isoformat(),
         }
@@ -217,7 +217,7 @@ def admin_list_payouts_service(*, request: Request, db: Session, status: str | N
                 "status": payout.status,
                 "period_start": payout.period_start.isoformat(),
                 "period_end": payout.period_end.isoformat(),
-                "created_at": legacy.to_jst_isoformat(payout.created_at),
+                "created_at": legacy.to_utc_isoformat(payout.created_at),
             }
             for payout, username in rows
         ]

@@ -744,9 +744,19 @@ button.nav-toggle.btn.btn-border:hover {
   margin-bottom: 1rem;
 }
 
+.search-bar-suggest-open {
+  position: relative;
+  z-index: 130;
+}
+
+.search-bar-suggest-open .search-query-wrap,
+.search-bar-suggest-open .search-suggest-panel {
+  z-index: 130;
+}
+
 .search-query-wrap {
   position: relative;
-  z-index: 10;
+  z-index: 45;
   flex: 1 1 220px;
   min-width: 200px;
 }
@@ -1456,7 +1466,7 @@ button.nav-toggle.btn.btn-border:hover {
     width: 100%;
     min-width: 0;
     flex: 0 0 auto;
-    z-index: 10;
+    z-index: 45;
   }
 
   .episode-cover-wrap {

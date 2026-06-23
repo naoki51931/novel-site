@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..cache_helpers import enqueue_episode_view
 from ..content_helpers import deserialize_tag_names, deserialize_meta_tags, normalize_language
+from ..database import SessionLocal
 from ..episode_publish_helpers import (
     apply_episode_publish_mode,
     is_episode_draft,
@@ -257,7 +258,17 @@ def update_episode_service(
                 )
             db.commit()
         else:
-            background_tasks.add_task(_background_upsert_episode_and_novel_translation, ep.id)
+            background_tasks.add_task(
+                _background_upsert_episode_and_novel_translation,
+                ep.id,
+                session_local=SessionLocal,
+                models=models,
+                normalize_language=normalize_language,
+                upsert_episode_translation=upsert_episode_translation,
+                upsert_novel_translation=upsert_novel_translation,
+                get_novel_tag_names=get_novel_tag_names,
+                logger=logger,
+            )
     if publishing_now:
         background_tasks.add_task(_background_notify_episode_published, novel.id, ep.id, ep.site_key)
     return ep

@@ -6,6 +6,7 @@ import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { isGoogleCrawler } from "../lib/seo";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone, setUserTimeZone } from "../lib/timezone";
 import { applySeoMeta, buildSeoDescription } from "../lib/seoMeta";
 import { formatReadMinutes } from "../lib/readTime";
 
@@ -451,6 +452,7 @@ export default function EpisodeDetail() {
         if (!res.ok) return;
         const data = await res.json();
         setMyUserId(data.id);
+        if (data?.timezone) setUserTimeZone(data.timezone);
       } catch (e) {
         console.error(e);
       }
@@ -745,12 +747,8 @@ export default function EpisodeDetail() {
     return episode?.author_id === myUserId;
   };
 
-  const formatDateTime = (isoString: string | null | undefined) => {
-    if (!isoString) return "";
-    return new Date(isoString).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-      timeZone: "Asia/Tokyo",
-    });
-  };
+  const formatDateTime = (isoString: string | null | undefined) =>
+    formatDateTimeInUserTimeZone(isoString, lang === "en" ? "en-US" : "ja-JP");
 
   const titleStartsWithEpisodePrefix = (title: string | null | undefined) => {
     if (typeof title !== "string") return false;

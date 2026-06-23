@@ -4,6 +4,7 @@ import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { mergeTagsInput, parseTagsInput } from "../lib/tagSuggest";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 const API_BASE = getApiBase();
 const NOVEL_DRAFT_KEY_PREFIX = "draft_edit_novel"; // 作品ごとの編集下書き用プレフィックス
@@ -70,7 +71,7 @@ type CoverHistoryItem = {
 export default function EditNovel() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -1487,7 +1488,7 @@ export default function EditNovel() {
                       <div style={{ width: "100%", aspectRatio: "2 / 3", background: "#f3f4f6", borderRadius: 6 }} />
                     )}
                     <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-                      {item.created_at ? new Date(item.created_at).toLocaleString() : ""}
+                      {formatDateTimeInUserTimeZone(item.created_at, lang === "en" ? "en-US" : "ja-JP")}
                     </div>
                     <div style={{ marginTop: 4, fontSize: 12 }}>
                       {item.status === "failed" ? t({ ja: "失敗", en: "Failed" }) : item.status}

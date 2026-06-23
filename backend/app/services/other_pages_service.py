@@ -321,7 +321,7 @@ def prerender_episode_page_service(episode_id: int, request: Request, db: Sessio
         "articleBody": article_body,
         "author": {"@type": "Person", "name": author_name, "url": author_url},
         "mainEntityOfPage": canonical_url,
-        "datePublished": legacy.to_jst_isoformat(ep.created_at) if isinstance(ep.created_at, datetime) else None,
+        "datePublished": legacy.to_utc_isoformat(ep.created_at) if isinstance(ep.created_at, datetime) else None,
     }
     json_ld = "\n".join(
         [

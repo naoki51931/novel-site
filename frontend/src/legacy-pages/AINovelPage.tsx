@@ -35,7 +35,7 @@ const COMMENT_REVISION_OUTPUT_RETRY_MAX = 5;
 const COMMENT_REVISION_LIVE_PREVIEW_LINGER_MS = 15000;
 const SEGMENT_TARGET_CHARS = 2000;
 const SEGMENT_COUNT_MIN = 1;
-const SEGMENT_COUNT_MAX = 30;
+const SEGMENT_COUNT_MAX = 60;
 const CHUNK_BLOCK_TIMEOUT_MS = 5 * 60 * 1000;
 
 type GeneratedChunkBlock = {
@@ -59,6 +59,12 @@ type StoryAgentMessage = {
   appliedChunkedGenerationPlans?: string[];
 };
 
+type UploadedTextFileInfo = {
+  name: string;
+  size: number;
+  importedAt: string;
+};
+
 function clampSegmentCount(value: any) {
   const n = Number.parseInt(String(value), 10);
   if (!Number.isFinite(n)) return SEGMENT_COUNT_MIN;
@@ -76,6 +82,14 @@ function normalizeRetryMax(value: any) {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_RETRY_MAX;
   return Math.max(0, Math.min(MAX_RETRY_MAX, parsed));
+}
+
+function formatFileSize(bytes: any) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size <= 0) return "0 B";
+  if (size < 1024) return `${Math.round(size)} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function normalizeDraftRetrySettings(draft: any) {
@@ -656,6 +670,7 @@ export default function AINovelPage() {
   const [addonUnitPriceYen, setAddonUnitPriceYen] = useState(1000);
   const [addonCheckoutLoading, setAddonCheckoutLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [uploadedTextFileInfo, setUploadedTextFileInfo] = useState<UploadedTextFileInfo | null>(null);
   const [continuationBody, setContinuationBody] = useState("");
   const [postEpisodeTitle, setPostEpisodeTitle] = useState("");
   const [lastGenerateParams, setLastGenerateParams] = useState<any>(null);
@@ -738,6 +753,7 @@ export default function AINovelPage() {
   const resultBodyRef = useRef<HTMLPreElement | null>(null);
   const charactersInputRef = useRef<HTMLTextAreaElement | null>(null);
   const storyAgentMessagesRef = useRef<HTMLDivElement | null>(null);
+  const textUploadInputRef = useRef<HTMLInputElement | null>(null);
   const combinedBodyRef = useRef("");
   const lastSelectionContextRef = useRef<any>(null);
   const jobPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1120,7 +1136,24 @@ export default function AINovelPage() {
     ) {
       setEditEpisodeId(draft.editEpisodeId);
     }
-    if (draft.result && typeof draft.result === "object") setResult(draft.result);
+    if (draft.result && typeof draft.result === "object") {
+      setResult(draft.result);
+      if (draft.uploadedTextFileInfo && typeof draft.uploadedTextFileInfo === "object") {
+        setUploadedTextFileInfo({
+          name: String(draft.uploadedTextFileInfo.name || draft.result?.generated_title || ""),
+          size: Number(draft.uploadedTextFileInfo.size || 0),
+          importedAt: String(draft.uploadedTextFileInfo.importedAt || new Date().toISOString()),
+        });
+      } else if (draft.result?.source === "text_upload") {
+        setUploadedTextFileInfo({
+          name: String(draft.result?.uploaded_file_name || draft.result?.generated_title || ""),
+          size: Number(draft.result?.uploaded_file_size || 0),
+          importedAt: String(draft.result?.uploaded_at || new Date().toISOString()),
+        });
+      } else {
+        setUploadedTextFileInfo(null);
+      }
+    }
     if (typeof draft.continuationBody === "string") setContinuationBody(draft.continuationBody);
     if (typeof draft.postEpisodeTitle === "string") setPostEpisodeTitle(draft.postEpisodeTitle);
     if (draft.lastGenerateParams && typeof draft.lastGenerateParams === "object") {
@@ -1185,6 +1218,7 @@ export default function AINovelPage() {
     editSourceBody,
     editEpisodeId,
     result,
+    uploadedTextFileInfo,
     continuationBody,
     postEpisodeTitle,
     lastGenerateParams,
@@ -1259,6 +1293,7 @@ export default function AINovelPage() {
     }
     stopChunkedProgress(true);
     const normalized = normalizeAINovelResponse(payload || {});
+    setUploadedTextFileInfo(null);
     setResult(normalized);
     chunkedGenerateRetryRef.current = {
       enabled: false,
@@ -1299,6 +1334,7 @@ export default function AINovelPage() {
     setChunkedCompletedBlocks(completedBlocks);
     setChunkedProgressPercent(percent);
     if (String(normalized?.body || "").trim()) {
+      setUploadedTextFileInfo(null);
       setResult({
         generated_title:
           normalized?.generated_title || titleHint || t({ ja: "生成された小説", en: "Generated Novel" }),
@@ -1762,6 +1798,7 @@ export default function AINovelPage() {
   };
 
   const handleResetAll = () => {
+    resetToNewNovelMode();
     setTitleHint("");
     setGenre("");
     setCharacters("");
@@ -1777,6 +1814,7 @@ export default function AINovelPage() {
     setRetryAttempts(0);
     setActiveRetryMax(null);
     setResult(null);
+    setUploadedTextFileInfo(null);
     setContinuationBody("");
     setPostEpisodeTitle("");
     setLastGenerateParams(null);
@@ -1787,6 +1825,17 @@ export default function AINovelPage() {
     setPremiumError("");
     setPolishPreview(null);
     setLastPolishContext(null);
+    setLastPolishScope("full");
+    setRevisionCommentInput("");
+    setRevisionComments([]);
+    setLastRevisionTargetInfo(null);
+    setRevisionChatScope("full");
+    setCommentRevisionDiffSegments([]);
+    setCommentRevisionUndoStack([]);
+    setCommentRevisionHasActiveDiff(false);
+    resetCommentRevisionLivePreview();
+    setHasActiveSelection(false);
+    lastSelectionContextRef.current = null;
     setHasContinuationAttempted(false);
     setRedoContinuationArmed(false);
     setTextEditMode(false);
@@ -1945,6 +1994,7 @@ export default function AINovelPage() {
     editSourceBody,
     editEpisodeId,
     result,
+    uploadedTextFileInfo,
     continuationBody,
     postEpisodeTitle,
     lastGenerateParams,
@@ -2002,6 +2052,7 @@ export default function AINovelPage() {
     editSourceBody,
     editEpisodeId,
     result,
+    uploadedTextFileInfo,
     continuationBody,
     postEpisodeTitle,
     lastGenerateParams,
@@ -2023,6 +2074,7 @@ export default function AINovelPage() {
     if (!pending || !pending.body) return;
     const errMsg = consumePendingAiPostError();
     if (errMsg) setError(errMsg);
+    setUploadedTextFileInfo(null);
     setResult({
       generated_title:
         pending.generated_title || pending.title || t({ ja: "AI生成小説", en: "AI-generated novel" }),
@@ -2286,6 +2338,11 @@ export default function AINovelPage() {
     if (!result?.body) return "";
     if (!continuationBody) return result.body;
     return `${result.body}\n\n${continuationBody}`;
+  };
+
+  const getEditableCombinedBody = () => {
+    if (textEditMode) return textEditValue || "";
+    return getCombinedBody();
   };
 
   useEffect(() => {
@@ -3241,6 +3298,7 @@ export default function AINovelPage() {
       ? (result?.body || editSourceBody || "").trim()
       : "";
     setResult(null);
+    setUploadedTextFileInfo(null);
     setLastGenerateParams(null);
     setLastPolishScope("full");
     setContinuationBody("");
@@ -4070,7 +4128,7 @@ export default function AINovelPage() {
 
   const handleCopyToClipboard = async () => {
     if (!result) return;
-    const text = `${result.generated_title}\n\n${getCombinedBody()}`;
+    const text = `${result.generated_title}\n\n${getEditableCombinedBody()}`;
     try {
       await navigator.clipboard.writeText(text);
       alert(t({ ja: "クリップボードにコピーしました。", en: "Copied to clipboard." }));
@@ -4081,6 +4139,163 @@ export default function AINovelPage() {
           en: "Copy failed. Please select the text and copy manually.",
         })
       );
+    }
+  };
+
+  const makeTextFileName = (baseName: any) => {
+    const safeBase =
+      String(baseName || "")
+        .trim()
+        .replace(/[\\/:*?"<>|]/g, "_")
+        .replace(/\s+/g, "_")
+        .slice(0, 80) || "ai_novel";
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    return `${safeBase}_${stamp}.txt`;
+  };
+
+  const handleDownloadTextFile = () => {
+    if (!result) return;
+    const titleText = String(result.generated_title || t({ ja: "生成された小説", en: "Generated Novel" })).trim();
+    const bodyText = getEditableCombinedBody();
+    if (!bodyText.trim()) {
+      setError(t({ ja: "ダウンロードする本文がありません。", en: "No text available to download." }));
+      return;
+    }
+    const text = titleText ? `${titleText}\n\n${bodyText}` : bodyText;
+    const blob = new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = makeTextFileName(titleText);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleUploadTextFile = async (event: any) => {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    try {
+      const originalFileName = String(file.name || "").trim();
+      const fileName = originalFileName.replace(/\.[^.]+$/, "").trim();
+      const text = await file.text();
+      const normalizedText = String(text || "").replace(/^\uFEFF/, "");
+      if (!normalizedText.trim()) {
+        setError(t({ ja: "空のテキストファイルは読み込めません。", en: "Empty text files cannot be imported." }));
+        return;
+      }
+      activeJobSessionRef.current += 1;
+      stopJobPolling();
+      clearPendingAiJob();
+      setPendingJob(null);
+      setLoading(false);
+      setContinuing(false);
+      setPolishing(false);
+      setRevisingByComment(false);
+      setIsContinueMode(false);
+      setEpisodeId(null);
+      setContinueNovelId(null);
+      setContinueEpisodeNumber(null);
+      setCanPostToContinueNovel(null);
+      setContinueInfoError("");
+      setIsEditMode(false);
+      setEditSourceBody("");
+      setEditEpisodeId(null);
+      const uploadedAt = new Date().toISOString();
+      const uploadedInfo = {
+        name: originalFileName || `${fileName || t({ ja: "アップロードした小説", en: "Uploaded novel" })}.txt`,
+        size: Number(file.size || 0),
+        importedAt: uploadedAt,
+      };
+      setUploadedTextFileInfo(uploadedInfo);
+      setResult({
+        generated_title: fileName || t({ ja: "アップロードした小説", en: "Uploaded novel" }),
+        body: normalizedText,
+        source: "text_upload",
+        uploaded_file_name: uploadedInfo.name,
+        uploaded_file_size: uploadedInfo.size,
+        uploaded_at: uploadedAt,
+      });
+      setContinuationBody("");
+      setPostEpisodeTitle("");
+      setTextEditMode(false);
+      setTextEditValue("");
+      setTextEditOriginal("");
+      setPolishPreview(null);
+      setLastPolishContext(null);
+      setLastPolishScope("full");
+      setRevisionChatScope("full");
+      setRevisionComments([
+        {
+          role: "assistant",
+          content: t({
+            ja: "テキストファイルを読み込みました。コメントを入力して全体修正、または本文を選択して部分修正できます。",
+            en: "Imported the text file. Enter a comment for full revision, or select text for partial revision.",
+          }),
+          at: new Date().toISOString(),
+        },
+      ]);
+      setRevisionCommentInput("");
+      setCommentRevisionUndoStack([]);
+      setCommentRevisionDiffSegments([]);
+      setCommentRevisionHasActiveDiff(false);
+      resetCommentRevisionLivePreview();
+      setLastRevisionTargetInfo(null);
+      setHasActiveSelection(false);
+      lastSelectionContextRef.current = null;
+      setError("");
+      setQuotaError("");
+      setPremiumError("");
+      setAutoFillError("");
+      setLastGenerateParams({
+        titleHint: fileName,
+        genre,
+        characters,
+        tone,
+        length,
+        model,
+        isR18,
+        retryMode,
+        retryMax,
+      });
+      markUserInput();
+      setTimeout(() => {
+        resultBodyRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 50);
+    } catch (e: any) {
+      console.error(e);
+      setError(t({ ja: "テキストファイルの読み込みに失敗しました。", en: "Failed to import the text file." }));
+    } finally {
+      if (event?.target) event.target.value = "";
+    }
+  };
+
+  const handleRemoveUploadedTextFile = () => {
+    activeJobSessionRef.current += 1;
+    stopJobPolling();
+    clearPendingAiJob();
+    setPendingJob(null);
+    setLoading(false);
+    setContinuing(false);
+    setPolishing(false);
+    setRevisingByComment(false);
+    stopChunkedProgress(false);
+    resetCommentRevisionLivePreview();
+    handleResetAll();
+    setRevisionComments([]);
+    setRevisionCommentInput("");
+    setRevisionChatScope("full");
+    setCommentRevisionUndoStack([]);
+    setCommentRevisionDiffSegments([]);
+    setCommentRevisionHasActiveDiff(false);
+    setLastRevisionTargetInfo(null);
+    setHasActiveSelection(false);
+    lastSelectionContextRef.current = null;
+    try {
+      window.getSelection?.()?.removeAllRanges();
+    } catch {
+      // ignore
     }
   };
 
@@ -4463,6 +4678,68 @@ export default function AINovelPage() {
           })}
         </p>
       )}
+
+      <div
+        style={{
+          marginBottom: "1rem",
+          padding: "0.75rem",
+          border: "1px solid var(--border)",
+          borderRadius: "8px",
+          backgroundColor: "var(--ai-result-surface)",
+          display: "flex",
+          gap: "0.75rem",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+        }}
+      >
+        <input
+          ref={textUploadInputRef}
+          type="file"
+          accept=".txt,text/plain"
+          onChange={handleUploadTextFile}
+          style={{ display: "none" }}
+        />
+        <div style={{ fontSize: "0.9rem", color: "var(--muted-text)", lineHeight: 1.5, flex: "1 1 260px" }}>
+          {uploadedTextFileInfo ? (
+            <div>
+              <div style={{ color: "var(--text)", fontWeight: 600 }}>
+                {t({ ja: "アップロード済み", en: "Uploaded" })}: {uploadedTextFileInfo.name}
+              </div>
+              <div style={{ fontSize: "0.82rem" }}>
+                {formatFileSize(uploadedTextFileInfo.size)}
+              </div>
+            </div>
+          ) : (
+            t({
+              ja: "TXTを読み込むと生成結果表示に切り替わり、全体修正・部分修正をそのまま使えます。",
+              en: "Import a TXT file to switch to the result view and use full or partial revision.",
+            })
+          )}
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+          {uploadedTextFileInfo && (
+            <button
+              type="button"
+              className="btn btn-border"
+              onClick={handleRemoveUploadedTextFile}
+              disabled={loading || continuing || polishing || revisingByComment}
+            >
+              {t({ ja: "削除", en: "Remove" })}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-border"
+            onClick={() => textUploadInputRef.current?.click()}
+            disabled={loading || continuing || polishing || revisingByComment}
+          >
+            {uploadedTextFileInfo
+              ? t({ ja: "TXTを差し替え", en: "Replace TXT" })
+              : t({ ja: "TXTアップロード", en: "Upload TXT" })}
+          </button>
+        </div>
+      </div>
 
       {!isEditMode && !isContinueMode && (
         <section
@@ -5382,10 +5659,18 @@ export default function AINovelPage() {
             backgroundColor: "var(--ai-result-bg)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
-            <h2 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>
-              {result.generated_title || t({ ja: "生成された小説", en: "Generated Novel" })}
-            </h2>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+            <div>
+              <h2 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>
+                {result.generated_title || t({ ja: "生成された小説", en: "Generated Novel" })}
+              </h2>
+              {uploadedTextFileInfo && (
+                <div style={{ fontSize: "0.85rem", color: "var(--muted-text)", marginBottom: "0.65rem" }}>
+                  {t({ ja: "アップロードファイル", en: "Uploaded file" })}: {uploadedTextFileInfo.name}
+                  {uploadedTextFileInfo.size ? ` (${formatFileSize(uploadedTextFileInfo.size)})` : ""}
+                </div>
+              )}
+            </div>
             <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
               <div style={{ minWidth: "180px" }}>
                 <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginBottom: "0.2rem" }}>
@@ -5512,6 +5797,38 @@ export default function AINovelPage() {
               >
                 {t({ ja: "文章をコピー", en: "Copy text" })}
               </button>
+              <button
+                type="button"
+                onClick={handleDownloadTextFile}
+                style={{
+                  height: "2.2rem",
+                  alignSelf: "center",
+                  padding: "0.3rem 0.8rem",
+                  borderRadius: "4px",
+                  border: "1px solid var(--border)",
+                  cursor: "pointer",
+                }}
+              >
+                {t({ ja: "TXTダウンロード", en: "Download TXT" })}
+              </button>
+              {uploadedTextFileInfo && (
+                <button
+                  type="button"
+                  onClick={handleRemoveUploadedTextFile}
+                  disabled={loading || continuing || polishing || revisingByComment}
+                  style={{
+                    height: "2.2rem",
+                    alignSelf: "center",
+                    padding: "0.3rem 0.8rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--border)",
+                    cursor: loading || continuing || polishing || revisingByComment ? "default" : "pointer",
+                    opacity: loading || continuing || polishing || revisingByComment ? 0.7 : 1,
+                  }}
+                >
+                  {t({ ja: "アップロードを削除", en: "Remove upload" })}
+                </button>
+              )}
               {!textEditMode ? (
                 <button
                   type="button"

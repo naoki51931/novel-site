@@ -38,7 +38,7 @@ def get_my_ai_logs_service(*, request: Request, db: Session, limit: int):
     return [
         {
             "id": log.id,
-            "created_at": log.created_at,
+            "created_at": legacy.to_utc_isoformat(log.created_at),
             "prompt_summary": log.prompt_summary,
             "tokens_used": log.tokens_used,
             "model": log.model,

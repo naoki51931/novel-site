@@ -358,6 +358,8 @@ def admin_delete_user_service(*, user_id: int, request: Request, db: Session):
         "DELETE FROM direct_message_threads WHERE user1_id = :uid OR user2_id = :uid",
         "DELETE FROM episode_likes WHERE user_id = :uid",
         "DELETE FROM novel_likes WHERE user_id = :uid",
+        "DELETE FROM board_post_likes WHERE user_id = :uid",
+        "DELETE FROM board_post_likes WHERE post_id IN (SELECT id FROM board_posts WHERE user_id = :uid)",
         "DELETE FROM novel_favorites WHERE user_id = :uid",
         "DELETE FROM user_follows WHERE follower_user_id = :uid OR followed_user_id = :uid",
         "DELETE FROM tag_follows WHERE user_id = :uid",
@@ -445,7 +447,7 @@ def admin_get_ai_logs_service(*, request: Request, limit: int, db: Session):
     return [
         {
             "id": log.id,
-            "created_at": log.created_at,
+            "created_at": legacy.to_utc_isoformat(log.created_at),
             "prompt_summary": log.prompt_summary,
             "tokens_used": log.tokens_used,
             "model": log.model,

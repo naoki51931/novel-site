@@ -68,12 +68,12 @@ def list_my_ai_chat_favorites_service(*, request: Request, db: Session):
                     getattr(character, "personality", None)
                 ),
                 "author_username": author_username,
-                "published_at": legacy.to_jst_isoformat(getattr(character, "published_at", None)),
+                "published_at": legacy.to_utc_isoformat(getattr(character, "published_at", None)),
                 "image_url": getattr(character, "image_url", None),
                 "is_r18": bool(getattr(character, "is_r18", False)),
                 "like_count": like_counts.get(int(character.id), 0),
                 "favorite_count": favorite_counts.get(int(character.id), 0),
-                "created_at": legacy.to_jst_isoformat(getattr(favorite_link, "created_at", None)),
+                "created_at": legacy.to_utc_isoformat(getattr(favorite_link, "created_at", None)),
             }
         )
     return output

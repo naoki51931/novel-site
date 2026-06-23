@@ -52,7 +52,7 @@ def i18n_dictionary_service(*, target_lang: str):
             .first()
         )
         updated_at = (
-            legacy.to_jst_isoformat(updated_row[0])
+            legacy.to_utc_isoformat(updated_row[0])
             if updated_row and updated_row[0]
             else i18n_runtime.get_ui_i18n_published_updated_at()
         )

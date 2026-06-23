@@ -6,26 +6,31 @@ from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 
 
-def install_jst_json_encoder(
+def install_utc_json_encoder(
     *,
     fastapi_routing_module,
     fastapi_jsonable_encoder,
     datetime_cls,
-    to_jst_isoformat,
+    to_utc_isoformat,
 ):
-    def _jsonable_encoder_with_jst(*args, **kwargs):
+    def _jsonable_encoder_with_utc(*args, **kwargs):
         custom = dict(kwargs.pop("custom_encoder", {}) or {})
-        custom.setdefault(datetime_cls, to_jst_isoformat)
+        custom.setdefault(datetime_cls, to_utc_isoformat)
         return fastapi_jsonable_encoder(*args, custom_encoder=custom, **kwargs)
 
-    fastapi_routing_module.jsonable_encoder = _jsonable_encoder_with_jst
+    fastapi_routing_module.jsonable_encoder = _jsonable_encoder_with_utc
+
+
+install_jst_json_encoder = install_utc_json_encoder
 
 
 def build_shared_runtime_exports(
     *,
     utcnow_impl,
     to_jst_isoformat_impl,
+    to_utc_isoformat_impl,
     display_payload_in_jst_impl,
+    display_payload_in_utc_impl,
     get_novel_char_counts_impl,
     apply_novel_daily_metric_impl,
     normalize_illust_tag_impl,
@@ -40,7 +45,9 @@ def build_shared_runtime_exports(
     return {
         "utcnow": utcnow_impl,
         "to_jst_isoformat": to_jst_isoformat_impl,
+        "to_utc_isoformat": to_utc_isoformat_impl,
         "display_payload_in_jst": display_payload_in_jst_impl,
+        "display_payload_in_utc": display_payload_in_utc_impl,
         "get_novel_char_counts": get_novel_char_counts_impl,
         "apply_novel_daily_metric": apply_novel_daily_metric_impl,
         "normalize_illust_tag": normalize_illust_tag_impl,

@@ -1,6 +1,7 @@
 from fastapi import HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
+from ..ai_job_helpers import SEGMENT_COUNT_MAX, SEGMENT_COUNT_MIN
 from ..schemas_ai_story_agent import StoryAgentResponse
 
 
@@ -35,10 +36,13 @@ async def generate_story_agent_reply_service(*, payload, request: Request, respo
     chunked_generation_enabled = (
         bool(payload.chunked_generation_enabled) if payload.chunked_generation_enabled is not None else False
     )
-    chunked_generation_count = max(1, min(30, int(payload.chunked_generation_count or 1)))
+    chunked_generation_count = max(
+        SEGMENT_COUNT_MIN,
+        min(SEGMENT_COUNT_MAX, int(payload.chunked_generation_count or SEGMENT_COUNT_MIN)),
+    )
     chunked_generation_plans = [
         str(item or "").strip()
-        for item in list(payload.chunked_generation_plans or [])[:30]
+        for item in list(payload.chunked_generation_plans or [])[:SEGMENT_COUNT_MAX]
         if str(item or "").strip()
     ]
 
@@ -110,13 +114,16 @@ async def generate_story_agent_reply_service(*, payload, request: Request, respo
     next_chunked_count = None
     if data.get("chunked_generation_count") is not None:
         try:
-            next_chunked_count = max(1, min(30, int(data.get("chunked_generation_count"))))
+            next_chunked_count = max(
+                SEGMENT_COUNT_MIN,
+                min(SEGMENT_COUNT_MAX, int(data.get("chunked_generation_count"))),
+            )
         except Exception:
             next_chunked_count = None
     next_chunked_plans: list[str] = []
     raw_plans = data.get("chunked_generation_plans")
     if isinstance(raw_plans, list):
-        for item in raw_plans[:30]:
+        for item in raw_plans[:SEGMENT_COUNT_MAX]:
             text = str(item or "").strip()
             if text:
                 next_chunked_plans.append(text)

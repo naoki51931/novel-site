@@ -170,6 +170,7 @@ def _build_user_cache_payload(user) -> dict[str, Any]:
             getattr(user, "email_notifications_enabled", True)
         ),
         "favorite_visibility": favorite_visibility,
+        "timezone": str(getattr(user, "timezone", "Asia/Tokyo") or "Asia/Tokyo"),
         "profile_bio": str(getattr(user, "profile_bio", "") or "") or None,
         "profile_icon_url": str(getattr(user, "profile_icon_url", "") or "") or None,
         "profile_header_url": str(getattr(user, "profile_header_url", "") or "") or None,

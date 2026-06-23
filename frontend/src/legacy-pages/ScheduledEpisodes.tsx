@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 const API_BASE = getApiBase();
 
@@ -15,7 +16,7 @@ type ScheduledEpisode = {
 };
 
 export default function ScheduledEpisodes() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -119,7 +120,7 @@ export default function ScheduledEpisodes() {
                   <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{item.novel_title}</td>
                   <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{item.episode_title}</td>
                   <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                    {item.scheduled_publish_at ? new Date(item.scheduled_publish_at).toLocaleString() : "-"}
+                    {formatDateTimeInUserTimeZone(item.scheduled_publish_at, lang === "en" ? "en-US" : "ja-JP") || "-"}
                   </td>
                   <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{item.status}</td>
                   <td style={{ padding: 8, borderBottom: "1px solid #eee", textAlign: "center", whiteSpace: "nowrap" }}>

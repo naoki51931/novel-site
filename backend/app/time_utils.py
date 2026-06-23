@@ -42,16 +42,26 @@ def to_jst_isoformat(value: datetime | None) -> str | None:
     return converted.isoformat()
 
 
-def display_payload_in_jst(value):
+def to_utc_isoformat(value: datetime | None) -> str | None:
+    converted = ensure_utc(value)
+    if converted is None:
+        return None
+    return converted.isoformat()
+
+
+def display_payload_in_utc(value):
     if isinstance(value, datetime):
-        return to_jst_isoformat(value)
+        return to_utc_isoformat(value)
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, dict):
-        return {k: display_payload_in_jst(v) for k, v in value.items()}
+        return {k: display_payload_in_utc(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [display_payload_in_jst(v) for v in value]
+        return [display_payload_in_utc(v) for v in value]
     return value
+
+
+display_payload_in_jst = display_payload_in_utc
 
 
 class UTCDateTime(TypeDecorator):

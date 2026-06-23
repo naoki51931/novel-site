@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiFetch, authTokenExists } from "../lib/api";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 const BOARD_DRAFT_STORAGE_KEY = "board_post_draft_v1";
 const RECAPTCHA_SITE_KEY = (process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || "").toString().trim();
@@ -16,6 +17,8 @@ type BoardPost = {
   username?: string | null;
   display_name?: string | null;
   guest_name?: string | null;
+  like_count?: number | null;
+  is_liked?: boolean | null;
 };
 
 type ReplyDraftMap = Record<number, string>;
@@ -82,6 +85,7 @@ export default function Board() {
   const [posting, setPosting] = useState(false);
   const [replyPostingThreadId, setReplyPostingThreadId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [likingPostIds, setLikingPostIds] = useState<Set<number>>(() => new Set());
   const [isAdmin, setIsAdmin] = useState(false);
   const [error, setError] = useState("");
   const [replyTitleByThread, setReplyTitleByThread] = useState<ReplyDraftMap>({});
@@ -289,6 +293,50 @@ export default function Board() {
     }
   };
 
+  const handleToggleLike = async (post: BoardPost) => {
+    const postId = Number(post?.id || 0);
+    if (!postId) return;
+    if (!isLoggedIn) {
+      setError(t({ ja: "いいねするにはログインが必要です", en: "Login is required to like." }));
+      return;
+    }
+    const currentlyLiked = !!post.is_liked;
+    try {
+      setLikingPostIds((prev) => {
+        const next = new Set(prev);
+        next.add(postId);
+        return next;
+      });
+      setError("");
+      const data = await apiFetch("/api/board/posts/" + postId + "/like", {
+        method: currentlyLiked ? "DELETE" : "POST",
+        auth: true,
+      });
+      setPosts((prev) =>
+        prev.map((item) =>
+          Number(item.id) === postId
+            ? {
+                ...item,
+                is_liked: typeof data.liked === "boolean" ? data.liked : !currentlyLiked,
+                like_count:
+                  typeof data.like_count === "number"
+                    ? data.like_count
+                    : Math.max(0, Number(item.like_count || 0) + (currentlyLiked ? -1 : 1)),
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      setError(getErrorMessage(error, t({ ja: "いいね操作に失敗しました", en: "Failed to update like." })));
+    } finally {
+      setLikingPostIds((prev) => {
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
+    }
+  };
+
   const handleReplySubmit = async (mainPost: BoardPost) => {
     const mainId = Number(mainPost?.id || 0);
     if (!mainId) return;
@@ -334,6 +382,30 @@ export default function Board() {
       );
     }
     return <span>{post?.display_name || post?.guest_name || t({ ja: "ゲスト", en: "Guest" })}</span>;
+  };
+
+  const renderLikeButton = (post: BoardPost) => {
+    const postId = Number(post?.id || 0);
+    const isBusy = likingPostIds.has(postId);
+    const count = Number(post?.like_count || 0);
+    const liked = !!post?.is_liked;
+    return (
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => handleToggleLike(post)}
+        disabled={isBusy}
+        aria-pressed={liked}
+        aria-label={liked ? t({ ja: "いいねを取り消す", en: "Unlike" }) : t({ ja: "いいね", en: "Like" })}
+        title={liked ? t({ ja: "いいねを取り消す", en: "Unlike" }) : t({ ja: "いいね", en: "Like" })}
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+      >
+        <span aria-hidden="true" style={{ color: liked ? "#e7497a" : "var(--muted-text)", fontSize: 16 }}>
+          {liked ? "♥" : "♡"}
+        </span>
+        <span>{count}</span>
+      </button>
+    );
   };
 
   const handleSelectMainThread = (post: BoardPost) => {
@@ -466,14 +538,13 @@ export default function Board() {
                     <span> · </span>
                     <span>
                       {post.created_at
-                        ? new Date(post.created_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-                            timeZone: "Asia/Tokyo",
-                          })
+                        ? formatDateTimeInUserTimeZone(post.created_at, lang === "en" ? "en-US" : "ja-JP")
                         : ""}
                     </span>
                   </div>
                   <p style={{ margin: "10px 0 0", whiteSpace: "pre-wrap" }}>{post.body}</p>
                   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {renderLikeButton(post)}
                     <button
                       type="button"
                       className="btn btn-border"
@@ -585,13 +656,14 @@ export default function Board() {
                           <span> · </span>
                           <span>
                             {reply.created_at
-                              ? new Date(reply.created_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-                                  timeZone: "Asia/Tokyo",
-                                })
+                              ? formatDateTimeInUserTimeZone(reply.created_at, lang === "en" ? "en-US" : "ja-JP")
                               : ""}
                           </span>
                         </div>
                         <p style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}>{reply.body}</p>
+                        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {renderLikeButton(reply)}
+                        </div>
                         {isAdmin && (
                           <div style={{ marginTop: 8 }}>
                             <button

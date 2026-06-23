@@ -38,6 +38,8 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN email_notifications_enabled TINYINT(1) NOT NULL DEFAULT 1")
             if "favorite_visibility" not in existing:
                 alters.append("ADD COLUMN favorite_visibility VARCHAR(16) NOT NULL DEFAULT 'public'")
+            if "timezone" not in existing:
+                alters.append("ADD COLUMN timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Tokyo'")
             if "profile_bio" not in existing:
                 alters.append("ADD COLUMN profile_bio TEXT NULL")
             if "profile_icon_url" not in existing:
@@ -646,6 +648,30 @@ def ensure_tag_indexes():
         print("[db] ensure_tag_indexes failed:", repr(e))
 
 
+def ensure_board_post_likes_table():
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS board_post_likes (
+                      id INT AUTO_INCREMENT PRIMARY KEY,
+                      post_id INT NOT NULL,
+                      user_id INT NOT NULL,
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      UNIQUE KEY uq_board_post_likes_post_user (post_id, user_id),
+                      KEY ix_board_post_likes_post_id (post_id),
+                      KEY ix_board_post_likes_user_id (user_id),
+                      CONSTRAINT fk_board_post_likes_post_id FOREIGN KEY (post_id) REFERENCES board_posts(id) ON DELETE CASCADE,
+                      CONSTRAINT fk_board_post_likes_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+    except Exception as e:
+        print("[db] ensure_board_post_likes_table failed:", repr(e))
+
+
 def ensure_seo_pages_table() -> None:
     try:
         with engine.begin() as conn:
@@ -685,6 +711,7 @@ def run_db_bootstrap() -> None:
     ensure_novels_table_columns()
     ensure_cover_generations_table()
     ensure_board_posts_table_columns()
+    ensure_board_post_likes_table()
     ensure_ai_novel_jobs_table_columns()
     ensure_ai_chat_tables()
     ensure_ai_memory_items_table_columns()

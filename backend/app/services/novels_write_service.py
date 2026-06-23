@@ -27,6 +27,7 @@ from ..runtime_config import (
     SITE_KEY_DEFAULT,
 )
 from ..site_helpers import normalize_site_key as normalize_site_key_impl, resolve_site_key as resolve_site_key_impl
+from ..database import SessionLocal
 from ..translation_helpers import _background_upsert_novel_translation, upsert_novel_translation
 from ..user_access_helpers import require_current_user as require_current_user_impl
 
@@ -118,7 +119,16 @@ def create_novel_service(
         db.commit()
         db.refresh(novel)
     else:
-        background_tasks.add_task(_background_upsert_novel_translation, novel.id)
+        background_tasks.add_task(
+            _background_upsert_novel_translation,
+            novel.id,
+            session_local=SessionLocal,
+            models=models,
+            normalize_language=normalize_language,
+            get_novel_tag_names=get_novel_tag_names,
+            upsert_novel_translation=upsert_novel_translation,
+            logger=logger,
+        )
 
     if bool(getattr(novel, "is_public", True)):
         notify_recommended_users_new_novel(db, novel=novel)
@@ -247,7 +257,16 @@ def update_novel_service(
                 tag_names=tag_names_for_translation,
             )
         else:
-            background_tasks.add_task(_background_upsert_novel_translation, novel.id)
+            background_tasks.add_task(
+                _background_upsert_novel_translation,
+                novel.id,
+                session_local=SessionLocal,
+                models=models,
+                normalize_language=normalize_language,
+                get_novel_tag_names=get_novel_tag_names,
+                upsert_novel_translation=upsert_novel_translation,
+                logger=logger,
+            )
 
     db.commit()
     db.refresh(novel)

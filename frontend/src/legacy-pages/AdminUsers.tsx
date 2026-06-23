@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 type AdminUser = {
   id: number | string;
@@ -446,10 +447,7 @@ export default function AdminUsers() {
                                   <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
                                     {t({ ja: "作成日", en: "Created" })}:{" "}
                                     {novel.created_at
-                                      ? new Date(novel.created_at).toLocaleDateString(
-                                          lang === "en" ? "en-US" : "ja-JP",
-                                          { timeZone: "Asia/Tokyo" }
-                                        )
+                                      ? formatDateTimeInUserTimeZone(novel.created_at, lang === "en" ? "en-US" : "ja-JP", { year: "numeric", month: "numeric", day: "numeric" })
                                       : "-"}
                                   </div>
                                 </div>

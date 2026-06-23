@@ -590,6 +590,7 @@ async def call_ai_json(
                     {"role": "system", "content": system_instructions},
                     {"role": "user", "content": prompt},
                 ],
+                "response_format": {"type": "json_object"},
                 "max_tokens": max_output_tokens,
             }
             if temperature is not None:
@@ -606,7 +607,7 @@ async def call_ai_json(
             raise
         except Exception as e:
             print("[ERROR] DeepSeek API 呼び出し失敗:", repr(e))
-            raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
+            _raise_ai_api_call_error("AI JSON API", e)
 
         raw = ""
         try:
@@ -627,6 +628,7 @@ async def call_ai_json(
                     {"role": "system", "content": system_instructions},
                     {"role": "user", "content": prompt},
                 ],
+                "response_format": {"type": "json_object"},
                 "max_tokens": max_output_tokens,
             }
             if temperature is not None:
@@ -643,7 +645,7 @@ async def call_ai_json(
             raise
         except Exception as e:
             print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))
-            raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
+            _raise_ai_api_call_error("AI JSON API", e)
 
         raw = ""
         try:
@@ -680,7 +682,7 @@ async def call_ai_json(
             raise
         except Exception as e:
             print("[ERROR] OpenAI Chat API 呼び出し失敗:", repr(e))
-            raise HTTPException(status_code=502, detail=f"AI 翻訳 API 呼び出しに失敗しました: {e!r}")
+            _raise_ai_api_call_error("AI JSON API", e)
 
         raw = ""
         try:
@@ -924,6 +926,7 @@ async def call_openai_tag_candidates(text: str, model: str | None = None) -> tup
         model=effective_model,
         provider=provider_from_model(effective_model),
         system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        temperature=0.2,
         max_output_tokens=256,
     )
 
@@ -975,6 +978,7 @@ async def call_openai_title_candidate(text: str, model: str | None = None) -> tu
         model=effective_model,
         provider=provider_from_model(effective_model),
         system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        temperature=0.2,
         max_output_tokens=128,
     )
 
@@ -1019,6 +1023,7 @@ async def call_openai_title_candidates(
         model=effective_model,
         provider=provider_from_model(effective_model),
         system_instructions="あなたは日本語の編集者です。必ず JSON のみを返してください。",
+        temperature=0.2,
         max_output_tokens=256,
     )
 

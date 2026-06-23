@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 const API_BASE = getApiBase();
 
@@ -168,10 +169,7 @@ export default function DirectMessageThread() {
                 <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                   {msg.sender_username || t({ ja: "ユーザー", en: "User" })} /{" "}
                   {msg.created_at
-                    ? new Date(msg.created_at).toLocaleString(
-                        lang === "en" ? "en-US" : "ja-JP",
-                        { timeZone: "Asia/Tokyo" }
-                      )
+                    ? formatDateTimeInUserTimeZone(msg.created_at, lang === "en" ? "en-US" : "ja-JP")
                     : ""}
                   {currentUserId && msg.sender_id === currentUserId && (
                     <span style={{ marginLeft: 8 }}>

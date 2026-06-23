@@ -7,6 +7,7 @@ import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
 import { filterR18Novels, useShowR18ByDisplaySetting } from "../lib/r18Display";
 import { hasRecentEpisodeActivity } from "../lib/freshness";
+import { formatDateTimeInUserTimeZone, setUserTimeZone } from "../lib/timezone";
 
 const API_BASE = getApiBase();
 
@@ -439,7 +440,8 @@ export default function Home({
           setPremiumChecked(true);
           return;
         }
-        await res.json().catch(() => ({}));
+        const profile = await res.json().catch(() => ({}));
+        if (profile?.timezone) setUserTimeZone(profile.timezone);
       } catch (err) {
         console.error(err);
       } finally {
@@ -1228,8 +1230,7 @@ export default function Home({
 
     try {
       setQuickEpisodeCreating(true);
-      const stamp = new Date().toLocaleString("ja-JP", {
-        timeZone: "Asia/Tokyo",
+      const stamp = formatDateTimeInUserTimeZone(new Date(), "ja-JP", {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",

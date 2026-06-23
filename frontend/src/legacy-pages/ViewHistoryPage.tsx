@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 import { readShowR18Setting } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
@@ -83,12 +84,8 @@ export default function ViewHistoryPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  const formatDateTime = (iso: string | null | undefined) => {
-    if (!iso) return "";
-    return new Date(iso).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-      timeZone: "Asia/Tokyo",
-    });
-  };
+  const formatDateTime = (iso: string | null | undefined) =>
+    formatDateTimeInUserTimeZone(iso, lang === "en" ? "en-US" : "ja-JP");
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>

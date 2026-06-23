@@ -297,7 +297,7 @@ export default function SearchBar({
   };
 
   return (
-    <form className="search-bar" onSubmit={handleSubmit}>
+    <form className={`search-bar ${activeToken?.keyword ? "search-bar-suggest-open" : ""}`.trim()} onSubmit={handleSubmit}>
       <div className="search-query-wrap">
         <input
           name="query"

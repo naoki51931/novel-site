@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPaperPlane } from "@fortawesome/free-regular-svg-icons";
 import { useI18n } from "../lib/i18n";
+import { setUserTimeZone } from "../lib/timezone";
 
 const AI_CHAT_CHARACTER_NAME_KEY = "ai_chat_character_name_v1";
 const AI_CHAT_PERSONALITY_KEY = "ai_chat_personality_v1";
@@ -1138,6 +1139,7 @@ export default function AiChatPage() {
       })
       .then((data) => {
         if (cancelled) return;
+        if (data?.timezone) setUserTimeZone(data.timezone);
         const preferredModel = String(data?.ai_chat_model || "").trim();
         if (preferredModel) {
           setRecommendedModelsOnly(false);

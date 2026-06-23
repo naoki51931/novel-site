@@ -10,6 +10,28 @@ def list_board_posts_service(request, db, limit):
         .limit(limit)
         .all()
     )
+    post_ids = [int(p.id) for p in posts]
+    like_counts = {}
+    liked_ids = set()
+    if post_ids:
+        like_rows = (
+            db.query(legacy.models.BoardPostLike.post_id, legacy.func.count(legacy.models.BoardPostLike.id))
+            .filter(legacy.models.BoardPostLike.post_id.in_(post_ids))
+            .group_by(legacy.models.BoardPostLike.post_id)
+            .all()
+        )
+        like_counts = {int(post_id): int(count or 0) for post_id, count in like_rows}
+        user = legacy.get_optional_current_user_soft(request, db)
+        if user:
+            liked_rows = (
+                db.query(legacy.models.BoardPostLike.post_id)
+                .filter(
+                    legacy.models.BoardPostLike.post_id.in_(post_ids),
+                    legacy.models.BoardPostLike.user_id == user.id,
+                )
+                .all()
+            )
+            liked_ids = {int(post_id) for (post_id,) in liked_rows}
     return [
         {
             "id": p.id,
@@ -23,6 +45,8 @@ def list_board_posts_service(request, db, limit):
             or getattr(p, "guest_name", None)
             or "ゲスト",
             "created_at": p.created_at,
+            "like_count": like_counts.get(int(p.id), 0),
+            "is_liked": int(p.id) in liked_ids,
         }
         for p in posts
     ]
@@ -180,3 +204,89 @@ def create_board_post_service(request, payload, db):
             link_url=link_url,
         )
     return {"ok": True, "id": post.id}
+
+
+def like_board_post_service(request, post_id, db):
+    from .. import main as legacy
+    from .. import notification_helpers
+
+    site_key = legacy.resolve_site_key(request)
+    user = legacy.require_current_user(request, db)
+    post = (
+        db.query(legacy.models.BoardPost)
+        .filter(
+            legacy.models.BoardPost.id == post_id,
+            legacy.models.BoardPost.site_key == site_key,
+        )
+        .first()
+    )
+    if not post:
+        raise legacy.HTTPException(status_code=404, detail="掲示板投稿が見つかりません")
+
+    existing = (
+        db.query(legacy.models.BoardPostLike)
+        .filter(
+            legacy.models.BoardPostLike.post_id == post.id,
+            legacy.models.BoardPostLike.user_id == user.id,
+        )
+        .first()
+    )
+    if not existing:
+        db.add(legacy.models.BoardPostLike(post_id=post.id, user_id=user.id))
+        if post.user_id and post.user_id != user.id:
+            title = "掲示板投稿にいいねが付きました"
+            body = f"{user.username}が掲示板投稿「{legacy._truncate_text(post.title, 80)}」にいいねしました"
+            link_url = f"/board#post-{post.id}"
+            notification_helpers.create_notification(
+                db,
+                user_id=post.user_id,
+                notif_type="board_post_like",
+                title=title,
+                body=body,
+                link_url=link_url,
+                actor_user_id=user.id,
+            )
+        db.commit()
+
+    like_count = (
+        db.query(legacy.models.BoardPostLike)
+        .filter(legacy.models.BoardPostLike.post_id == post.id)
+        .count()
+    )
+    return {"ok": True, "liked": True, "like_count": int(like_count or 0)}
+
+
+def unlike_board_post_service(request, post_id, db):
+    from .. import main as legacy
+
+    site_key = legacy.resolve_site_key(request)
+    user = legacy.require_current_user(request, db)
+    post = (
+        db.query(legacy.models.BoardPost)
+        .filter(
+            legacy.models.BoardPost.id == post_id,
+            legacy.models.BoardPost.site_key == site_key,
+        )
+        .first()
+    )
+    if not post:
+        raise legacy.HTTPException(status_code=404, detail="掲示板投稿が見つかりません")
+
+    like = (
+        db.query(legacy.models.BoardPostLike)
+        .filter(
+            legacy.models.BoardPostLike.post_id == post.id,
+            legacy.models.BoardPostLike.user_id == user.id,
+        )
+        .first()
+    )
+    if like:
+        db.delete(like)
+        db.commit()
+
+    like_count = (
+        db.query(legacy.models.BoardPostLike)
+        .filter(legacy.models.BoardPostLike.post_id == post.id)
+        .count()
+    )
+    return {"ok": True, "liked": False, "like_count": int(like_count or 0)}

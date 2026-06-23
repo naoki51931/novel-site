@@ -1,4 +1,5 @@
 from functools import partial
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import jwt
 from fastapi import HTTPException, Request
@@ -32,6 +33,17 @@ require_current_user = partial(
     models=models,
     http_exception_cls=HTTPException,
 )
+
+
+def _normalize_timezone(value: str | None) -> str:
+    raw = str(value or "").strip() or "Asia/Tokyo"
+    if len(raw) > 64:
+        raise HTTPException(400, "timezone が長すぎます")
+    try:
+        ZoneInfo(raw)
+    except ZoneInfoNotFoundError as e:
+        raise HTTPException(400, "timezone は有効なIANAタイムゾーンを指定してください") from e
+    return raw
 
 
 def _normalize_profile_url(value: str | None) -> str | None:
@@ -97,6 +109,8 @@ def update_profile_service(*, payload, request: Request, db: Session):
         if normalized_visibility not in ("public", "private"):
             raise HTTPException(400, "favorite_visibility は public/private のみ指定できます")
         user.favorite_visibility = normalized_visibility
+    if payload.timezone is not None:
+        user.timezone = _normalize_timezone(payload.timezone)
     if payload.profile_bio is not None:
         user.profile_bio = str(payload.profile_bio or "").strip()[:4000] or None
     if payload.profile_icon_url is not None:

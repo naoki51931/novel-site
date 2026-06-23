@@ -164,7 +164,7 @@ def list_public_ai_chat_characters_service(request, q, limit, offset, db):
                 recommendation_samples=blended_samples,
                 is_recommended=bool(blended_samples >= 2 and blended_score >= 0.42),
                 author_username=str(username or "") if username else None,
-                published_at=legacy.to_jst_isoformat(getattr(item, "published_at", None)),
+                published_at=legacy.to_utc_isoformat(getattr(item, "published_at", None)),
                 like_count=like_counts.get(item_id, 0),
                 favorite_count=favorite_counts.get(item_id, 0),
                 is_liked=item_id in liked_ids,

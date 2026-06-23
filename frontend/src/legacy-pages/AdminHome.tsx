@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 type ContactMessage = {
   id: number | string;
@@ -242,10 +243,7 @@ export default function AdminHome() {
                     {message.admin_username
                       ? `${message.admin_username} / `
                       : ""}
-                    {new Date(message.created_at).toLocaleString(
-                      lang === "en" ? "en-US" : "ja-JP",
-                      { timeZone: "Asia/Tokyo" }
-                    )}
+                    {formatDateTimeInUserTimeZone(message.created_at, lang === "en" ? "en-US" : "ja-JP")}
                   </div>
                 </div>
               ))}
@@ -326,10 +324,7 @@ export default function AdminHome() {
               {t(
                 { ja: "更新: {{time}}", en: "Updated: {{time}}" },
                 {
-                  time: new Date(indexingCarryoverUpdatedAt).toLocaleString(
-                    lang === "en" ? "en-US" : "ja-JP",
-                    { timeZone: "Asia/Tokyo" }
-                  ),
+                  time: formatDateTimeInUserTimeZone(indexingCarryoverUpdatedAt, lang === "en" ? "en-US" : "ja-JP"),
                 }
               )}
             </span>

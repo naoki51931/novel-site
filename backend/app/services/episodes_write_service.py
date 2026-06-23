@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..content_helpers import normalize_illust_tag, normalize_language, normalize_meta_tags, serialize_meta_tags
+from ..database import SessionLocal
 from ..episode_publish_helpers import (
     apply_episode_publish_mode,
     is_episode_draft,
@@ -192,7 +193,17 @@ def create_episode_service(
                 )
             db.commit()
         else:
-            background_tasks.add_task(_background_upsert_episode_and_novel_translation, episode.id)
+            background_tasks.add_task(
+                _background_upsert_episode_and_novel_translation,
+                episode.id,
+                session_local=SessionLocal,
+                models=models,
+                normalize_language=normalize_language,
+                upsert_episode_translation=upsert_episode_translation,
+                upsert_novel_translation=upsert_novel_translation,
+                get_novel_tag_names=get_novel_tag_names,
+                logger=logger,
+            )
     if publish_mode == "public":
         background_tasks.add_task(_background_notify_episode_published, novel_id, episode.id, site_key)
     if is_indexable_episode:

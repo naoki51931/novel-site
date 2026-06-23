@@ -1358,9 +1358,9 @@ def _serialize_ai_chat_character_response(legacy, *, db, item, owner_username, v
         is_public=bool(getattr(item, "is_public", False)),
         is_name_duplicate=bool(getattr(item, "is_name_duplicate", False)),
         name_duplicate_index=legacy._compute_ai_chat_name_duplicate_index(db=db, character=item),
-        published_at=legacy.to_jst_isoformat(getattr(item, "published_at", None)),
-        created_at=legacy.to_jst_isoformat(getattr(item, "created_at", None)),
-        updated_at=legacy.to_jst_isoformat(getattr(item, "updated_at", None)),
+        published_at=legacy.to_utc_isoformat(getattr(item, "published_at", None)),
+        created_at=legacy.to_utc_isoformat(getattr(item, "created_at", None)),
+        updated_at=legacy.to_utc_isoformat(getattr(item, "updated_at", None)),
     )
 
 
@@ -1606,7 +1606,7 @@ def list_ai_chat_messages_service(*, character_id, request, db):
             ).strip()
             or None,
             message_owner_username=(str(owner_username or "").strip() or None) if is_demo_reader else None,
-            created_at=legacy.to_jst_isoformat(getattr(msg, "created_at", None)),
+            created_at=legacy.to_utc_isoformat(getattr(msg, "created_at", None)),
         )
         for msg, owner_username in items
     ]
@@ -1786,7 +1786,7 @@ def get_public_ai_chat_character_detail_service(*, character_id, request, db):
         image_url=str(getattr(character, "image_url", "") or "").strip() or None,
         is_r18=bool(getattr(character, "is_r18", False)),
         author_username=str(username or "") if username else None,
-        published_at=legacy.to_jst_isoformat(getattr(character, "published_at", None)),
+        published_at=legacy.to_utc_isoformat(getattr(character, "published_at", None)),
         like_count=int(like_count or 0),
         favorite_count=int(favorite_count or 0),
         is_liked=bool(is_liked),
@@ -1798,7 +1798,7 @@ def get_public_ai_chat_character_detail_service(*, character_id, request, db):
                 mode="do" if msg.mode == "do" else "say",
                 is_auto_dialogue=bool(getattr(msg, "is_auto_dialogue", False)),
                 content=str(msg.content or ""),
-                created_at=legacy.to_jst_isoformat(getattr(msg, "created_at", None)),
+                created_at=legacy.to_utc_isoformat(getattr(msg, "created_at", None)),
             )
             for msg in messages
         ],
@@ -2041,7 +2041,7 @@ def get_ai_chat_engagement_summary_service(*, character_id, request, db):
     recent_items = [
         legacy.AIChatEngagementSummaryItem(
             id=int(r.id),
-            created_at=legacy.to_jst_isoformat(getattr(r, "created_at", None)),
+            created_at=legacy.to_utc_isoformat(getattr(r, "created_at", None)),
             latency_bucket=str(getattr(r, "latency_bucket", "slow") or "slow"),
             followup_latency_seconds=float(getattr(r, "followup_latency_seconds", 0.0) or 0.0),
             engagement_score=float(getattr(r, "engagement_score", 0.0) or 0.0),
@@ -2367,7 +2367,7 @@ async def upload_ai_chat_message_images_service(*, character_id, request, files,
         message_id=int(msg.id),
         images=saved_images,
         descriptions=descriptions,
-        created_at=legacy.to_jst_isoformat(getattr(msg, "created_at", None)),
+        created_at=legacy.to_utc_isoformat(getattr(msg, "created_at", None)),
     )
 
 

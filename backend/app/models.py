@@ -24,6 +24,7 @@ class User(Base):
     email_notifications_enabled = Column(Boolean, nullable=False, server_default="1")
     # ブックマーク公開設定（public/private）
     favorite_visibility = Column(String(16), nullable=False, server_default="public")
+    timezone = Column(String(64), nullable=False, server_default="Asia/Tokyo")
     profile_bio = Column(Text, nullable=True)
     profile_icon_url = Column(String(255), nullable=True)
     profile_header_url = Column(String(255), nullable=True)
@@ -78,6 +79,7 @@ class User(Base):
     episode_likes = relationship("EpisodeLike", back_populates="user")
     novel_likes = relationship("NovelLike", back_populates="user")
     ai_chat_character_likes = relationship("AIChatCharacterLike", back_populates="user")
+    board_post_likes = relationship("BoardPostLike", back_populates="user")
     ai_chat_character_favorites = relationship("AIChatCharacterFavorite", back_populates="user")
     ai_generate_logs = relationship("AIGenerateLog", back_populates="user")
     oauth_accounts = relationship(
@@ -759,6 +761,23 @@ class BoardPost(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
     user = relationship("User", back_populates="board_posts")
+    likes = relationship("BoardPostLike", back_populates="post", cascade="all, delete-orphan")
+
+
+class BoardPostLike(Base):
+    __tablename__ = "board_post_likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(Integer, ForeignKey("board_posts.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    post = relationship("BoardPost", back_populates="likes")
+    user = relationship("User", back_populates="board_post_likes")
+
+    __table_args__ = (
+        UniqueConstraint("post_id", "user_id", name="uq_board_post_likes_post_user"),
+    )
 
 
 class AIGenerateLog(Base):

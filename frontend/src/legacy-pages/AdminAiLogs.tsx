@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 type AdminAiLog = {
   id: number;
@@ -82,12 +83,8 @@ export default function AdminAiLogs() {
     load();
   }, [navigate, t]);
 
-  const formatDateTime = (iso: string | null | undefined) => {
-    if (!iso) return "";
-    return new Date(iso).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-      timeZone: "Asia/Tokyo",
-    });
-  };
+  const formatDateTime = (iso: string | null | undefined) =>
+    formatDateTimeInUserTimeZone(iso, lang === "en" ? "en-US" : "ja-JP");
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>

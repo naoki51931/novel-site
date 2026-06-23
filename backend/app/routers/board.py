@@ -41,4 +41,26 @@ def create_board_post(
     from ..features.board_service import create_board_post_service
 
     return create_board_post_service(request=request, payload=payload, db=db)
+
+@router.post("/api/board/posts/{post_id}/like")
+def like_board_post(
+    post_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..features.board_service import like_board_post_service
+
+    return like_board_post_service(request=request, post_id=post_id, db=db)
+
+
+@router.delete("/api/board/posts/{post_id}/like")
+def unlike_board_post(
+    post_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from ..features.board_service import unlike_board_post_service
+
+    return unlike_board_post_service(request=request, post_id=post_id, db=db)
+
 # END AUTO-GENERATED ROUTER WRAPPERS: BOARD

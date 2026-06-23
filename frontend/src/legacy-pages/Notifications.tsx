@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
+import { formatDateTimeInUserTimeZone, setUserTimeZone } from "../lib/timezone";
 
 type NotificationGroup = "all" | "reaction" | "follow" | "update" | "system";
 
@@ -93,6 +94,7 @@ export default function Notifications() {
           );
         }
         const profile = await res.json();
+        if (profile?.timezone) setUserTimeZone(profile.timezone);
         setEmailNotificationsEnabled(
           profile.email_notifications_enabled !== false
         );
@@ -561,9 +563,7 @@ export default function Notifications() {
                     </div>
                     <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
                       {n.created_at
-                        ? new Date(n.created_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-                            timeZone: "Asia/Tokyo",
-                          })
+                        ? formatDateTimeInUserTimeZone(n.created_at, lang === "en" ? "en-US" : "ja-JP")
                         : ""}
                     </div>
                   </div>

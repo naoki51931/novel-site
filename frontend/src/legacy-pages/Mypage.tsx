@@ -4,6 +4,7 @@ import TagChipLink from "../components/TagChipLink";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone, setUserTimeZone } from "../lib/timezone";
 import {
   MYPAGE_SHOW_R18_STORAGE_KEY,
   R18_DISPLAY_CHANGE_EVENT,
@@ -381,6 +382,7 @@ export default function Mypage() {
           setIsPremium(!!profile.is_premium);
           setEmailAddressInvalid(profile.email_address_invalid === true);
           setProfileEmail((profile.email || "").trim());
+          if (profile.timezone) setUserTimeZone(profile.timezone);
           if (profile.username) {
             setUsername(profile.username);
             localStorage.setItem("username", profile.username);
@@ -799,7 +801,7 @@ export default function Mypage() {
                     {t({ ja: "状態", en: "Status" })}: {job.status}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
-                    {t({ ja: "作成", en: "Created" })}: {job.created_at || "-"}
+                    {t({ ja: "作成", en: "Created" })}: {formatDateTimeInUserTimeZone(job.created_at, lang === "en" ? "en-US" : "ja-JP") || "-"}
                   </div>
                 </div>
               </label>

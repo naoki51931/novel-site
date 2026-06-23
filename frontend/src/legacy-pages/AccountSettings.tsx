@@ -3,6 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { getSavedTheme, setTheme } from "../theme";
 import { useI18n } from "../lib/i18n";
+import {
+  DEFAULT_USER_TIMEZONE,
+  TIME_ZONE_OPTIONS,
+  getUserTimeZone,
+  setUserTimeZone,
+} from "../lib/timezone";
 
 const MYPAGE_SHOW_CHATBOT_STORAGE_KEY = "mypage_show_chatbot";
 const BIRTH_YEAR_MIN = 1900;
@@ -90,6 +96,7 @@ export default function AccountSettings() {
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [favoriteVisibility, setFavoriteVisibility] = useState("public");
+  const [timeZone, setTimeZone] = useState(() => getUserTimeZone());
   const [profileBio, setProfileBio] = useState("");
   const [profileIconUrl, setProfileIconUrl] = useState("");
   const [profileHeaderUrl, setProfileHeaderUrl] = useState("");
@@ -173,6 +180,8 @@ export default function AccountSettings() {
         setFavoriteVisibility(
           data.favorite_visibility === "private" ? "private" : "public"
         );
+        const loadedTimeZone = setUserTimeZone(data.timezone || DEFAULT_USER_TIMEZONE);
+        setTimeZone(loadedTimeZone);
         setProfileBio(data.profile_bio || "");
         setProfileIconUrl(data.profile_icon_url || "");
         setProfileHeaderUrl(data.profile_header_url || "");
@@ -228,6 +237,7 @@ export default function AccountSettings() {
           email,
           birth_date: birthDate,
           favorite_visibility: favoriteVisibility,
+          timezone: timeZone,
           profile_bio: profileBio,
           profile_icon_url: profileIconUrl,
           profile_header_url: profileHeaderUrl,
@@ -277,6 +287,7 @@ export default function AccountSettings() {
       }
 
       localStorage.setItem("username", username);
+      setUserTimeZone(timeZone);
       alert(t({ ja: "保存しました。", en: "Saved." }));
     } catch (e) {
       setError(getErrorMessage(e, t({ ja: "保存に失敗しました", en: "Failed to save." })));
@@ -345,6 +356,26 @@ export default function AccountSettings() {
                 {t({
                   ja: "チャットbotを表示（AIチャットで使用モデルを表示）",
                   en: "Show chatbot info (show model in AI chat)",
+                })}
+              </span>
+            </label>
+            <label style={{ display: "grid", gap: 4, marginTop: 12 }}>
+              <span>{t({ ja: "タイムゾーン", en: "Time zone" })}</span>
+              <select
+                value={timeZone}
+                onChange={(e) => setTimeZone(e.target.value)}
+                style={{ width: "100%", padding: 4 }}
+              >
+                {TIME_ZONE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {t({ ja: option.labelJa, en: option.labelEn })} ({option.value})
+                  </option>
+                ))}
+              </select>
+              <span style={{ fontSize: 12, color: "var(--muted-text)" }}>
+                {t({
+                  ja: "小説・エピソード・通知・AI利用履歴などの日時表示に使用します。",
+                  en: "Used for date/time display such as novels, episodes, notifications, and AI usage history.",
                 })}
               </span>
             </label>

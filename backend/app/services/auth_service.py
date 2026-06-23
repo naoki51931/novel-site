@@ -498,11 +498,12 @@ async def oauth_callback_service(*, provider: str, code: str | None = None, stat
                     },
                 )
                 token_body = token_res.text
-                print(f"GOOGLE TOKEN status={token_res.status_code} body={token_body}")
                 try:
                     token_data = token_res.json()
                 except Exception:
                     token_data = {}
+                safe_token_keys = sorted(str(k) for k in token_data.keys()) if isinstance(token_data, dict) else []
+                print(f"GOOGLE TOKEN status={token_res.status_code} keys={safe_token_keys}")
                 if token_res.status_code != 200:
                     error_detail = (
                         token_data.get("error_description")

@@ -34,8 +34,8 @@ def list_my_ai_jobs_service(*, request, response, db):
             "id": job.id,
             "status": job.status,
             "job_type": job.job_type,
-            "created_at": legacy.to_jst_isoformat(job.created_at),
-            "started_at": legacy.to_jst_isoformat(job.started_at),
+            "created_at": legacy.to_utc_isoformat(job.created_at),
+            "started_at": legacy.to_utc_isoformat(job.started_at),
         }
         for job in jobs
     ]
@@ -146,8 +146,8 @@ def list_all_ai_jobs_service(*, request, db):
             "user_id": job.user_id,
             "status": job.status,
             "job_type": job.job_type,
-            "created_at": legacy.to_jst_isoformat(job.created_at),
-            "started_at": legacy.to_jst_isoformat(job.started_at),
+            "created_at": legacy.to_utc_isoformat(job.created_at),
+            "started_at": legacy.to_utc_isoformat(job.started_at),
         }
         for job in jobs
     ]

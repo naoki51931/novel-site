@@ -144,6 +144,20 @@ def admin_delete_board_post_service(*, post_id: int, request: Request, db: Sessi
     )
     if not post:
         raise HTTPException(404, "投稿が見つかりません")
+    child_ids = [
+        int(row[0])
+        for row in db.query(legacy.models.BoardPost.id)
+        .filter(
+            legacy.models.BoardPost.parent_post_id == post.id,
+            legacy.models.BoardPost.site_key == site_key,
+        )
+        .all()
+    ]
+    delete_post_ids = [int(post.id), *child_ids]
+    if delete_post_ids:
+        db.query(legacy.models.BoardPostLike).filter(
+            legacy.models.BoardPostLike.post_id.in_(delete_post_ids)
+        ).delete(synchronize_session=False)
     db.query(legacy.models.BoardPost).filter(
         legacy.models.BoardPost.parent_post_id == post.id,
         legacy.models.BoardPost.site_key == site_key,

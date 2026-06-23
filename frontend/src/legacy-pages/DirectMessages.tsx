@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { getErrorMessage } from "../lib/errorUtils";
 import { useI18n } from "../lib/i18n";
 import { getApiBase } from "../lib/apiBase";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 const API_BASE = getApiBase();
 
@@ -140,9 +141,7 @@ export default function DirectMessages() {
               </div>
               <div style={{ fontSize: 12, color: "var(--muted-text)", marginBottom: 6 }}>
                 {thread.updated_at
-                  ? new Date(thread.updated_at).toLocaleString(lang === "en" ? "en-US" : "ja-JP", {
-                      timeZone: "Asia/Tokyo",
-                    })
+                  ? formatDateTimeInUserTimeZone(thread.updated_at, lang === "en" ? "en-US" : "ja-JP")
                   : ""}
               </div>
               <div style={{ whiteSpace: "pre-wrap", color: "var(--text)" }}>

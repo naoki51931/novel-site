@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import TagChipLink from "./TagChipLink";
 import { hasRecentEpisodeActivity } from "../lib/freshness";
 import { formatReadMinutes } from "../lib/readTime";
+import { formatDateTimeInUserTimeZone } from "../lib/timezone";
 
 type TranslateFn = (messages: Record<string, string>, vars?: Record<string, string | number>) => string;
 
@@ -148,7 +149,7 @@ export default function NovelCard({
 
         {showCreatedAt && novel.created_at ? (
           <div className="novel-card-created-at">
-            {t({ ja: "作成日時", en: "Created" })}: {new Date(novel.created_at).toLocaleString("ja-JP")}
+            {t({ ja: "作成日時", en: "Created" })}: {formatDateTimeInUserTimeZone(novel.created_at, "ja-JP")}
           </div>
         ) : null}
 

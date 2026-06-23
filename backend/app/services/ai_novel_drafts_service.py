@@ -18,7 +18,7 @@ def get_ai_novel_draft_service(*, request, db):
     updated_at = getattr(user, "ai_novel_draft_updated_at", None)
     return {
         "draft": payload,
-        "updated_at": legacy.to_jst_isoformat(updated_at),
+        "updated_at": legacy.to_utc_isoformat(updated_at),
     }
 
 
@@ -34,7 +34,7 @@ def save_ai_novel_draft_service(*, payload, request, db):
     db.commit()
     return {
         "draft": draft_payload,
-        "updated_at": legacy.to_jst_isoformat(user.ai_novel_draft_updated_at),
+        "updated_at": legacy.to_utc_isoformat(user.ai_novel_draft_updated_at),
     }
 
 
@@ -52,8 +52,8 @@ def list_ai_novel_drafts_service(*, request, db):
         {
             "id": d.id,
             "title": d.title,
-            "updated_at": legacy.to_jst_isoformat(d.updated_at),
-            "created_at": legacy.to_jst_isoformat(d.created_at),
+            "updated_at": legacy.to_utc_isoformat(d.updated_at),
+            "created_at": legacy.to_utc_isoformat(d.created_at),
         }
         for d in drafts
     ]
@@ -80,8 +80,8 @@ def create_ai_novel_draft_service(*, payload, request, db):
         "id": draft.id,
         "title": draft.title,
         "draft": draft_payload,
-        "updated_at": legacy.to_jst_isoformat(draft.updated_at),
-        "created_at": legacy.to_jst_isoformat(draft.created_at),
+        "updated_at": legacy.to_utc_isoformat(draft.updated_at),
+        "created_at": legacy.to_utc_isoformat(draft.created_at),
     }
 
 
@@ -105,8 +105,8 @@ def get_ai_novel_draft_slot_service(*, draft_id, request, db):
         "id": draft.id,
         "title": draft.title,
         "draft": payload,
-        "updated_at": legacy.to_jst_isoformat(draft.updated_at),
-        "created_at": legacy.to_jst_isoformat(draft.created_at),
+        "updated_at": legacy.to_utc_isoformat(draft.updated_at),
+        "created_at": legacy.to_utc_isoformat(draft.created_at),
     }
 
 
@@ -135,8 +135,8 @@ def update_ai_novel_draft_service(*, draft_id, payload, request, db):
         "id": draft.id,
         "title": draft.title,
         "draft": draft_payload,
-        "updated_at": legacy.to_jst_isoformat(draft.updated_at),
-        "created_at": legacy.to_jst_isoformat(draft.created_at),
+        "updated_at": legacy.to_utc_isoformat(draft.updated_at),
+        "created_at": legacy.to_utc_isoformat(draft.created_at),
     }
 
 

@@ -563,7 +563,9 @@ from .public_chat_helpers import (
 )
 from .time_utils import (
     display_payload_in_jst as display_payload_in_jst_impl,
+    display_payload_in_utc as display_payload_in_utc_impl,
     to_jst_isoformat as to_jst_isoformat_impl,
+    to_utc_isoformat as to_utc_isoformat_impl,
     utcnow as utcnow_impl,
 )
 from .runtime_export_builders import (
@@ -572,7 +574,7 @@ from .runtime_export_builders import (
     build_core_runtime_exports,
     build_shared_runtime_exports,
     build_translation_runtime_exports,
-    install_jst_json_encoder,
+    install_utc_json_encoder,
 )
 from .runtime_config import *  # noqa: F401,F403
 from .rate_limit_helpers import (
@@ -646,7 +648,9 @@ globals().update(
     build_shared_runtime_exports(
         utcnow_impl=utcnow_impl,
         to_jst_isoformat_impl=to_jst_isoformat_impl,
+        to_utc_isoformat_impl=to_utc_isoformat_impl,
         display_payload_in_jst_impl=display_payload_in_jst_impl,
+        display_payload_in_utc_impl=display_payload_in_utc_impl,
         get_novel_char_counts_impl=get_novel_char_counts_impl,
         apply_novel_daily_metric_impl=apply_novel_daily_metric_impl,
         normalize_illust_tag_impl=normalize_illust_tag_impl,
@@ -659,11 +663,11 @@ globals().update(
         normalize_translated_tags_impl=normalize_translated_tags_impl,
     )
 )
-install_jst_json_encoder(
+install_utc_json_encoder(
     fastapi_routing_module=fastapi_routing,
     fastapi_jsonable_encoder=fastapi_jsonable_encoder,
     datetime_cls=datetime,
-    to_jst_isoformat=to_jst_isoformat,
+    to_utc_isoformat=to_utc_isoformat,
 )
 
 # =========================================

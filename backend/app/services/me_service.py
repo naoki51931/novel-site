@@ -47,7 +47,7 @@ def list_my_scheduled_episodes_service(*, request: Request, db: Session):
                 "novel_id": int(ep.novel_id),
                 "novel_title": str(novel_title or ""),
                 "episode_title": str(ep.title or ""),
-                "scheduled_publish_at": legacy.to_jst_isoformat(ep.scheduled_publish_at)
+                "scheduled_publish_at": legacy.to_utc_isoformat(ep.scheduled_publish_at)
                 if isinstance(ep.scheduled_publish_at, datetime)
                 else None,
                 "status": str(ep.status or "scheduled"),
