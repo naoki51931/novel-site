@@ -162,6 +162,7 @@ class AINovelRequest(BaseModel):
     chunked_generation_enabled: bool = False
     chunked_generation_count: int | None = None
     chunked_generation_plans: list[dict] | None = None
+    client_job_kind: str | None = None
 
 
 class AINovelResponse(BaseModel):

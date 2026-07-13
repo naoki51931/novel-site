@@ -61,6 +61,16 @@ class User(Base):
 
     # リレーション
     novels = relationship("Novel", back_populates="author")
+    blog_posts = relationship(
+        "BlogPost",
+        back_populates="author",
+        cascade="all, delete-orphan",
+    )
+    blog_comments = relationship(
+        "BlogComment",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     favorite_links = relationship(
         "NovelFavorite",
         back_populates="user",
@@ -114,6 +124,49 @@ class UserFollow(Base):
 
     follower = relationship("User", foreign_keys=[follower_user_id])
     followed = relationship("User", foreign_keys=[followed_user_id])
+
+
+class BlogPost(Base):
+    __tablename__ = "blog_posts"
+    __table_args__ = (
+        Index("idx_blog_posts_author_status", "author_id", "status"),
+        Index("idx_blog_posts_site_status", "site_key", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    site_key = Column(String(32), nullable=False, server_default="main", index=True)
+    title = Column(String(200), nullable=False)
+    body = Column(LONGTEXT, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    status = Column(String(16), nullable=False, server_default="public", index=True)
+    view_count = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    author = relationship("User", back_populates="blog_posts")
+    comments = relationship(
+        "BlogComment",
+        back_populates="post",
+        cascade="all, delete-orphan",
+    )
+
+
+class BlogComment(Base):
+    __tablename__ = "blog_comments"
+    __table_args__ = (
+        Index("idx_blog_comments_post_created", "post_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(Integer, ForeignKey("blog_posts.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    guest_name = Column(String(40), nullable=True)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    post = relationship("BlogPost", back_populates="comments")
+    user = relationship("User", back_populates="blog_comments")
 
 
 class PasswordResetToken(Base):

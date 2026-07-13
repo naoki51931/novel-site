@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faInstagram, faXTwitter } from "@fortawesome/free-brands-svg-icons";
 import TagChipLink from "../components/TagChipLink";
 import SupportPanel from "../components/SupportPanel";
 import { getErrorMessage } from "../lib/errorUtils";
@@ -909,17 +911,21 @@ export default function EpisodeDetail() {
 
         <button
           type="button"
-          className="btn btn-border"
+          className="btn btn-border social-share-icon-btn"
           onClick={handleShareToX}
+          aria-label={t({ ja: "Xで共有", en: "Share on X" })}
+          title={t({ ja: "Xで共有", en: "Share on X" })}
         >
-          {t({ ja: "Xで共有", en: "Share on X" })}
+          <FontAwesomeIcon icon={faXTwitter} aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="btn btn-border"
+          className="btn btn-border social-share-icon-btn"
           onClick={handleShareToInstagram}
+          aria-label={t({ ja: "Instagramで共有", en: "Share on Instagram" })}
+          title={t({ ja: "Instagramで共有", en: "Share on Instagram" })}
         >
-          {t({ ja: "Instagramで共有", en: "Share on Instagram" })}
+          <FontAwesomeIcon icon={faInstagram} aria-hidden="true" />
         </button>
 
         <button

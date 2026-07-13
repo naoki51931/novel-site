@@ -682,6 +682,7 @@ app = FastAPI(
         episode_image_dir=str(EPISODE_IMAGE_DIR),
         ai_chat_character_image_dir=str(AI_CHAT_CHARACTER_IMAGE_DIR),
         ai_chat_message_image_dir=str(AI_CHAT_MESSAGE_IMAGE_DIR),
+        blog_image_dir=str(BLOG_IMAGE_DIR),
         cover_upload_dir=str(COVER_UPLOAD_DIR),
         get_redis_client=get_redis_client,
         start_redis_metrics_flusher_if_enabled=_start_redis_metrics_flusher_if_enabled,

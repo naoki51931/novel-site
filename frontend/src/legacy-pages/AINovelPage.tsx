@@ -24,6 +24,7 @@ const PENDING_AI_POST_ERROR_KEY = "pending_ai_post_error_v1";
 const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 const AI_NOVEL_SEGMENT_PREFS_KEY = "ai_novel_segment_prefs_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
+const PENDING_COMMENT_REVISION_JOB_KEY = "pending_comment_revision_job_v1";
 const DEFAULT_AI_NOVEL_MODEL = "google/gemini-3-flash-preview";
 const AI_NOVEL_RETRY_SETTINGS_VERSION = 2;
 const DEFAULT_RETRY_MODE = true;
@@ -37,6 +38,8 @@ const SEGMENT_TARGET_CHARS = 2000;
 const SEGMENT_COUNT_MIN = 1;
 const SEGMENT_COUNT_MAX = 60;
 const CHUNK_BLOCK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD = 5;
+const MIN_AI_PLOT_SUGGESTION_RETRY_THRESHOLD = 2;
 
 type GeneratedChunkBlock = {
   index: number;
@@ -63,6 +66,21 @@ type UploadedTextFileInfo = {
   name: string;
   size: number;
   importedAt: string;
+};
+
+type AiBackgroundJobSummary = {
+  id: number;
+  status: string;
+  job_type?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+};
+
+type AiPlotSuggestion = {
+  note: string;
+  plans: string[];
+  retryAttempts: number;
+  createdAt: string;
 };
 
 function clampSegmentCount(value: any) {
@@ -157,6 +175,32 @@ function loadPendingAiJob() {
 function clearPendingAiJob() {
   try {
     localStorage.removeItem(PENDING_AI_JOB_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function savePendingCommentRevisionJob(data: any) {
+  try {
+    localStorage.setItem(PENDING_COMMENT_REVISION_JOB_KEY, JSON.stringify(data));
+  } catch {
+    // ignore
+  }
+}
+
+function loadPendingCommentRevisionJob() {
+  try {
+    const raw = localStorage.getItem(PENDING_COMMENT_REVISION_JOB_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingCommentRevisionJob() {
+  try {
+    localStorage.removeItem(PENDING_COMMENT_REVISION_JOB_KEY);
   } catch {
     // ignore
   }
@@ -621,6 +665,11 @@ export default function AINovelPage() {
   const [chunkedProgressBlock, setChunkedProgressBlock] = useState(1);
   const [chunkedProgressPercent, setChunkedProgressPercent] = useState(0);
   const [chunkedCompletedBlocks, setChunkedCompletedBlocks] = useState(0);
+  const [aiCreatedPlotApplied, setAiCreatedPlotApplied] = useState(false);
+  const [aiPlotSuggestionRetryThreshold, setAiPlotSuggestionRetryThreshold] = useState(DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD);
+  const [aiPlotSuggestion, setAiPlotSuggestion] = useState<AiPlotSuggestion | null>(null);
+  const [aiPlotSuggestionLoading, setAiPlotSuggestionLoading] = useState(false);
+  const [aiPlotSuggestionError, setAiPlotSuggestionError] = useState("");
 
   // ★ ここが「続き生成モード」用の state
   const [isContinueMode, setIsContinueMode] = useState(false);
@@ -771,7 +820,12 @@ export default function AINovelPage() {
   const segmentPrefsLoadedRef = useRef(false);
   const chunkedProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const commentRevisionLivePreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiPlotSuggestionTriggeredRef = useRef(0);
+  const chunkedRetryCarryRef = useRef(0);
   const [pendingJob, setPendingJob] = useState<any>(null);
+  const [backgroundAiJobs, setBackgroundAiJobs] = useState<AiBackgroundJobSummary[]>([]);
+  const [backgroundAiJobsLoading, setBackgroundAiJobsLoading] = useState(false);
+  const [backgroundAiJobsError, setBackgroundAiJobsError] = useState("");
   const hasAuthToken = Boolean(getAuthToken());
   const markUserInput = () => {
     hasUserInputRef.current = true;
@@ -779,6 +833,7 @@ export default function AINovelPage() {
 
   const setChunkPlanCount = (nextCountRaw: any) => {
     const nextCount = clampSegmentCount(nextCountRaw);
+    setAiCreatedPlotApplied(false);
     setChunkedGenerationCount(nextCount);
     setChunkedGenerationPlans((prev: any) => {
       const safePrev = Array.isArray(prev) ? prev : [];
@@ -877,12 +932,14 @@ export default function AINovelPage() {
 
   const handleAddChunkPlan = () => {
     markUserInput();
+    setAiCreatedPlotApplied(false);
     if (chunkedGenerationCount >= SEGMENT_COUNT_MAX) return;
     setChunkPlanCount(chunkedGenerationCount + 1);
   };
 
   const handleInsertChunkPlanBelow = (index: any) => {
     markUserInput();
+    setAiCreatedPlotApplied(false);
     if (chunkedGenerationCount >= SEGMENT_COUNT_MAX) return;
     setChunkedGenerationPlans((prev: any) => {
       const safePrev = Array.isArray(prev) ? prev : [];
@@ -896,6 +953,7 @@ export default function AINovelPage() {
 
   const handleRemoveChunkPlan = (index: any) => {
     markUserInput();
+    setAiCreatedPlotApplied(false);
     if (chunkedGenerationCount <= SEGMENT_COUNT_MIN) return;
     setChunkedGenerationPlans((prev: any) => {
       const safePrev = Array.isArray(prev) ? prev : [];
@@ -907,6 +965,7 @@ export default function AINovelPage() {
 
   const handleChangeChunkPlanInstruction = (index: any, value: any) => {
     markUserInput();
+    setAiCreatedPlotApplied(false);
     setChunkedGenerationPlans((prev: any) =>
       (prev || []).map((item: any, i: any) => (i === index ? { ...item, instruction: value } : item))
     );
@@ -1115,6 +1174,17 @@ export default function AINovelPage() {
     } else {
       setChunkedGenerationPlans(Array.from({ length: draftChunkCount }, (_: any, idx: any) => makeSegmentPlanItem(idx + 1)));
     }
+    if (typeof draft.aiCreatedPlotApplied === "boolean") {
+      setAiCreatedPlotApplied(draft.aiCreatedPlotApplied);
+    } else {
+      setAiCreatedPlotApplied(false);
+    }
+    if (typeof draft.aiPlotSuggestionRetryThreshold === "number") {
+      const nextThreshold = Math.max(MIN_AI_PLOT_SUGGESTION_RETRY_THRESHOLD, Math.min(MAX_RETRY_MAX, Math.floor(draft.aiPlotSuggestionRetryThreshold)));
+      setAiPlotSuggestionRetryThreshold(nextThreshold);
+    } else {
+      setAiPlotSuggestionRetryThreshold(DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD);
+    }
     if (!skipModeOverwrite && typeof draft.isContinueMode === "boolean") {
       setIsContinueMode(Boolean(draft.isContinueMode && draftEpisodeId !== null));
     }
@@ -1210,6 +1280,8 @@ export default function AINovelPage() {
     chunkedGenerationEnabled,
     chunkedGenerationCount,
     chunkedGenerationPlans,
+    aiCreatedPlotApplied,
+    aiPlotSuggestionRetryThreshold,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -1480,6 +1552,9 @@ export default function AINovelPage() {
       const data = await res.json();
       if (typeof data?.retry_attempts === "number") {
         setRetryAttempts(data.retry_attempts);
+        if (job?.kind === "generate") {
+          maybeStartAiPlotSuggestion(data.retry_attempts);
+        }
       }
       if (typeof data?.retry_max === "number") {
         setActiveRetryMax(data.retry_max);
@@ -1595,6 +1670,83 @@ export default function AINovelPage() {
     startJobPolling(job);
     return true;
   };
+
+  const getJobKindFromType = (jobType: any) =>
+    String(jobType || "") === "episode_continue" ? "continuation" : "generate";
+
+  const fetchBackgroundAiJobs = async () => {
+    const token = getAuthToken();
+    if (!token) {
+      setBackgroundAiJobs([]);
+      return;
+    }
+    setBackgroundAiJobsLoading(true);
+    setBackgroundAiJobsError("");
+    try {
+      const res = await fetch("/api/ai/jobs/me?status=active&limit=100", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          data?.detail ||
+            t(
+              { ja: "バックグラウンド生成の取得に失敗しました (status={{status}})", en: "Failed to load background generations (status={{status}})" },
+              { status: res.status }
+            )
+        );
+      }
+      const data = await res.json().catch(() => []);
+      const jobs = Array.isArray(data)
+        ? data
+            .filter((item: any) => item && ["pending", "running"].includes(String(item.status || "")))
+            .filter((item: any) => String(item.client_job_kind || "") !== "plot_suggestion")
+            .map((item: any) => ({
+              id: Number(item.id),
+              status: String(item.status || ""),
+              job_type: item.job_type || null,
+              created_at: item.created_at || null,
+              started_at: item.started_at || null,
+            }))
+            .filter((item: AiBackgroundJobSummary) => Number.isFinite(item.id) && item.id > 0)
+        : [];
+      setBackgroundAiJobs(jobs);
+    } catch (e: any) {
+      console.error("failed to load background ai jobs", e);
+      setBackgroundAiJobsError(
+        e?.message ||
+          t({
+            ja: "バックグラウンド生成の取得中にエラーが発生しました。",
+            en: "An error occurred while loading background generations.",
+          })
+      );
+    } finally {
+      setBackgroundAiJobsLoading(false);
+    }
+  };
+
+  const handleResumeBackgroundAiJob = (job: AiBackgroundJobSummary) => {
+    if (!job?.id) return;
+    const kind = getJobKindFromType(job.job_type);
+    startJobPolling({
+      job_id: job.id,
+      kind,
+      started_at: Date.now(),
+    });
+    setBackgroundAiJobs((prev) => prev.filter((item) => item.id !== job.id));
+  };
+
+  const formatBackgroundAiJobTime = (value: any) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString(lang === "en" ? "en-US" : "ja-JP");
+  };
+
+  const getBackgroundAiJobLabel = (job: AiBackgroundJobSummary) =>
+    String(job.job_type || "") === "episode_continue"
+      ? t({ ja: "続き生成", en: "Continuation" })
+      : t({ ja: "AI小説生成", en: "AI novel generation" });
 
   const fetchDraftSlots = async (selectId: any = null) => {
     const token = getAuthToken();
@@ -1811,6 +1963,13 @@ export default function AINovelPage() {
     setChunkedGenerationEnabled(false);
     setChunkedGenerationCount(2);
     setChunkedGenerationPlans([makeSegmentPlanItem(1), makeSegmentPlanItem(2)]);
+    setAiCreatedPlotApplied(false);
+    setAiPlotSuggestionRetryThreshold(DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD);
+    setAiPlotSuggestion(null);
+    setAiPlotSuggestionLoading(false);
+    setAiPlotSuggestionError("");
+    aiPlotSuggestionTriggeredRef.current = 0;
+    chunkedRetryCarryRef.current = 0;
     setRetryAttempts(0);
     setActiveRetryMax(null);
     setResult(null);
@@ -1834,6 +1993,7 @@ export default function AINovelPage() {
     setCommentRevisionUndoStack([]);
     setCommentRevisionHasActiveDiff(false);
     resetCommentRevisionLivePreview();
+    clearPendingCommentRevisionJob();
     setHasActiveSelection(false);
     lastSelectionContextRef.current = null;
     setHasContinuationAttempted(false);
@@ -1844,16 +2004,26 @@ export default function AINovelPage() {
   };
 
   useEffect(() => {
-    const pending = loadPendingAiJob();
+    let cancelled = false;
+    (async () => {
+      const resumedCommentRevision = await resumePendingCommentRevisionIfAny();
+      if (cancelled || resumedCommentRevision) return;
+      const pending = loadPendingAiJob();
       if (pending && pending.job_id) {
-      if (pending.kind === "continuation") {
-        setContinuing(true);
+        if (pending.kind === "continuation") {
+          setContinuing(true);
+        } else {
+          setLoading(true);
+        }
+        startJobPolling(pending);
       } else {
-        setLoading(true);
+        fetchBackgroundAiJobs();
       }
-      startJobPolling(pending);
-    }
-    return () => stopJobPolling();
+    })();
+    return () => {
+      cancelled = true;
+      stopJobPolling();
+    };
   }, []);
 
   useEffect(() => {
@@ -1986,6 +2156,8 @@ export default function AINovelPage() {
     chunkedGenerationEnabled,
     chunkedGenerationCount,
     chunkedGenerationPlans,
+    aiCreatedPlotApplied,
+    aiPlotSuggestionRetryThreshold,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -2044,6 +2216,8 @@ export default function AINovelPage() {
     chunkedGenerationEnabled,
     chunkedGenerationCount,
     chunkedGenerationPlans,
+    aiCreatedPlotApplied,
+    aiPlotSuggestionRetryThreshold,
     isContinueMode,
     episodeId,
     continueNovelId,
@@ -2554,7 +2728,8 @@ export default function AINovelPage() {
     return jobId;
   };
 
-  const pollGenerateJobUntilDone = async (jobId: any, token: any) => {
+  const pollGenerateJobUntilDone = async (jobId: any, token: any, options: any = {}) => {
+    const updateRetryStatus = options?.updateRetryStatus !== false;
     const sleep = (ms: any) => new Promise((resolve: any) => setTimeout(resolve, ms));
     const started = Date.now();
     while (true) {
@@ -2588,10 +2763,10 @@ export default function AINovelPage() {
         throw e;
       }
       const statusData = await statusRes.json().catch(() => ({}));
-      if (typeof statusData?.retry_attempts === "number") {
+      if (updateRetryStatus && typeof statusData?.retry_attempts === "number") {
         setRetryAttempts(statusData.retry_attempts);
       }
-      if (typeof statusData?.retry_max === "number") {
+      if (updateRetryStatus && typeof statusData?.retry_max === "number") {
         setActiveRetryMax(statusData.retry_max);
       }
       if (statusData?.status === "succeeded") {
@@ -2604,6 +2779,276 @@ export default function AINovelPage() {
         e.code = "job_failed";
         throw e;
       }
+    }
+  };
+
+  const normalizeAiPlotSuggestionPlans = (rawPlans: any, fallbackCount: any) => {
+    const count = clampSegmentCount(fallbackCount);
+    const plans = Array.isArray(rawPlans)
+      ? rawPlans.map((item: any) => {
+          if (typeof item === "string") return item.trim();
+          if (item && typeof item === "object") return String(item.instruction || item.text || item.plan || "").trim();
+          return "";
+        })
+      : [];
+    const cleaned = plans.filter(Boolean).slice(0, count);
+    while (cleaned.length < count) {
+      const fallback = chunkedGenerationPlans[cleaned.length]?.instruction || "前後と自然につながる展開にする。";
+      cleaned.push(String(fallback || "前後と自然につながる展開にする。").trim());
+    }
+    return cleaned;
+  };
+
+  const parseAiPlotSuggestionBody = (body: any, fallbackCount: any, retryAttemptCount: any): AiPlotSuggestion => {
+    const text = String(body || "").trim();
+    let parsed: any = null;
+    const tryParse = (value: string) => {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    };
+    parsed = tryParse(text);
+    if (!parsed) {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) parsed = tryParse(match[0]);
+    }
+    if (parsed && typeof parsed === "object") {
+      return {
+        note: String(parsed.note || parsed.reason || "").trim(),
+        plans: normalizeAiPlotSuggestionPlans(parsed.plans || parsed.blocks || parsed.plot, fallbackCount),
+        retryAttempts: retryAttemptCount,
+        createdAt: new Date().toISOString(),
+      };
+    }
+    const lines = text
+      .split("\n")
+      .map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
+      .filter(Boolean);
+    return {
+      note: t({
+        ja: "AIが読み込みやすいように、各ブロックの目的を具体化した修正案です。",
+        en: "This proposal makes each block goal more explicit for the AI.",
+      }),
+      plans: normalizeAiPlotSuggestionPlans(lines, fallbackCount),
+      retryAttempts: retryAttemptCount,
+      createdAt: new Date().toISOString(),
+    };
+  };
+
+  const sanitizePlotTextForSuggestion = (value: any) => {
+    let text = String(value || "").trim();
+    if (!text) return "未指定";
+    const replacements: Array<[RegExp, string]> = [
+      [/レズセックス|セックス|性交|性行為|性的描写/g, "成人向けの親密な場面"],
+      [/乳房|乳首|股間|敏感な場所/g, "身体的な反応"],
+      [/絶頂|イク|イキっぱなし|快感/g, "感情と感覚の高まり"],
+      [/裸|愛撫|触り合い|擦り合い/g, "距離が近い接触"],
+    ];
+    replacements.forEach(([pattern, replacement]) => {
+      text = text.replace(pattern, replacement);
+    });
+    return text.slice(0, 500);
+  };
+
+  const buildFallbackAiPlotSuggestion = (retryAttemptCount: any): AiPlotSuggestion => {
+    const activeCount = clampSegmentCount(chunkedGenerationCount);
+    const plans = (chunkedGenerationPlans || [])
+      .slice(0, activeCount)
+      .map((item: any, idx: any) => {
+        const current = sanitizePlotTextForSuggestion(item?.instruction || "");
+        const next = idx + 1 < activeCount
+          ? sanitizePlotTextForSuggestion(chunkedGenerationPlans[idx + 1]?.instruction || "")
+          : "次の展開へ余韻を残して締める";
+        return `このブロックでは「${current}」を中心に、場面の目的、登場人物の行動、感情の変化を順番に描く。最後は「${next}」へ自然につながる一文で終える。`;
+      });
+    return {
+      note: t({
+        ja: "AIの応答が空だったため、既存プロットをAIが読み込みやすい形に自動整理しました。",
+        en: "The AI response was empty, so the existing plot was automatically structured into an AI-readable form.",
+      }),
+      plans: normalizeAiPlotSuggestionPlans(plans, activeCount),
+      retryAttempts: retryAttemptCount,
+      createdAt: new Date().toISOString(),
+    };
+  };
+
+  const buildAiPlotSuggestionPrompt = (retryAttemptCount: any) => {
+    const activeCount = clampSegmentCount(chunkedGenerationCount);
+    const planLines = (chunkedGenerationPlans || [])
+      .slice(0, activeCount)
+      .map((item: any, idx: any) => `第${idx + 1}ブロック: ${sanitizePlotTextForSuggestion(item?.instruction || "")}`)
+      .join("\n");
+    return [
+      "あなたは小説生成プロンプトの編集者です。",
+      `分割生成で再試行が${retryAttemptCount}回以上発生しました。AIが迷わず本文を書けるように、分割プロットを具体的で矛盾の少ない形へ修正してください。`,
+      "本文は生成せず、プロット修正案だけを作ってください。",
+      "各ブロックは、目的・場面・登場人物の行動・次ブロックへの接続が分かる1文から3文にしてください。",
+      "成人向けの詳細描写は書かず、構造・感情・場面遷移だけを整理してください。",
+      "この画面のAI生成APIは最上位JSONに body が必須です。body を空にしないでください。",
+      "出力は必ず次のJSONだけにしてください: {\"title\":\"分割プロット修正案\",\"body\":\"{\\\"note\\\":\\\"修正意図\\\",\\\"plans\\\":[\\\"第1ブロックの指示\\\",\\\"第2ブロックの指示\\\"]}\"}",
+      "body の中身はJSON文字列にし、note と plans を含めてください。plans の件数はブロック数と同じにしてください。",
+      "",
+      "【現在の条件（安全な要約）】",
+      `- タイトルのイメージ: ${sanitizePlotTextForSuggestion(titleHint || "指定なし")}`,
+      `- ジャンル: ${sanitizePlotTextForSuggestion(genre || "指定なし")}`,
+      `- 雰囲気: ${sanitizePlotTextForSuggestion(tone || "指定なし")}`,
+      `- 登場人物・設定: ${characters ? "指定あり。詳細描写ではなく構造だけを整理する。" : "指定なし"}`,
+      `- ブロック数: ${activeCount}`,
+      "",
+      "【現在の分割プロット（安全な要約）】",
+      planLines || "未指定",
+    ].join("\n");
+  };
+
+  const maybeStartAiPlotSuggestion = (retryAttemptCount: any) => {
+    const attempts = Number(retryAttemptCount || 0);
+    const suggestionStep = Math.max(MIN_AI_PLOT_SUGGESTION_RETRY_THRESHOLD, Math.min(MAX_RETRY_MAX, Number(aiPlotSuggestionRetryThreshold || DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD)));
+    const cumulativeAttempts = Math.max(0, Number(chunkedRetryCarryRef.current || 0)) + attempts;
+    const threshold = Math.floor(cumulativeAttempts / suggestionStep) * suggestionStep;
+    if (threshold < suggestionStep) return;
+    if (!chunkedGenerationEnabled || isEditMode || !canUseChunkedGeneration) return;
+    if (aiPlotSuggestion || aiPlotSuggestionLoading) return;
+    if (threshold <= Number(aiPlotSuggestionTriggeredRef.current || 0)) return;
+    aiPlotSuggestionTriggeredRef.current = threshold;
+    setAiPlotSuggestionLoading(true);
+    setAiPlotSuggestionError("");
+    (async () => {
+      try {
+        const token = getAuthToken();
+        const prompt = buildAiPlotSuggestionPrompt(cumulativeAttempts);
+        const jobId = await requestGenerateJob("/api/ai/novels/generate_job", token, {
+          title_hint: titleHint || "分割プロット修正案",
+          genre: genre || null,
+          characters: null,
+          tone: null,
+          length: "short",
+          client_job_kind: "plot_suggestion",
+          model: model || DEFAULT_AI_NOVEL_MODEL,
+          r18: false,
+          prompt,
+          retry_mode: true,
+          retry_max: 2,
+        });
+        const payload = await pollGenerateJobUntilDone(jobId, token, { updateRetryStatus: false });
+        const normalized = normalizeAINovelResponse(payload || {});
+        const suggestion = parseAiPlotSuggestionBody(normalized?.body || "", chunkedGenerationCount, cumulativeAttempts);
+        setAiPlotSuggestion(suggestion);
+      } catch (e: any) {
+        console.error("failed to create ai plot suggestion", e);
+        setAiPlotSuggestion(buildFallbackAiPlotSuggestion(cumulativeAttempts));
+        setAiPlotSuggestionError(
+          t({
+            ja: "AIの応答が空だったため、既存プロットを整理した修正案を表示しています。",
+            en: "The AI response was empty, so a structured proposal based on the existing plot is shown.",
+          })
+        );
+      } finally {
+        setAiPlotSuggestionLoading(false);
+      }
+    })();
+  };
+
+  const killCurrentAiJobIfPossible = async () => {
+    const token = getAuthToken();
+    const jobId = Number(pendingJob?.job_id || 0);
+    if (!token || !Number.isFinite(jobId) || jobId <= 0) return;
+    try {
+      await fetch("/api/ai/jobs/kill_selected_me", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ job_ids: [jobId] }),
+      });
+    } catch (e: any) {
+      console.error("failed to kill current ai job", e);
+    }
+  };
+
+  const handleApproveAiPlotSuggestion = async () => {
+    if (!aiPlotSuggestion || aiPlotSuggestion.plans.length === 0) return;
+    const token = getAuthToken();
+    const activeChunkCount = clampSegmentCount(aiPlotSuggestion.plans.length || chunkedGenerationCount);
+    const nextPlans = aiPlotSuggestion.plans.slice(0, activeChunkCount).map((instruction: any, idx: any) => ({
+      id: makeSegmentPlanItem(idx + 1).id,
+      instruction: String(instruction || ""),
+    }));
+    await killCurrentAiJobIfPossible();
+    activeJobSessionRef.current += 1;
+    stopJobPolling();
+    clearPendingAiJob();
+    setPendingJob(null);
+    setChunkedGenerationEnabled(true);
+    setChunkedGenerationCount(activeChunkCount);
+    setChunkedGenerationPlans(nextPlans);
+    setAiCreatedPlotApplied(true);
+    chunkedRetryCarryRef.current = Math.max(0, Number(aiPlotSuggestion.retryAttempts || 0));
+    setAiPlotSuggestion(null);
+    setAiPlotSuggestionError("");
+    setLoading(true);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+    setRetryAttempts(0);
+    setActiveRetryMax(retryMode ? retryMax : 0);
+    stopChunkedProgress(false);
+    const endpoint = episodeId ? `/api/ai/episodes/${episodeId}/continue_job` : "/api/ai/novels/generate_job";
+    const requestBody = {
+      title_hint: titleHint || null,
+      genre: genre || null,
+      characters: characters || null,
+      tone: tone || null,
+      length: String(activeChunkCount * SEGMENT_TARGET_CHARS),
+      model: model || DEFAULT_AI_NOVEL_MODEL,
+      r18: isR18,
+      prompt: null,
+      retry_mode: retryMode,
+      retry_max: retryMax,
+      chunked_generation_enabled: true,
+      chunked_generation_count: activeChunkCount,
+      chunked_generation_plans: nextPlans.map((item: any) => ({ instruction: item.instruction })),
+    };
+    chunkedGenerateRetryRef.current = {
+      enabled: true,
+      attempts: 0,
+      max: Math.max(1, Number(retryMode ? retryMax : 2)),
+      endpoint,
+      requestBody,
+    };
+    try {
+      const jobId = await requestGenerateJob(endpoint, token, requestBody);
+      setLastGenerateParams({
+        titleHint,
+        genre,
+        characters,
+        tone,
+        length,
+        model,
+        isR18,
+        retryMode,
+        retryMax,
+        chunkedGenerationEnabled: true,
+        chunkedGenerationCount: activeChunkCount,
+        chunkedGenerationPlans: nextPlans,
+        isContinueMode,
+      });
+      startChunkedProgress(activeChunkCount);
+      startJobPolling({ job_id: jobId, kind: "generate" });
+    } catch (e: any) {
+      console.error(e);
+      setError(
+        e?.message ||
+          t({
+            ja: "AI作成プロットでの再生成を開始できませんでした。",
+            en: "Could not start regeneration with the AI-created plot.",
+          })
+      );
+      setLoading(false);
+      stopChunkedProgress(false);
+      resetChunkedGenerateRetryContext();
     }
   };
 
@@ -2735,6 +3180,337 @@ export default function AINovelPage() {
       "",
       "出力は JSON の body に改稿後の本文のみを書いてください（タイトルは変更しない）。",
     ].join("\n");
+  };
+
+  const startCommentRevisionJob = async (bodyText: any, params: any, comments: any, promptOptions: any = {}) => {
+    const token = getAuthToken();
+    const disableServerRetry = Boolean(promptOptions?.disableServerRetry);
+    const prompt = buildRevisionPromptFromComments(bodyText, params, comments, {
+      ...promptOptions,
+      sourceChars: bodyText.length,
+    });
+    const res = await fetch("/api/ai/novels/generate_job", {
+      method: "POST",
+      headers: token
+        ? {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          }
+        : { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title_hint: params.titleHint || null,
+        genre: params.genre || null,
+        characters: params.characters || null,
+        tone: params.tone || null,
+        length: String(bodyText.length || 0),
+        model: aiCommentRevisionModel || params.model || DEFAULT_AI_NOVEL_MODEL,
+        r18: params.isR18,
+        retry_mode: disableServerRetry ? false : Boolean(params.retryMode),
+        retry_max: disableServerRetry ? 0 : Number(params.retryMax || 0),
+        prompt,
+      }),
+    });
+
+    let errorDetail: any = null;
+    if (!res.ok) {
+      const isJson = res.headers.get("content-type")?.includes("application/json");
+      if (isJson) {
+        const data = await res.json().catch(() => ({}));
+        if (data && typeof data.detail === "string" && data.detail.trim()) {
+          errorDetail = data.detail.trim();
+        }
+      } else {
+        const text = await res.text().catch(() => "");
+        if (text && text.trim()) {
+          errorDetail = text.trim().slice(0, 300);
+        }
+      }
+    }
+
+    if (res.status === 401 && token) {
+      setError(
+        t({
+          ja: "ログインの有効期限が切れています。再ログインしてください。",
+          en: "Your session has expired. Please log in again.",
+        })
+      );
+      setTimeout(() => navigate("/login"), 800);
+      const e = new Error("handled");
+      e.handled = true;
+      throw e;
+    }
+
+    if (res.status === 402) {
+      setPremiumError(
+        t({
+          ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
+          en: "This feature is for paid plans only. Check your plan on My Page.",
+        })
+      );
+      const e = new Error("handled");
+      e.handled = true;
+      throw e;
+    }
+
+    if (res.status === 429) {
+      setQuotaError(
+        errorDetail ||
+          t({
+            ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
+            en: "You've reached today's AI generation limit. Please try again tomorrow.",
+          })
+      );
+      const e = new Error("handled");
+      e.handled = true;
+      throw e;
+    }
+
+    if (!res.ok) {
+      throw new Error(
+        errorDetail ||
+          t(
+            { ja: "修正に失敗しました (status={{status}})", en: "Revision failed (status={{status}})" },
+            { status: res.status }
+          )
+      );
+    }
+    const jobData = await res.json().catch(() => ({}));
+    const jobId = Number(jobData?.job_id);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      throw new Error(
+        t({ ja: "修正ジョブの開始に失敗しました。", en: "Failed to start revision job." })
+      );
+    }
+    return jobId;
+  };
+
+  const waitForCommentRevisionJob = async (jobId: any, startedAt = Date.now()) => {
+    const token = getAuthToken();
+    const sleep = (ms: any) => new Promise((resolve: any) => setTimeout(resolve, ms));
+    while (true) {
+      if (Date.now() - Number(startedAt || Date.now()) > 60 * 60 * 1000) {
+        throw new Error(
+          t({
+            ja: "修正処理が長時間続いています。バックグラウンド生成から再接続してください。",
+            en: "Revision is taking a long time. Reconnect from background generations.",
+          })
+        );
+      }
+      await sleep(700);
+      const statusRes = await fetch(`/api/ai/jobs/${jobId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!statusRes.ok) {
+        const statusErr = await statusRes.json().catch(() => ({}));
+        throw new Error(
+          statusErr?.detail ||
+            t(
+              {
+                ja: "修正ジョブの状態取得に失敗しました (status={{status}})",
+                en: "Failed to get revision job status (status={{status}})",
+              },
+              { status: statusRes.status }
+            )
+        );
+      }
+      const statusData = await statusRes.json().catch(() => ({}));
+      if (typeof statusData?.retry_attempts === "number") {
+        setRetryAttempts(statusData.retry_attempts);
+      }
+      if (typeof statusData?.retry_max === "number") {
+        setActiveRetryMax(statusData.retry_max);
+      }
+      if (statusData?.status === "succeeded") {
+        return statusData?.response || {};
+      }
+      if (statusData?.status === "failed") {
+        const attempts = Number(statusData?.retry_attempts || 0);
+        const max = Number(statusData?.retry_max || 0);
+        const retrySummary = max > 0
+          ? t({ ja: "再試行: {{attempts}}/{{max}}", en: "Retries: {{attempts}}/{{max}}" }, { attempts, max })
+          : "";
+        throw new Error(
+          `${statusData?.error || t({ ja: "修正に失敗しました。", en: "Revision failed." })}${
+            retrySummary ? ` (${retrySummary})` : ""
+          }`
+        );
+      }
+    }
+  };
+
+  const applyCompletedCommentRevision = (context: any, revisedBody: string) => {
+    const originalFullBody = String(context?.originalFullBody || "");
+    const targetContext = context?.targetContext || null;
+    const nextFullBody =
+      targetContext && typeof targetContext.start === "number" && typeof targetContext.end === "number"
+        ? applyPolishReplacement(
+            String(targetContext.fullText || originalFullBody),
+            targetContext.start,
+            targetContext.end,
+            revisedBody
+          )
+        : revisedBody;
+    setResult((prev: any) => ({
+      ...(prev || context?.result || {}),
+      body: nextFullBody,
+    }));
+    setContinuationBody("");
+    setCommentRevisionUndoStack((prev: any) => [...prev, originalFullBody]);
+    setCommentRevisionDiffSegments(buildLineDiffSegments(originalFullBody, nextFullBody));
+    setCommentRevisionHasActiveDiff(true);
+    lingerCommentRevisionLivePreview();
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(t({ ja: "コメント修正が完了しました", en: "Comment revision is ready" }));
+      } catch {
+        // ignore
+      }
+    }
+    notifyAndroidAiResult({
+      title: t({ ja: "コメント修正が完了しました", en: "Comment revision is ready" }),
+      body: revisedBody.slice(0, 120),
+      url: "/ai-novel",
+    });
+    setRevisionComments((prev: any) => [
+      ...prev,
+      {
+        role: "assistant",
+        content:
+          context?.scope === "selection"
+            ? t({
+                ja: context?.usedWeaviateTargeting
+                  ? "コメント内容を反映して、選択範囲内の関連箇所を更新しました。"
+                  : "コメント内容を反映して、選択範囲のみ更新しました。",
+                en: context?.usedWeaviateTargeting
+                  ? "Applied your comment and updated the related part in the selected range."
+                  : "Applied your comment and updated only the selected range.",
+              })
+            : t({
+                ja: context?.usedWeaviateTargeting
+                  ? "コメント内容を反映して、生成した文章全体から関連箇所を検索して更新しました。"
+                  : "コメント内容を反映して生成した文章全体を更新しました。",
+                en: context?.usedWeaviateTargeting
+                  ? "Applied your comment and updated the searched related part in the generated text."
+                  : "Applied your comment and updated the entire generated text.",
+              }),
+        at: new Date().toISOString(),
+      },
+    ]);
+  };
+
+  const resumePendingCommentRevisionIfAny = async () => {
+    const saved = loadPendingCommentRevisionJob();
+    if (!saved || !Array.isArray(saved.chunks) || saved.chunks.length === 0) return false;
+    const params = saved.params && typeof saved.params === "object" ? saved.params : {};
+    const comments = Array.isArray(saved.comments) ? saved.comments : [];
+    const chunks = saved.chunks;
+    let revisedParts = Array.isArray(saved.revisedParts) ? saved.revisedParts.map((part: any) => String(part || "")) : [];
+    let chunkIndex = Math.max(0, Math.min(chunks.length - 1, Number(saved.chunkIndex || revisedParts.length || 0)));
+    setRevisionChatScope(saved.scope === "selection" ? "selection" : "full");
+    setRevisionComments(comments);
+    setRevisionCommentInput("");
+    setLastRevisionTargetInfo(saved.lastRevisionTargetInfo || null);
+    setRevisingByComment(true);
+    setRetryAttempts(0);
+    setActiveRetryMax(Boolean(params.retryMode) ? Number(params.retryMax || 0) : 0);
+    setError("");
+    setQuotaError("");
+    setPremiumError("");
+    setAutoFillError("");
+    if (saved.result && typeof saved.result === "object") {
+      setResult(saved.result);
+    } else if (saved.originalFullBody) {
+      setResult((prev: any) => ({ ...(prev || {}), body: String(saved.originalFullBody || "") }));
+    }
+    if (saved.livePreviewEnabled) {
+      setCommentRevisionLiveProgress({ completed: revisedParts.length, total: chunks.length });
+    }
+
+    try {
+      for (; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex];
+        const chunkText = String(chunk?.text || "");
+        if (!chunkText) continue;
+        let jobId = chunkIndex === Number(saved.chunkIndex || 0) ? Number(saved.job_id || 0) : 0;
+        let outputRetryCount = 0;
+        while (true) {
+          if (!Number.isFinite(jobId) || jobId <= 0) {
+            jobId = await startCommentRevisionJob(chunkText, params, comments, {
+              scope: saved.scope === "selection" ? "selection" : "full",
+              chunkIndex: chunks.length > 1 ? chunkIndex + 1 : 0,
+              chunkTotal: chunks.length,
+              disableServerRetry: Boolean(saved.useGlobalRetryAcrossChunks),
+            });
+          }
+          savePendingCommentRevisionJob({
+            ...saved,
+            job_id: jobId,
+            chunkIndex,
+            revisedParts,
+            resumed_at: new Date().toISOString(),
+          });
+          const payload = await waitForCommentRevisionJob(jobId, saved.started_at || Date.now());
+          const data = normalizeAINovelResponse(payload || {});
+          const revisedChunk = String(data?.body || "");
+          const outputIssue = getCommentRevisionOutputIssue(revisedChunk);
+          if (!outputIssue) {
+            revisedParts = [...revisedParts, revisedChunk];
+            break;
+          }
+          if (outputRetryCount >= COMMENT_REVISION_OUTPUT_RETRY_MAX) {
+            throw new Error(
+              t({
+                ja: "コメント修正の出力が不正（JSON形式エラーまたは空）だったため、再試行上限に達しました。",
+                en: "Comment revision output was invalid (JSON error or empty) and reached retry limit.",
+              })
+            );
+          }
+          outputRetryCount += 1;
+          jobId = 0;
+        }
+        if (saved.livePreviewEnabled) {
+          const provisionalTargetBody = revisedParts
+            .concat(chunks.slice(chunkIndex + 1).map((pendingChunk: any) => String(pendingChunk?.text || "")))
+            .join("");
+          const targetContext = saved.targetContext || null;
+          const provisionalFullBody =
+            targetContext && typeof targetContext.start === "number" && typeof targetContext.end === "number"
+              ? applyPolishReplacement(
+                  String(targetContext.fullText || saved.originalFullBody || ""),
+                  targetContext.start,
+                  targetContext.end,
+                  provisionalTargetBody
+                )
+              : provisionalTargetBody;
+          setCommentRevisionLivePreviewBody(provisionalFullBody);
+          setCommentRevisionLiveDiffSegments(buildLineDiffSegments(String(saved.originalFullBody || ""), provisionalFullBody));
+          setCommentRevisionLiveProgress({ completed: chunkIndex + 1, total: chunks.length });
+        }
+        savePendingCommentRevisionJob({
+          ...saved,
+          job_id: null,
+          chunkIndex: chunkIndex + 1,
+          revisedParts,
+          resumed_at: new Date().toISOString(),
+        });
+      }
+      applyCompletedCommentRevision(saved, revisedParts.join(""));
+      clearPendingCommentRevisionJob();
+    } catch (err: any) {
+      if (err?.handled) return true;
+      console.error(err);
+      setError(
+        err.message ||
+          t({
+            ja: "コメント反映中にエラーが発生しました。",
+            en: "An error occurred while applying your comment.",
+          })
+      );
+      clearPendingCommentRevisionJob();
+    } finally {
+      setRevisingByComment(false);
+    }
+    return true;
   };
 
   const handleReviseByComment = async (scope = "full") => {
@@ -2890,158 +3666,20 @@ export default function AINovelPage() {
       }
 
       const targetBody = targetContext.selectedText;
-      const throwHandled = () => {
-        const e = new Error("handled");
-        e.handled = true;
-        throw e;
-      };
+      let pendingCommentRevisionContext: any = null;
       const runRevisionJob = async (bodyText: any, promptOptions: any = {}) => {
-        const disableServerRetry = Boolean(promptOptions?.disableServerRetry);
-        const prompt = buildRevisionPromptFromComments(bodyText, params, nextComments, {
-          ...promptOptions,
-          sourceChars: bodyText.length,
-        });
-        const res = await fetch("/api/ai/novels/generate_job", {
-          method: "POST",
-          headers: token
-            ? {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              }
-            : { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title_hint: params.titleHint || null,
-            genre: params.genre || null,
-            characters: params.characters || null,
-            tone: params.tone || null,
-            length: String(bodyText.length || 0),
-            model: aiCommentRevisionModel || params.model || DEFAULT_AI_NOVEL_MODEL,
-            r18: params.isR18,
-            retry_mode: disableServerRetry ? false : Boolean(params.retryMode),
-            retry_max: disableServerRetry ? 0 : Number(params.retryMax || 0),
-            prompt,
-          }),
-        });
-
-        let errorDetail: any = null;
-        if (!res.ok) {
-          const isJson = res.headers.get("content-type")?.includes("application/json");
-          if (isJson) {
-            const data = await res.json().catch(() => ({}));
-            if (data && typeof data.detail === "string" && data.detail.trim()) {
-              errorDetail = data.detail.trim();
-            }
-          } else {
-            const text = await res.text().catch(() => "");
-            if (text && text.trim()) {
-              errorDetail = text.trim().slice(0, 300);
-            }
-          }
-        }
-
-        if (res.status === 401 && token) {
-          setError(
-            t({
-              ja: "ログインの有効期限が切れています。再ログインしてください。",
-              en: "Your session has expired. Please log in again.",
-            })
-          );
-          setTimeout(() => navigate("/login"), 800);
-          throwHandled();
-        }
-
-        if (res.status === 402) {
-          setPremiumError(
-            t({
-              ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。",
-              en: "This feature is for paid plans only. Check your plan on My Page.",
-            })
-          );
-          throwHandled();
-        }
-
-        if (res.status === 429) {
-          setQuotaError(
-            errorDetail ||
-              t({
-                ja: "本日の AI 小説生成の上限回数に達しました。明日またお試しください。",
-                en: "You've reached today's AI generation limit. Please try again tomorrow.",
-              })
-          );
-          throwHandled();
-        }
-
-        if (!res.ok) {
-          throw new Error(
-            errorDetail ||
-              t(
-                { ja: "修正に失敗しました (status={{status}})", en: "Revision failed (status={{status}})" },
-                { status: res.status }
-              )
-          );
-        }
-        const jobData = await res.json().catch(() => ({}));
-        const jobId = Number(jobData?.job_id);
-        if (!Number.isFinite(jobId) || jobId <= 0) {
-          throw new Error(
-            t({ ja: "修正ジョブの開始に失敗しました。", en: "Failed to start revision job." })
-          );
-        }
-
-        const sleep = (ms: any) => new Promise((resolve: any) => setTimeout(resolve, ms));
-        const startedAt = Date.now();
-        let finalPayload: any = null;
-        while (true) {
-          if (Date.now() - startedAt > 3 * 60 * 1000) {
-            throw new Error(
-              t({
-                ja: "修正処理がタイムアウトしました。時間をおいて再度お試しください。",
-                en: "Revision timed out. Please try again later.",
-              })
-            );
-          }
-          await sleep(700);
-          const statusRes = await fetch(`/api/ai/jobs/${jobId}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        const jobId = await startCommentRevisionJob(bodyText, params, nextComments, promptOptions);
+        if (pendingCommentRevisionContext) {
+          savePendingCommentRevisionJob({
+            ...pendingCommentRevisionContext,
+            job_id: jobId,
+            chunkIndex: Math.max(0, Number(promptOptions?.chunkIndex || 1) - 1),
+            revisedParts: pendingCommentRevisionContext.revisedParts || [],
+            started_at: Date.now(),
+            updated_at: new Date().toISOString(),
           });
-          if (!statusRes.ok) {
-            const statusErr = await statusRes.json().catch(() => ({}));
-            throw new Error(
-              statusErr?.detail ||
-                t(
-                  {
-                    ja: "修正ジョブの状態取得に失敗しました (status={{status}})",
-                    en: "Failed to get revision job status (status={{status}})",
-                  },
-                  { status: statusRes.status }
-                )
-            );
-          }
-          const statusData = await statusRes.json().catch(() => ({}));
-          if (typeof statusData?.retry_attempts === "number") {
-            setRetryAttempts(statusData.retry_attempts);
-          }
-          if (typeof statusData?.retry_max === "number") {
-            setActiveRetryMax(statusData.retry_max);
-          }
-          if (statusData?.status === "succeeded") {
-            finalPayload = statusData?.response || {};
-            break;
-          }
-          if (statusData?.status === "failed") {
-            const attempts = Number(statusData?.retry_attempts || 0);
-            const max = Number(statusData?.retry_max || 0);
-            const retrySummary = max > 0
-              ? t({ ja: "再試行: {{attempts}}/{{max}}", en: "Retries: {{attempts}}/{{max}}" }, { attempts, max })
-              : "";
-            throw new Error(
-              `${statusData?.error || t({ ja: "修正に失敗しました。", en: "Revision failed." })}${
-                retrySummary ? ` (${retrySummary})` : ""
-              }`
-            );
-          }
         }
-
+        const finalPayload = await waitForCommentRevisionJob(jobId, Date.now());
         const data = normalizeAINovelResponse(finalPayload || {});
         const revisedChunk = String(data?.body || "");
         if (typeof data?.retry_attempts === "number") {
@@ -3070,6 +3708,24 @@ export default function AINovelPage() {
       const globalRetryMax = useGlobalRetryAcrossChunks ? Number(params.retryMax || 0) : 0;
       let globalRetryAttempts = 0;
       const revisedParts: any[] = [];
+      pendingCommentRevisionContext = {
+        scope: normalizedScope,
+        params,
+        comments: nextComments,
+        targetContext,
+        originalFullBody: generatedFullBody,
+        result,
+        chunks,
+        chunkIndex: 0,
+        revisedParts,
+        usedWeaviateTargeting,
+        lastRevisionTargetInfo,
+        livePreviewEnabled: commentRevisionLivePreviewEnabled,
+        useGlobalRetryAcrossChunks,
+        started_at: Date.now(),
+        updated_at: new Date().toISOString(),
+      };
+      savePendingCommentRevisionJob(pendingCommentRevisionContext);
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
         const chunk = chunks[chunkIndex];
         let revisedChunk = "";
@@ -3108,6 +3764,16 @@ export default function AINovelPage() {
           }
         }
         revisedParts.push(revisedChunk);
+        if (pendingCommentRevisionContext) {
+          pendingCommentRevisionContext = {
+            ...pendingCommentRevisionContext,
+            job_id: null,
+            chunkIndex: chunkIndex + 1,
+            revisedParts: [...revisedParts],
+            updated_at: new Date().toISOString(),
+          };
+          savePendingCommentRevisionJob(pendingCommentRevisionContext);
+        }
         if (commentRevisionLivePreviewEnabled) {
           const provisionalTargetBody = revisedParts
             .concat(chunks.slice(chunkIndex + 1).map((pendingChunk: any) => pendingChunk.text))
@@ -3146,6 +3812,7 @@ export default function AINovelPage() {
       setCommentRevisionDiffSegments(buildLineDiffSegments(generatedFullBody, nextFullBody));
       setCommentRevisionHasActiveDiff(true);
       lingerCommentRevisionLivePreview();
+      clearPendingCommentRevisionJob();
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
         try {
           new Notification(
@@ -3187,6 +3854,7 @@ export default function AINovelPage() {
       ]);
     } catch (err: any) {
       if (err?.handled) return;
+      clearPendingCommentRevisionJob();
       console.error(err);
       setError(
         err.message ||
@@ -3294,6 +3962,11 @@ export default function AINovelPage() {
     setQuotaError("");
     setPremiumError("");
     setAutoFillError("");
+    setAiPlotSuggestion(null);
+    setAiPlotSuggestionError("");
+    setAiPlotSuggestionLoading(false);
+    aiPlotSuggestionTriggeredRef.current = 0;
+    chunkedRetryCarryRef.current = 0;
     const baseBodyForEdit = isEditMode
       ? (result?.body || editSourceBody || "").trim()
       : "";
@@ -5381,9 +6054,108 @@ export default function AINovelPage() {
                           resize: "vertical",
                         }}
                       />
+                      {aiPlotSuggestion?.plans?.[idx] && (
+                        <div
+                          style={{
+                            marginTop: "0.45rem",
+                            padding: "0.5rem 0.6rem",
+                            borderRadius: "4px",
+                            border: "1px solid #93c5fd",
+                            backgroundColor: "#eff6ff",
+                            color: "#1e3a8a",
+                            fontSize: "0.88rem",
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, marginBottom: "0.2rem" }}>
+                            {t({ ja: "AIが考えたプロット案", en: "AI plot proposal" })}
+                          </div>
+                          {aiPlotSuggestion.plans[idx]}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {chunkedGenerationEnabled && aiCreatedPlotApplied && (
+              <div
+                style={{
+                  marginTop: "0.6rem",
+                  padding: "0.45rem 0.6rem",
+                  borderRadius: "6px",
+                  border: "1px solid #86efac",
+                  backgroundColor: "#dcfce7",
+                  color: "#065f46",
+                  fontWeight: 700,
+                  fontSize: "0.86rem",
+                }}
+              >
+                {t({ ja: "AI作成プロット", en: "AI-created plot" })}
+              </div>
+            )}
+            {chunkedGenerationEnabled && (aiPlotSuggestionLoading || aiPlotSuggestion || aiPlotSuggestionError) && (
+              <div
+                style={{
+                  marginTop: "0.7rem",
+                  padding: "0.75rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border)",
+                  backgroundColor: "var(--ai-result-bg)",
+                }}
+              >
+                <div style={{ fontWeight: "bold", marginBottom: "0.35rem" }}>
+                  {t({ ja: "プロット修正案", en: "Plot revision proposal" })}
+                </div>
+                {aiPlotSuggestionLoading && (
+                  <div style={{ fontSize: "0.9rem", color: "var(--muted-text)" }}>
+                    {t({
+                      ja: "再試行が多いため、AIが読み込みやすいプロット修正案を作成しています...",
+                      en: "Retries are high, so a more AI-readable plot proposal is being created...",
+                    })}
+                  </div>
+                )}
+                {aiPlotSuggestionError && (
+                  <div style={{ color: "#842029", fontSize: "0.9rem" }}>{aiPlotSuggestionError}</div>
+                )}
+                {aiPlotSuggestion && (
+                  <>
+                    <div style={{ fontSize: "0.86rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                      {aiPlotSuggestion.note ||
+                        t({
+                          ja: "AIが読み込みやすいように、各ブロックの目的と接続を整理しました。",
+                          en: "The block goals and transitions were clarified for the AI.",
+                        })}
+                    </div>
+                    <div style={{ fontSize: "0.86rem", color: "var(--muted-text)", marginBottom: "0.5rem" }}>
+                      {t({
+                        ja: "各ブロックの入力欄の下に、対応するAIプロット案を表示しています。",
+                        en: "Each AI plot proposal is shown under its matching block field.",
+                      })}
+                    </div>
+                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.65rem" }}>
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        onClick={handleApproveAiPlotSuggestion}
+                        disabled={loading && !pendingJob}
+                      >
+                        {t({ ja: "このプロットを許可して再生成", en: "Approve this plot and regenerate" })}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-border"
+                        onClick={() => {
+                          setAiPlotSuggestion(null);
+                          setAiPlotSuggestionError("");
+                        }}
+                      >
+                        {t({ ja: "閉じる", en: "Dismiss" })}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -5488,6 +6260,27 @@ export default function AINovelPage() {
               disabled={!retryMode}
             />
           </div>
+          <div style={{ marginTop: "0.5rem" }}>
+            <label style={{ fontSize: "0.9rem", color: "var(--muted-text)" }}>
+              {t({ ja: "プロット修正案を出す再試行回数", en: "Retries before plot proposal" })}
+            </label>
+            <input
+              type="number"
+              min={MIN_AI_PLOT_SUGGESTION_RETRY_THRESHOLD}
+              max={MAX_RETRY_MAX}
+              value={aiPlotSuggestionRetryThreshold}
+              onChange={(e: any) => {
+                markUserInput();
+                const next = Number.parseInt(e.target.value, 10);
+                if (!Number.isFinite(next)) return;
+                const clamped = Math.max(MIN_AI_PLOT_SUGGESTION_RETRY_THRESHOLD, Math.min(MAX_RETRY_MAX, next));
+                setAiPlotSuggestionRetryThreshold(clamped);
+                aiPlotSuggestionTriggeredRef.current = 0;
+              }}
+              style={{ width: "120px", marginLeft: "0.5rem", padding: "0.4rem" }}
+              disabled={!retryMode}
+            />
+          </div>
           {showRetryStatus && (
             <div
               style={{
@@ -5582,6 +6375,78 @@ export default function AINovelPage() {
         >
           {t({ ja: "利用履歴を見る", en: "View usage history" })}
         </button>
+
+        {hasAuthToken && !pendingJob && !loading && !continuing && (
+          <div
+            style={{
+              marginTop: "0.75rem",
+              padding: "0.75rem",
+              borderRadius: "6px",
+              border: "1px solid var(--border)",
+              backgroundColor: "var(--ai-result-surface)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: "bold", fontSize: "0.95rem" }}>
+                  {t({ ja: "バックグラウンドのAI生成", en: "Background AI generations" })}
+                </div>
+                <div style={{ marginTop: "0.2rem", fontSize: "0.85rem", color: "var(--muted-text)" }}>
+                  {t({
+                    ja: "この端末の復元情報がない場合でも、実行中の生成があればここから再接続できます。",
+                    en: "If this device has no restore data, reconnect to any running generation here.",
+                  })}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-border"
+                onClick={fetchBackgroundAiJobs}
+                disabled={backgroundAiJobsLoading}
+              >
+                {backgroundAiJobsLoading
+                  ? t({ ja: "確認中...", en: "Checking..." })
+                  : t({ ja: "候補を確認", en: "Check candidates" })}
+              </button>
+            </div>
+
+            {backgroundAiJobsError && (
+              <div style={{ marginTop: "0.5rem", color: "#c00000", fontSize: "0.85rem" }}>
+                {backgroundAiJobsError}
+              </div>
+            )}
+
+            {!backgroundAiJobsLoading && !backgroundAiJobsError && backgroundAiJobs.length === 0 && (
+              <div style={{ marginTop: "0.5rem", color: "var(--muted-text)", fontSize: "0.85rem" }}>
+                {t({ ja: "現在、再接続できるバックグラウンド生成はありません。", en: "No reconnectable background generations right now." })}
+              </div>
+            )}
+
+            {backgroundAiJobs.length > 0 && (
+              <div style={{ marginTop: "0.65rem", display: "grid", gap: "0.45rem" }}>
+                {backgroundAiJobs.map((job) => (
+                  <button
+                    key={job.id}
+                    type="button"
+                    className="btn btn-border"
+                    onClick={() => handleResumeBackgroundAiJob(job)}
+                    style={{ justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal" }}
+                  >
+                    {t(
+                      { ja: "{{label}} #{{id}} に再接続", en: "Reconnect to {{label}} #{{id}}" },
+                      { label: getBackgroundAiJobLabel(job), id: String(job.id) }
+                    )}
+                    {job.started_at || job.created_at ? (
+                      <span style={{ marginLeft: "0.5rem", color: "var(--muted-text)", fontSize: "0.82rem" }}>
+                        {formatBackgroundAiJobTime(job.started_at || job.created_at)}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </form>
 
       {premiumError && (

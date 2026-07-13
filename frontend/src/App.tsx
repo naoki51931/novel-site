@@ -15,6 +15,8 @@ import StripeReturn from "./legacy-pages/StripeReturn";
 import Login from "./legacy-pages/Login";
 import OAuthCallback from "./legacy-pages/OAuthCallback";
 import Mypage from "./legacy-pages/Mypage";
+import BlogManager from "./legacy-pages/BlogManager";
+import BlogPostPage from "./legacy-pages/BlogPostPage";
 import ViewHistoryPage from "./legacy-pages/ViewHistoryPage";
 import UserPage from "./legacy-pages/UserPage";
 import AINovelPage from "./legacy-pages/AINovelPage";
@@ -1077,6 +1079,7 @@ export default function App() {
             }
           />
           <Route path="/mypage" element={<Mypage />} />
+          <Route path="/me/blog" element={<BlogManager />} />
           <Route path="/me/view-history" element={<ViewHistoryPage />} />
           <Route path="/dms" element={<DirectMessages />} />
           <Route path="/notifications" element={<Notifications />} />
@@ -1095,6 +1098,7 @@ export default function App() {
           <Route path="/admin/i18n-jobs" element={<AdminI18nJobs />} />
           <Route path="/admin/seo-pages" element={<AdminSeoPages />} />
           <Route path="/users/:username" element={<UserPage />} />
+          <Route path="/users/:username/blog/:postId" element={<BlogPostPage />} />
           <Route path="/dms/:threadId" element={<DirectMessageThread />} />
           <Route path="/novels/new" element={<NewNovel />} />
           <Route path="/novels/:id" element={<NovelDetail />} />

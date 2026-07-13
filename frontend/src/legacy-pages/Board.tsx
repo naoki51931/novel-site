@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch, authTokenExists } from "../lib/api";
 import { getErrorMessage } from "../lib/errorUtils";
@@ -23,6 +23,198 @@ type BoardPost = {
 
 type ReplyDraftMap = Record<number, string>;
 
+type BoardMarkdownAction = "bold" | "large" | "link";
+
+const isSafeBoardUrl = (value: string) => /^https?:\/\//i.test(value.trim());
+
+const normalizeBoardMarkdownBlocks = (value: string) =>
+  value
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+const clipboardHtmlToBoardMarkdown = (html: string) => {
+  if (!html || typeof DOMParser === "undefined") return "";
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  const inlineToMarkdown = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const element = node as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    const content = Array.from(element.childNodes).map(inlineToMarkdown).join("");
+
+    if (tag === "br") return "\n";
+    if (tag === "strong" || tag === "b") return content ? `**${content}**` : "";
+    if (tag === "a") {
+      const href = element.getAttribute("href") || "";
+      return content && isSafeBoardUrl(href) ? `[${content}](${href})` : content;
+    }
+    return content;
+  };
+
+  const blockToMarkdown = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return (node.textContent || "").trim();
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const element = node as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    const content = Array.from(element.childNodes).map(inlineToMarkdown).join("").trim();
+
+    if (!content && tag !== "br") return "";
+    if (tag === "h1") return `# ${content}`;
+    if (tag === "h2") return `## ${content}`;
+    if (tag === "h3") return `### ${content}`;
+    if (tag === "li") return `- ${content}`;
+    if (tag === "br") return "";
+    return content;
+  };
+
+  const blocks: string[] = [];
+  const walkBlocks = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = (node.textContent || "").trim();
+      if (text) blocks.push(text);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    if (["h1", "h2", "h3", "p", "div", "li"].includes(tag)) {
+      const block = blockToMarkdown(element);
+      if (block) blocks.push(block);
+      return;
+    }
+    if (tag === "ul" || tag === "ol" || tag === "body") {
+      Array.from(element.childNodes).forEach(walkBlocks);
+      return;
+    }
+    const inline = inlineToMarkdown(element).trim();
+    if (inline) blocks.push(inline);
+  };
+
+  Array.from(doc.body.childNodes).forEach(walkBlocks);
+  return normalizeBoardMarkdownBlocks(blocks.join("\n\n"));
+};
+
+const clipboardToBoardMarkdown = (clipboardData: DataTransfer) => {
+  const htmlMarkdown = clipboardHtmlToBoardMarkdown(clipboardData.getData("text/html"));
+  if (htmlMarkdown) return htmlMarkdown;
+  return normalizeBoardMarkdownBlocks(clipboardData.getData("text/plain"));
+};
+
+const renderBoldMarkdown = (text: string, keyPrefix: string): ReactNode[] => {
+  const parts: ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*)/g;
+  let lastIndex = 0;
+  let index = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index || 0;
+    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
+    parts.push(<strong key={`${keyPrefix}-bold-${index}`}>{match[0].slice(2, -2)}</strong>);
+    lastIndex = start + match[0].length;
+    index += 1;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length > 0 ? parts : [text];
+};
+
+const renderInlineBoardMarkdown = (text: string, keyPrefix: string): ReactNode[] => {
+  const parts: ReactNode[] = [];
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let lastIndex = 0;
+  let index = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index || 0;
+    if (start > lastIndex) {
+      parts.push(...renderBoldMarkdown(text.slice(lastIndex, start), `${keyPrefix}-text-${index}`));
+    }
+    const label = match[1];
+    const url = match[2];
+    parts.push(
+      <a key={`${keyPrefix}-link-${index}`} href={url} target="_blank" rel="noopener noreferrer">
+        {renderBoldMarkdown(label, `${keyPrefix}-link-label-${index}`)}
+      </a>
+    );
+    lastIndex = start + match[0].length;
+    index += 1;
+  }
+  if (lastIndex < text.length) {
+    parts.push(...renderBoldMarkdown(text.slice(lastIndex), `${keyPrefix}-tail`));
+  }
+  return parts.length > 0 ? parts : [text];
+};
+
+const renderBoardMarkdown = (value: string | null | undefined) => {
+  const text = String(value || "");
+  const lines = text.split(/\r?\n/);
+  const nodes: ReactNode[] = [];
+  let listItems: ReactNode[] = [];
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    nodes.push(
+      <ul key={`list-${nodes.length}`} style={{ margin: "8px 0 0", paddingLeft: 22 }}>
+        {listItems}
+      </ul>
+    );
+    listItems = [];
+  };
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    const listItem = /^[-*]\s+(.+)$/.exec(trimmed);
+
+    if (!trimmed) {
+      flushList();
+      nodes.push(<div key={`blank-${index}`} style={{ height: 8 }} />);
+      return;
+    }
+
+    if (heading) {
+      flushList();
+      const level = heading[1].length;
+      const fontSize = level === 1 ? 28 : level === 2 ? 22 : 18;
+      nodes.push(
+        <div
+          key={`heading-${index}`}
+          style={{
+            fontSize,
+            fontWeight: 800,
+            lineHeight: 1.35,
+            marginTop: nodes.length ? 10 : 0,
+            overflowWrap: "anywhere",
+          }}
+        >
+          {renderInlineBoardMarkdown(heading[2], `heading-${index}`)}
+        </div>
+      );
+      return;
+    }
+
+    if (listItem) {
+      listItems.push(
+        <li key={`li-${index}`} style={{ marginTop: 4, overflowWrap: "anywhere" }}>
+          {renderInlineBoardMarkdown(listItem[1], `li-${index}`)}
+        </li>
+      );
+      return;
+    }
+
+    flushList();
+    nodes.push(
+      <p key={`p-${index}`} style={{ margin: nodes.length ? "8px 0 0" : 0, overflowWrap: "anywhere" }}>
+        {renderInlineBoardMarkdown(line, `p-${index}`)}
+      </p>
+    );
+  });
+
+  flushList();
+  return <div>{nodes}</div>;
+};
+
+const renderBoardBody = (value: string | null | undefined) => renderBoardMarkdown(value);
+
 const parseBoardDate = (value: string | null | undefined) => {
   const ts = value ? Date.parse(value) : NaN;
   return Number.isFinite(ts) ? ts : 0;
@@ -33,6 +225,8 @@ export default function Board() {
   const isLoggedIn = authTokenExists();
   const shouldUseRecaptcha = !isLoggedIn && !!RECAPTCHA_SITE_KEY;
   const formSectionRef = useRef<HTMLElement | null>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const replyTextareaRefs = useRef<Record<number, HTMLTextAreaElement | null>>({});
   const [recaptchaReady, setRecaptchaReady] = useState(!shouldUseRecaptcha);
   const [posts, setPosts] = useState<BoardPost[]>([]);
   const [guestName, setGuestName] = useState(() => {
@@ -79,6 +273,17 @@ export default function Board() {
       return typeof parsed?.body === "string" ? parsed.body : "";
     } catch {
       return "";
+    }
+  });
+  const [markdownMode, setMarkdownMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const raw = localStorage.getItem(BOARD_DRAFT_STORAGE_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return !!parsed?.markdown_mode;
+    } catch {
+      return false;
     }
   });
   const [loading, setLoading] = useState(true);
@@ -183,12 +388,13 @@ export default function Board() {
           selected_main_thread_id: selectedMainThreadId,
           title,
           body,
+          markdown_mode: markdownMode,
         })
       );
     } catch {
       // ignore
     }
-  }, [guestName, selectedMainThreadId, title, body]);
+  }, [guestName, selectedMainThreadId, title, body, markdownMode]);
 
   const postsById = useMemo(() => {
     const map = new Map<number, BoardPost>();
@@ -418,6 +624,125 @@ export default function Board() {
     }
   };
 
+
+  const applyMarkdownAction = (
+    textarea: HTMLTextAreaElement | null,
+    value: string,
+    setValue: (nextValue: string) => void,
+    action: BoardMarkdownAction
+  ) => {
+    if (!textarea) return;
+    const start = textarea.selectionStart ?? value.length;
+    const end = textarea.selectionEnd ?? value.length;
+    const selected = value.slice(start, end);
+    let replacement = selected;
+    let nextSelectionStart = start;
+    let nextSelectionEnd = end;
+
+    if (action === "bold") {
+      const inner = selected || t({ ja: "太字", en: "bold text" });
+      replacement = `**${inner}**`;
+      nextSelectionStart = start + 2;
+      nextSelectionEnd = nextSelectionStart + inner.length;
+    } else if (action === "large") {
+      const lineStart = value.lastIndexOf("\n", Math.max(start - 1, 0)) + 1;
+      const lineEnd = end < value.length ? value.indexOf("\n", end) : -1;
+      const rangeEnd = lineEnd === -1 ? value.length : lineEnd;
+      const block = value.slice(lineStart, rangeEnd) || t({ ja: "大きい文字", en: "Large text" });
+      replacement = block
+        .split("\n")
+        .map((line) => (line.startsWith("# ") ? line : `# ${line.replace(/^#{1,3}\s+/, "")}`))
+        .join("\n");
+      const nextValue = `${value.slice(0, lineStart)}${replacement}${value.slice(rangeEnd)}`;
+      setValue(nextValue);
+      requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.setSelectionRange(lineStart, lineStart + replacement.length);
+      });
+      return;
+    } else if (action === "link") {
+      const selectedUrl = isSafeBoardUrl(selected) ? selected.trim() : "";
+      const url = window.prompt(t({ ja: "URLを入力してください", en: "Enter URL" }), selectedUrl || "https://");
+      if (!url) return;
+      const trimmedUrl = url.trim();
+      if (!isSafeBoardUrl(trimmedUrl)) {
+        setError(t({ ja: "URLは https:// または http:// で始めてください", en: "URL must start with https:// or http://." }));
+        return;
+      }
+      const label = selected && !isSafeBoardUrl(selected) ? selected : trimmedUrl;
+      replacement = `[${label}](${trimmedUrl})`;
+      nextSelectionStart = start + 1;
+      nextSelectionEnd = nextSelectionStart + label.length;
+    }
+
+    const nextValue = `${value.slice(0, start)}${replacement}${value.slice(end)}`;
+    setValue(nextValue);
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(nextSelectionStart, nextSelectionEnd);
+    });
+  };
+
+  const handlePreviewPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    const pastedText = clipboardToBoardMarkdown(event.clipboardData);
+    if (!pastedText) return;
+    event.preventDefault();
+    setBody((current: string) => {
+      const separator = current && !current.endsWith("\n") ? "\n" : "";
+      return `${current}${separator}${pastedText}`.slice(0, 5000);
+    });
+  };
+
+  const markdownToolButtonStyle = {
+    width: 44,
+    height: 34,
+    padding: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 800,
+    lineHeight: 1,
+  } as const;
+
+  const renderMarkdownToolbar = (
+    getTextarea: () => HTMLTextAreaElement | null,
+    value: string,
+    setValue: (nextValue: string) => void
+  ) => (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => applyMarkdownAction(getTextarea(), value, setValue, "bold")}
+        title={t({ ja: "選択範囲を太字にする", en: "Make selection bold" })}
+        style={markdownToolButtonStyle}
+      >
+        B
+      </button>
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => applyMarkdownAction(getTextarea(), value, setValue, "large")}
+        title={t({ ja: "選択行を大きい文字にする", en: "Make selected lines large" })}
+        style={markdownToolButtonStyle}
+      >
+        大
+      </button>
+      <button
+        type="button"
+        className="btn btn-border"
+        onClick={() => applyMarkdownAction(getTextarea(), value, setValue, "link")}
+        title={t({ ja: "選択範囲をURLリンクにする", en: "Turn selection into a URL link" })}
+        style={{ ...markdownToolButtonStyle, fontSize: 12 }}
+      >
+        URL
+      </button>
+      <span style={{ color: "var(--muted-text)", fontSize: 12 }}>
+        {t({ ja: "選択してボタンを押すとMarkdown記法を挿入します", en: "Select text, then press a button to insert Markdown." })}
+      </span>
+    </div>
+  );
+
   return (
     <div style={{ maxWidth: 940, margin: "0 auto" }}>
       <h2>{t({ ja: "掲示板", en: "Board" })}</h2>
@@ -473,7 +798,24 @@ export default function Board() {
             placeholder={t({ ja: "タイトル（120文字以内）", en: "Title (max 120 chars)" })}
             style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid var(--border)" }}
           />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-border"
+              aria-pressed={markdownMode}
+              onClick={() => setMarkdownMode((current) => !current)}
+            >
+              {markdownMode
+                ? t({ ja: "Markdownモード: ON", en: "Markdown mode: ON" })
+                : t({ ja: "Markdownモード: OFF", en: "Markdown mode: OFF" })}
+            </button>
+            <span style={{ color: "var(--muted-text)", fontSize: 12 }}>
+              {t({ ja: "# 大きい文字 / **太字** / [表示名](URL) に対応", en: "Supports # large text / **bold** / [label](URL)." })}
+            </span>
+          </div>
+          {markdownMode && renderMarkdownToolbar(() => bodyTextareaRef.current, body, setBody)}
           <textarea
+            ref={bodyTextareaRef}
             value={body}
             onChange={(event) => setBody(event.target.value)}
             maxLength={5000}
@@ -481,6 +823,32 @@ export default function Board() {
             placeholder={t({ ja: "本文（5000文字以内）", en: "Message (max 5000 chars)" })}
             style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid var(--border)" }}
           />
+          {markdownMode ? (
+            <div
+              tabIndex={0}
+              onPaste={handlePreviewPaste}
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                padding: 10,
+                background: "var(--bg)",
+                minHeight: 72,
+                outlineOffset: 2,
+              }}
+              title={t({ ja: "ここにMarkdownテキストを貼り付けできます", en: "Paste Markdown text here." })}
+            >
+              <div style={{ color: "var(--muted-text)", fontSize: 12, marginBottom: 6 }}>
+                {t({ ja: "プレビュー（ここに貼り付け可）", en: "Preview (paste here)" })}
+              </div>
+              {body.trim() ? (
+                renderBoardBody(body)
+              ) : (
+                <div style={{ color: "var(--muted-text)", fontSize: 13 }}>
+                  {t({ ja: "Markdownテキストをここに貼り付けると本文に入ります", en: "Paste Markdown text here to add it to the message." })}
+                </div>
+              )}
+            </div>
+          ) : null}
           {shouldUseRecaptcha && (
             <div style={{ fontSize: 12, color: "var(--muted-text)" }}>
               {recaptchaReady
@@ -542,7 +910,7 @@ export default function Board() {
                         : ""}
                     </span>
                   </div>
-                  <p style={{ margin: "10px 0 0", whiteSpace: "pre-wrap" }}>{post.body}</p>
+                  <div style={{ margin: "10px 0 0" }}>{renderBoardBody(post.body)}</div>
                   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {renderLikeButton(post)}
                     <button
@@ -588,7 +956,19 @@ export default function Board() {
                         })}
                         style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid var(--border)" }}
                       />
+                      {renderMarkdownToolbar(
+                        () => replyTextareaRefs.current[Number(post.id)] || null,
+                        String(replyBodyByThread[post.id] || ""),
+                        (nextValue) =>
+                          setReplyBodyByThread((prev) => ({
+                            ...prev,
+                            [post.id]: nextValue,
+                          }))
+                      )}
                       <textarea
+                        ref={(element) => {
+                          replyTextareaRefs.current[Number(post.id)] = element;
+                        }}
                         value={String(replyBodyByThread[post.id] || "")}
                         onChange={(event) =>
                           setReplyBodyByThread((prev) => ({
@@ -660,7 +1040,7 @@ export default function Board() {
                               : ""}
                           </span>
                         </div>
-                        <p style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}>{reply.body}</p>
+                        <div style={{ margin: "8px 0 0" }}>{renderBoardBody(reply.body)}</div>
                         <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
                           {renderLikeButton(reply)}
                         </div>

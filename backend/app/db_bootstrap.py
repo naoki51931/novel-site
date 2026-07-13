@@ -672,6 +672,80 @@ def ensure_board_post_likes_table():
         print("[db] ensure_board_post_likes_table failed:", repr(e))
 
 
+def ensure_blog_posts_table() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS blog_posts (
+                      id INT AUTO_INCREMENT PRIMARY KEY,
+                      author_id INT NOT NULL,
+                      site_key VARCHAR(32) NOT NULL DEFAULT 'main',
+                      title VARCHAR(200) NOT NULL,
+                      body LONGTEXT NOT NULL,
+                      image_url VARCHAR(512) NULL,
+                      status VARCHAR(16) NOT NULL DEFAULT 'public',
+                      view_count INT NOT NULL DEFAULT 0,
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                      KEY ix_blog_posts_id (id),
+                      KEY ix_blog_posts_author_id (author_id),
+                      KEY ix_blog_posts_site_key (site_key),
+                      KEY ix_blog_posts_status (status),
+                      KEY idx_blog_posts_author_status (author_id, status),
+                      KEY idx_blog_posts_site_status (site_key, status),
+                      CONSTRAINT fk_blog_posts_author_id FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'blog_posts'
+                    """
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+            if "image_url" not in existing:
+                conn.execute(text("ALTER TABLE blog_posts ADD COLUMN image_url VARCHAR(512) NULL"))
+            if "view_count" not in existing:
+                conn.execute(text("ALTER TABLE blog_posts ADD COLUMN view_count INT NOT NULL DEFAULT 0"))
+    except Exception as e:
+        print("[db] ensure_blog_posts_table failed:", repr(e))
+
+
+def ensure_blog_comments_table() -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS blog_comments (
+                      id INT AUTO_INCREMENT PRIMARY KEY,
+                      post_id INT NOT NULL,
+                      user_id INT NULL,
+                      guest_name VARCHAR(40) NULL,
+                      body TEXT NOT NULL,
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      KEY ix_blog_comments_id (id),
+                      KEY ix_blog_comments_post_id (post_id),
+                      KEY ix_blog_comments_user_id (user_id),
+                      KEY idx_blog_comments_post_created (post_id, created_at),
+                      CONSTRAINT fk_blog_comments_post_id FOREIGN KEY (post_id) REFERENCES blog_posts(id) ON DELETE CASCADE,
+                      CONSTRAINT fk_blog_comments_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+    except Exception as e:
+        print("[db] ensure_blog_comments_table failed:", repr(e))
+
+
 def ensure_seo_pages_table() -> None:
     try:
         with engine.begin() as conn:
@@ -712,6 +786,8 @@ def run_db_bootstrap() -> None:
     ensure_cover_generations_table()
     ensure_board_posts_table_columns()
     ensure_board_post_likes_table()
+    ensure_blog_posts_table()
+    ensure_blog_comments_table()
     ensure_ai_novel_jobs_table_columns()
     ensure_ai_chat_tables()
     ensure_ai_memory_items_table_columns()

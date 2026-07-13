@@ -294,7 +294,7 @@ a {
 .btn { display: inline-block; padding: 10px 20px; font-weight: 600; text-decoration: none; cursor: pointer; transition: 0.2s ease; }
 .btn-border { border: 2px solid var(--border-strong); border-radius: 0; background: var(--surface); color: var(--text); }
 .btn-border:hover { color: var(--bg); background: var(--text); }
-button.btn.btn-border { background: var(--surface); border: 2px solid var(--border-strong); color: var(--text); }
+button.btn.btn-border { background: var(--surface); border: 2px solid var(--border-strong); border-radius: 4px; color: var(--text); }
 button.btn.btn-border:hover { background: var(--text); color: var(--bg); }
 button.btn.btn-border.bubble-send-btn {
   min-width: 28px;
@@ -335,6 +335,22 @@ button.btn.btn-border.bubble-send-btn {
 .btn-border:hover {
   background: var(--text);
   color: var(--bg);
+}
+
+.social-share-icon-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  min-height: 39px;
+  padding: 8px 16px;
+  line-height: 1;
+}
+
+.social-share-icon-btn svg {
+  width: 1em;
+  height: 1em;
 }
 
 .novel-post-guide {

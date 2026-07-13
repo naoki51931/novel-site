@@ -34,6 +34,10 @@ AI_CHAT_MESSAGE_IMAGE_DIR = os.getenv(
     "AI_CHAT_MESSAGE_IMAGE_DIR",
     str(STATIC_DIR / "ai_chat_message_images"),
 )
+BLOG_IMAGE_DIR = os.getenv(
+    "BLOG_IMAGE_DIR",
+    str(STATIC_DIR / "blog_images"),
+)
 COVER_UPLOAD_DIR = os.getenv("COVER_UPLOAD_DIR", "/app/uploads/covers")
 UPLOADS_DIR = Path(COVER_UPLOAD_DIR).resolve().parent
 

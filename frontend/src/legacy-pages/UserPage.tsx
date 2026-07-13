@@ -12,6 +12,13 @@ const API_BASE = getApiBase();
 const FAVORITE_SUMMARY_MAX_CHARS = 500;
 type FollowListKind = "followers" | "following" | "";
 
+const resolveImageUrl = (url: string | null | undefined) => {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return API_BASE + (value.startsWith("/") ? value : "/" + value);
+};
+
 type UserProfile = {
   id?: number | string | null;
   username?: string | null;
@@ -60,6 +67,17 @@ type FavoriteTag = {
   name: string;
 };
 
+type BlogPost = {
+  id: number | string;
+  title?: string | null;
+  body?: string | null;
+  image_url?: string | null;
+  status?: string | null;
+  view_count?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 type FollowListItem = {
   user_id?: number | string | null;
   username?: string | null;
@@ -91,6 +109,7 @@ export default function UserPage() {
   const [novels, setNovels] = useState<UserNovel[]>([]);
   const [popularNovels, setPopularNovels] = useState<UserNovel[]>([]);
   const [favorites, setFavorites] = useState<UserNovel[]>([]);
+  const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
   const [authorStats, setAuthorStats] = useState<AuthorStats | null>(null);
   const [favoriteTags, setFavoriteTags] = useState<FavoriteTag[]>([]);
   const [activeTab, setActiveTab] = useState("works");
@@ -135,15 +154,17 @@ export default function UserPage() {
           );
         }
 
-        const [resNovels, resPopularNovels, resFavorites] = await Promise.all([
+        const [resNovels, resPopularNovels, resFavorites, resBlogPosts] = await Promise.all([
           fetch(`${API_BASE}/api/public/users/${safeUsername}/novels`, { headers }),
           fetch(`${API_BASE}/api/public/users/${safeUsername}/novels?sort=popular`, { headers }),
           fetch(`${API_BASE}/api/public/users/${safeUsername}/favorites`, { headers }),
+          fetch(`${API_BASE}/api/public/users/${safeUsername}/blog-posts`, { headers }),
         ]);
 
         const novelsData = await resNovels.json().catch(() => []);
         const popularNovelsData = await resPopularNovels.json().catch(() => []);
         const favoritesData = await resFavorites.json().catch(() => []);
+        const blogPostsData = await resBlogPosts.json().catch(() => []);
         if (!resNovels.ok) {
           throw new Error(
             novelsData.detail || t({ ja: "小説一覧の取得に失敗しました", en: "Failed to load novels." })
@@ -160,11 +181,17 @@ export default function UserPage() {
             favoritesData.detail || t({ ja: "お気に入りの取得に失敗しました", en: "Failed to load favorites." })
           );
         }
+        if (!resBlogPosts.ok) {
+          throw new Error(
+            blogPostsData.detail || t({ ja: "ブログの取得に失敗しました", en: "Failed to load blog posts." })
+          );
+        }
 
         setProfile(profileData);
         setNovels(Array.isArray(novelsData) ? novelsData : []);
         setPopularNovels(Array.isArray(popularNovelsData) ? popularNovelsData : []);
         setFavorites(Array.isArray(favoritesData) ? favoritesData : []);
+        setBlogPosts(Array.isArray(blogPostsData) ? blogPostsData : []);
         setActiveTab("works");
         if (profileData?.id) {
           const [resStats, resTags] = await Promise.all([
@@ -630,8 +657,59 @@ export default function UserPage() {
     );
   };
 
+  const renderBlogList = () => {
+    if (blogPosts.length === 0) {
+      return <p style={{ marginTop: 10 }}>{t({ ja: "ブログ記事がありません。", en: "No blog posts." })}</p>;
+    }
+    return (
+      <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+        {blogPosts.map((post) => (
+          <article
+            key={post.id}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: 12,
+              background: "var(--surface)",
+            }}
+          >
+            {post.image_url && (
+              <img
+                src={resolveImageUrl(post.image_url)}
+                alt=""
+                style={{
+                  width: "100%",
+                  maxHeight: 220,
+                  objectFit: "cover",
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  marginBottom: 10,
+                }}
+              />
+            )}
+            <h4 style={{ margin: "0 0 8px" }}>
+              <Link to={`/users/${encodeURIComponent(displayName)}/blog/${post.id}`}>{post.title}</Link>
+            </h4>
+            <div style={{ color: "var(--muted-text)", fontSize: 12, marginBottom: 8 }}>
+              {t({ ja: "閲覧", en: "Views" })}: {post.view_count ?? 0}
+            </div>
+            <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, margin: 0 }}>
+              {(post.body || "").slice(0, 220)}{(post.body || "").length > 220 ? "..." : ""}
+            </p>
+            <div style={{ marginTop: 10 }}>
+              <Link className="btn btn-border" to={`/users/${encodeURIComponent(displayName)}/blog/${post.id}`}>
+                {t({ ja: "続きを読む", en: "Read more" })}
+              </Link>
+            </div>
+          </article>
+        ))}
+      </div>
+    );
+  };
+
   const tabs = [
     { key: "works", label: t({ ja: "作品", en: "Works" }) },
+    { key: "blog", label: t({ ja: "ブログ", en: "Blog" }) },
     { key: "popular", label: t({ ja: "人気", en: "Popular" }) },
     { key: "bookmarks", label: t({ ja: "ブックマーク", en: "Bookmarks" }) },
     { key: "profile", label: t({ ja: "プロフィール", en: "Profile" }) },
@@ -889,6 +967,22 @@ export default function UserPage() {
               items: novels,
               emptyText: t({ ja: "公開中の小説がありません。", en: "No published novels." }),
             })}
+          </section>
+        )}
+
+        {activeTab === "blog" && (
+          <section style={{ marginTop: "1rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <h3 style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6, margin: 0, flex: "1 1 auto" }}>
+                {t({ ja: "ブログ", en: "Blog" })}
+              </h3>
+              {isOwnPage && (
+                <Link className="btn btn-border" to="/me/blog">
+                  {t({ ja: "ブログ作成・更新", en: "Manage blog" })}
+                </Link>
+              )}
+            </div>
+            {renderBlogList()}
           </section>
         )}
 

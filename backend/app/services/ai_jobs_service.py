@@ -1,3 +1,17 @@
+import json
+def _client_job_kind_from_request_json(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    value = payload.get("client_job_kind") if isinstance(payload, dict) else None
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
 def _payload_job_ids(payload) -> list[int]:
     if isinstance(payload, dict):
         raw_job_ids = payload.get("job_ids") or []
@@ -18,7 +32,7 @@ def list_my_ai_jobs_service(*, request, response, db):
     user = legacy.require_current_user(request, db)
     legacy._kill_expired_ai_jobs(db, user_id=user.id)
     guest_id = legacy.get_or_set_ai_guest_id(request, response)
-    jobs = (
+    query = (
         db.query(legacy.models.AINovelJob)
         .filter(
             legacy.or_(
@@ -26,14 +40,31 @@ def list_my_ai_jobs_service(*, request, response, db):
                 legacy.models.AINovelJob.guest_id == guest_id,
             )
         )
-        .order_by(legacy.models.AINovelJob.created_at.desc())
-        .all()
     )
+
+    status = str(request.query_params.get("status") or "").strip().lower()
+    if status == "active":
+        query = query.filter(legacy.models.AINovelJob.status.in_(["pending", "running"]))
+    elif status in {"pending", "running", "succeeded", "failed"}:
+        query = query.filter(legacy.models.AINovelJob.status == status)
+
+    query = query.order_by(legacy.models.AINovelJob.created_at.desc())
+
+    raw_limit = request.query_params.get("limit")
+    if raw_limit is not None:
+        try:
+            limit = max(1, min(int(raw_limit), 500))
+        except Exception:
+            limit = 100
+        query = query.limit(limit)
+
+    jobs = query.all()
     return [
         {
             "id": job.id,
             "status": job.status,
             "job_type": job.job_type,
+            "client_job_kind": _client_job_kind_from_request_json(job.request_json),
             "created_at": legacy.to_utc_isoformat(job.created_at),
             "started_at": legacy.to_utc_isoformat(job.started_at),
         }

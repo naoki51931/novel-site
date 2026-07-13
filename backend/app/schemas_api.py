@@ -195,6 +195,8 @@ class AdminUserOut(BaseModel):
     username: str
     email: str | None = None
     is_premium: bool
+    premium_source: str = "inactive"
+    premium_plan_amount_yen: int | None = None
     email_notifications_enabled: bool
     novel_count: int
 

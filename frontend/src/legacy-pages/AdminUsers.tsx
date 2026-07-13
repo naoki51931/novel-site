@@ -10,6 +10,8 @@ type AdminUser = {
   username?: string | null;
   email?: string | null;
   is_premium?: boolean | null;
+  premium_source?: "inactive" | "campaign" | "paid" | string | null;
+  premium_plan_amount_yen?: number | null;
   email_notifications_enabled?: boolean | null;
   novel_count?: number | null;
 };
@@ -219,6 +221,26 @@ export default function AdminUsers() {
 
   const expandedIds = useMemo(() => expandedUsers, [expandedUsers]);
 
+  const formatPremiumStatus = (user: AdminUser) => {
+    if (!user?.is_premium || user.premium_source === "inactive") {
+      return t({ ja: "無効", en: "Inactive" });
+    }
+    if (user.premium_source === "campaign") {
+      return t({ ja: "プレミアムキャンペーン中: 有効", en: "Premium campaign: Active" });
+    }
+    const amount = Number(user.premium_plan_amount_yen || 0);
+    if ([1000, 3000, 5000].includes(amount)) {
+      return t(
+        {
+          ja: "{{amount}}円課金: 有効",
+          en: "JPY {{amount}} paid plan: Active",
+        },
+        { amount: amount.toLocaleString(lang === "en" ? "en-US" : "ja-JP") }
+      );
+    }
+    return t({ ja: "有効（課金プラン不明）", en: "Active (unknown paid plan)" });
+  };
+
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <div style={{ marginBottom: 12 }}>
@@ -379,7 +401,7 @@ export default function AdminUsers() {
                       <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
                         ID: {user.id} / {user.email || "-"} /{" "}
                         {t({ ja: "有料", en: "Premium" })}:{" "}
-                        {user.is_premium ? t({ ja: "有効", en: "Active" }) : t({ ja: "無効", en: "Inactive" })}
+                        {formatPremiumStatus(user)}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
                         {t({ ja: "通知メール", en: "Email notifications" })}:{" "}
@@ -390,7 +412,23 @@ export default function AdminUsers() {
                         {t({ ja: "小説数", en: "Novels" })}: {user.novel_count}
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      {user.username ? (
+                        <Link
+                          className="btn btn-border"
+                          to={`/users/${encodeURIComponent(String(user.username))}`}
+                        >
+                          {t({ ja: "公開ページ", en: "Public page" })}
+                        </Link>
+                      ) : (
+                        <span
+                          className="btn btn-border"
+                          aria-disabled="true"
+                          style={{ opacity: 0.55, cursor: "not-allowed" }}
+                        >
+                          {t({ ja: "公開ページ", en: "Public page" })}
+                        </span>
+                      )}
                       <button
                         type="button"
                         className="btn btn-border"

@@ -70,6 +70,7 @@ class AIJobListItem(BaseModel):
     user_id: int | None = None
     status: str
     job_type: str
+    client_job_kind: str | None = None
     created_at: str | None = None
     started_at: str | None = None
 

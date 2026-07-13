@@ -196,19 +196,20 @@ export default function PremiumLP() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginBottom: 14 }}>
           {plans.map((plan) => {
             const active = selectedAmount === plan.amount;
+            const isSelectionLocked = loading;
             return (
               <button
                 key={plan.amount}
                 type="button"
                 onClick={() => setSelectedAmount(plan.amount)}
-                disabled={loading || isPremium}
+                disabled={isSelectionLocked}
                 style={{
                   textAlign: "left",
                   border: active ? "2px solid #2d2010" : "1px solid #d4c198",
                   borderRadius: 8,
                   padding: "12px",
                   background: active ? "#fff7e8" : "rgba(255,255,255,0.72)",
-                  cursor: loading || isPremium ? "default" : "pointer",
+                  cursor: isSelectionLocked ? "default" : "pointer",
                 }}
               >
                 <div style={{ fontWeight: 800, fontSize: 18 }}>{plan.label}</div>

@@ -21,6 +21,7 @@ from ..routers.ai_story_agent import router as ai_story_agent_router
 from ..routers.admin import router as admin_router
 from ..routers.auth import router as auth_router
 from ..routers.board import router as board_router
+from ..routers.blog import router as blog_router
 from ..routers.dms import router as dms_router
 from ..routers.episodes import router as episodes_router
 from ..routers.feed import router as feed_router
@@ -39,6 +40,7 @@ def include_feature_routers(app: FastAPI) -> None:
     app.include_router(admin_router)
     app.include_router(auth_router)
     app.include_router(board_router)
+    app.include_router(blog_router)
     app.include_router(dms_router)
     app.include_router(ai_chat_router)
     app.include_router(ai_episode_assist_router)

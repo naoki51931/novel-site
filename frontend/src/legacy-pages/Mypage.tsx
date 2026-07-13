@@ -16,6 +16,7 @@ const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
 const FAVORITE_SUMMARY_MAX_CHARS = 500;
+const AI_JOBS_HISTORY_LIMIT = 200;
 
 type TagItem = {
   id?: number | string | null;
@@ -213,7 +214,7 @@ export default function Mypage() {
     try {
       setAiJobsLoading(true);
       setAiJobsError("");
-      const res = await fetch(`${API_BASE}/api/ai/jobs/me`, {
+      const res = await fetch(`${API_BASE}/api/ai/jobs/me?limit=${AI_JOBS_HISTORY_LIMIT}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => []);
@@ -854,6 +855,20 @@ export default function Mypage() {
         <div style={{ marginTop: 8 }}>
           <Link className="btn btn-border" to="/notifications">
             {t({ ja: "通知センター", en: "Notifications" })}
+          </Link>
+        </div>
+      </section>
+
+      <section style={{ marginTop: "2.5rem" }}>
+        <h3 style={{ borderBottom: "1px solid #ddd", paddingBottom: 6 }}>
+          {t({ ja: "ブログ", en: "Blog" })}
+        </h3>
+        <p style={{ marginTop: 8, lineHeight: 1.6 }}>
+          {t({ ja: "あなたの公開ページに表示するブログ記事を作成・更新できます。", en: "Create and update blog posts shown on your public page." })}
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <Link className="btn btn-border" to="/me/blog">
+            {t({ ja: "ブログ作成・更新", en: "Create or update blog" })}
           </Link>
         </div>
       </section>

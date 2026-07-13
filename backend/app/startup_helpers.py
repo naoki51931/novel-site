@@ -8,6 +8,7 @@ def on_startup(
     episode_image_dir: str,
     ai_chat_character_image_dir: str,
     ai_chat_message_image_dir: str,
+    blog_image_dir: str,
     cover_upload_dir: str,
     get_redis_client,
     start_redis_metrics_flusher_if_enabled,
@@ -25,6 +26,7 @@ def on_startup(
     os.makedirs(episode_image_dir, exist_ok=True)
     os.makedirs(ai_chat_character_image_dir, exist_ok=True)
     os.makedirs(ai_chat_message_image_dir, exist_ok=True)
+    os.makedirs(blog_image_dir, exist_ok=True)
     os.makedirs(cover_upload_dir, exist_ok=True)
     get_redis_client()
     start_redis_metrics_flusher_if_enabled()

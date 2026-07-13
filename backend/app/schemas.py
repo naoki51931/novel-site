@@ -88,6 +88,59 @@ class Novel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+
+# =========================
+# Blog
+# =========================
+class BlogPostCreate(BaseModel):
+    title: str
+    body: str
+    image_url: Optional[str] = None
+    status: Literal["public", "draft"] = "public"
+
+
+class BlogPostUpdate(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    image_url: Optional[str] = None
+    status: Optional[Literal["public", "draft"]] = None
+
+
+class BlogPostRead(BaseModel):
+    id: int
+    title: str
+    body: str
+    image_url: Optional[str] = None
+    status: str
+    author_id: int
+    author_username: Optional[str] = None
+    site_key: Optional[str] = None
+    view_count: int = 0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BlogCommentCreate(BaseModel):
+    body: str
+    guest_name: Optional[str] = None
+    recaptcha_token: Optional[str] = None
+    recaptcha_action: Optional[str] = None
+
+
+class BlogCommentRead(BaseModel):
+    id: int
+    post_id: int
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    guest_name: Optional[str] = None
+    display_name: str
+    body: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
 # =========================
 # Episode
 # =========================

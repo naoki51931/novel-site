@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import notification_helpers
 from ..time_utils import utcnow
+from ..stripe_helpers import premium_plan_amount_yen_for_user
 
 
 def admin_create_contact_message_service(*, request: Request, payload, db: Session):
@@ -45,6 +46,26 @@ def admin_list_contact_messages_service(*, request: Request, limit: int, db: Ses
     )
 
 
+def _admin_premium_status_for_user(user, legacy) -> tuple[str, int | None]:
+    effective_premium = bool(legacy.is_effective_premium_user(user))
+    if not effective_premium:
+        return "inactive", None
+
+    stored_premium = bool(getattr(user, "is_premium", False))
+    subscription_id = str(getattr(user, "stripe_subscription_id", "") or "").strip()
+    if not stored_premium or not subscription_id:
+        return "campaign", None
+
+    amount_yen = premium_plan_amount_yen_for_user(
+        user,
+        stripe_price_id_3000=legacy.STRIPE_PRICE_ID_3000,
+        stripe_price_id_5000=legacy.STRIPE_PRICE_ID_5000,
+        stripe_module=legacy.stripe,
+        stripe_obj_get=legacy._stripe_obj_get,
+    )
+    return "paid", int(amount_yen or 1000)
+
+
 def admin_list_users_service(*, request: Request, limit: int, offset: int, db: Session):
     from .. import main as legacy
 
@@ -69,17 +90,21 @@ def admin_list_users_service(*, request: Request, limit: int, offset: int, db: S
         .limit(limit)
         .all()
     )
-    users = [
-        legacy.AdminUserOut(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            is_premium=legacy.is_effective_premium_user(user),
-            email_notifications_enabled=bool(user.email_notifications_enabled),
-            novel_count=int(novel_count or 0),
+    users = []
+    for user, novel_count in rows:
+        premium_source, premium_plan_amount_yen = _admin_premium_status_for_user(user, legacy)
+        users.append(
+            legacy.AdminUserOut(
+                id=user.id,
+                username=user.username,
+                email=user.email,
+                is_premium=premium_source != "inactive",
+                premium_source=premium_source,
+                premium_plan_amount_yen=premium_plan_amount_yen,
+                email_notifications_enabled=bool(user.email_notifications_enabled),
+                novel_count=int(novel_count or 0),
+            )
         )
-        for user, novel_count in rows
-    ]
     return legacy.AdminUserListOut(total_users=total_users, users=users)
 
 
