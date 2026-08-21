@@ -11,12 +11,12 @@ Codex で作業するときの要点と入口をまとめます。
 - Frontend: `frontend/src/main.jsx` → `frontend/src/App.jsx` → `frontend/src/pages/*`
 - 静的ファイル: `static/episode_images`, `frontend/public`
 - nginx: `nginx/`
-- Docker: `docker-compose.yml`, `docker-compose.free.yml`
+- Docker: `docker-compose.yml`, `docker-compose.agefree.yml`, `docker-compose.free.yml`
 - バックアップ類: `backend/app/main.py.bak*`, `backend/app/models.py.bak*` は参照用。基本は編集しない。
 
 ## 開発コマンド（ローカル）
 
-- Docker 起動: `docker compose up --build`（または `docker compose -f docker-compose.free.yml up --build`）
+- Docker 起動: `docker compose up --build`（エロ/R18・年齢制限解除で起動する場合は `docker compose -f docker-compose.yml -f docker-compose.agefree.yml up -d --build`。無料化も同時に必要な場合のみ `docker-compose.free.yml` も追加する）
 - Backend 単体起動: `cd backend` → `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
 - Frontend dev: `cd frontend` → `npm install` → `npm run dev`
 - Frontend build: `cd frontend` → `npm run build`
@@ -89,6 +89,7 @@ Codex で作業するときの要点と入口をまとめます。
 
 ## 反映時のハマりどころ
 
+- エロ/R18・年齢制限解除で起動する場合は、`docker compose -f docker-compose.yml -f docker-compose.agefree.yml up -d --build` を使う。backend は `AGE_RESTRICTION_DISABLED=1` になる。
 - `docker compose build backend` はイメージ更新のみ。稼働中コンテナへは未反映。
 - 反映には必ず `docker compose up --build -d backend`（または recreate）を実行する。
 - フロント修正後は `frontend/dist` へビルドし、`docker compose restart nginx` で配信反映。
