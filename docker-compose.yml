@@ -146,6 +146,8 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://shosetsu-toukou-site.org}
       WEAVIATE_URL: ${WEAVIATE_URL:-http://weaviate:8080}
       WEAVIATE_TIMEOUT_SEC: ${WEAVIATE_TIMEOUT_SEC:-10}
+#       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://local-llm:8000}
+#       LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-900}
 
     volumes:
       - ./static:/app/static
@@ -174,6 +176,23 @@ services:
       NEXT_PUBLIC_SITE_KEY: ${VITE_SITE_KEY:-}
     depends_on:
       - backend
+
+#   local-llm:
+#     build:
+#       context: ./local-llm
+#       dockerfile: Dockerfile
+#     container_name: novel-local-llm
+#     restart: unless-stopped
+#     environment:
+#       TZ: UTC
+#       HF_HOME: /opt/models/huggingface
+#       TRANSFORMERS_CACHE: /opt/models/huggingface/transformers
+#       HF_TOKEN: ${HF_TOKEN:-}
+#       LOCAL_QWEN35_BASE_MODEL: ${LOCAL_QWEN35_BASE_MODEL:-techwithsergiu/Qwen3.5-text-9B-bnb-4bit}
+#     volumes:
+#       - llm-model-cache:/opt/models
+#     gpus: all
+#     shm_size: "16gb"
 
   redis:
     image: redis:7-alpine
@@ -231,3 +250,4 @@ volumes:
   db-data:
   weaviate_data:
   redis_data:
+#   llm-model-cache:

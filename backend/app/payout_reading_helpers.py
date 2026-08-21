@@ -83,7 +83,7 @@ def parse_payout_period(
     return start, next_month - timedelta_cls(days=1)
 
 
-def truncate_for_free(body: str | None, ratio: float = 0.3) -> str | None:
+def truncate_for_free(body: str | None, ratio: float = 0.75) -> str | None:
     if not body:
         return body
     return body[: max(1, int(len(body) * ratio))]
