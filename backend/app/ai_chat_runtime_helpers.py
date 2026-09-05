@@ -40,14 +40,21 @@ def _resolve_ai_chat_provider(provider: str | None, model: str | None, *, provid
     explicit = (provider or "").strip().lower()
     if explicit:
         return explicit
+    if not (model or "").strip():
+        configured_default = (os.getenv("AI_CHAT_DEFAULT_PROVIDER", "") or "").strip().lower()
+        if configured_default:
+            return configured_default
     return provider_from_model(model)
 
 
 def _ai_chat_provider_candidates(provider: str | None, model: str | None, *, resolve_ai_chat_provider: Any) -> list[str]:
     primary = resolve_ai_chat_provider(provider, model)
-    if (provider or "").strip() or (model or "").strip():
-        return [primary] if primary else []
     ordered = [primary, "openai", "deepseek", "openrouter"]
+    configured_default = (os.getenv("AI_CHAT_DEFAULT_PROVIDER", "") or "").strip().lower()
+    if configured_default == "local":
+        ordered.append("local")
+    if (provider or "").strip() or (model or "").strip():
+        ordered = [primary, "local"] if configured_default == "local" else [primary]
     seen: set[str] = set()
     out: list[str] = []
     for p in ordered:
@@ -87,6 +94,12 @@ def _resolve_ai_chat_candidate_model(
         return default_ai_chat_openrouter_model()
     if candidate == "deepseek":
         return default_ai_chat_deepseek_model() or None
+    if candidate == "local":
+        return (
+            (os.getenv("AI_CHAT_LOCAL_MODEL", "") or "").strip()
+            or (os.getenv("LOCAL_LLM_DEFAULT_MODEL", "") or "").strip()
+            or "local-qwen3-8b-nsfw-jp"
+        )
     return None
 
 

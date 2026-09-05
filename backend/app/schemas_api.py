@@ -194,6 +194,7 @@ class AdminUserOut(BaseModel):
     id: int
     username: str
     email: str | None = None
+    created_at: datetime
     is_premium: bool
     premium_source: str = "inactive"
     premium_plan_amount_yen: int | None = None

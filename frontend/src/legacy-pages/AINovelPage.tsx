@@ -25,11 +25,15 @@ const AI_NOVEL_DRAFT_KEY = "draft_ai_novel_v1";
 const AI_NOVEL_SEGMENT_PREFS_KEY = "ai_novel_segment_prefs_v1";
 const PENDING_AI_JOB_KEY = "pending_ai_job_v1";
 const PENDING_COMMENT_REVISION_JOB_KEY = "pending_comment_revision_job_v1";
-const DEFAULT_AI_NOVEL_MODEL = "google/gemini-3-flash-preview";
+const DEFAULT_AI_NOVEL_MODEL = "local-qwen3-8b-nsfw-jp";
+const AUTO_AI_NOVEL_MODEL_VALUE = "__auto__";
 const AI_NOVEL_RETRY_SETTINGS_VERSION = 2;
 const DEFAULT_RETRY_MODE = true;
 const DEFAULT_RETRY_MAX = 30;
 const MAX_RETRY_MAX = 9999;
+const HIGH_RETRY_DEFAULT_EMAIL = "naoki.xyz.ueda.xyz.5@gmail.com";
+const HIGH_RETRY_DEFAULT_MAX = 200;
+const HIGH_RETRY_PLOT_SUGGESTION_THRESHOLD = 40;
 const REVISION_CHUNK_MAX_CHARS = 3200;
 const COMMENT_REVISION_LIVE_PREVIEW_CHUNK_MAX_CHARS = 1200;
 const COMMENT_REVISION_OUTPUT_RETRY_MAX = 5;
@@ -650,6 +654,10 @@ export default function AINovelPage() {
   const [tone, setTone] = useState("");
   const [length, setLength] = useState("medium");
   const [model, setModel] = useState(DEFAULT_AI_NOVEL_MODEL);
+  const [localModelOptions, setLocalModelOptions] = useState<any[]>([]);
+  const [localLlmStatus, setLocalLlmStatus] = useState<any>(null);
+  const [aiModelDefault, setAiModelDefault] = useState(DEFAULT_AI_NOVEL_MODEL);
+  const [localJobStatus, setLocalJobStatus] = useState<any>(null);
   const [isR18, setIsR18] = useState(false);
   const [retryMode, setRetryMode] = useState(DEFAULT_RETRY_MODE);
   const [retryMax, setRetryMax] = useState(DEFAULT_RETRY_MAX);
@@ -714,6 +722,7 @@ export default function AINovelPage() {
   const [autoFillPreview, setAutoFillPreview] = useState<any>(null);
   const [guestRemaining, setGuestRemaining] = useState<any>(null);
   const [userRemaining, setUserRemaining] = useState<any>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [userPaidRemaining, setUserPaidRemaining] = useState(0);
   const [addonUnitGenerations, setAddonUnitGenerations] = useState(80);
   const [addonUnitPriceYen, setAddonUnitPriceYen] = useState(1000);
@@ -796,6 +805,40 @@ export default function AINovelPage() {
     liveCommentDiffDepth,
     commentRevisionLivePreviewEnabled
   );
+  const useHighRetryDefaults =
+    currentUserEmail.trim().toLowerCase() === HIGH_RETRY_DEFAULT_EMAIL;
+  const resetRetryMax = useHighRetryDefaults ? HIGH_RETRY_DEFAULT_MAX : DEFAULT_RETRY_MAX;
+  const resetPlotSuggestionRetryThreshold = useHighRetryDefaults
+    ? HIGH_RETRY_PLOT_SUGGESTION_THRESHOLD
+    : DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD;
+
+  const isLocalCpuModel = String(model || "").startsWith("local-");
+  const localLlmOk = Boolean(localLlmStatus?.ok);
+  const loadedLocalLlmModel = String(localLlmStatus?.loaded_model || "").trim();
+  const formatLocalModelLabel = (item: any) => {
+    const base = lang === "en" ? item.label_en || item.id : item.label_ja || item.id;
+    if (!localLlmOk) return `${base} (${t({ ja: "停止中", en: "offline" })})`;
+    if (loadedLocalLlmModel && loadedLocalLlmModel === item.id) return `${base} (${t({ ja: "起動中", en: "active" })})`;
+    return `${base} (${t({ ja: "選択可", en: "available" })})`;
+  };
+  const localLlmStatusText = localLlmOk
+    ? loadedLocalLlmModel
+      ? t(
+          { ja: "ローカルLLM起動中: {{model}} / 実行 {{running}} 件 / 待機 {{queued}} 件", en: "Local LLM active: {{model}} / running {{running}} / queued {{queued}}" },
+          { model: loadedLocalLlmModel, running: Number(localLlmStatus?.running_jobs || 0), queued: Number(localLlmStatus?.queued_jobs || 0) }
+        )
+      : t(
+          { ja: "ローカルLLM起動中: モデル未ロード / 実行 {{running}} 件 / 待機 {{queued}} 件", en: "Local LLM active: no model loaded / running {{running}} / queued {{queued}}" },
+          { running: Number(localLlmStatus?.running_jobs || 0), queued: Number(localLlmStatus?.queued_jobs || 0) }
+        )
+    : t({ ja: "ローカルLLM停止中または未接続", en: "Local LLM offline or unreachable" });
+  const resolveAiNovelModel = (value: any) => {
+    const selected = String(value || "").trim();
+    if (!selected || selected === AUTO_AI_NOVEL_MODEL_VALUE) {
+      return aiModelDefault || DEFAULT_AI_NOVEL_MODEL;
+    }
+    return selected;
+  };
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -972,6 +1015,35 @@ export default function AINovelPage() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+    const loadAiModels = async () => {
+      try {
+        const res = await fetch("/api/ai/novels/models", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (typeof data?.default_model === "string" && data.default_model.trim()) {
+          setAiModelDefault(data.default_model.trim());
+        }
+        if (Array.isArray(data?.local_models)) {
+          setLocalModelOptions(data.local_models.filter((item: any) => item && typeof item.id === "string"));
+        }
+        setLocalLlmStatus(data?.local_llm_status || null);
+      } catch (e: any) {
+        if (!cancelled) {
+          console.error("failed to load ai model options", e);
+          setLocalLlmStatus({ ok: false });
+        }
+      }
+    };
+    loadAiModels();
+    const timer = window.setInterval(loadAiModels, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     const fetchRemaining = async () => {
       try {
         const token = getAuthToken();
@@ -1013,6 +1085,7 @@ export default function AINovelPage() {
     const token = getAuthToken();
     if (!token) {
       setAiCommentRevisionModel("");
+      setCurrentUserEmail("");
       return;
     }
     const loadProfilePrefs = async () => {
@@ -1022,6 +1095,7 @@ export default function AINovelPage() {
         });
         if (!res.ok) return;
         const data = await res.json().catch(() => ({}));
+        setCurrentUserEmail(typeof data?.email === "string" ? data.email : "");
         setAiCommentRevisionModel(
           typeof data?.ai_comment_revision_model === "string"
             ? data.ai_comment_revision_model
@@ -1183,7 +1257,7 @@ export default function AINovelPage() {
       const nextThreshold = Math.max(MIN_AI_PLOT_SUGGESTION_RETRY_THRESHOLD, Math.min(MAX_RETRY_MAX, Math.floor(draft.aiPlotSuggestionRetryThreshold)));
       setAiPlotSuggestionRetryThreshold(nextThreshold);
     } else {
-      setAiPlotSuggestionRetryThreshold(DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD);
+      setAiPlotSuggestionRetryThreshold(resetPlotSuggestionRetryThreshold);
     }
     if (!skipModeOverwrite && typeof draft.isContinueMode === "boolean") {
       setIsContinueMode(Boolean(draft.isContinueMode && draftEpisodeId !== null));
@@ -1478,8 +1552,6 @@ export default function AINovelPage() {
           en: "Generation is taking longer than usual. Retrying in background. You will be notified when it completes.",
         })
       );
-      jobPollTimerRef.current = setTimeout(() => pollAiJob(job, sessionId), 5000);
-      return;
     }
     const token = getAuthToken();
     try {
@@ -1959,12 +2031,12 @@ export default function AINovelPage() {
     setModel(DEFAULT_AI_NOVEL_MODEL);
     setIsR18(false);
     setRetryMode(DEFAULT_RETRY_MODE);
-    setRetryMax(DEFAULT_RETRY_MAX);
+    setRetryMax(resetRetryMax);
     setChunkedGenerationEnabled(false);
     setChunkedGenerationCount(2);
     setChunkedGenerationPlans([makeSegmentPlanItem(1), makeSegmentPlanItem(2)]);
     setAiCreatedPlotApplied(false);
-    setAiPlotSuggestionRetryThreshold(DEFAULT_AI_PLOT_SUGGESTION_RETRY_THRESHOLD);
+    setAiPlotSuggestionRetryThreshold(resetPlotSuggestionRetryThreshold);
     setAiPlotSuggestion(null);
     setAiPlotSuggestionLoading(false);
     setAiPlotSuggestionError("");
@@ -2056,6 +2128,7 @@ export default function AINovelPage() {
           return;
         }
         const data = await res.json().catch(() => ({}));
+        setCurrentUserEmail(typeof data?.email === "string" ? data.email : "");
         setIsPushDebugUser((data?.username || "") === "demo02");
         setStoryAgentVisible(data?.ai_story_agent_visible !== false);
       } catch {
@@ -2728,6 +2801,43 @@ export default function AINovelPage() {
     return jobId;
   };
 
+  const pollLocalNovelJobUntilDone = async (jobId: any, token: any) => {
+    const sleep = (ms: any) => new Promise((resolve: any) => setTimeout(resolve, ms));
+    const started = Date.now();
+    while (true) {
+      if (Date.now() - started > 60 * 60 * 1000) {
+        const e = new Error(
+          t({
+            ja: "ローカルCPU生成が1時間でタイムアウトしました。",
+            en: "Local CPU generation timed out after 1 hour.",
+          })
+        );
+        e.code = "poll_timeout";
+        throw e;
+      }
+      await sleep(2000);
+      const statusRes = await fetch(`/api/ai/novels/local/jobs/${jobId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!statusRes.ok) {
+        const data = await statusRes.json().catch(() => ({}));
+        const e = new Error(data?.detail || t({ ja: "ローカル生成状況の取得に失敗しました。", en: "Failed to get local generation status." }));
+        e.code = "status_failed";
+        throw e;
+      }
+      const data = await statusRes.json().catch(() => ({}));
+      setLocalJobStatus(data);
+      if (data.status === "completed") {
+        return data.result || {};
+      }
+      if (["failed", "cancelled"].includes(String(data.status || ""))) {
+        const e = new Error(data.error || t({ ja: "ローカル生成に失敗しました。", en: "Local generation failed." }));
+        e.code = "job_failed";
+        throw e;
+      }
+    }
+  };
+
   const pollGenerateJobUntilDone = async (jobId: any, token: any, options: any = {}) => {
     const updateRetryStatus = options?.updateRetryStatus !== false;
     const sleep = (ms: any) => new Promise((resolve: any) => setTimeout(resolve, ms));
@@ -2925,7 +3035,7 @@ export default function AINovelPage() {
           tone: null,
           length: "short",
           client_job_kind: "plot_suggestion",
-          model: model || DEFAULT_AI_NOVEL_MODEL,
+          model: resolveAiNovelModel(model),
           r18: false,
           prompt,
           retry_mode: true,
@@ -3002,7 +3112,7 @@ export default function AINovelPage() {
       characters: characters || null,
       tone: tone || null,
       length: String(activeChunkCount * SEGMENT_TARGET_CHARS),
-      model: model || DEFAULT_AI_NOVEL_MODEL,
+      model: resolveAiNovelModel(model),
       r18: isR18,
       prompt: null,
       retry_mode: retryMode,
@@ -3203,7 +3313,7 @@ export default function AINovelPage() {
         characters: params.characters || null,
         tone: params.tone || null,
         length: String(bodyText.length || 0),
-        model: aiCommentRevisionModel || params.model || DEFAULT_AI_NOVEL_MODEL,
+        model: resolveAiNovelModel(aiCommentRevisionModel || params.model),
         r18: params.isR18,
         retry_mode: disableServerRetry ? false : Boolean(params.retryMode),
         retry_max: disableServerRetry ? 0 : Number(params.retryMax || 0),
@@ -3956,6 +4066,7 @@ export default function AINovelPage() {
     stopJobPolling();
     clearPendingAiJob();
     setPendingJob(null);
+    setLocalJobStatus(null);
     setLoading(true);
     stopChunkedProgress(false);
     setError("");
@@ -4056,7 +4167,7 @@ export default function AINovelPage() {
       characters: characters || null,
       tone: tone || null,
       length: useChunkedGeneration ? String(activeChunkCount * SEGMENT_TARGET_CHARS) : (length || "medium"),
-      model: model || DEFAULT_AI_NOVEL_MODEL,
+      model: resolveAiNovelModel(model),
       r18: isR18,
       prompt,
       retry_mode: retryMode,
@@ -4076,6 +4187,63 @@ export default function AINovelPage() {
         ...chunkedGenerateRetryRef.current,
         requestBody,
       };
+    }
+
+    if (isLocalCpuModel && !episodeId && !useChunkedGeneration) {
+      try {
+        const res = await fetchWithTimeout(
+          "/api/ai/novels/local/generate",
+          {
+            method: "POST",
+            headers: token
+              ? {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              : { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody),
+          },
+          30000
+        );
+        if (res.status === 401 && token) {
+          setError(t({ ja: "ログインの有効期限が切れています。再ログインしてください。", en: "Your session has expired. Please log in again." }));
+          setTimeout(() => navigate("/login"), 800);
+          setLoading(false);
+          return;
+        }
+        if (res.status === 402) {
+          setPremiumError(t({ ja: "この機能は有料プラン専用です。マイページからプランをご確認ください。", en: "This feature is for paid plans only. Check your plan on My Page." }));
+          setLoading(false);
+          return;
+        }
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || t({ ja: "ローカル生成ジョブの開始に失敗しました。", en: "Failed to start local generation job." }));
+        }
+        const data = await res.json().catch(() => ({}));
+        setLocalJobStatus(data);
+        const localResult = await pollLocalNovelJobUntilDone(data.job_id, token);
+        const normalized = normalizeAINovelResponse({
+          generated_title: titleHint || t({ ja: "生成された小説", en: "Generated Novel" }),
+          body: localResult.text || localResult.body || "",
+          used_tokens: localResult.total_tokens || localResult.used_tokens,
+          model,
+        });
+        setLastGenerateParams(params);
+        setRetryAttempts(0);
+        setActiveRetryMax(null);
+        stopChunkedProgress(true);
+        setUploadedTextFileInfo(null);
+        setResult(normalized);
+        setLoading(false);
+        setLocalJobStatus(null);
+      } catch (err: any) {
+        console.error(err);
+        setError(err.message || t({ ja: "ローカル生成中にエラーが発生しました。", en: "An error occurred during local generation." }));
+        setLoading(false);
+        stopChunkedProgress(false);
+      }
+      return;
     }
 
     try {
@@ -4224,7 +4392,7 @@ export default function AINovelPage() {
             characters: params.characters || null,
             tone: params.tone || null,
             length: null,
-            model: params.model || DEFAULT_AI_NOVEL_MODEL,
+            model: resolveAiNovelModel(params.model),
             r18: params.isR18,
             prompt,
             retry_mode: params.retryMode,
@@ -4396,7 +4564,7 @@ export default function AINovelPage() {
           characters: params.characters || null,
           tone: params.tone || null,
           length: String(maxChars),
-          model: params.model || DEFAULT_AI_NOVEL_MODEL,
+          model: resolveAiNovelModel(params.model),
           r18: params.isR18,
           prompt,
         }),
@@ -6190,6 +6358,17 @@ export default function AINovelPage() {
             }}
             style={{ width: "100%", padding: "0.5rem" }}
           >
+            <option value={AUTO_AI_NOVEL_MODEL_VALUE}>{t({ ja: "自動（既定モデル）", en: "Auto (default model)" })}</option>
+            {localModelOptions.length > 0 && (
+              <optgroup label={t({ ja: "ローカルLLM", en: "Local LLM" })}>
+                {localModelOptions.map((item: any) => (
+                  <option key={item.id} value={item.id}>
+                    {formatLocalModelLabel(item)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label={t({ ja: "既存AI API", en: "Existing AI APIs" })}>
             <option value="gpt-5.2">{t({ ja: "GPT-5.2（最高品質）", en: "GPT-5.2 (highest quality)" })}</option>
             <option value="gpt-5">{t({ ja: "GPT-5（高品質）", en: "GPT-5 (high quality)" })}</option>
             <option value="gpt-5-mini">{t({ ja: "GPT-5 Mini（推奨・高速）", en: "GPT-5 Mini (recommended, fast)" })}</option>
@@ -6198,28 +6377,33 @@ export default function AINovelPage() {
             <option value="gpt-4.1-preview">{t({ ja: "GPT-4.1 Preview（長文向け）", en: "GPT-4.1 Preview (long-form)" })}</option>
             <option value="gpt-4o-mini">GPT-4o Mini</option>
             <option value="gpt-4o">GPT-4o</option>
-            <option value="openai/chatgpt-4o-latest">{t({ ja: "ChatGPT（OpenRouter / chatgpt-4o-latest）", en: "ChatGPT (OpenRouter / chatgpt-4o-latest)" })}</option>
-            <option value="x-ai/grok-4">{t({ ja: "Grok 4（OpenRouter）", en: "Grok 4 (OpenRouter)" })}</option>
-            <option value="x-ai/grok-4.1-fast">{t({ ja: "Grok 4.1 Fast（OpenRouter）", en: "Grok 4.1 Fast (OpenRouter)" })}</option>
-            <option value="x-ai/grok-4-fast">{t({ ja: "Grok 4 Fast（OpenRouter）", en: "Grok 4 Fast (OpenRouter)" })}</option>
-            <option value="x-ai/grok-3">{t({ ja: "Grok 3（OpenRouter）", en: "Grok 3 (OpenRouter)" })}</option>
-            <option value="x-ai/grok-3-mini">{t({ ja: "Grok 3 Mini（OpenRouter）", en: "Grok 3 Mini (OpenRouter)" })}</option>
-            <option value="x-ai/grok-code-fast-1">{t({ ja: "Grok Code Fast 1（OpenRouter）", en: "Grok Code Fast 1 (OpenRouter)" })}</option>
+            <option value="openai/gpt-chat-latest">{t({ ja: "ChatGPT（OpenRouter / gpt-chat-latest）", en: "ChatGPT (OpenRouter / gpt-chat-latest)" })}</option>
+            <option value="x-ai/grok-4.6">{t({ ja: "Grok 4.6（OpenRouter）", en: "Grok 4.6 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-4.5">{t({ ja: "Grok 4.5（OpenRouter）", en: "Grok 4.5 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-4.3">{t({ ja: "Grok 4.3（OpenRouter）", en: "Grok 4.3 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-4.20">{t({ ja: "Grok 4.20（OpenRouter）", en: "Grok 4.20 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-build-0.1">{t({ ja: "Grok Build 0.1（OpenRouter）", en: "Grok Build 0.1 (OpenRouter)" })}</option>
+            <option value="x-ai/grok-4.20-multi-agent">{t({ ja: "Grok 4.20 Multi-Agent（OpenRouter）", en: "Grok 4.20 Multi-Agent (OpenRouter)" })}</option>
             <option value="z-ai/glm-4.6">{t({ ja: "GLM 4.6（OpenRouter / z-ai/glm-4.6）", en: "GLM 4.6 (OpenRouter / z-ai/glm-4.6)" })}</option>
-            <option value="google/gemini-3-pro-preview">{t({ ja: "Gemini 3 Pro Preview（OpenRouter）", en: "Gemini 3 Pro Preview (OpenRouter)" })}</option>
+            <option value="google/gemini-3.7-flash">{t({ ja: "Gemini 3.7 Flash（OpenRouter）", en: "Gemini 3.7 Flash (OpenRouter)" })}</option>
             <option value="google/gemini-3-flash-preview">{t({ ja: "Gemini 3 Flash Preview（OpenRouter）", en: "Gemini 3 Flash Preview (OpenRouter)" })}</option>
             <option value="google/gemini-2.5-pro">{t({ ja: "Gemini 2.5 Pro（OpenRouter）", en: "Gemini 2.5 Pro (OpenRouter)" })}</option>
             <option value="google/gemini-2.5-flash">{t({ ja: "Gemini 2.5 Flash（OpenRouter）", en: "Gemini 2.5 Flash (OpenRouter)" })}</option>
             <option value="google/gemini-2.5-flash-lite">{t({ ja: "Gemini 2.5 Flash Lite（OpenRouter）", en: "Gemini 2.5 Flash Lite (OpenRouter)" })}</option>
             <option value="moonshotai/kimi-k2">{t({ ja: "Kimi（OpenRouter / kimi-k2）", en: "Kimi (OpenRouter / kimi-k2)" })}</option>
+            <option value="moonshotai/kimi-k3">{t({ ja: "Kimi K3（OpenRouter）", en: "Kimi K3 (OpenRouter)" })}</option>
             <option value="moonshotai/kimi-k2-thinking">{t({ ja: "Kimi K2 Thinking（OpenRouter）", en: "Kimi K2 Thinking (OpenRouter)" })}</option>
-            <option value="moonshotai/kimi-k2-thinking-turbo">{t({ ja: "Kimi K2 Thinking Turbo（OpenRouter）", en: "Kimi K2 Thinking Turbo (OpenRouter)" })}</option>
+            <option value="moonshotai/kimi-k2.6">{t({ ja: "Kimi K2.6（OpenRouter）", en: "Kimi K2.6 (OpenRouter)" })}</option>
             <option value="deepseek/deepseek-chat">{t({ ja: "DeepSeek（OpenRouter / deepseek-chat）", en: "DeepSeek (OpenRouter / deepseek-chat)" })}</option>
-            <option value="deepseek/deepseek-reasoner">{t({ ja: "DeepSeek Reasoner（OpenRouter）", en: "DeepSeek Reasoner (OpenRouter)" })}</option>
+            <option value="deepseek/deepseek-r1">{t({ ja: "DeepSeek R1（OpenRouter）", en: "DeepSeek R1 (OpenRouter)" })}</option>
             <option value="deepseek:deepseek-chat">{t({ ja: "DeepSeek（公式 / deepseek-chat）", en: "DeepSeek (official / deepseek-chat)" })}</option>
             <option value="deepseek:deepseek-reasoner">{t({ ja: "DeepSeek（公式 / deepseek-reasoner）", en: "DeepSeek (official / deepseek-reasoner)" })}</option>
-            <option value="google/gemini-2.0-flash-001">{t({ ja: "Gemini（OpenRouter / gemini-2.0-flash）", en: "Gemini (OpenRouter / gemini-2.0-flash)" })}</option>
+            <option value="google/gemini-3.6-flash">{t({ ja: "Gemini 3.6 Flash（OpenRouter）", en: "Gemini 3.6 Flash (OpenRouter)" })}</option>
+            </optgroup>
           </select>
+          <div style={{ marginTop: "0.35rem", fontSize: "0.86rem", color: localLlmOk ? "#1f6f43" : "#9a3412" }}>
+            {localLlmStatusText}
+          </div>
         </div>
 
         <div>
@@ -6317,6 +6501,35 @@ export default function AINovelPage() {
             ? t({ ja: "AIで次話を作成", en: "Create next episode with AI" })
             : t({ ja: "AI小説を生成する", en: "Generate AI novel" })}
         </button>
+        {loading && isLocalCpuModel && (
+          <div
+            style={{
+              marginTop: "0.5rem",
+              padding: "0.65rem 0.75rem",
+              borderRadius: "6px",
+              border: "1px solid var(--border)",
+              backgroundColor: "var(--ai-result-surface)",
+              color: "var(--text)",
+              fontSize: "0.9rem",
+            }}
+          >
+            <div style={{ fontWeight: "bold" }}>
+              {t({ ja: "AIが小説を生成しています。CPU推論のため数分かかる場合があります。", en: "AI is generating the novel. Local CPU inference may take several minutes." })}
+            </div>
+            {localJobStatus?.status === "queued" && (
+              <div style={{ marginTop: "0.25rem", color: "var(--muted-text)" }}>
+                {typeof localJobStatus?.queue_position === "number"
+                  ? t({ ja: "現在、生成待ちです。あなたの前に{{count}}件待っています。", en: "Queued. There are {{count}} jobs ahead of you." }, { count: localJobStatus.queue_position })
+                  : t({ ja: "現在、生成待ちです。", en: "Queued for generation." })}
+              </div>
+            )}
+            {localJobStatus?.status === "running" && (
+              <div style={{ marginTop: "0.25rem", color: "var(--muted-text)" }}>
+                {t({ ja: "ローカルモデルで推論中です。", en: "Running local model inference." })}
+              </div>
+            )}
+          </div>
+        )}
         {chunkedProgressActive && loading && canUseChunkedGeneration && (
           <div
             style={{

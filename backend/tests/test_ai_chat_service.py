@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import ai_source_helpers, main, notification_helpers, public_chat_helpers
+from app.ai_chat_runtime_helpers import _ai_chat_provider_candidates
 from app.services.ai_chat_service import (
     ai_chat_generate_image_service,
     ai_chat_service,
@@ -71,6 +72,30 @@ def test_ai_chat_generate_image_route_is_mounted_via_router():
         if getattr(r, "path", None) == "/api/ai/chat/generate_image" and "POST" in getattr(r, "methods", set())
     )
     assert route.endpoint.__module__ == "app.routers.ai_chat"
+
+
+def test_ai_chat_explicit_remote_model_can_fallback_to_local_when_local_is_default(monkeypatch):
+    monkeypatch.setenv("AI_CHAT_DEFAULT_PROVIDER", "local")
+
+    candidates = _ai_chat_provider_candidates(
+        "openrouter",
+        "google/gemini-3-flash-preview",
+        resolve_ai_chat_provider=lambda provider, model: provider or "openrouter",
+    )
+
+    assert candidates == ["openrouter", "local"]
+
+
+def test_ai_chat_explicit_remote_model_does_not_fallback_to_local_without_local_default(monkeypatch):
+    monkeypatch.delenv("AI_CHAT_DEFAULT_PROVIDER", raising=False)
+
+    candidates = _ai_chat_provider_candidates(
+        "openrouter",
+        "google/gemini-3-flash-preview",
+        resolve_ai_chat_provider=lambda provider, model: provider or "openrouter",
+    )
+
+    assert candidates == ["openrouter"]
 
 
 class _DummyReq:

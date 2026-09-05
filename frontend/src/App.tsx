@@ -22,6 +22,7 @@ import UserPage from "./legacy-pages/UserPage";
 import AINovelPage from "./legacy-pages/AINovelPage";
 import AiLogsPage from "./legacy-pages/AiLogsPage";
 import AiChatPage from "./legacy-pages/AiChatPage";
+import AIConsultationPage from "./legacy-pages/AIConsultationPage";
 import AiChatPublicPage from "./legacy-pages/AiChatPublicPage";
 import AiChatHowToPage from "./legacy-pages/AiChatHowToPage";
 import AiChatLPPage from "./legacy-pages/AiChatLPPage";
@@ -144,6 +145,7 @@ const HEADER_I18N = {
   },
   aiNovel: { ja: "AI小説生成", en: "AI Novel", "zh-cn": "AI小说生成", "zh-tw": "AI小說生成", ko: "AI 소설 생성" },
   aiChat: { ja: "AIチャット", en: "AI Chat", "zh-cn": "AI聊天", "zh-tw": "AI聊天", ko: "AI 채팅" },
+  aiConsultation: { ja: "AI相談室", en: "AI Consultation", "zh-cn": "AI咨询室", "zh-tw": "AI諮詢室", ko: "AI 상담실" },
   board: { ja: "掲示板", en: "Board", "zh-cn": "论坛", "zh-tw": "論壇", ko: "게시판" },
   premium: { ja: "プレミアム", en: "Premium", "zh-cn": "高级会员", "zh-tw": "高級會員", ko: "프리미엄" },
   fanficTop: { ja: "二次創作", en: "Fanfic", "zh-cn": "同人", "zh-tw": "同人", ko: "팬픽" },
@@ -383,12 +385,15 @@ export default function App() {
   const nextLang = LANGUAGE_ORDER[(currentLangIndex + 1) % LANGUAGE_ORDER.length];
   const aiNovelNavPath = lang === "en" ? "/en/ai-novel?mode=new_novel" : "/ai-novel?mode=new_novel";
   const aiChatNavPath = lang === "en" ? "/en/ai_chat" : "/ai_chat";
+  const aiConsultationNavPath = lang === "en" ? "/en/ai-consultation" : "/ai-consultation";
   const handleLanguageSwitch = () => {
     setLang(nextLang);
     const localizedPathMap: Record<string, { ja: string; en: string }> = {
       "/ai-novel": { ja: "/ai-novel", en: "/en/ai-novel" },
       "/en/ai-novel": { ja: "/ai-novel", en: "/en/ai-novel" },
       "/ai_chat": { ja: "/ai_chat", en: "/en/ai_chat" },
+      "/ai-consultation": { ja: "/ai-consultation", en: "/en/ai-consultation" },
+      "/en/ai-consultation": { ja: "/ai-consultation", en: "/en/ai-consultation" },
       "/en/ai_chat": { ja: "/ai_chat", en: "/en/ai_chat" },
       "/ai_chat/lp": { ja: "/ai_chat/lp", en: "/en/ai_chat/lp" },
       "/en/ai_chat/lp": { ja: "/ai_chat/lp", en: "/en/ai_chat/lp" },
@@ -474,6 +479,8 @@ export default function App() {
         path.startsWith("/en/ai-novel") ||
         path.startsWith("/ai_chat") ||
         path.startsWith("/en/ai_chat") ||
+        path.startsWith("/ai-consultation") ||
+        path.startsWith("/en/ai-consultation") ||
         path.startsWith("/board") ||
         path.startsWith("/tags/") ||
         path.startsWith("/novels/") ||
@@ -779,6 +786,13 @@ export default function App() {
             onClick={() => setMenuOpen(false)}
           >
             {t(HEADER_I18N.aiChat)}
+          </Link>
+          <Link
+            to={aiConsultationNavPath}
+            className="nav-link"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t(HEADER_I18N.aiConsultation)}
           </Link>
           <Link
             to="/board"
@@ -1107,6 +1121,8 @@ export default function App() {
 	  <Route path="/ai-novel" element={<AINovelPage />} />
 	  <Route path="/en/ai-novel" element={<ForcedLanguagePage lang="en"><AINovelPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat" element={<AiChatPage />} />
+	  <Route path="/ai-consultation" element={<AIConsultationPage />} />
+	  <Route path="/en/ai-consultation" element={<ForcedLanguagePage lang="en"><AIConsultationPage /></ForcedLanguagePage>} />
 	  <Route path="/en/ai_chat" element={<ForcedLanguagePage lang="en"><AiChatPage /></ForcedLanguagePage>} />
 	  <Route path="/ai_chat/girlfriend" element={<AiChatPage />} />
 	  <Route path="/ai_chat/boyfriend" element={<AiChatPage />} />

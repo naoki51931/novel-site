@@ -13,6 +13,7 @@ from .ai_novel import (
     AINovelRequest,
     AINovelResponse,
     call_deepseek_novel_api,
+    call_local_novel_api,
     call_openai_novel_api,
     call_openrouter_novel_api,
     provider_from_model,
@@ -146,6 +147,15 @@ def _build_chunked_novel_prompt(
         ]
     )
     return "\n".join([line for line in lines if line != ""])
+
+
+def _adapt_chunked_prompt_for_provider(prompt: str, provider: str) -> str:
+    if provider != "local":
+        return prompt
+    return prompt.replace(
+        "出力は JSON の body に本文のみを書いてください（タイトルは変更しない）。",
+        "出力は本文のみを書いてください。JSON、コードブロック、説明文、タイトルは出力しないでください。",
+    )
 
 
 def _build_chunked_job_response(
@@ -312,6 +322,7 @@ def _should_retry_ai_error(err: Exception) -> bool:
                 "AI からの応答が空でした" in detail
                 or "AI 応答の JSON 解析に失敗しました" in detail
                 or "AI 応答の形式が不正です" in detail
+                or "AI 応答の文字数が不足しています" in detail
             )
         if status >= 500:
             return True
@@ -321,6 +332,7 @@ def _should_retry_ai_error(err: Exception) -> bool:
             or "AI 応答の形式が不正です" in detail
             or "AI 小説生成 API 呼び出しに失敗しました" in detail
             or "AI 翻訳 API 呼び出しに失敗しました" in detail
+            or "AI 応答の文字数が不足しています" in detail
         )
     return True
 
@@ -347,6 +359,8 @@ async def _call_ai_with_retry(
                 return await call_deepseek_novel_api(req, strict_json=True)
             if provider == "openrouter":
                 return await call_openrouter_novel_api(req, strict_json=True)
+            if provider == "local":
+                return await call_local_novel_api(req, strict_json=True)
             return await call_openai_novel_api(req, strict_json=True)
         except HTTPException as e:
             last_error = e
@@ -396,6 +410,8 @@ async def _call_ai_with_retry_prompt(
                 return await call_deepseek_novel_api(prompt, model=model, strict_json=True)
             if provider == "openrouter":
                 return await call_openrouter_novel_api(prompt, model=model, strict_json=True)
+            if provider == "local":
+                return await call_local_novel_api(prompt, model=model, strict_json=True)
             return await call_openai_novel_api(prompt, model=model, strict_json=True)
         except HTTPException as e:
             last_error = e
@@ -492,6 +508,7 @@ async def _run_ai_job(job_id: int) -> None:
                         segment_chars=SEGMENT_TARGET_CHARS,
                         is_continue_mode=False,
                     )
+                    chunk_prompt = _adapt_chunked_prompt_for_provider(chunk_prompt, provider)
                     chunk_req = req.copy(
                         update={
                             "prompt": chunk_prompt,
@@ -513,6 +530,8 @@ async def _run_ai_job(job_id: int) -> None:
                             resp = await call_deepseek_novel_api(chunk_req)
                         elif provider == "openrouter":
                             resp = await call_openrouter_novel_api(chunk_req)
+                        elif provider == "local":
+                            resp = await call_local_novel_api(chunk_req)
                         else:
                             resp = await call_openai_novel_api(chunk_req)
 
@@ -572,6 +591,8 @@ async def _run_ai_job(job_id: int) -> None:
                         resp = await call_deepseek_novel_api(req)
                     elif provider == "openrouter":
                         resp = await call_openrouter_novel_api(req)
+                    elif provider == "local":
+                        resp = await call_local_novel_api(req)
                     else:
                         resp = await call_openai_novel_api(req)
 
@@ -679,6 +700,7 @@ async def _run_ai_job(job_id: int) -> None:
                         segment_chars=SEGMENT_TARGET_CHARS,
                         is_continue_mode=True,
                     )
+                    chunk_prompt = _adapt_chunked_prompt_for_provider(chunk_prompt, provider)
                     if retry_enabled and retry_max > 0:
                         ai_resp = await _call_ai_with_retry_prompt(
                             chunk_prompt,
@@ -692,6 +714,8 @@ async def _run_ai_job(job_id: int) -> None:
                             ai_resp = await call_deepseek_novel_api(chunk_prompt, model=req.model)
                         elif provider == "openrouter":
                             ai_resp = await call_openrouter_novel_api(chunk_prompt, model=req.model)
+                        elif provider == "local":
+                            ai_resp = await call_local_novel_api(chunk_prompt, model=req.model)
                         else:
                             ai_resp = await call_openai_novel_api(chunk_prompt, model=req.model)
 
@@ -757,6 +781,8 @@ async def _run_ai_job(job_id: int) -> None:
                         ai_resp = await call_deepseek_novel_api(prompt, model=req.model)
                     elif provider == "openrouter":
                         ai_resp = await call_openrouter_novel_api(prompt, model=req.model)
+                    elif provider == "local":
+                        ai_resp = await call_local_novel_api(prompt, model=req.model)
                     else:
                         ai_resp = await call_openai_novel_api(prompt, model=req.model)
 

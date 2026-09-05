@@ -22,18 +22,19 @@ const DEFAULT_MY_PAGE_AI_MODEL = "google/gemini-2.5-flash";
 const DEFAULT_TRANSLATION_AI_MODEL = "google/gemini-3-flash-preview";
 
 const AI_MODEL_OPTIONS: AiModelOption[] = [
-  { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
   { value: "google/gemini-3-flash-preview", labelJa: "Gemini 3 Flash Preview（OpenRouter）", labelEn: "Gemini 3 Flash Preview (OpenRouter)" },
+  { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
   { value: "gpt-5.2", labelJa: "GPT-5.2", labelEn: "GPT-5.2" },
   { value: "gpt-5", labelJa: "GPT-5", labelEn: "GPT-5" },
   { value: "gpt-5-mini", labelJa: "GPT-5 Mini", labelEn: "GPT-5 Mini" },
   { value: "gpt-4.1", labelJa: "GPT-4.1", labelEn: "GPT-4.1" },
   { value: "gpt-4.1-mini", labelJa: "GPT-4.1 Mini", labelEn: "GPT-4.1 Mini" },
-  { value: "openai/chatgpt-4o-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
+  { value: "openai/gpt-chat-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
   { value: "google/gemini-2.5-pro", labelJa: "Gemini 2.5 Pro（OpenRouter）", labelEn: "Gemini 2.5 Pro (OpenRouter)" },
   { value: "moonshotai/kimi-k2", labelJa: "Kimi（OpenRouter）", labelEn: "Kimi (OpenRouter)" },
+  { value: "moonshotai/kimi-k3", labelJa: "Kimi K3（OpenRouter）", labelEn: "Kimi K3 (OpenRouter)" },
   { value: "deepseek/deepseek-chat", labelJa: "DeepSeek（OpenRouter）", labelEn: "DeepSeek (OpenRouter)" },
-  { value: "deepseek/deepseek-reasoner", labelJa: "DeepSeek Reasoner（OpenRouter）", labelEn: "DeepSeek Reasoner (OpenRouter)" },
+  { value: "deepseek/deepseek-r1", labelJa: "DeepSeek R1（OpenRouter）", labelEn: "DeepSeek R1 (OpenRouter)" },
   { value: "deepseek:deepseek-chat", labelJa: "DeepSeek（公式）", labelEn: "DeepSeek (official)" },
   { value: "deepseek:deepseek-reasoner", labelJa: "DeepSeek Reasoner（公式）", labelEn: "DeepSeek Reasoner (official)" },
 ];

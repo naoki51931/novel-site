@@ -104,6 +104,7 @@ erDiagram
     USERS ||--o{ AI_MEMORY_ITEMS : stores
     USERS ||--o{ AI_GENERATE_LOGS : generates
     USERS ||--o{ AI_CHAT_TOKEN_USAGE_LOGS : consumes
+    USERS ||--o{ AI_CONSULTATION_TOKEN_USAGE_LOGS : consults
 
     USERS ||--o{ DIRECT_MESSAGE_THREADS : joins
     DIRECT_MESSAGE_THREADS ||--o{ DIRECT_MESSAGES : has
@@ -248,6 +249,13 @@ flowchart LR
     - ゲスト会話のログイン時移行（JSONバックアップ自動保存）
     - 同名キャラの複製作成 + インデックス表示（`#1`, `#2`）
     - キャラ削除は論理削除（`is_deleted`）
+  - AI相談室:
+    - 通常のAIチャットとは別機能として、質問相談用のチャット画面を提供。
+    - 会話履歴はブラウザのlocalStorageに保存し、初回質問から自動タイトルを付けて履歴選択できる。
+    - 空返答時の再試行チェックボックスと再試行回数指定を持つ。
+    - 「このアイデアから小説生成」でAI小説ページへ下書きを渡せる。章見出しを2件以上検出した場合は2000文字単位の分割ブロック生成を有効化し、各章をブロック指示に変換する。
+    - 小説生成に渡すモデルはAI相談室画面側で選択できる。
+    - トークン利用量はAIチャットとは別枠で月次カウントする。
 - 管理
   - 管理者ログイン
   - ユーザー管理
@@ -372,6 +380,12 @@ npm run dev
 - AIチャットの削除/学習:
   - キャラ削除は `ai_chat_characters` の論理削除（`is_deleted`, `deleted_at`）。
   - 学習キー（`character_profile_key`）は同名キャラ間で継続される仕様（キャラ名 + speech_gender ベース）。
+- AI相談室の月次トークン上限:
+  - AIチャットとは別カウント。ユーザーは `users.ai_consultation_tokens_used`, `users.ai_consultation_tokens_total_used`, `users.ai_consultation_tokens_month_key` で管理する。
+  - ゲスト利用は `ai_consultation_guest_usage`、利用ログは `ai_consultation_token_usage_logs` に保存する。
+  - デフォルト上限はゲスト `50,000` トークン/月、無料ログインユーザー `200,000` トークン/月、プレミアム `2,000,000` トークン/月。
+  - 上限値は `AI_CONSULTATION_GUEST_TOKENS`, `AI_CONSULTATION_FREE_TOKENS`, `AI_CONSULTATION_PREMIUM_TOKENS` で変更できる。
+  - 利用状況は `GET /api/ai/consultation/access` で返し、チャット応答 `POST /api/ai/consultation/chat` でも月次使用量・上限・残量を返す。
 - 公開状態は互換対応が混在:
   - `status` と `is_public` を併用する箇所があるため、公開ロジック変更時は一覧/詳細/権限を横断確認する。
 - フロント成果物:

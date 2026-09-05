@@ -51,6 +51,8 @@ async def generate_ai_episode_continue_service(*, episode_id, req, request, db):
         ai_resp = await legacy.call_deepseek_novel_api(prompt, model=req.model)
     elif provider == "openrouter":
         ai_resp = await legacy.call_openrouter_novel_api(prompt, model=req.model)
+    elif provider == "local":
+        ai_resp = await legacy.call_local_novel_api(prompt, model=req.model)
     else:
         ai_resp = await legacy.call_openai_novel_api(prompt, model=req.model)
 

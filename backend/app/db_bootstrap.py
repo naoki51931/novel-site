@@ -90,6 +90,14 @@ def ensure_users_table_columns():
                 alters.append("ADD COLUMN ai_chat_tokens_month_key INT NOT NULL DEFAULT 0")
             if "ai_chat_paid_blocks" not in existing:
                 alters.append("ADD COLUMN ai_chat_paid_blocks INT NOT NULL DEFAULT 0")
+            if "ai_consultation_tokens_used" not in existing:
+                alters.append("ADD COLUMN ai_consultation_tokens_used INT NOT NULL DEFAULT 0")
+            if "ai_consultation_tokens_total_used" not in existing:
+                alters.append("ADD COLUMN ai_consultation_tokens_total_used INT NOT NULL DEFAULT 0")
+            if "ai_consultation_tokens_month_key" not in existing:
+                alters.append("ADD COLUMN ai_consultation_tokens_month_key INT NOT NULL DEFAULT 0")
+            if "created_at" not in existing:
+                alters.append("ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP")
 
             for clause in alters:
                 conn.execute(text(f"ALTER TABLE users {clause}"))

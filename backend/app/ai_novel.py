@@ -4,6 +4,7 @@ import os
 import re
 import json
 import asyncio
+import time
 from textwrap import dedent
 from typing import Tuple
 
@@ -12,6 +13,10 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from pydantic import BaseModel
+
+import httpx
+
+from .local_llm_models import get_local_model, is_local_model, public_local_models
 
 # .env 読み込み（他でやっていても二重読み込みは特に害なし）
 load_dotenv()
@@ -96,6 +101,8 @@ except Exception as e:
 def provider_from_model(model: str | None) -> str:
     if not model:
         return "openai"
+    if is_local_model(model):
+        return "local"
     if model.startswith("deepseek:"):
         return "deepseek"
     return "openrouter" if "/" in model else "openai"
@@ -152,6 +159,18 @@ class AINovelRequest(BaseModel):
     genre: str | None = None
     characters: str | None = None
     tone: str | None = None
+    title: str | None = None
+    rating: str | None = None
+    setting: str | None = None
+    style: str | None = None
+    previous_text: str | None = None
+    instruction: str | None = None
+    max_new_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    repetition_penalty: float | None = None
     length: str | None = "medium"  # "short" | "medium" | "long" | "xlong" | "xxlong"
     prompt: str | None = None
     model: str | None = None
@@ -237,6 +256,417 @@ def build_ai_prompt(req: AINovelRequest) -> str:
     ).strip()
 
     return prompt
+
+
+def list_ai_novel_models() -> dict:
+    return {
+        "default_model": os.getenv("AI_NOVEL_DEFAULT_MODEL", "local-qwen3-8b-nsfw-jp"),
+        "local_models": public_local_models(),
+    }
+
+
+def _normalize_rating(req: AINovelRequest) -> str:
+    rating = str(getattr(req, "rating", None) or "").strip().lower()
+    if not rating:
+        rating = "r18" if bool(getattr(req, "r18", False)) else "general"
+    aliases = {"all": "general", "adult": "r18", "r-18": "r18", "r-15": "r15"}
+    rating = aliases.get(rating, rating)
+    if rating not in {"general", "r15", "r18"}:
+        raise HTTPException(status_code=400, detail="rating は general / r15 / r18 のいずれかを指定してください。")
+    return rating
+
+
+_MINOR_PATTERNS = [
+    r"未成年",
+    r"小学生",
+    r"中学生",
+    r"高校生",
+    r"女子高生",
+    r"男子高生",
+    r"児童",
+    r"幼い",
+    r"幼女",
+    r"少年",
+    r"少女",
+    r"(?:^|[^\d])(?:[0-9]|1[0-7])\s*歳",
+    r"年齢\s*[:：]?\s*(?:[0-9]|1[0-7])(?:\D|$)",
+]
+
+
+def _assert_r18_adult_characters(req: AINovelRequest) -> None:
+    if _normalize_rating(req) != "r18":
+        return
+    text = "\n".join(
+        [
+            str(getattr(req, "characters", "") or ""),
+            str(getattr(req, "setting", "") or ""),
+            str(getattr(req, "prompt", "") or ""),
+            str(getattr(req, "instruction", "") or ""),
+        ]
+    )
+    for pattern in _MINOR_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            raise HTTPException(
+                status_code=400,
+                detail="R18生成では成人キャラクターのみ指定できます。未成年または年齢が成人未満に見える設定を修正してください。",
+            )
+    adult_markers = ("成人", "大人", "20歳", "21歳", "22歳", "23歳", "24歳", "25歳", "30歳", "社会人")
+    if text.strip() and not any(marker in text for marker in adult_markers):
+        raise HTTPException(
+            status_code=400,
+            detail="R18生成では登場人物が成人であることを明記してください。",
+        )
+
+
+def _target_chars_from_length(length: str | None) -> int | None:
+    raw = str(length or "").strip().lower()
+    if not raw:
+        return None
+    if raw.isdigit():
+        try:
+            return max(200, min(120000, int(raw)))
+        except Exception:
+            return None
+    return {
+        "short": 1000,
+        "medium": 2500,
+        "long": 5000,
+        "xlong": 7000,
+        "xxlong": 9000,
+    }.get(raw)
+
+
+def _local_max_tokens_for_target_chars(target_chars: int | None, default_tokens: int) -> int:
+    if not target_chars:
+        return default_tokens
+    # Japanese prose is often near one token per character on local tokenizers.
+    # Add headroom so a 2000-char block is not cut short by the sampler limit.
+    estimated = int(target_chars * 1.25) + 256
+    return max(default_tokens, min(4096, estimated))
+
+
+def _local_length_instruction(length: str | None) -> str:
+    target_chars = _target_chars_from_length(length)
+    if target_chars:
+        lower = max(200, int(target_chars * 0.9))
+        upper = int(target_chars * 1.1)
+        return f"- 出力本文は約{target_chars}文字、可能な限り{lower}〜{upper}文字に収める"
+    return "- 指定された長さに合わせて本文量を調整する"
+
+
+def _merge_generation_config(req: AINovelRequest) -> dict:
+    model_def = get_local_model(req.model)
+    defaults = model_def.generation
+    target_chars = _target_chars_from_length(getattr(req, "length", None))
+    try:
+        max_new_tokens = int(
+            req.max_new_tokens
+            if req.max_new_tokens is not None
+            else _local_max_tokens_for_target_chars(target_chars, defaults.max_tokens)
+        )
+    except Exception:
+        max_new_tokens = _local_max_tokens_for_target_chars(target_chars, defaults.max_tokens)
+    max_new_tokens = max(64, min(4096, max_new_tokens))
+
+    def _float_value(value, default, minimum, maximum):
+        try:
+            parsed = float(value if value is not None else default)
+        except Exception:
+            parsed = default
+        return max(minimum, min(maximum, parsed))
+
+    def _int_value(value, default, minimum, maximum):
+        try:
+            parsed = int(value if value is not None else default)
+        except Exception:
+            parsed = default
+        return max(minimum, min(maximum, parsed))
+
+    return {
+        "max_tokens": max_new_tokens,
+        "temperature": _float_value(req.temperature, defaults.temperature, 0.0, 2.0),
+        "top_p": _float_value(req.top_p, defaults.top_p, 0.0, 1.0),
+        "top_k": _int_value(req.top_k, defaults.top_k, 0, 200),
+        "repeat_penalty": _float_value(req.repetition_penalty, defaults.repeat_penalty, 0.8, 2.0),
+    }
+
+
+def _build_local_novel_messages(req: AINovelRequest) -> tuple[list[dict], dict]:
+    model_def = get_local_model(req.model)
+    rating = _normalize_rating(req)
+    _assert_r18_adult_characters(req)
+
+    genre = req.genre or "指定なし"
+    style = req.style or req.tone or "novel"
+    characters = req.characters or "指定なし"
+    setting = req.setting or "指定なし"
+    title = req.title or req.title_hint or "指定なし"
+    instruction = req.instruction or req.prompt or req.title_hint or "この条件で日本語小説を書いてください。"
+    rating_rule = {
+        "general": "- 一般向けとして露骨な性的描写を避ける",
+        "r15": "- R15相当として過度に露骨な性的描写は避ける",
+        "r18": "- 成人キャラクターのみを扱い、未成年または年齢不明の性的描写を含めない",
+    }[rating]
+
+    system_prompt = dedent(
+        f"""
+        あなたは日本語の小説執筆AIです。
+
+        ジャンル:
+        {genre}
+
+        レーティング:
+        {rating}
+
+        文体:
+        {style}
+
+        登場人物:
+        {characters}
+
+        設定:
+        {setting}
+
+        タイトル:
+        {title}
+
+        制約:
+        - 日本語で書く
+        - 指定された人物設定を維持する
+        - 既存本文との連続性を維持する
+        - 本文だけを生成する
+        {_local_length_instruction(req.length)}
+        {rating_rule}
+        """
+    ).strip()
+
+    previous_text = req.previous_text or ""
+    user_prompt = dedent(
+        f"""
+        PREVIOUS TEXT
+        {previous_text or "なし"}
+
+        USER INSTRUCTION
+        {instruction}
+
+        /no_think
+        """
+    ).strip()
+    return ([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], {"context_window": model_def.generation.context_window, "generation": _merge_generation_config(req)})
+
+
+async def call_local_novel_api(
+    req: AINovelRequest | str,
+    model: str | None = None,
+    strict_json: bool = False,
+) -> AINovelResponse:
+    effective_model = (model or (req.model if isinstance(req, AINovelRequest) else None) or "").strip()
+    if not is_local_model(effective_model):
+        raise HTTPException(status_code=400, detail="ローカルLLMモデルが指定されていません。")
+
+    if isinstance(req, AINovelRequest):
+        request_for_prompt = req.copy(update={"model": effective_model})
+        messages, prompt_meta = _build_local_novel_messages(request_for_prompt)
+        generation = prompt_meta["generation"]
+    else:
+        model_def = get_local_model(effective_model)
+        messages = [
+            {"role": "system", "content": "あなたは日本語の小説執筆AIです。本文だけを生成してください。"},
+            {"role": "user", "content": str(req)},
+        ]
+        generation = {
+            "max_tokens": model_def.generation.max_tokens,
+            "temperature": model_def.generation.temperature,
+            "top_p": model_def.generation.top_p,
+            "top_k": model_def.generation.top_k,
+            "repeat_penalty": model_def.generation.repeat_penalty,
+        }
+
+    started = time.monotonic()
+    data = await run_local_novel_job_until_complete(
+        model=effective_model,
+        messages=messages,
+        generation=generation,
+        strict_json=bool(strict_json),
+    )
+    raw_body = str(data.get("text") or "").strip()
+    body = _clean_local_llm_text(raw_body)
+    if not body:
+        raise HTTPException(status_code=500, detail="ローカルLLMからの応答が空でした。")
+    title = str(getattr(req, "title_hint", None) or getattr(req, "title", None) or "生成された小説").strip()
+    parsed_json: dict | None = None
+    if body.startswith("{") or body.startswith("["):
+        try:
+            candidate = _parse_json_payload(body)
+            if isinstance(candidate, dict):
+                parsed_json = candidate
+        except Exception:
+            parsed_json = None
+    if parsed_json is not None:
+        parsed_title = str(parsed_json.get("generated_title") or parsed_json.get("title") or "").strip()
+        parsed_body = str(
+            parsed_json.get("body")
+            or parsed_json.get("text")
+            or parsed_json.get("content")
+            or parsed_json.get("novel")
+            or ""
+        ).strip()
+        if parsed_title:
+            title = parsed_title
+        if parsed_body:
+            body = _clean_local_llm_text(parsed_body)
+    elif strict_json:
+        parsed_title, parsed_body = _parse_title_and_body(body)
+        title = parsed_title or title
+        body = _clean_local_llm_text(parsed_body or body)
+    target_chars = _target_chars_from_length(getattr(req, "length", None) if isinstance(req, AINovelRequest) else None)
+    if strict_json and target_chars and target_chars >= 1000:
+        min_chars = max(400, int(target_chars * 0.7))
+        if len(body) < min_chars:
+            raise HTTPException(
+                status_code=500,
+                detail=f"AI 応答の文字数が不足しています（{len(body)}/{target_chars}文字）。",
+            )
+    try:
+        tokens = int(data["total_tokens"]) if data.get("total_tokens") is not None else None
+    except Exception:
+        tokens = None
+    print("[INFO] local_llm_generation", json.dumps({"model_id": effective_model, "provider": "local", "generation_time": round(time.monotonic() - started, 3), "input_tokens": data.get("input_tokens"), "output_tokens": data.get("output_tokens"), "chars": len(body), "target_chars": target_chars, "gpu_vram": data.get("gpu_vram"), "success": True}, ensure_ascii=False))
+    return AINovelResponse(generated_title=title or "生成された小説", body=body, used_tokens=tokens, model=effective_model, prompt_used=None)
+
+
+def _local_llm_base_url() -> str:
+    return os.getenv("LOCAL_LLM_BASE_URL", "http://local-llm:8000").rstrip("/")
+
+
+def _local_llm_timeout() -> float:
+    return float(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS", "900") or 900)
+
+
+async def submit_local_novel_job(
+    *,
+    req: AINovelRequest,
+    strict_json: bool = False,
+) -> dict:
+    effective_model = (req.model or "").strip()
+    if not is_local_model(effective_model):
+        raise HTTPException(status_code=400, detail="ローカルLLMモデルが指定されていません。")
+    request_for_prompt = req.copy(update={"model": effective_model})
+    messages, prompt_meta = _build_local_novel_messages(request_for_prompt)
+    payload = {
+        "model": effective_model,
+        "messages": messages,
+        "generation": prompt_meta["generation"],
+        "strict_json": bool(strict_json),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.post(f"{_local_llm_base_url()}/jobs", json=payload)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail="ローカルLLM推論サーバに接続できません。") from e
+    if resp.status_code >= 400:
+        detail = "ローカルLLMジョブの作成に失敗しました。"
+        try:
+            data = resp.json()
+            detail = str(data.get("detail") or data.get("error") or detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code if resp.status_code < 500 else 502, detail=detail)
+    return resp.json()
+
+
+async def get_local_novel_job(job_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.get(f"{_local_llm_base_url()}/jobs/{job_id}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail="ローカルLLM推論サーバに接続できません。") from e
+    if resp.status_code >= 400:
+        detail = "ローカルLLMジョブ状態の取得に失敗しました。"
+        try:
+            data = resp.json()
+            detail = str(data.get("detail") or data.get("error") or detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code if resp.status_code < 500 else 502, detail=detail)
+    data = resp.json()
+    result = data.get("result") if isinstance(data, dict) else None
+    if isinstance(result, dict) and data.get("status") == "completed":
+        body = str(result.get("text") or "").strip()
+        result["body"] = body
+        result["generated_title"] = "生成された小説"
+        result["used_tokens"] = result.get("total_tokens")
+    return data
+
+
+async def cancel_local_novel_job(job_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.delete(f"{_local_llm_base_url()}/jobs/{job_id}")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail="ローカルLLM推論サーバに接続できません。") from e
+    if resp.status_code >= 400:
+        detail = "ローカルLLMジョブのキャンセルに失敗しました。"
+        try:
+            data = resp.json()
+            detail = str(data.get("detail") or data.get("error") or detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code if resp.status_code < 500 else 502, detail=detail)
+    return resp.json()
+
+
+async def get_local_llm_status() -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.get(f"{_local_llm_base_url()}/status")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail="ローカルLLM推論サーバに接続できません。") from e
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail="ローカルLLM状態の取得に失敗しました。")
+    return resp.json()
+
+
+async def run_local_novel_job_until_complete(
+    *,
+    model: str,
+    messages: list[dict],
+    generation: dict,
+    strict_json: bool = False,
+) -> dict:
+    timeout = _local_llm_timeout()
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            create_resp = await http.post(
+                f"{_local_llm_base_url()}/jobs",
+                json={"model": model, "messages": messages, "generation": generation, "strict_json": bool(strict_json)},
+            )
+            if create_resp.status_code >= 400:
+                detail = create_resp.text
+                try:
+                    detail = create_resp.json().get("detail") or detail
+                except Exception:
+                    pass
+                raise HTTPException(status_code=create_resp.status_code if create_resp.status_code < 500 else 502, detail=detail)
+            job_id = create_resp.json().get("job_id")
+            if not job_id:
+                raise HTTPException(status_code=502, detail="ローカルLLMジョブIDが返されませんでした。")
+            while time.monotonic() - started < timeout:
+                await asyncio.sleep(2.0)
+                status_resp = await http.get(f"{_local_llm_base_url()}/jobs/{job_id}")
+                if status_resp.status_code >= 400:
+                    raise HTTPException(status_code=502, detail="ローカルLLMジョブ状態の取得に失敗しました。")
+                status_data = status_resp.json()
+                if status_data.get("status") == "completed":
+                    return status_data.get("result") or {}
+                if status_data.get("status") in {"failed", "cancelled"}:
+                    raise HTTPException(status_code=502, detail=status_data.get("error") or "ローカルLLM生成に失敗しました。")
+    except HTTPException:
+        raise
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail="ローカルLLM推論サーバに接続できません。") from e
+    raise HTTPException(status_code=504, detail="ローカルLLM推論がタイムアウトしました。")
 
 
 # ===== テキストからタイトルと本文を切り分ける（今は使っていないが残しておく） =====
@@ -390,6 +820,14 @@ def _parse_title_and_body(raw: str) -> Tuple[str, str]:
     return split_title_and_body(raw)
 
 
+def _clean_local_llm_text(raw: str) -> str:
+    text = str(raw or "").strip()
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = re.sub(r"^<think>.*", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = _strip_code_fence(text).strip()
+    return text
+
+
 def _parse_json_payload(raw: str) -> dict:
     import ast
     import json
@@ -521,6 +959,20 @@ def _raise_ai_api_call_error(api_name: str, err: Exception) -> None:
     raise HTTPException(status_code=502, detail=f"{api_name} 呼び出しに失敗しました。しばらくしてから再試行してください。")
 
 
+def _is_response_format_unsupported_error(err: Exception) -> bool:
+    text = repr(err).lower()
+    return (
+        "response_format" in text
+        and (
+            "unsupported" in text
+            or "not supported" in text
+            or "invalid" in text
+            or "unknown parameter" in text
+            or "unrecognized" in text
+        )
+    )
+
+
 def _extract_openrouter_affordable_tokens(err: Exception) -> int | None:
     m = re.search(r"can only afford\s+(\d+)", repr(err), flags=re.IGNORECASE)
     if not m:
@@ -576,7 +1028,47 @@ async def call_ai_json(
                 detail=f"AI 翻訳 API 呼び出しがタイムアウトしました（{int(effective_timeout)}秒）。",
             ) from e
 
-    if provider == "deepseek":
+    local_tokens: int | None = None
+    resp = None
+    if provider == "local":
+        effective_model = (
+            (model or "").strip()
+            or (os.getenv("AI_CHAT_LOCAL_MODEL", "") or "").strip()
+            or (os.getenv("LOCAL_LLM_DEFAULT_MODEL", "") or "").strip()
+            or "local-qwen3-8b-nsfw-jp"
+        )
+        if not is_local_model(effective_model):
+            raise HTTPException(status_code=400, detail="ローカルLLMモデルが指定されていません。")
+        try:
+            local_max_output_tokens = int(os.getenv("AI_CHAT_LOCAL_MAX_OUTPUT_TOKENS", "1200") or 1200)
+        except Exception:
+            local_max_output_tokens = 1200
+        generation = {
+            "max_tokens": max(128, min(max_output_tokens, local_max_output_tokens, 4096)),
+            "temperature": max(0.0, min(2.0, float(temperature if temperature is not None else 0.7))),
+            "top_p": max(0.0, min(1.0, float(top_p if top_p is not None else 0.85))),
+        }
+        data = await run_local_novel_job_until_complete(
+            model=effective_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        system_instructions
+                        + "\n推論過程、<think>タグ、説明文は出力しないでください。可能ならJSON 1個のみを返してください。"
+                    ),
+                },
+                {"role": "user", "content": prompt + "\n\n/no_think"},
+            ],
+            generation=generation,
+            strict_json=False,
+        )
+        raw = str(data.get("text") or "").strip()
+        try:
+            local_tokens = int(data["total_tokens"]) if data.get("total_tokens") is not None else None
+        except Exception:
+            local_tokens = None
+    elif provider == "deepseek":
         if deepseek_client is None:
             raise HTTPException(status_code=500, detail="DeepSeek の API キーが設定されていません。")
         effective_model = (model or os.getenv("DEEPSEEK_MODEL_TEXT") or "").strip()
@@ -697,14 +1189,24 @@ async def call_ai_json(
     try:
         data = _parse_json_payload(raw)
     except Exception as e:
-        _log_ai_raw_response(raw, "call_ai_json")
-        print("[ERROR] AI JSON parse failed:", repr(e))
-        raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+        if provider == "local":
+            fallback_reply = _clean_local_llm_text(raw)
+            if fallback_reply:
+                data = {"reply": fallback_reply}
+            else:
+                _log_ai_raw_response(raw, "call_ai_json")
+                print("[ERROR] AI JSON parse failed:", repr(e))
+                raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
+        else:
+            _log_ai_raw_response(raw, "call_ai_json")
+            print("[ERROR] AI JSON parse failed:", repr(e))
+            raise HTTPException(status_code=500, detail="AI 応答の JSON 解析に失敗しました。")
 
-    tokens: int | None = None
-    usage = getattr(resp, "usage", None)
-    if usage is not None:
-        tokens = getattr(usage, "total_tokens", None)
+    tokens: int | None = local_tokens
+    if tokens is None:
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            tokens = getattr(usage, "total_tokens", None)
 
     return data, tokens, effective_model
 
@@ -1084,12 +1586,12 @@ async def call_openrouter_novel_api(
 
     resp = None
     last_error: Exception | None = None
+    json_mode_unavailable = False
     for max_tokens in max_tokens_attempts:
         try:
-            resp = await asyncio.to_thread(
-                openrouter_client.chat.completions.create,
-                model=effective_model,
-                messages=[
+            create_kwargs = {
+                "model": effective_model,
+                "messages": [
                     {
                         "role": "system",
                         "content": (
@@ -1101,10 +1603,20 @@ async def call_openrouter_novel_api(
                     },
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=max_tokens,
+                "max_tokens": max_tokens,
+            }
+            if strict_json and not json_mode_unavailable:
+                create_kwargs["response_format"] = {"type": "json_object"}
+            resp = await asyncio.to_thread(
+                openrouter_client.chat.completions.create,
+                **create_kwargs,
             )
             break
         except Exception as e:
+            if strict_json and not json_mode_unavailable and _is_response_format_unsupported_error(e):
+                json_mode_unavailable = True
+                max_tokens_attempts.insert(0, max_tokens)
+                continue
             last_error = e
             if not _is_openrouter_credit_error(e):
                 print("[ERROR] OpenRouter API 呼び出し失敗:", repr(e))

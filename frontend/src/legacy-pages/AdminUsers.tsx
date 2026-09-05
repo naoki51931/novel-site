@@ -9,6 +9,7 @@ type AdminUser = {
   id: number | string;
   username?: string | null;
   email?: string | null;
+  created_at?: string | null;
   is_premium?: boolean | null;
   premium_source?: "inactive" | "campaign" | "paid" | string | null;
   premium_plan_amount_yen?: number | null;
@@ -400,6 +401,12 @@ export default function AdminUsers() {
                       <div style={{ fontWeight: 600 }}>{user.username}</div>
                       <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
                         ID: {user.id} / {user.email || "-"} /{" "}
+                        {t({ ja: "登録日", en: "Registered" })}:{" "}
+                        {user.created_at
+                          ? formatDateTimeInUserTimeZone(user.created_at, lang === "en" ? "en-US" : "ja-JP", { year: "numeric", month: "numeric", day: "numeric" })
+                          : "-"}
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--muted-text)", marginTop: 4 }}>
                         {t({ ja: "有料", en: "Premium" })}:{" "}
                         {formatPremiumStatus(user)}
                       </div>

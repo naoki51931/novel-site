@@ -124,6 +124,17 @@ def admin_get_ai_logs(
     return admin_get_ai_logs_service(request=request, limit=limit, db=db)
 
 
+
+
+@router.get("/api/admin/local-llm/status")
+async def admin_local_llm_status(request: Request):
+    from .. import main as legacy
+    from ..ai_novel import get_local_llm_status
+
+    legacy.require_admin(request)
+    return await get_local_llm_status()
+
+
 @router.post("/api/admin/email-test-all-users")
 def admin_send_test_email_all_users(request: Request, db: Session = Depends(get_db)):
     from ..services.admin_service import admin_send_test_email_all_users_service

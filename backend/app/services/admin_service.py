@@ -98,6 +98,7 @@ def admin_list_users_service(*, request: Request, limit: int, offset: int, db: S
                 id=user.id,
                 username=user.username,
                 email=user.email,
+                created_at=user.created_at,
                 is_premium=premium_source != "inactive",
                 premium_source=premium_source,
                 premium_plan_amount_yen=premium_plan_amount_yen,

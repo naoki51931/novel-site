@@ -25,12 +25,15 @@ const AUTO_DIALOGUE_STOP_WORDS = ["停止", "止める", "ストップ", "stop"]
 const PREVIEW_BUBBLE_COUNT = 3;
 const APPEARANCE_SECTION_HEADER = "【見た目設定】";
 const AI_CHAT_IMAGE_MESSAGE_PREFIX = "__AI_CHAT_IMAGE_MSG__:";
-const DEFAULT_AI_CHAT_MODEL = "google/gemini-2.5-flash";
+const DEFAULT_AI_CHAT_MODEL = "local-qwen3-8b-nsfw-jp";
 const DEMO02_AI_CHAT_MODEL = "google/gemini-3-flash-preview";
 const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 768px)";
 const RECOMMENDED_MODEL_VALUES = new Set([
+  "local-qwen3-8b-nsfw-jp",
+  "local-llama3-jprp-8b",
   "moonshotai/kimi-k2",
-  "google/gemini-3-pro-preview",
+  "moonshotai/kimi-k3",
+  "google/gemini-3.7-flash",
   "google/gemini-3-flash-preview",
 ]);
 const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
@@ -90,27 +93,31 @@ const ABSTRACT_IMAGE_PROMPT_WORDS = new Set([
 ]);
 
 const AI_MODELS: AiModelOption[] = [
+  { value: "local-qwen3-8b-nsfw-jp", labelJa: "Qwen3 8B JP（ローカルLLM）", labelEn: "Qwen3 8B JP (Local LLM)" },
+  { value: "local-llama3-jprp-8b", labelJa: "Llama 3 JPRP 8B（ローカルLLM）", labelEn: "Llama 3 JPRP 8B (Local LLM)" },
+  { value: "local-doujinshi-14b", labelJa: "Doujinshi 14B（ローカルLLM）", labelEn: "Doujinshi 14B (Local LLM)" },
   { value: "gpt-5.2", labelJa: "GPT-5.2（OpenAI）", labelEn: "GPT-5.2 (OpenAI)" },
   { value: "gpt-5", labelJa: "GPT-5（OpenAI）", labelEn: "GPT-5 (OpenAI)" },
   { value: "gpt-5-mini", labelJa: "GPT-5 mini（OpenAI）", labelEn: "GPT-5 mini (OpenAI)" },
   { value: "gpt-4.1-mini", labelJa: "GPT-4.1 mini（OpenAI）", labelEn: "GPT-4.1 mini (OpenAI)" },
-  { value: "openai/chatgpt-4o-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
-  { value: "x-ai/grok-4", labelJa: "Grok 4（OpenRouter）", labelEn: "Grok 4 (OpenRouter)" },
-  { value: "x-ai/grok-4.1-fast", labelJa: "Grok 4.1 Fast（OpenRouter）", labelEn: "Grok 4.1 Fast (OpenRouter)" },
-  { value: "x-ai/grok-4-fast", labelJa: "Grok 4 Fast（OpenRouter）", labelEn: "Grok 4 Fast (OpenRouter)" },
-  { value: "x-ai/grok-3", labelJa: "Grok 3（OpenRouter）", labelEn: "Grok 3 (OpenRouter)" },
-  { value: "x-ai/grok-3-mini", labelJa: "Grok 3 Mini（OpenRouter）", labelEn: "Grok 3 Mini (OpenRouter)" },
-  { value: "x-ai/grok-code-fast-1", labelJa: "Grok Code Fast 1（OpenRouter）", labelEn: "Grok Code Fast 1 (OpenRouter)" },
-  { value: "google/gemini-3-pro-preview", labelJa: "Gemini 3 Pro Preview（OpenRouter）", labelEn: "Gemini 3 Pro Preview (OpenRouter)" },
+  { value: "openai/gpt-chat-latest", labelJa: "ChatGPT（OpenRouter）", labelEn: "ChatGPT (OpenRouter)" },
+  { value: "x-ai/grok-4.6", labelJa: "Grok 4.6（OpenRouter）", labelEn: "Grok 4.6 (OpenRouter)" },
+  { value: "x-ai/grok-4.5", labelJa: "Grok 4.5（OpenRouter）", labelEn: "Grok 4.5 (OpenRouter)" },
+  { value: "x-ai/grok-4.3", labelJa: "Grok 4.3（OpenRouter）", labelEn: "Grok 4.3 (OpenRouter)" },
+  { value: "x-ai/grok-4.20", labelJa: "Grok 4.20（OpenRouter）", labelEn: "Grok 4.20 (OpenRouter)" },
+  { value: "x-ai/grok-build-0.1", labelJa: "Grok Build 0.1（OpenRouter）", labelEn: "Grok Build 0.1 (OpenRouter)" },
+  { value: "x-ai/grok-4.20-multi-agent", labelJa: "Grok 4.20 Multi-Agent（OpenRouter）", labelEn: "Grok 4.20 Multi-Agent (OpenRouter)" },
+  { value: "google/gemini-3.7-flash", labelJa: "Gemini 3.7 Flash（OpenRouter）", labelEn: "Gemini 3.7 Flash (OpenRouter)" },
   { value: "google/gemini-3-flash-preview", labelJa: "Gemini 3 Flash Preview（OpenRouter）", labelEn: "Gemini 3 Flash Preview (OpenRouter)" },
   { value: "google/gemini-2.5-pro", labelJa: "Gemini 2.5 Pro（OpenRouter）", labelEn: "Gemini 2.5 Pro (OpenRouter)" },
   { value: "google/gemini-2.5-flash", labelJa: "Gemini 2.5 Flash（OpenRouter）", labelEn: "Gemini 2.5 Flash (OpenRouter)" },
   { value: "google/gemini-2.5-flash-lite", labelJa: "Gemini 2.5 Flash Lite（OpenRouter）", labelEn: "Gemini 2.5 Flash Lite (OpenRouter)" },
   { value: "z-ai/glm-4.6", labelJa: "GLM 4.6（OpenRouter）", labelEn: "GLM 4.6 (OpenRouter)" },
   { value: "moonshotai/kimi-k2", labelJa: "Kimi（OpenRouter）", labelEn: "Kimi (OpenRouter)" },
+  { value: "moonshotai/kimi-k3", labelJa: "Kimi K3（OpenRouter）", labelEn: "Kimi K3 (OpenRouter)" },
   { value: "moonshotai/kimi-k2-thinking", labelJa: "Kimi K2 Thinking（OpenRouter）", labelEn: "Kimi K2 Thinking (OpenRouter)" },
   { value: "deepseek/deepseek-chat", labelJa: "DeepSeek（OpenRouter）", labelEn: "DeepSeek (OpenRouter)" },
-  { value: "deepseek/deepseek-reasoner", labelJa: "DeepSeek Reasoner（OpenRouter）", labelEn: "DeepSeek Reasoner (OpenRouter)" },
+  { value: "deepseek/deepseek-r1", labelJa: "DeepSeek R1（OpenRouter）", labelEn: "DeepSeek R1 (OpenRouter)" },
   { value: "deepseek:deepseek-chat", labelJa: "DeepSeek（公式）", labelEn: "DeepSeek (official)" },
   { value: "deepseek:deepseek-reasoner", labelJa: "DeepSeek Reasoner（公式）", labelEn: "DeepSeek Reasoner (official)" },
 ];
@@ -257,6 +264,7 @@ type LocationLike = {
 
 function modelProvider(model: string) {
   if (!model) return "openai";
+  if (model.startsWith("local-")) return "local";
   if (model.startsWith("deepseek:")) return "deepseek";
   return model.includes("/") ? "openrouter" : "openai";
 }
@@ -923,6 +931,8 @@ export default function AiChatPage() {
   );
   const [profileAiChatModelLoaded, setProfileAiChatModelLoaded] = useState(false);
   const [recommendedModelsOnly, setRecommendedModelsOnly] = useState(() => isDemo02UserLocal());
+  const [localModelOptions, setLocalModelOptions] = useState<any[]>([]);
+  const [localLlmStatus, setLocalLlmStatus] = useState<any>(null);
   const [characterName, setCharacterName] = useState(() => {
     if (typeof window === "undefined") return "";
     return initialCastState?.mainCharacter?.name || localStorage.getItem(AI_CHAT_CHARACTER_NAME_KEY) || "";
@@ -1051,10 +1061,52 @@ export default function AiChatPage() {
   const autoSaveInFlightRef = useRef<Promise<void> | null>(null);
   const deletingMessagesRef = useRef(false);
   const lastAutoSavedSignatureRef = useRef("");
+  const localLlmOk = Boolean(localLlmStatus?.ok);
+  const loadedLocalLlmModel = String(localLlmStatus?.loaded_model || "").trim();
+  const localAiModels = useMemo(() => {
+    const fallback = AI_MODELS.filter((m) => String(m.value || "").startsWith("local-"));
+    const source = localModelOptions.length > 0
+      ? localModelOptions.map((item: any) => ({
+          value: item.id,
+          labelJa: item.label_ja || item.id,
+          labelEn: item.label_en || item.id,
+        }))
+      : fallback;
+    return source.map((m: any) => {
+      const suffix = !localLlmOk
+        ? t({ ja: "停止中", en: "offline" })
+        : loadedLocalLlmModel && loadedLocalLlmModel === m.value
+          ? t({ ja: "起動中", en: "active" })
+          : t({ ja: "選択可", en: "available" });
+      return {
+        ...m,
+        labelJa: `${m.labelJa}（${suffix}）`,
+        labelEn: `${m.labelEn} (${suffix})`,
+      };
+    });
+  }, [localModelOptions, localLlmOk, loadedLocalLlmModel, t]);
+  const aiModelOptions = useMemo(() => {
+    const remote = AI_MODELS.filter((m) => !String(m.value || "").startsWith("local-"));
+    return [...localAiModels, ...remote];
+  }, [localAiModels]);
   const visibleAiModels = useMemo(
-    () => (recommendedModelsOnly ? AI_MODELS.filter((m) => RECOMMENDED_MODEL_VALUES.has(m.value)) : AI_MODELS),
-    [recommendedModelsOnly]
+    () =>
+      recommendedModelsOnly
+        ? aiModelOptions.filter((m) => String(m.value || "").startsWith("local-") || RECOMMENDED_MODEL_VALUES.has(m.value))
+        : aiModelOptions,
+    [recommendedModelsOnly, aiModelOptions]
   );
+  const localLlmStatusText = localLlmOk
+    ? loadedLocalLlmModel
+      ? t(
+          { ja: "ローカルLLM起動中: {{model}} / 実行 {{running}} 件 / 待機 {{queued}} 件", en: "Local LLM active: {{model}} / running {{running}} / queued {{queued}}" },
+          { model: loadedLocalLlmModel, running: Number(localLlmStatus?.running_jobs || 0), queued: Number(localLlmStatus?.queued_jobs || 0) }
+        )
+      : t(
+          { ja: "ローカルLLM起動中: モデル未ロード / 実行 {{running}} 件 / 待機 {{queued}} 件", en: "Local LLM active: no model loaded / running {{running}} / queued {{queued}}" },
+          { running: Number(localLlmStatus?.running_jobs || 0), queued: Number(localLlmStatus?.queued_jobs || 0) }
+        )
+    : t({ ja: "ローカルLLM停止中または未接続", en: "Local LLM offline or unreachable" });
   const activeModel = useMemo(() => {
     if (visibleAiModels.some((m) => m.value === model)) return model;
     return visibleAiModels[0]?.value || DEFAULT_AI_CHAT_MODEL;
@@ -1125,6 +1177,29 @@ export default function AiChatPage() {
     setRecommendedModelsOnly(true);
     setModel(DEMO02_AI_CHAT_MODEL);
   }, [authToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadLocalModels = async () => {
+      try {
+        const res = await fetch("/api/ai/novels/models", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (Array.isArray(data?.local_models)) {
+          setLocalModelOptions(data.local_models.filter((item: any) => item && typeof item.id === "string"));
+        }
+        setLocalLlmStatus(data?.local_llm_status || null);
+      } catch {
+        if (!cancelled) setLocalLlmStatus({ ok: false });
+      }
+    };
+    loadLocalModels();
+    const timer = window.setInterval(loadLocalModels, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const token = getStoredAuthToken();
@@ -2563,6 +2638,15 @@ export default function AiChatPage() {
     const name = String(characterName || "").trim();
     if (!name) {
       setError(t({ ja: "先にキャラ名を入力してください。", en: "Enter character name first." }));
+      return;
+    }
+    if (!fanficMode) {
+      setError(
+        t({
+          ja: "作品候補を選択するには、先に二次創作モードをONにしてください。",
+          en: "Turn on fanfic mode before selecting anime title candidates.",
+        })
+      );
       return;
     }
     setError("");
@@ -4888,7 +4972,7 @@ export default function AiChatPage() {
               checked={recommendedModelsOnly}
               onChange={(e: any) => setRecommendedModelsOnly(e.target.checked)}
             />
-            <span>{t({ ja: "おすすめのみ（Kimi / Gemini 3）", en: "Recommended only (Kimi / Gemini 3)" })}</span>
+            <span>{t({ ja: "おすすめのみ（ローカルLLM / Kimi / Gemini 3）", en: "Recommended only (Local LLM / Kimi / Gemini 3)" })}</span>
           </div>
           <select value={activeModel} onChange={(e: any) => setModel(e.target.value)} style={{ width: "100%", marginTop: 6 }}>
             {visibleAiModels.map((m: any) => (
@@ -4897,6 +4981,9 @@ export default function AiChatPage() {
               </option>
             ))}
           </select>
+          <div style={{ marginTop: 6, fontSize: "0.86rem", color: localLlmOk ? "#1f6f43" : "#9a3412" }}>
+            {localLlmStatusText}
+          </div>
           <div style={{ marginTop: 6, fontSize: "0.86rem", color: "#5f6675" }}>
             {t({
               ja: "初期値はマイページ設定のAIチャットモデルです。性格設定の読み込みを含むAI処理は、ここで選択したモデルを使用します。",
@@ -5154,7 +5241,7 @@ export default function AiChatPage() {
               type="button"
               className="btn btn-border"
               onClick={openAnimeTitlePicker}
-              disabled={loading || augmentLoading || animeTitleLoading || !fanficMode || !characterName.trim()}
+              disabled={loading || augmentLoading || animeTitleLoading || !characterName.trim()}
             >
               {animeTitleLoading
                 ? t({ ja: "候補取得中...", en: "Loading titles..." })

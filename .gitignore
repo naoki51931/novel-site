@@ -32,3 +32,8 @@ frontend/node_modules/
 .next/
 dist/
 
+
+# Local LLM model cache and benchmark outputs
+models/
+benchmark_results/
+local-llm/models/

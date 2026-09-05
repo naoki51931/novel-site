@@ -58,6 +58,13 @@ class User(Base):
     # 月次リセット判定キー (YYYYMM, UTC)
     ai_chat_tokens_month_key = Column(Integer, nullable=False, server_default="0")
     ai_chat_paid_blocks = Column(Integer, nullable=False, server_default="0")
+    # AI相談室当月使用量
+    ai_consultation_tokens_used = Column(Integer, nullable=False, server_default="0")
+    # AI相談室累計使用量
+    ai_consultation_tokens_total_used = Column(Integer, nullable=False, server_default="0")
+    # AI相談室月次リセット判定キー (YYYYMM, UTC)
+    ai_consultation_tokens_month_key = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     # リレーション
     novels = relationship("Novel", back_populates="author")
@@ -1233,6 +1240,29 @@ class AIChatGuestUsage(Base):
 
 class AIChatTokenUsageLog(Base):
     __tablename__ = "ai_chat_token_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    guest_id = Column(String(64), nullable=True, index=True)
+    tokens_used = Column(Integer, nullable=False, server_default="0")
+    provider = Column(String(32), nullable=True, index=True)
+    model = Column(String(120), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+    user = relationship("User")
+
+
+class AIConsultationGuestUsage(Base):
+    __tablename__ = "ai_consultation_guest_usage"
+
+    guest_id = Column(String(64), primary_key=True)
+    tokens_used = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+
+
+class AIConsultationTokenUsageLog(Base):
+    __tablename__ = "ai_consultation_token_usage_logs"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)

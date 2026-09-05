@@ -159,3 +159,48 @@ async def test_create_ai_episode_continue_job_service_creates_job_and_schedules_
     assert committed == [True]
     assert refreshed == [added[0]]
     assert len(created_tasks) == 1
+
+
+@pytest.mark.anyio
+async def test_openrouter_novel_strict_json_uses_response_format(monkeypatch):
+    from app import ai_novel
+
+    captured = {}
+
+    class _Message:
+        content = '{"title":"T","body":"B"}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Usage:
+        total_tokens = 12
+
+    class _Response:
+        choices = [_Choice()]
+        usage = _Usage()
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    monkeypatch.setattr(ai_novel, "openrouter_client", _Client())
+
+    out = await ai_novel.call_openrouter_novel_api(
+        "JSONで返してください",
+        model="google/gemini-2.5-flash",
+        strict_json=True,
+    )
+
+    assert captured["model"] == "google/gemini-2.5-flash"
+    assert captured["response_format"] == {"type": "json_object"}
+    assert out.generated_title == "T"
+    assert out.body == "B"
+    assert out.used_tokens == 12

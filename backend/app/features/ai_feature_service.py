@@ -536,6 +536,8 @@ async def generate_ai_novel_service(req, request, response, db):
             resp = await legacy.call_deepseek_novel_api(req_for_ai)
         elif provider == "openrouter":
             resp = await legacy.call_openrouter_novel_api(req_for_ai)
+        elif provider == "local":
+            resp = await legacy.call_local_novel_api(req_for_ai)
         else:
             resp = await legacy.call_openai_novel_api(req_for_ai)
         resp.retry_attempts = retry_attempts
@@ -605,6 +607,8 @@ async def generate_ai_novel_service(req, request, response, db):
         resp = await legacy.call_deepseek_novel_api(req_for_ai)
     elif provider == "openrouter":
         resp = await legacy.call_openrouter_novel_api(req_for_ai)
+    elif provider == "local":
+        resp = await legacy.call_local_novel_api(req_for_ai)
     else:
         resp = await legacy.call_openai_novel_api(req_for_ai)
     resp.retry_attempts = retry_attempts

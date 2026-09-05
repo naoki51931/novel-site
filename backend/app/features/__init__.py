@@ -13,6 +13,7 @@ from .ai_memory_backfill_routes import router as ai_memory_backfill_router
 from .ai_novel_job_routes import router as ai_novel_job_router
 from .ai_chat_public_interactions_routes import router as ai_chat_public_interactions_router
 from ..routers.ai_chat import router as ai_chat_router
+from ..routers.ai_consultation import router as ai_consultation_router
 from ..routers.ai_jobs import router as ai_jobs_router
 from ..routers.ai_misc import router as ai_misc_router
 from ..routers.ai_novel_drafts import router as ai_novel_drafts_router
@@ -43,6 +44,7 @@ def include_feature_routers(app: FastAPI) -> None:
     app.include_router(blog_router)
     app.include_router(dms_router)
     app.include_router(ai_chat_router)
+    app.include_router(ai_consultation_router)
     app.include_router(ai_episode_assist_router)
     app.include_router(ai_novel_generate_router)
     app.include_router(ai_novel_revision_target_router)

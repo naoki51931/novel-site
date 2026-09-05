@@ -609,6 +609,8 @@ from .ai_novel import (
     call_openai_novel_api,
     call_openrouter_novel_api,
     call_deepseek_novel_api,
+    call_local_novel_api,
+    list_ai_novel_models,
     call_openai_summary_candidates,
     call_openai_tag_candidates,
     call_openai_title_candidate,
