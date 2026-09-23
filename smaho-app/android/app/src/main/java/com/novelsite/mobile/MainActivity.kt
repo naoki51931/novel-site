@@ -123,6 +123,9 @@ class MainActivity : AppCompatActivity() {
         setupDownloadBehavior()
         setupPullToRefresh()
         setupBottomNav()
+        findViewById<android.widget.Button>(R.id.openNovelGenerator).setOnClickListener {
+            startActivity(Intent(this, NovelGeneratorActivity::class.java))
+        }
 
         if (savedInstanceState == null) {
             webView.loadUrl(resolveIntentUrl(intent) ?: SITE_URL)
