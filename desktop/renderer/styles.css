@@ -14,3 +14,4 @@ button { border:1px solid #b8c2d1; border-radius:8px; padding:10px 16px; backgro
 button.primary { background:#2563eb; color:white; border-color:#2563eb; } button:disabled { opacity:.6; cursor:default; }
 .status { margin-top:14px; min-height:1.5em; white-space:pre-wrap; }.muted { color:#64748b; font-size:.92rem; }
 .result textarea { min-height:520px; } @media(max-width:900px){.layout{grid-template-columns:1fr;}}
+hr{border:0;border-top:1px solid #e2e8f0;margin:20px 0}.row{display:flex;gap:10px;align-items:end}.grow{flex:1}.row button{margin-bottom:14px}h2,h3{margin:14px 0 10px}#modelList,#history,#templates{margin-bottom:14px}details{border:1px solid #e2e8f0;border-radius:8px;margin:8px 0;padding:8px}summary{cursor:pointer;font-weight:700}pre{white-space:pre-wrap;line-height:1.6;font-family:inherit}
