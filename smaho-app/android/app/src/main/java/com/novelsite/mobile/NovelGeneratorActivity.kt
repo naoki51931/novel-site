@@ -34,7 +34,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
   val lp=LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT);lp.setMargins(0,8,0,8);e.layoutParams=lp;blockPromptContainer.addView(e);blocks.setText(blockPromptContainer.childCount.toString())
   e.setOnEditorActionListener{_,_,_->if(e===blockPromptContainer.getChildAt(blockPromptContainer.childCount-1)){addBlockPrompt();true}else false}
  }
- private fun blockPrompts():List<String>=(0 until blockPromptContainer.childCount).map{(blockPromptContainer.getChildAt(it) as EditText).text.toString().trim()}
+ private fun blockPrompts(): List<String> = (0 until blockPromptContainer.childCount).map { index -> (blockPromptContainer.getChildAt(index) as EditText).text.toString().trim() }
  private fun k()=key.text.toString().trim();private fun m()=model.selectedItem?.toString()?:"openrouter/auto";private fun limit()=(tokens.text.toString().toIntOrNull()?:2000).coerceIn(512,8192)
  private fun base():String{val a=if(adult.isChecked)"\n成人向け表現を許可。ただし登場人物は全員18歳以上で、合意のある成人同士の関係のみ。" else "";return "日本語の小説を書いてください。\nタイトル: "+title.text+"\nジャンル: "+genre.text+"\n登場人物: "+chars.text+"\n雰囲気・文体: "+mood.text+"\n指示・あらすじ: "+prompt.text+a+"\n説明ではなく小説本文を出力してください。"}
  private fun setModels(x:List<String>){model.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,x)}
