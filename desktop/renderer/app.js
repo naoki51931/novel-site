@@ -15,3 +15,9 @@ $("saveTemplate").onclick=async()=>{const name=prompt("テンプレート名","�
 $("refreshHistory").onclick=refresh;
 $("history").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x)show(x)};
 $("templates").onchange=e=>{const x=e.target._data?.[+e.target.value];if(!x)return;["model","titleHint","genre","characters","tone","length","maxTokens","blockCount","blockMaxTokens"].forEach(k=>{if(x[k]!=null&&$(k))$(k).value=x[k]});$("r18").checked=!!x.r18;$("blockPlans").value=(x.blockPlans||[]).join("\n");};
+async function refreshDrafts(){const d=await window.lexis.listDraftsLocal();$("drafts").innerHTML='<option value="">オフライン保存から読み込み</option>'+d.map((x,i)=>'<option value="'+i+'">'+new Date(x.savedAt).toLocaleString()+" "+x.title+"</option>").join("");$("drafts")._data=d;}
+$("saveLocal").onclick=async()=>{await busy(()=>window.lexis.saveDraftLocal({title:$("resultTitle").value,body:$("resultBody").value,r18:$("r18").checked}),"オフライン保存中...");refreshDrafts();};
+$("drafts").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x){$("resultTitle").value=x.title||"";$("resultBody").value=x.body||"";$("r18").checked=!!x.r18;}};
+$("lexisLogin").onclick=()=>busy(()=>window.lexis.lexisLogin({username:$("lexisUsername").value,password:$("lexisPassword").value}),"Lexisログイン中...");
+$("uploadLexis").onclick=async()=>{if(!confirm("現在のタイトルと本文をLexisへ新規作品としてアップロードします。よろしいですか？"))return;const r=await busy(()=>window.lexis.uploadToLexis({title:$("resultTitle").value,body:$("resultBody").value,r18:$("r18").checked}),"Lexisへアップロード中...");$("status").textContent="アップロード完了: "+r.url;};
+refreshDrafts();
