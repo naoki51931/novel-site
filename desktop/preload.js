@@ -9,5 +9,9 @@ contextBridge.exposeInMainWorld("lexis", {
   getHistory: () => ipcRenderer.invoke("history:get"),
   saveTemplate: (template) => ipcRenderer.invoke("templates:save", template),
   getTemplates: () => ipcRenderer.invoke("templates:get"),
+  saveDraftLocal: (payload) => ipcRenderer.invoke("draft:save-local", payload),
+  listDraftsLocal: () => ipcRenderer.invoke("draft:list-local"),
+  lexisLogin: (input) => ipcRenderer.invoke("lexis:login", input),
+  uploadToLexis: (payload) => ipcRenderer.invoke("lexis:upload", payload),
   saveNovel: (payload) => ipcRenderer.invoke("novel:save", payload)
 });
