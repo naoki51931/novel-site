@@ -256,6 +256,73 @@ ipcMain.handle("novel:generate-blocks", async (_event, input) => {
   return result;
 });
 
+ipcMain.handle("draft:save-local", async (_event, payload) => {
+  const drafts = store.get("drafts", []);
+  const item = {
+    id: payload.id || Date.now(),
+    savedAt: new Date().toISOString(),
+    title: String(payload.title || "タイトル未設定"),
+    body: String(payload.body || ""),
+    r18: !!payload.r18
+  };
+  const next = [item, ...drafts.filter((x) => x.id !== item.id)].slice(0, 100);
+  store.set("drafts", next);
+  return item;
+});
+
+ipcMain.handle("draft:list-local", async () => store.get("drafts", []));
+
+ipcMain.handle("lexis:login", async (_event, input) => {
+  const response = await fetch("https://shosetsu-toukou-site.org/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: String(input.username || ""), password: String(input.password || "") })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || ("Lexisログインに失敗しました: " + response.status));
+  const token = data.access_token || data.token;
+  if (!token) throw new Error("Lexisの認証トークンを取得できませんでした。");
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("認証情報を安全に保存できません。");
+  store.set("lexisToken", safeStorage.encryptString(token).toString("base64"));
+  store.set("lexisUsername", String(input.username || ""));
+  return { ok: true, username: String(input.username || "") };
+});
+
+function getLexisToken() {
+  const encrypted = store.get("lexisToken");
+  if (!encrypted || !safeStorage.isEncryptionAvailable()) return "";
+  try { return safeStorage.decryptString(Buffer.from(encrypted, "base64")); } catch { return ""; }
+}
+
+ipcMain.handle("lexis:upload", async (_event, payload) => {
+  const token = getLexisToken();
+  if (!token) throw new Error("先にLexisへログインしてください。");
+  const title = String(payload.title || "AI生成小説").trim();
+  const body = String(payload.body || "").trim();
+  if (!body) throw new Error("アップロードする本文がありません。");
+  const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + token };
+  const novelRes = await fetch("https://shosetsu-toukou-site.org/api/novels", {
+    method: "POST", headers,
+    body: JSON.stringify({
+      title,
+      description: String(payload.description || "Lexis Novel Desktopから投稿"),
+      age_limit: payload.r18 ? "r18" : "all",
+      is_ai_generated: true,
+      tag_names: []
+    })
+  });
+  const novel = await novelRes.json().catch(() => ({}));
+  if (!novelRes.ok) throw new Error(novel.detail || ("小説作成に失敗しました: " + novelRes.status));
+  if (!novel.id) throw new Error("作成した小説IDを取得できませんでした。");
+  const epRes = await fetch("https://shosetsu-toukou-site.org/api/novels/" + novel.id + "/episodes", {
+    method: "POST", headers,
+    body: JSON.stringify({ episode_number: 1, title: "第1話", body, tag_names: [] })
+  });
+  const episode = await epRes.json().catch(() => ({}));
+  if (!epRes.ok) throw new Error(episode.detail || ("第1話の投稿に失敗しました: " + epRes.status));
+  return { ok: true, novelId: novel.id, url: "https://shosetsu-toukou-site.org/novels/" + novel.id };
+});
+
 ipcMain.handle("novel:save", async (_event, payload) => {
   const result = await dialog.showSaveDialog({
     title: "小説を保存",
