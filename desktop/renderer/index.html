@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lexis Novel Desktop</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="layout">
+    <section class="panel">
+      <h1>Lexis Novel Desktop</h1>
+      <p class="muted">Windows上で動く小説生成アプリ。生成時のみOpenRouterへ接続します。</p>
+      <label>OpenRouter APIキー<input id="apiKey" type="password" placeholder="sk-or-v1-..." /></label>
+      <label>モデル<input id="model" type="text" value="openrouter/auto" placeholder="例: openrouter/auto" /></label>
+      <div class="grid2">
+        <label>タイトルのイメージ<input id="titleHint" type="text" /></label>
+        <label>ジャンル<input id="genre" type="text" placeholder="恋愛、ファンタジーなど" /></label>
+      </div>
+      <label>登場人物・設定<textarea id="characters" rows="7"></textarea></label>
+      <label>雰囲気<input id="tone" type="text" placeholder="甘め、シリアス、ダークなど" /></label>
+      <div class="grid3">
+        <label>長さ<select id="length">
+          <option value="short">短編</option><option value="medium" selected>中編</option>
+          <option value="long">長め</option><option value="xlong">長編</option><option value="xxlong">超長編</option>
+        </select></label>
+        <label>最大トークン<input id="maxTokens" type="number" min="512" max="8192" value="4096" /></label>
+        <label class="check"><input id="r18" type="checkbox" /> R18モード</label>
+      </div>
+      <div class="actions"><button id="saveSettings">設定を保存</button><button id="generate" class="primary">小説を生成</button></div>
+      <div id="status" class="status"></div>
+    </section>
+    <section class="panel result">
+      <label>生成タイトル<input id="resultTitle" type="text" /></label>
+      <label>本文<textarea id="resultBody" rows="28"></textarea></label>
+      <div class="actions"><button id="saveNovel">TXT/Markdownで保存</button></div>
+      <div id="meta" class="muted"></div>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
