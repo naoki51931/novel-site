@@ -13,5 +13,7 @@ contextBridge.exposeInMainWorld("lexis", {
   listDraftsLocal: () => ipcRenderer.invoke("draft:list-local"),
   lexisLogin: (input) => ipcRenderer.invoke("lexis:login", input),
   uploadToLexis: (payload) => ipcRenderer.invoke("lexis:upload", payload),
+  updateApp: () => ipcRenderer.invoke("app:update"),
+  uninstallApp: () => ipcRenderer.invoke("app:uninstall"),
   saveNovel: (payload) => ipcRenderer.invoke("novel:save", payload)
 });
