@@ -8,7 +8,8 @@
     "dist": "electron-builder --win"
   },
   "dependencies": {
-    "electron-store": "^10.0.0"
+    "electron-store": "^10.0.0",
+    "electron-updater": "^6.6.2"
   },
   "devDependencies": {
     "electron": "^38.0.0",
@@ -29,6 +30,20 @@
         "nsis"
       ],
       "icon": "../frontend/public/favicon.ico"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "naoki51931",
+        "repo": "novel-site"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
     }
   }
 }
