@@ -144,7 +144,7 @@ function auth(input) {
   return apiKey;
 }
 
-async function openRouterJson(input, prompt, maxTokens) {
+async function openRouterJsonOnce(input, prompt, maxTokens) {
   const apiKey = auth(input);
   const model = String(input.model || store.get("model", "openrouter/auto")).trim();
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -169,6 +169,27 @@ async function openRouterJson(input, prompt, maxTokens) {
   const raw = data?.choices?.[0]?.message?.content || "";
   if (!raw) throw new Error("AIから空の応答が返りました。");
   return { raw, data, model: data.model || model };
+}
+
+async function openRouterJson(input, prompt, maxTokens) {
+  const retries = Math.max(0, Math.min(100, Number(input.retryCount ?? 20)));
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await openRouterJsonOnce(input, prompt, maxTokens);
+      if (!String(r.raw || "").trim()) throw new Error("AIから空の応答が返りました。");
+      return r;
+    } catch (e) {
+      lastError = e;
+      const msg = String(e?.message || e);
+      if (/401|403|unauthorized|invalid api key|authentication/i.test(msg)) {
+        throw new Error("OpenRouter APIキーが無効です。APIキーを確認してください。");
+      }
+      if (attempt >= retries) throw e;
+      await new Promise(resolve => setTimeout(resolve, Math.min(5000, 500 + attempt * 250)));
+    }
+  }
+  throw lastError;
 }
 
 function remember(result, input, kind) {
