@@ -17,7 +17,18 @@
   "build": {
     "appId": "com.lexis.novel.desktop",
     "productName": "Lexis Novel Desktop",
-    "files": ["main.js", "preload.js", "renderer/**/*"],
-    "win": { "target": ["nsis"] }
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "../frontend/public/favicon.ico",
+      "../frontend/public/favicon-512x512.png"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "../frontend/public/favicon.ico"
+    }
   }
 }
