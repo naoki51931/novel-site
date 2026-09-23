@@ -1,6 +1,11 @@
 name: Build and Release Lexis Android
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release-android.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -18,7 +23,7 @@ jobs:
       run:
         working-directory: smaho-app/android
     steps:
-      - name: Checkout Android implementation branch
+      - name: Checkout latest Android implementation
         uses: actions/checkout@v4
         with:
           ref: feature/windows-openrouter-novel-app
@@ -45,7 +50,7 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ inputs.version || '1.0.0' }}
         run: |
           TAG="android-v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
