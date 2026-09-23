@@ -325,6 +325,26 @@ ipcMain.handle("lexis:upload", async (_event, payload) => {
   return { ok: true, novelId: novel.id, url: "https://shosetsu-toukou-site.org/novels/" + novel.id };
 });
 
+ipcMain.handle("app:update", async () => {
+  await require("electron").shell.openExternal("https://github.com/naoki51931/novel-site/releases/latest");
+  return { ok: true };
+});
+
+ipcMain.handle("app:uninstall", async () => {
+  if (!app.isPackaged) throw new Error("アンインストールはインストール版で利用できます。");
+  const exe = process.execPath;
+  const uninstaller = path.join(path.dirname(exe), "Uninstall Lexis Novel Desktop.exe");
+  try {
+    await fs.access(uninstaller);
+    require("child_process").spawn(uninstaller, [], { detached: true, stdio: "ignore" }).unref();
+    setTimeout(() => app.quit(), 500);
+    return { ok: true };
+  } catch {
+    await require("electron").shell.openExternal("ms-settings:appsfeatures");
+    return { ok: true, fallback: true };
+  }
+});
+
 ipcMain.handle("novel:save", async (_event, payload) => {
   const result = await dialog.showSaveDialog({
     title: "小説を保存",
