@@ -1,0 +1,62 @@
+name: Build and Release Lexis Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (example: 0.1.0)"
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Windows implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/windows-openrouter-novel-app
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm install
+
+      - name: Build Windows installer
+        working-directory: desktop
+        run: npm run dist -- --publish never
+
+      - name: Find and rename installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "desktop/dist/*.exe" | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+          if (-not $exe) { throw "Windows installer was not generated." }
+          Copy-Item $exe.FullName "Lexis-Novel-Desktop-Setup.exe"
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lexis-Windows-v${{ inputs.version }}
+          path: Lexis-Novel-Desktop-Setup.exe
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          $tag = "windows-v$env:VERSION"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag Lexis-Novel-Desktop-Setup.exe --clobber
+          } else {
+            gh release create $tag Lexis-Novel-Desktop-Setup.exe --title "Lexis Windows v$env:VERSION" --notes "Lexis Windows desktop app v$env:VERSION"
+          }
