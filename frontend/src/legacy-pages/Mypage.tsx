@@ -12,6 +12,9 @@ import {
 
 const API_BASE = getApiBase();
 const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
+const WINDOWS_APP_FILE = "/static/app_downloads/Lexis-Novel-Desktop-Setup.exe";
+const ANDROID_APP_VERSION = "1.0.0";
+const WINDOWS_APP_VERSION = "0.1.0";
 const IPHONE_APP_FILE = "/static/app_downloads/novelsite-iphone.ipa";
 const MOBILE_APP_UPDATED_AT = "2026/02/12";
 const FAVORITE_SUMMARY_MAX_CHARS = 500;
@@ -130,6 +133,7 @@ export default function Mypage() {
   });
   const [showR18, setShowR18] = useState(() => readShowR18Setting());
   const [androidAppReady, setAndroidAppReady] = useState(false);
+  const [windowsAppReady, setWindowsAppReady] = useState(false);
   const [iphoneAppReady, setIphoneAppReady] = useState(false);
   const [emailAddressInvalid, setEmailAddressInvalid] = useState(false);
   const [profileEmail, setProfileEmail] = useState("");
@@ -244,6 +248,7 @@ export default function Mypage() {
   useEffect(() => {
     if (hideAppDownloads) {
       setAndroidAppReady(false);
+      setWindowsAppReady(false);
       setIphoneAppReady(false);
       return;
     }
@@ -256,6 +261,7 @@ export default function Mypage() {
       }
     };
     checkFile(ANDROID_APP_FILE, setAndroidAppReady);
+    checkFile(WINDOWS_APP_FILE, setWindowsAppReady);
     checkFile(IPHONE_APP_FILE, setIphoneAppReady);
   }, [hideAppDownloads]);
 
@@ -892,7 +898,7 @@ export default function Mypage() {
             {androidAppReady ? (
               <div style={{ marginTop: 12 }}>
                 <a className="btn btn-border" href={ANDROID_APP_FILE} download>
-                  {t({ ja: "Android APKをダウンロード", en: "Download Android APK" })}
+                  {t({ ja: `Android APKをダウンロード（v${ANDROID_APP_VERSION}）`, en: `Download Android APK (v${ANDROID_APP_VERSION})` })}
                 </a>
               </div>
             ) : (
@@ -900,6 +906,20 @@ export default function Mypage() {
                 {t({
                   ja: "Android APK は未配置です（/static/app_downloads/novelsite-android.apk）。",
                   en: "Android APK is not uploaded yet (/static/app_downloads/novelsite-android.apk).",
+                })}
+              </p>
+            )}
+            {windowsAppReady ? (
+              <div style={{ marginTop: 8 }}>
+                <a className="btn btn-border" href={WINDOWS_APP_FILE} download>
+                  {t({ ja: `Windowsアプリをダウンロード（v${WINDOWS_APP_VERSION}）`, en: `Download Windows app (v${WINDOWS_APP_VERSION})` })}
+                </a>
+              </div>
+            ) : (
+              <p style={{ marginTop: 8, color: "var(--muted-text)" }}>
+                {t({
+                  ja: `Windowsアプリ v${WINDOWS_APP_VERSION} は未配置です（${WINDOWS_APP_FILE}）。`,
+                  en: `Windows app v${WINDOWS_APP_VERSION} is not uploaded yet (${WINDOWS_APP_FILE}).`,
                 })}
               </p>
             )}
