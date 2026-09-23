@@ -2,6 +2,7 @@ package com.novelsite.mobile
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import android.view.MotionEvent
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -24,6 +25,11 @@ class NovelGeneratorActivity:AppCompatActivity(){
  override fun onCreate(b:Bundle?){super.onCreate(b);setContentView(R.layout.activity_novel_generator)
   key=findViewById(R.id.apiKey);model=findViewById(R.id.modelSpinner);title=findViewById(R.id.titleInput);genre=findViewById(R.id.genreInput);chars=findViewById(R.id.charactersInput);mood=findViewById(R.id.moodInput);prompt=findViewById(R.id.instructionInput);adult=findViewById(R.id.r18Check);blocks=findViewById(R.id.blockCount);tokens=findViewById(R.id.maxTokens);result=findViewById(R.id.resultText);progress=findViewById(R.id.progress);status=findViewById(R.id.status);email=findViewById(R.id.lexisEmail);password=findViewById(R.id.lexisPassword);blockPromptContainer=findViewById(R.id.blockPromptContainer);retryCount=findViewById(R.id.retryCount)
   key.setText(prefs.getString("openrouter_key","")); setModels(listOf("openrouter/auto")); addBlockPrompt(); addBlockPrompt(); addBlockPrompt()
+  result.setOnTouchListener{v,e->
+   if(e.action==MotionEvent.ACTION_DOWN||e.action==MotionEvent.ACTION_MOVE)v.parent?.requestDisallowInterceptTouchEvent(true)
+   if(e.action==MotionEvent.ACTION_UP||e.action==MotionEvent.ACTION_CANCEL)v.parent?.requestDisallowInterceptTouchEvent(false)
+   false
+  }
   findViewById<Button>(R.id.addBlockPrompt).setOnClickListener{addBlockPrompt()}
   findViewById<Button>(R.id.saveApiKey).setOnClickListener{prefs.edit().putString("openrouter_key",key.text.toString().trim()).apply();toast("APIキーを保存しました")}
   findViewById<Button>(R.id.loadModels).setOnClickListener{loadModels()};findViewById<Button>(R.id.generate).setOnClickListener{generate(false)};findViewById<Button>(R.id.generateBlocks).setOnClickListener{generate(true)}
