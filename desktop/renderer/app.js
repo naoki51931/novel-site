@@ -10,9 +10,9 @@ window.lexis.getSettings().then(s=>{$("apiKey").value=s.apiKey||"";$("model").va
 $("saveSettings").onclick=()=>busy(()=>window.lexis.saveSettings({apiKey:$("apiKey").value,model:$("model").value}),"保存中...");
 $("loadModels").onclick=async()=>{const ms=await busy(()=>window.lexis.listModels(input()),"モデル取得中...");$("modelList").innerHTML='<option value="">取得したモデルから選択</option>'+ms.map(m=>'<option value="'+m.id+'">'+m.id+"</option>").join("")};
 $("modelList").onchange=e=>{if(e.target.value)$("model").value=e.target.value};
-$("generate").onclick=async()=>show(await busy(()=>window.lexis.generateNovel(input()),"生成中..."));
-$("generateBlocks").onclick=async()=>show(await busy(()=>window.lexis.generateBlocks(input()),"ブロック生成中..."));
-$("continueNovel").onclick=async()=>{const r=await busy(()=>window.lexis.continueNovel(input()),"続きを生成中...");$("resultBody").value += ($("resultBody").value?"\n\n":"")+r.body;$("meta").textContent=r.model||"";refresh();};
+$("generate").onclick=async()=>{const r=await busy(()=>window.lexis.generateNovel(input()),"生成中...");show(r);await window.lexis.saveLibraryNovel({title:r.title,body:r.body,r18:$("r18").checked});};
+$("generateBlocks").onclick=async()=>{const r=await busy(()=>window.lexis.generateBlocks(input()),"ブロック生成中...");show(r);await window.lexis.saveLibraryNovel({title:r.title,body:r.body,r18:$("r18").checked});};
+$("continueNovel").onclick=async()=>{const r=await busy(()=>window.lexis.continueNovel(input()),"続きを生成中...");$("resultBody").value += ($("resultBody").value?"\n\n":"")+r.body;$("meta").textContent=r.model||"";await window.lexis.saveLibraryNovel({title:$("resultTitle").value,body:$("resultBody").value,r18:$("r18").checked});refresh();};
 $("saveNovel").onclick=()=>busy(()=>window.lexis.saveNovel({title:$("resultTitle").value,body:$("resultBody").value}),"保存中...");
 $("saveTemplate").onclick=async()=>{const name=prompt("テンプレート名","小説設定");if(!name)return;await busy(()=>window.lexis.saveTemplate({...input(),apiKey:undefined,body:undefined,title:undefined,name}),"テンプレート保存中...");refresh();};
 $("refreshHistory").onclick=refresh;
@@ -27,3 +27,18 @@ refreshDrafts();
 
 $("updateApp").onclick=()=>busy(()=>window.lexis.updateApp(),"最新版のダウンロードページを開いています...");
 $("uninstallApp").onclick=async()=>{if(!confirm("Lexis Novel Desktopをアンインストールしますか？\nオフライン保存や設定も不要なら、アンインストール後にアプリデータを手動削除できます。"))return;await busy(()=>window.lexis.uninstallApp(),"アンインストーラーを起動しています...");};
+
+let selectedLibraryNovel=null;
+async function loadLibrary(){
+ const novels=await window.lexis.listLibraryNovels();
+ $("libraryList").innerHTML="";
+ if(!novels.length){$("libraryList").textContent="まだ生成した小説はありません。";return;}
+ novels.forEach(n=>{const b=document.createElement("button");b.className="library-item";b.style.display="block";b.style.width="100%";b.style.margin="8px 0";b.style.textAlign="left";b.textContent=(n.title||"タイトル未設定")+"　"+new Date(n.savedAt).toLocaleString();b.onclick=()=>openLibraryNovel(n);$("libraryList").appendChild(b);});
+}
+function openLibraryNovel(n){selectedLibraryNovel=n;$("libraryList").style.display="none";$("libraryDetail").style.display="block";$("libraryTitle").textContent=n.title||"タイトル未設定";$("libraryBody").value=n.body||"";$("libraryStatus").textContent="";}
+$("navGenerate").onclick=()=>{$("generatorView").style.display="block";$("libraryView").style.display="none";};
+$("navLibrary").onclick=async()=>{$("generatorView").style.display="none";$("libraryView").style.display="block";$("libraryDetail").style.display="none";$("libraryList").style.display="block";await loadLibrary();};
+$("libraryBack").onclick=()=>{$("libraryDetail").style.display="none";$("libraryList").style.display="block";selectedLibraryNovel=null;};
+$("libraryDownload").onclick=async()=>{if(!selectedLibraryNovel)return;await window.lexis.saveNovel({title:selectedLibraryNovel.title,body:$("libraryBody").value});$("libraryStatus").textContent="ダウンロード保存しました。";};
+$("libraryDelete").onclick=async()=>{if(!selectedLibraryNovel||!confirm("この小説を一覧から削除しますか？"))return;await window.lexis.deleteLibraryNovel(selectedLibraryNovel.id);selectedLibraryNovel=null;$("libraryDetail").style.display="none";$("libraryList").style.display="block";await loadLibrary();};
+$("libraryUpload").onclick=async()=>{if(!selectedLibraryNovel)return;if(!confirm("この小説をLexisへ投稿しますか？"))return;try{const r=await window.lexis.uploadToLexis({title:selectedLibraryNovel.title,body:$("libraryBody").value,r18:!!selectedLibraryNovel.r18});$("libraryStatus").textContent="Lexis投稿完了: "+r.url;}catch(e){$("libraryStatus").textContent=e.message||String(e);}};
