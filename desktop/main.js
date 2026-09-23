@@ -1,7 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs/promises");
-const Store = require("electron-store");
+const StoreModule = require("electron-store");
+const Store = StoreModule.default || StoreModule;
 
 const store = new Store({ name: "settings" });
 
@@ -11,6 +12,7 @@ function createWindow() {
     height: 820,
     minWidth: 900,
     minHeight: 650,
+    icon: path.join(__dirname, "..", "frontend", "public", process.platform === "win32" ? "favicon.ico" : "favicon-512x512.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
