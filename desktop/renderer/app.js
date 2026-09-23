@@ -21,3 +21,6 @@ $("drafts").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x){$("resu
 $("lexisLogin").onclick=()=>busy(()=>window.lexis.lexisLogin({username:$("lexisUsername").value,password:$("lexisPassword").value}),"Lexisログイン中...");
 $("uploadLexis").onclick=async()=>{if(!confirm("現在のタイトルと本文をLexisへ新規作品としてアップロードします。よろしいですか？"))return;const r=await busy(()=>window.lexis.uploadToLexis({title:$("resultTitle").value,body:$("resultBody").value,r18:$("r18").checked}),"Lexisへアップロード中...");$("status").textContent="アップロード完了: "+r.url;};
 refreshDrafts();
+
+$("updateApp").onclick=()=>busy(()=>window.lexis.updateApp(),"最新版のダウンロードページを開いています...");
+$("uninstallApp").onclick=async()=>{if(!confirm("Lexis Novel Desktopをアンインストールしますか？\nオフライン保存や設定も不要なら、アンインストール後にアプリデータを手動削除できます。"))return;await busy(()=>window.lexis.uninstallApp(),"アンインストーラーを起動しています...");};
