@@ -1,0 +1,40 @@
+name: Build Lexis Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Windows implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/windows-openrouter-novel-app
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build Windows installer
+        working-directory: desktop
+        run: npm run dist -- --publish never
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lexis-Windows
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/latest.yml
+          if-no-files-found: error
