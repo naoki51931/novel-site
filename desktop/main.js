@@ -296,6 +296,28 @@ ipcMain.handle("draft:save-local", async (_event, payload) => {
 
 ipcMain.handle("draft:list-local", async () => store.get("drafts", []));
 
+ipcMain.handle("library:list", async () => store.get("novelLibrary", []));
+ipcMain.handle("library:save", async (_event, payload) => {
+  const body = String(payload.body || "").trim();
+  if (!body) throw new Error("保存する本文がありません。");
+  const novels = store.get("novelLibrary", []);
+  const id = payload.id || Date.now();
+  const item = {
+    id,
+    savedAt: new Date().toISOString(),
+    title: String(payload.title || "タイトル未設定"),
+    body,
+    r18: !!payload.r18
+  };
+  store.set("novelLibrary", [item, ...novels.filter(x => x.id !== id)].slice(0, 200));
+  return item;
+});
+ipcMain.handle("library:delete", async (_event, id) => {
+  const novels = store.get("novelLibrary", []);
+  store.set("novelLibrary", novels.filter(x => String(x.id) !== String(id)));
+  return { ok: true };
+});
+
 ipcMain.handle("lexis:login", async (_event, input) => {
   const response = await fetch("https://shosetsu-toukou-site.org/api/auth/login", {
     method: "POST",
