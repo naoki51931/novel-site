@@ -18,8 +18,10 @@ jobs:
       run:
         working-directory: smaho-app/android
     steps:
-      - name: Checkout
+      - name: Checkout Android implementation branch
         uses: actions/checkout@v4
+        with:
+          ref: feature/windows-openrouter-novel-app
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
