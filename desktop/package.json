@@ -1,0 +1,23 @@
+{
+  "name": "lexis-desktop-novel",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "dependencies": {
+    "electron-store": "^10.0.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.lexis.novel.desktop",
+    "productName": "Lexis Novel Desktop",
+    "files": ["main.js", "preload.js", "renderer/**/*"],
+    "win": { "target": ["nsis"] }
+  }
+}
