@@ -1,49 +1,17 @@
-const $ = (id) => document.getElementById(id);
-
-async function loadSettings() {
-  const settings = await window.lexis.getSettings();
-  $("apiKey").value = settings.apiKey || "";
-  $("model").value = settings.model || "openrouter/auto";
-}
-
-$("saveSettings").addEventListener("click", async () => {
-  $("status").textContent = "保存中...";
-  try {
-    await window.lexis.saveSettings({ apiKey: $("apiKey").value, model: $("model").value });
-    $("status").textContent = "設定を保存しました。";
-  } catch (e) { $("status").textContent = e.message || String(e); }
-});
-
-$("generate").addEventListener("click", async () => {
-  $("generate").disabled = true;
-  $("status").textContent = "生成中...";
-  $("meta").textContent = "";
-  try {
-    const result = await window.lexis.generateNovel({
-      apiKey: $("apiKey").value,
-      model: $("model").value,
-      titleHint: $("titleHint").value,
-      genre: $("genre").value,
-      characters: $("characters").value,
-      tone: $("tone").value,
-      length: $("length").value,
-      r18: $("r18").checked,
-      maxTokens: Number($("maxTokens").value)
-    });
-    $("resultTitle").value = result.title || "";
-    $("resultBody").value = result.body || "";
-    const total = result.usage && result.usage.total_tokens ? " / " + result.usage.total_tokens + " tokens" : "";
-    $("meta").textContent = (result.model || "") + total;
-    $("status").textContent = "生成完了";
-  } catch (e) { $("status").textContent = e.message || String(e); }
-  finally { $("generate").disabled = false; }
-});
-
-$("saveNovel").addEventListener("click", async () => {
-  try {
-    const result = await window.lexis.saveNovel({ title: $("resultTitle").value, body: $("resultBody").value });
-    if (!result.canceled) $("status").textContent = "保存しました: " + result.filePath;
-  } catch (e) { $("status").textContent = e.message || String(e); }
-});
-
-loadSettings().catch((e) => { $("status").textContent = e.message || String(e); });
+const $=id=>document.getElementById(id);
+function input(){return{apiKey:$("apiKey").value,model:$("model").value,titleHint:$("titleHint").value,genre:$("genre").value,characters:$("characters").value,tone:$("tone").value,length:$("length").value,r18:$("r18").checked,maxTokens:+$("maxTokens").value,blockCount:+$("blockCount").value,blockMaxTokens:+$("blockMaxTokens").value,blockPlans:$("blockPlans").value.split("\n").map(x=>x.trim()).filter(Boolean),title:$("resultTitle").value,body:$("resultBody").value};}
+function show(r){$("resultTitle").value=r.title||"";$("resultBody").value=r.body||"";$("meta").textContent=(r.model||"")+(r.usage?.total_tokens?" / "+r.usage.total_tokens+" tokens":"");$("blocks").innerHTML=(r.blocks||[]).map(b=>"<details><summary>ブロック "+b.index+(b.plan?" — "+b.plan:"")+"</summary><pre></pre></details>").join("");[...$("blocks").querySelectorAll("pre")].forEach((p,i)=>p.textContent=r.blocks[i].body);}
+async function busy(fn,msg){$("status").textContent=msg;try{const r=await fn();$("status").textContent="完了";return r}catch(e){$("status").textContent=e.message||String(e);throw e}}
+async function refresh(){const h=await window.lexis.getHistory();$("history").innerHTML='<option value="">履歴を読み込み</option>'+h.map((x,i)=>'<option value="'+i+'">'+new Date(x.createdAt).toLocaleString()+" "+x.title+"</option>").join("");$("history")._data=h;const t=await window.lexis.getTemplates();$("templates").innerHTML='<option value="">テンプレートを読み込み</option>'+t.map((x,i)=>'<option value="'+i+'">'+(x.name||"テンプレート")+"</option>").join("");$("templates")._data=t;}
+window.lexis.getSettings().then(s=>{$("apiKey").value=s.apiKey||"";$("model").value=s.model||"openrouter/auto";});refresh();
+$("saveSettings").onclick=()=>busy(()=>window.lexis.saveSettings({apiKey:$("apiKey").value,model:$("model").value}),"保存中...");
+$("loadModels").onclick=async()=>{const ms=await busy(()=>window.lexis.listModels(input()),"モデル取得中...");$("modelList").innerHTML='<option value="">取得したモデルから選択</option>'+ms.map(m=>'<option value="'+m.id+'">'+m.id+"</option>").join("")};
+$("modelList").onchange=e=>{if(e.target.value)$("model").value=e.target.value};
+$("generate").onclick=async()=>show(await busy(()=>window.lexis.generateNovel(input()),"生成中..."));
+$("generateBlocks").onclick=async()=>show(await busy(()=>window.lexis.generateBlocks(input()),"ブロック生成中..."));
+$("continueNovel").onclick=async()=>{const r=await busy(()=>window.lexis.continueNovel(input()),"続きを生成中...");$("resultBody").value += ($("resultBody").value?"\n\n":"")+r.body;$("meta").textContent=r.model||"";refresh();};
+$("saveNovel").onclick=()=>busy(()=>window.lexis.saveNovel({title:$("resultTitle").value,body:$("resultBody").value}),"保存中...");
+$("saveTemplate").onclick=async()=>{const name=prompt("テンプレート名","小説設定");if(!name)return;await busy(()=>window.lexis.saveTemplate({...input(),apiKey:undefined,body:undefined,title:undefined,name}),"テンプレート保存中...");refresh();};
+$("refreshHistory").onclick=refresh;
+$("history").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x)show(x)};
+$("templates").onchange=e=>{const x=e.target._data?.[+e.target.value];if(!x)return;["model","titleHint","genre","characters","tone","length","maxTokens","blockCount","blockMaxTokens"].forEach(k=>{if(x[k]!=null&&$(k))$(k).value=x[k]});$("r18").checked=!!x.r18;$("blockPlans").value=(x.blockPlans||[]).join("\n");};
