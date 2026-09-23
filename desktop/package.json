@@ -29,7 +29,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "../frontend/public/favicon.ico"
+      "icon": "../frontend/public/favicon-512x512.png"
     },
     "publish": [
       {
