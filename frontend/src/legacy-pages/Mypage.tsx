@@ -11,7 +11,7 @@ import {
 } from "../lib/r18Display";
 
 const API_BASE = getApiBase();
-const ANDROID_APP_FILE = "/static/app_downloads/novelsite-android.apk";
+const ANDROID_APP_FILE = "https://github.com/naoki51931/novel-site/releases/latest/download/Lexis-Android.apk";
 const WINDOWS_APP_FILE = "https://github.com/naoki51931/novel-site/releases/latest/download/Lexis-Novel-Desktop-Setup.exe";
 const ANDROID_APP_VERSION = "1.0.0";
 const WINDOWS_APP_VERSION = "0.1.0";
