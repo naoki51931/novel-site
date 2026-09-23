@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs/promises");
 const StoreModule = require("electron-store");
 const Store = StoreModule.default || StoreModule;
+const { autoUpdater } = require("electron-updater");
 
 const store = new Store({ name: "settings" });
 
@@ -326,8 +327,24 @@ ipcMain.handle("lexis:upload", async (_event, payload) => {
 });
 
 ipcMain.handle("app:update", async () => {
-  await require("electron").shell.openExternal("https://github.com/naoki51931/novel-site/releases/latest");
-  return { ok: true };
+  if (!app.isPackaged) throw new Error("自動アップデートはインストール版で利用できます。");
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  const result = await autoUpdater.checkForUpdatesAndNotify();
+  return { ok: true, version: result?.updateInfo?.version || null };
+});
+
+autoUpdater.on("update-downloaded", async () => {
+  const answer = await dialog.showMessageBox({
+    type: "info",
+    title: "Lexis アップデート",
+    message: "最新版のダウンロードが完了しました。",
+    detail: "今すぐ再起動してアップデートしますか？",
+    buttons: ["再起動して更新", "あとで"],
+    defaultId: 0,
+    cancelId: 1
+  });
+  if (answer.response === 0) autoUpdater.quitAndInstall(false, true);
 });
 
 ipcMain.handle("app:uninstall", async () => {
