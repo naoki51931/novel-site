@@ -31,6 +31,12 @@
             android:visibility="gone" />
     </FrameLayout>
 
+    <Button
+        android:id="@+id/openNovelGenerator"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="AI小説を作る" />
+
     <LinearLayout
         android:id="@+id/bottomNav"
         android:layout_width="match_parent"
