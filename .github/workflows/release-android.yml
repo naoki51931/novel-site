@@ -42,7 +42,7 @@ jobs:
 
       - name: Sync internal Android version
         env:
-          VERSION: ${{ inputs.version || '1.0.15' }}
+          VERSION: ${{ inputs.version || '1.0.16' }}
         run: |
           CODE=$(echo "$VERSION" | awk -F. '{print ($1*10000)+($2*100)+$3}')
           sed -i -E "s/versionCode = [0-9]+/versionCode = $CODE/" app/build.gradle.kts
@@ -58,7 +58,7 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '1.0.15' }}
+          VERSION: ${{ inputs.version || '1.0.16' }}
         run: |
           TAG="android-v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -67,4 +67,4 @@ jobs:
             gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android APK"
           fi
 
-# build-trigger: 2026-09-25 android-v1.0.15-ai-titles
+# build-trigger: 2026-09-25 android-v1.0.16-bookmarks
