@@ -63,7 +63,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
     if(it.code==401||it.code==403)return err("OpenRouter APIキーが無効です。APIキーを確認してください。")
     if(!it.isSuccessful)return retryOrFail(p,done,attempt,maxRetries,"生成失敗 HTTP "+it.code+"\n"+raw.take(400))
     val text=runCatching{JSONObject(raw).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")}.getOrNull()?.trim().orEmpty()
-    if(text.isBlank())return retryOrFail(p,done,attempt,maxRetries,"AIから空の応答が返りました。")
+    if(text.isBlank()||text.equals("null",ignoreCase=true))return retryOrFail(p,done,attempt,maxRetries,"AIから空またはnullの応答が返りました。")
     runOnUiThread{done(text)}
    }}
   })
