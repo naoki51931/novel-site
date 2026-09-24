@@ -3,6 +3,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.MotionEvent
+import android.text.method.ScrollingMovementMethod
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -27,6 +28,8 @@ class NovelGeneratorActivity:AppCompatActivity(){
  override fun onCreate(b:Bundle?){super.onCreate(b);setContentView(R.layout.activity_novel_generator)
   key=findViewById(R.id.apiKey);model=findViewById(R.id.modelSpinner);title=findViewById(R.id.titleInput);genre=findViewById(R.id.genreInput);chars=findViewById(R.id.charactersInput);mood=findViewById(R.id.moodInput);prompt=findViewById(R.id.instructionInput);adult=findViewById(R.id.r18Check);blocks=findViewById(R.id.blockCount);tokens=findViewById(R.id.maxTokens);result=findViewById(R.id.resultText);progress=findViewById(R.id.progress);status=findViewById(R.id.status);email=findViewById(R.id.lexisEmail);password=findViewById(R.id.lexisPassword);blockPromptContainer=findViewById(R.id.blockPromptContainer);retryCount=findViewById(R.id.retryCount);generationPanel=findViewById(R.id.generationPanel);libraryPanel=findViewById(R.id.libraryPanel);libraryContainer=findViewById(R.id.libraryContainer)
   key.setText(prefs.getString("openrouter_key","")); setModels(listOf("openrouter/auto")); addBlockPrompt(); addBlockPrompt(); addBlockPrompt()
+  enableTextEditing(key);enableTextEditing(title);enableTextEditing(genre);enableTextEditing(chars);enableTextEditing(mood);enableTextEditing(prompt);enableTextEditing(blocks);enableTextEditing(tokens);enableTextEditing(retryCount);enableTextEditing(email);enableTextEditing(password);enableTextEditing(result)
+  result.movementMethod=ScrollingMovementMethod.getInstance()
   result.setOnTouchListener{v,e->
    if(e.action==MotionEvent.ACTION_DOWN||e.action==MotionEvent.ACTION_MOVE)v.parent?.requestDisallowInterceptTouchEvent(true)
    if(e.action==MotionEvent.ACTION_UP||e.action==MotionEvent.ACTION_CANCEL)v.parent?.requestDisallowInterceptTouchEvent(false)
@@ -38,8 +41,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
   findViewById<Button>(R.id.loadModels).setOnClickListener{loadModels()};findViewById<Button>(R.id.generate).setOnClickListener{generate(false)};findViewById<Button>(R.id.generateBlocks).setOnClickListener{generate(true)}
   findViewById<Button>(R.id.continueButton).setOnClickListener{continueStory()};findViewById<Button>(R.id.saveDraft).setOnClickListener{saveDraft()};findViewById<Button>(R.id.shareText).setOnClickListener{share()};findViewById<Button>(R.id.uploadLexis).setOnClickListener{loginUpload()}
  }
+ private fun enableTextEditing(v:EditText){v.isLongClickable=true;v.setTextIsSelectable(true);v.customSelectionActionModeCallback=null;v.customInsertionActionModeCallback=null}
  private fun addBlockPrompt(){
-  val e=EditText(this);e.hint="ブロック "+(blockPromptContainer.childCount+1)+" の指示";e.minLines=3;e.gravity=android.view.Gravity.TOP;e.inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;e.setPadding(24,18,24,18)
+  val e=EditText(this);enableTextEditing(e);e.hint="ブロック "+(blockPromptContainer.childCount+1)+" の指示";e.minLines=3;e.gravity=android.view.Gravity.TOP;e.inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;e.setPadding(24,18,24,18)
   val lp=LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT);lp.setMargins(0,8,0,8);e.layoutParams=lp;blockPromptContainer.addView(e);blocks.setText(blockPromptContainer.childCount.toString())
   e.setOnEditorActionListener{_,_,_->if(e===blockPromptContainer.getChildAt(blockPromptContainer.childCount-1)){addBlockPrompt();true}else false}
  }
@@ -93,7 +97,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
   libraryContainer.removeAllViews()
   libraryContainer.addView(Button(this).apply{text="← 一覧へ戻る";setOnClickListener{renderLibrary()}})
   libraryContainer.addView(TextView(this).apply{text=n.optString("title","無題");textSize=20f;setPadding(8,20,8,12)})
-  libraryContainer.addView(TextView(this).apply{text=n.optString("body");textSize=16f;setTextIsSelectable(true);setPadding(12,12,12,20)})
+  libraryContainer.addView(EditText(this).apply{text=n.optString("body");textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);enableTextEditing(this)})
   libraryContainer.addView(Button(this).apply{text="Lexis投稿";setOnClickListener{loginUploadNovel(n.optString("title","無題"),n.optString("body"),n.optBoolean("r18",false))}})
   libraryContainer.addView(Button(this).apply{text="ダウンロード";setOnClickListener{downloadNovel=n;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,n.optString("title","novel").replace(Regex("[\\/:*?\"<>|]"),"_")+".txt")},9001)}})
   libraryContainer.addView(Button(this).apply{text="削除";setOnClickListener{android.app.AlertDialog.Builder(this@NovelGeneratorActivity).setMessage("この小説を削除しますか？").setNegativeButton("キャンセル",null).setPositiveButton("削除"){_,_->deleteLibraryNovel(n.optLong("id"))}.show()}})
