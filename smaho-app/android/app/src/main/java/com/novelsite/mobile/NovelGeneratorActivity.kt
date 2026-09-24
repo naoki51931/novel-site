@@ -29,11 +29,11 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private lateinit var chars:EditText; private lateinit var mood:EditText; private lateinit var prompt:EditText; private lateinit var adult:CheckBox
  private lateinit var blocks:EditText; private lateinit var tokens:EditText; private lateinit var result:EditText; private lateinit var progress:ProgressBar; private lateinit var status:TextView
  private lateinit var email:EditText; private lateinit var password:EditText; private lateinit var blockPromptContainer:LinearLayout; private lateinit var retryCount:EditText
- private lateinit var generationPanel:LinearLayout; private lateinit var libraryPanel:LinearLayout; private lateinit var libraryContainer:LinearLayout
+ private lateinit var generationPanel:LinearLayout; private lateinit var libraryPanel:LinearLayout; private lateinit var libraryContainer:LinearLayout; private lateinit var templateName:EditText; private lateinit var templateSpinner:Spinner
  private var downloadNovel:JSONObject?=null
  private val prefs by lazy{val mk=MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build();EncryptedSharedPreferences.create(this,"lexis_secure",mk,EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)}
  override fun onCreate(b:Bundle?){super.onCreate(b);setContentView(R.layout.activity_novel_generator)
-  key=findViewById(R.id.apiKey);model=findViewById(R.id.modelSpinner);title=findViewById(R.id.titleInput);genre=findViewById(R.id.genreInput);chars=findViewById(R.id.charactersInput);mood=findViewById(R.id.moodInput);prompt=findViewById(R.id.instructionInput);adult=findViewById(R.id.r18Check);blocks=findViewById(R.id.blockCount);tokens=findViewById(R.id.maxTokens);result=findViewById(R.id.resultText);progress=findViewById(R.id.progress);status=findViewById(R.id.status);email=findViewById(R.id.lexisEmail);password=findViewById(R.id.lexisPassword);blockPromptContainer=findViewById(R.id.blockPromptContainer);retryCount=findViewById(R.id.retryCount);generationPanel=findViewById(R.id.generationPanel);libraryPanel=findViewById(R.id.libraryPanel);libraryContainer=findViewById(R.id.libraryContainer)
+  key=findViewById(R.id.apiKey);model=findViewById(R.id.modelSpinner);title=findViewById(R.id.titleInput);genre=findViewById(R.id.genreInput);chars=findViewById(R.id.charactersInput);mood=findViewById(R.id.moodInput);prompt=findViewById(R.id.instructionInput);adult=findViewById(R.id.r18Check);blocks=findViewById(R.id.blockCount);tokens=findViewById(R.id.maxTokens);result=findViewById(R.id.resultText);progress=findViewById(R.id.progress);status=findViewById(R.id.status);email=findViewById(R.id.lexisEmail);password=findViewById(R.id.lexisPassword);blockPromptContainer=findViewById(R.id.blockPromptContainer);retryCount=findViewById(R.id.retryCount);generationPanel=findViewById(R.id.generationPanel);libraryPanel=findViewById(R.id.libraryPanel);libraryContainer=findViewById(R.id.libraryContainer);templateName=findViewById(R.id.templateName);templateSpinner=findViewById(R.id.templateSpinner)
   val storedKey=prefs.getString("openrouter_key","").orEmpty()
   val fileKey=readPersistentApiKey()
   val restoredKey=storedKey.ifBlank{fileKey}
@@ -42,7 +42,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
   adult.isChecked=prefs.getBoolean("r18_enabled",false)
   val cachedModels=runCatching{JSONArray(prefs.getString("model_cache","[]")).let{a->(0 until a.length()).mapNotNull{i->a.optString(i).takeIf{v->v.isNotBlank()}}}}.getOrDefault(emptyList())
   setModels(cachedModels.ifEmpty{listOf("openrouter/auto")}); addBlockPrompt(); addBlockPrompt(); addBlockPrompt()
-  enableTextEditing(key);enableTextEditing(title);enableTextEditing(genre);enableTextEditing(chars);enableTextEditing(mood);enableTextEditing(prompt);enableTextEditing(blocks);enableTextEditing(tokens);enableTextEditing(retryCount);enableTextEditing(email);enableTextEditing(password);enableTextEditing(result)
+  enableTextEditing(key);enableTextEditing(templateName);enableTextEditing(title);enableTextEditing(genre);enableTextEditing(chars);enableTextEditing(mood);enableTextEditing(prompt);enableTextEditing(blocks);enableTextEditing(tokens);enableTextEditing(retryCount);enableTextEditing(email);enableTextEditing(password);enableTextEditing(result)
   result.movementMethod=ScrollingMovementMethod.getInstance()
   result.setOnTouchListener{v,e->
    if(e.action==MotionEvent.ACTION_DOWN||e.action==MotionEvent.ACTION_MOVE)v.parent?.requestDisallowInterceptTouchEvent(true)
@@ -51,11 +51,36 @@ class NovelGeneratorActivity:AppCompatActivity(){
   }
   findViewById<Button>(R.id.navGenerate).setOnClickListener{showGenerator()};findViewById<Button>(R.id.navLibrary).setOnClickListener{showLibrary()}
   findViewById<Button>(R.id.addBlockPrompt).setOnClickListener{addBlockPrompt()}
+  refreshTemplates()
+  findViewById<Button>(R.id.saveTemplate).setOnClickListener{saveTemplate()}
+  findViewById<Button>(R.id.loadTemplate).setOnClickListener{loadSelectedTemplate()}
   findViewById<Button>(R.id.saveApiKey).setOnClickListener{val v=key.text.toString().trim();prefs.edit().putString("openrouter_key",v).apply();persistApiKey(v);toast("APIキーを保存しました")}
   adult.setOnCheckedChangeListener{_,checked->prefs.edit().putBoolean("r18_enabled",checked).apply()}
   model.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long){prefs.edit().putString("selected_model",model.selectedItem?.toString()?:"openrouter/auto").apply()};override fun onNothingSelected(parent:AdapterView<*>?){}}
   findViewById<Button>(R.id.loadModels).setOnClickListener{loadModels()};findViewById<Button>(R.id.generate).setOnClickListener{generate(false)};findViewById<Button>(R.id.generateBlocks).setOnClickListener{generate(true)}
   findViewById<Button>(R.id.continueButton).setOnClickListener{continueStory()};findViewById<Button>(R.id.saveDraft).setOnClickListener{saveDraft()};findViewById<Button>(R.id.shareText).setOnClickListener{share()};findViewById<Button>(R.id.uploadLexis).setOnClickListener{loginUpload()}
+ }
+ private fun templatePrefs()=getSharedPreferences("lexis_templates",MODE_PRIVATE)
+ private fun loadTemplates():JSONArray=runCatching{JSONArray(templatePrefs().getString("templates","[]"))}.getOrDefault(JSONArray())
+ private fun refreshTemplates(){
+  val a=loadTemplates();val names=mutableListOf("テンプレートを選択")
+  for(i in 0 until a.length())names.add(a.optJSONObject(i)?.optString("name").orEmpty().ifBlank{"テンプレート "+(i+1)})
+  templateSpinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,names)
+ }
+ private fun saveTemplate(){
+  val name=templateName.text.toString().trim();if(name.isBlank())return toast("テンプレート名を入力してください")
+  val plans=JSONArray();blockPrompts().forEach{plans.put(it)}
+  val item=JSONObject().put("name",name).put("model",m()).put("title",title.text.toString()).put("genre",genre.text.toString()).put("characters",chars.text.toString()).put("mood",mood.text.toString()).put("prompt",prompt.text.toString()).put("r18",adult.isChecked).put("blocks",blocks.text.toString()).put("tokens",tokens.text.toString()).put("retryCount",retryCount.text.toString()).put("blockPrompts",plans)
+  val old=loadTemplates();val out=JSONArray();out.put(item);for(i in 0 until old.length()){val x=old.optJSONObject(i)?:continue;if(!x.optString("name").equals(name,true))out.put(x)}
+  templatePrefs().edit().putString("templates",out.toString()).apply();refreshTemplates();templateSpinner.setSelection(1);toast("テンプレート「"+name+"」を保存しました")
+ }
+ private fun loadSelectedTemplate(){
+  val pos=templateSpinner.selectedItemPosition;if(pos<=0)return toast("テンプレートを選択してください")
+  val x=loadTemplates().optJSONObject(pos-1)?:return toast("テンプレートを読み込めませんでした")
+  title.setText(x.optString("title"));genre.setText(x.optString("genre"));chars.setText(x.optString("characters"));mood.setText(x.optString("mood"));prompt.setText(x.optString("prompt"));adult.isChecked=x.optBoolean("r18",adult.isChecked);blocks.setText(x.optString("blocks","3"));tokens.setText(x.optString("tokens","2000"));retryCount.setText(x.optString("retryCount","20"))
+  val plans=x.optJSONArray("blockPrompts")?:JSONArray();blockPromptContainer.removeAllViews();if(plans.length()==0){addBlockPrompt();addBlockPrompt();addBlockPrompt()}else for(i in 0 until plans.length())addBlockPrompt().also{(blockPromptContainer.getChildAt(i) as EditText).setText(plans.optString(i))}
+  val wanted=x.optString("model");val items=(0 until model.adapter.count).map{model.adapter.getItem(it).toString()};val mp=items.indexOf(wanted);if(mp>=0)model.setSelection(mp)
+  toast("テンプレート「"+x.optString("name")+"」を読み込みました")
  }
  private fun enableTextEditing(v:EditText){v.isLongClickable=true;v.setTextIsSelectable(true);v.customSelectionActionModeCallback=null;v.customInsertionActionModeCallback=null}
  private fun addBlockPrompt(){
