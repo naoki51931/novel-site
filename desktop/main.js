@@ -8,6 +8,15 @@ const { autoUpdater } = require("electron-updater");
 const store = new Store({ name: "settings" });
 const DEFAULT_NOVEL_TITLE = "Lexis生成小説";
 function normalizeNovelTitle(value) { const t = String(value || "").trim(); return (!t || /^(無題|タイトル未設定)$/.test(t)) ? DEFAULT_NOVEL_TITLE : t; }
+function safeFileName(value) { return normalizeNovelTitle(value).replace(/[\\/:*?"<>|]/g, "_").slice(0, 100); }
+function persistentNovelDir() { return path.join(app.getPath("documents"), "Lexis", "小説"); }
+async function ensurePersistentNovelDir() { const dir = persistentNovelDir(); await fs.mkdir(dir, { recursive: true }); return dir; }
+async function writePersistentNovel(item) {
+  const dir = await ensurePersistentNovelDir();
+  const file = path.join(dir, safeFileName(item.title) + "_" + String(item.id) + ".txt");
+  await fs.writeFile(file, normalizeNovelTitle(item.title) + "\n\n" + String(item.body || ""), "utf8");
+  return file;
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -331,7 +340,11 @@ ipcMain.handle("draft:save-local", async (_event, payload) => {
 
 ipcMain.handle("draft:list-local", async () => store.get("drafts", []));
 
-ipcMain.handle("library:list", async () => store.get("novelLibrary", []));
+ipcMain.handle("library:list", async () => {
+  const novels = store.get("novelLibrary", []);
+  for (const n of novels) { try { await writePersistentNovel(n); } catch {} }
+  return novels;
+});
 ipcMain.handle("library:save", async (_event, payload) => {
   const body = String(payload.body || "").trim();
   if (!body) throw new Error("保存する本文がありません。");
@@ -345,6 +358,7 @@ ipcMain.handle("library:save", async (_event, payload) => {
     r18: !!payload.r18
   };
   store.set("novelLibrary", [item, ...novels.filter(x => x.id !== id)].slice(0, 200));
+  item.filePath = await writePersistentNovel(item);
   return item;
 });
 ipcMain.handle("library:replace-untitled", async (_event, replacement) => {
@@ -357,6 +371,7 @@ ipcMain.handle("library:replace-untitled", async (_event, replacement) => {
     return n;
   });
   store.set("novelLibrary", next);
+  for (const n of next) { try { await writePersistentNovel(n); } catch {} }
   return { ok: true, changed, title: nextTitle };
 });
 ipcMain.handle("library:delete", async (_event, id) => {
