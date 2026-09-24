@@ -8,6 +8,9 @@ import android.view.View
 import android.view.MotionEvent
 import android.text.method.ScrollingMovementMethod
 import android.widget.*
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -21,6 +24,10 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class NovelGeneratorActivity:AppCompatActivity(){
+ private val generationChannel="lexis_generation"
+ private fun ensureGenerationChannel(){if(android.os.Build.VERSION.SDK_INT>=26){val m=getSystemService(NotificationManager::class.java);m.createNotificationChannel(NotificationChannel(generationChannel,"小説生成",NotificationManager.IMPORTANCE_DEFAULT))}}
+ private fun notifyGenerationStarted(){ensureGenerationChannel();val m=getSystemService(NotificationManager::class.java);m.notify(4101,NotificationCompat.Builder(this,generationChannel).setSmallIcon(R.drawable.ic_lexis_with_pen).setContentTitle("Lexis 小説生成中").setContentText("バックグラウンドで生成しています").setOngoing(true).build())}
+ private fun notifyGenerationFinished(t:String){ensureGenerationChannel();val m=getSystemService(NotificationManager::class.java);m.notify(4101,NotificationCompat.Builder(this,generationChannel).setSmallIcon(R.drawable.ic_lexis_with_pen).setContentTitle("Lexis 小説生成完了").setContentText(novelTitle(t)+" の生成が完了しました").setAutoCancel(true).build())}
  private val defaultNovelTitle="Lexis生成小説"
  private fun novelTitle(v:String):String{val t=v.trim();return if(t.isBlank()||t=="無題"||t=="タイトル未設定"||t==defaultNovelTitle)defaultNovelTitle else t}
  private fun needsAiTitle(v:String)=v.trim().let{it.isBlank()||it=="無題"||it=="タイトル未設定"||it==defaultNovelTitle}
@@ -102,9 +109,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
   val pos=items.indexOf(saved);if(pos>=0)model.setSelection(pos)
  }
  private fun loadModels(){if(k().isBlank())return toast("APIキーを入力してください");busy(true,"モデル取得中…");val q=Request.Builder().url("https://openrouter.ai/api/v1/models").header("Authorization","Bearer "+k()).build();client.newCall(q).enqueue(object:Callback{override fun onFailure(c:Call,e:IOException)=err(e.message?:"通信エラー");override fun onResponse(c:Call,r:Response){r.use{if(!it.isSuccessful)return err("モデル取得失敗 HTTP "+it.code);val a=JSONObject(it.body?.string().orEmpty()).optJSONArray("data")?:JSONArray();val x=(0 until a.length()).mapNotNull{i->a.optJSONObject(i)?.optString("id")?.takeIf{v->v.isNotBlank()}}.sorted();runOnUiThread{val items=x.ifEmpty{listOf("openrouter/auto")};prefs.edit().putString("model_cache",JSONArray(items).toString()).apply();setModels(items);busy(false,x.size.toString()+"モデル取得")}}}})}
- private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");if(!multi){call(base()){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了")}};return};val filled=blockPrompts();val n=maxOf((blocks.text.toString().toIntOrNull()?:filled.size).coerceIn(2,12),filled.size.coerceAtMost(12));result.setText("");block(1,n,"",filled)}
- private fun block(i:Int,n:Int,old:String,instructions:List<String>){busy(true,i.toString()+" / "+n+" ブロック生成中…");val context=if(old.isBlank())"" else "\n\nここまでの本文:\n"+old.takeLast(12000);val specific=instructions.getOrNull(i-1).orEmpty();val direction=if(specific.isBlank())"" else "\nこのブロック固有の指示: "+specific;call(base()+"\n\n全"+n+"ブロック中の第"+i+"ブロックを書いてください。前後を自然につないでください。本文中に「第○ブロックへ続く」「次のブロックへ続く」など、ブロック構成を読者に示すメタ文章は絶対に書かないでください。"+direction+context){p->val cleaned=cleanBlockMetaText(p);val all=if(old.isBlank())cleaned else old+"\n\n"+cleaned;result.setText(all);if(i<n)block(i+1,n,all,instructions)else{saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了")}}}}
- private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");call(base()+"\n\n以下の本文の直後から続きを書いてください。\n\n"+old.takeLast(14000)){p->result.setText(old+"\n\n"+p);saveGeneratedNovel(result.text.toString(),adult.isChecked){busy(false,"続きを生成しました")}}}
+ private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");notifyGenerationStarted();if(!multi){call(base()){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了");notifyGenerationFinished(title.text.toString())}};return};val filled=blockPrompts();val n=maxOf((blocks.text.toString().toIntOrNull()?:filled.size).coerceIn(2,12),filled.size.coerceAtMost(12));result.setText("");block(1,n,"",filled)}
+ private fun block(i:Int,n:Int,old:String,instructions:List<String>){busy(true,i.toString()+" / "+n+" ブロック生成中…");val context=if(old.isBlank())"" else "\n\nここまでの本文:\n"+old.takeLast(12000);val specific=instructions.getOrNull(i-1).orEmpty();val direction=if(specific.isBlank())"" else "\nこのブロック固有の指示: "+specific;call(base()+"\n\n全"+n+"ブロック中の第"+i+"ブロックを書いてください。前後を自然につないでください。本文中に「第○ブロックへ続く」「次のブロックへ続く」など、ブロック構成を読者に示すメタ文章は絶対に書かないでください。"+direction+context){p->val cleaned=cleanBlockMetaText(p);val all=if(old.isBlank())cleaned else old+"\n\n"+cleaned;result.setText(all);if(i<n)block(i+1,n,all,instructions)else{saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了");notifyGenerationFinished(title.text.toString())}}}}
+ private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");notifyGenerationStarted();call(base()+"\n\n以下の本文の直後から続きを書いてください。\n\n"+old.takeLast(14000)){p->result.setText(old+"\n\n"+p);saveGeneratedNovel(result.text.toString(),adult.isChecked){busy(false,"続きを生成しました");notifyGenerationFinished(title.text.toString())}}}
  private fun call(p:String,done:(String)->Unit){busy(true,"生成中…");callAttempt(p,done,0,retries())}
  private fun callAttempt(p:String,done:(String)->Unit,attempt:Int,maxRetries:Int){
   val body=JSONObject().put("model",m()).put("max_tokens",limit()).put("messages",JSONArray().put(JSONObject().put("role","user").put("content",p)))
