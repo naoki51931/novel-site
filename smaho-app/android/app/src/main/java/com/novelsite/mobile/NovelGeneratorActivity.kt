@@ -11,6 +11,7 @@ import android.widget.*
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -26,8 +27,8 @@ import java.util.concurrent.TimeUnit
 class NovelGeneratorActivity:AppCompatActivity(){
  private val generationChannel="lexis_generation"
  private fun ensureGenerationChannel(){if(android.os.Build.VERSION.SDK_INT>=26){val m=getSystemService(NotificationManager::class.java);m.createNotificationChannel(NotificationChannel(generationChannel,"小説生成",NotificationManager.IMPORTANCE_DEFAULT))}}
- private fun notifyGenerationStarted(){ensureGenerationChannel();val m=getSystemService(NotificationManager::class.java);m.notify(4101,NotificationCompat.Builder(this,generationChannel).setSmallIcon(R.drawable.ic_lexis_with_pen).setContentTitle("Lexis 小説生成中").setContentText("バックグラウンドで生成しています").setOngoing(true).build())}
- private fun notifyGenerationFinished(t:String){ensureGenerationChannel();val m=getSystemService(NotificationManager::class.java);m.notify(4101,NotificationCompat.Builder(this,generationChannel).setSmallIcon(R.drawable.ic_lexis_with_pen).setContentTitle("Lexis 小説生成完了").setContentText(novelTitle(t)+" の生成が完了しました").setAutoCancel(true).build())}
+ private fun notifyGenerationStarted(){ensureGenerationChannel();ContextCompat.startForegroundService(this,Intent(this,NovelGenerationService::class.java))}
+ private fun notifyGenerationFinished(t:String){stopService(Intent(this,NovelGenerationService::class.java));ensureGenerationChannel();val open=android.app.PendingIntent.getActivity(this,0,Intent(this,NovelGeneratorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE);val m=getSystemService(NotificationManager::class.java);m.notify(4102,NotificationCompat.Builder(this,generationChannel).setSmallIcon(R.drawable.ic_lexis_with_pen).setContentTitle("Lexis 小説生成完了").setContentText(novelTitle(t)+" の生成が完了しました").setContentIntent(open).setAutoCancel(true).build())}
  private val defaultNovelTitle="Lexis生成小説"
  private fun novelTitle(v:String):String{val t=v.trim();return if(t.isBlank()||t=="無題"||t=="タイトル未設定"||t==defaultNovelTitle)defaultNovelTitle else t}
  private fun needsAiTitle(v:String)=v.trim().let{it.isBlank()||it=="無題"||it=="タイトル未設定"||it==defaultNovelTitle}
