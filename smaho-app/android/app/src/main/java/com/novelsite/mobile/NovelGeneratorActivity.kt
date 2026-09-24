@@ -34,7 +34,11 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private val prefs by lazy{val mk=MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build();EncryptedSharedPreferences.create(this,"lexis_secure",mk,EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)}
  override fun onCreate(b:Bundle?){super.onCreate(b);setContentView(R.layout.activity_novel_generator)
   key=findViewById(R.id.apiKey);model=findViewById(R.id.modelSpinner);title=findViewById(R.id.titleInput);genre=findViewById(R.id.genreInput);chars=findViewById(R.id.charactersInput);mood=findViewById(R.id.moodInput);prompt=findViewById(R.id.instructionInput);adult=findViewById(R.id.r18Check);blocks=findViewById(R.id.blockCount);tokens=findViewById(R.id.maxTokens);result=findViewById(R.id.resultText);progress=findViewById(R.id.progress);status=findViewById(R.id.status);email=findViewById(R.id.lexisEmail);password=findViewById(R.id.lexisPassword);blockPromptContainer=findViewById(R.id.blockPromptContainer);retryCount=findViewById(R.id.retryCount);generationPanel=findViewById(R.id.generationPanel);libraryPanel=findViewById(R.id.libraryPanel);libraryContainer=findViewById(R.id.libraryContainer)
-  key.setText(prefs.getString("openrouter_key","").orEmpty().ifBlank{readPersistentApiKey()})
+  val storedKey=prefs.getString("openrouter_key","").orEmpty()
+  val fileKey=readPersistentApiKey()
+  val restoredKey=storedKey.ifBlank{fileKey}
+  key.setText(restoredKey)
+  if(storedKey.isBlank()&&restoredKey.isNotBlank())prefs.edit().putString("openrouter_key",restoredKey).apply()
   adult.isChecked=prefs.getBoolean("r18_enabled",false)
   val cachedModels=runCatching{JSONArray(prefs.getString("model_cache","[]")).let{a->(0 until a.length()).mapNotNull{i->a.optString(i).takeIf{v->v.isNotBlank()}}}}.getOrDefault(emptyList())
   setModels(cachedModels.ifEmpty{listOf("openrouter/auto")}); addBlockPrompt(); addBlockPrompt(); addBlockPrompt()
