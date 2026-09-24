@@ -17,6 +17,8 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class NovelGeneratorActivity:AppCompatActivity(){
+ private val defaultNovelTitle="Lexis生成小説"
+ private fun novelTitle(v:String):String{val t=v.trim();return if(t.isBlank()||t=="無題"||t=="タイトル未設定")defaultNovelTitle else t}
  private val client=OkHttpClient.Builder().connectTimeout(30,TimeUnit.SECONDS).readTimeout(180,TimeUnit.SECONDS).build()
  private lateinit var key:EditText; private lateinit var model:Spinner; private lateinit var title:EditText; private lateinit var genre:EditText
  private lateinit var chars:EditText; private lateinit var mood:EditText; private lateinit var prompt:EditText; private lateinit var adult:CheckBox
@@ -53,9 +55,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun base():String{val a=if(adult.isChecked)"\n成人向け表現を許可。ただし登場人物は全員18歳以上で、合意のある成人同士の関係のみ。" else "";return "日本語の小説を書いてください。\nタイトル: "+title.text+"\nジャンル: "+genre.text+"\n登場人物: "+chars.text+"\n雰囲気・文体: "+mood.text+"\n指示・あらすじ: "+prompt.text+a+"\n説明ではなく小説本文を出力してください。"}
  private fun setModels(x:List<String>){model.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,x)}
  private fun loadModels(){if(k().isBlank())return toast("APIキーを入力してください");busy(true,"モデル取得中…");val q=Request.Builder().url("https://openrouter.ai/api/v1/models").header("Authorization","Bearer "+k()).build();client.newCall(q).enqueue(object:Callback{override fun onFailure(c:Call,e:IOException)=err(e.message?:"通信エラー");override fun onResponse(c:Call,r:Response){r.use{if(!it.isSuccessful)return err("モデル取得失敗 HTTP "+it.code);val a=JSONObject(it.body?.string().orEmpty()).optJSONArray("data")?:JSONArray();val x=(0 until a.length()).mapNotNull{i->a.optJSONObject(i)?.optString("id")?.takeIf{v->v.isNotBlank()}}.sorted();runOnUiThread{setModels(x.ifEmpty{listOf("openrouter/auto")});busy(false,x.size.toString()+"モデル取得")}}}})}
- private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");if(!multi){call(base()){result.setText(it);saveNovelToLibrary(title.text.toString().ifBlank{"無題"},it,adult.isChecked);busy(false,"生成完了")};return};val filled=blockPrompts();val n=maxOf((blocks.text.toString().toIntOrNull()?:filled.size).coerceIn(2,12),filled.size.coerceAtMost(12));result.setText("");block(1,n,"",filled)}
- private fun block(i:Int,n:Int,old:String,instructions:List<String>){busy(true,i.toString()+" / "+n+" ブロック生成中…");val context=if(old.isBlank())"" else "\n\nここまでの本文:\n"+old.takeLast(12000);val specific=instructions.getOrNull(i-1).orEmpty();val direction=if(specific.isBlank())"" else "\nこのブロック固有の指示: "+specific;call(base()+"\n\n全"+n+"ブロック中の第"+i+"ブロックを書いてください。前後を自然につないでください。"+direction+context){p->val all=if(old.isBlank())p else old+"\n\n"+p;result.setText(all);if(i<n)block(i+1,n,all,instructions)else{saveNovelToLibrary(title.text.toString().ifBlank{"無題"},all,adult.isChecked);busy(false,"ブロック生成完了")}}}
- private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");call(base()+"\n\n以下の本文の直後から続きを書いてください。\n\n"+old.takeLast(14000)){p->result.setText(old+"\n\n"+p);saveNovelToLibrary(title.text.toString().ifBlank{"無題"},result.text.toString(),adult.isChecked);busy(false,"続きを生成しました")}}
+ private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");if(!multi){call(base()){result.setText(it);saveNovelToLibrary(novelTitle(title.text.toString()),it,adult.isChecked);busy(false,"生成完了")};return};val filled=blockPrompts();val n=maxOf((blocks.text.toString().toIntOrNull()?:filled.size).coerceIn(2,12),filled.size.coerceAtMost(12));result.setText("");block(1,n,"",filled)}
+ private fun block(i:Int,n:Int,old:String,instructions:List<String>){busy(true,i.toString()+" / "+n+" ブロック生成中…");val context=if(old.isBlank())"" else "\n\nここまでの本文:\n"+old.takeLast(12000);val specific=instructions.getOrNull(i-1).orEmpty();val direction=if(specific.isBlank())"" else "\nこのブロック固有の指示: "+specific;call(base()+"\n\n全"+n+"ブロック中の第"+i+"ブロックを書いてください。前後を自然につないでください。"+direction+context){p->val all=if(old.isBlank())p else old+"\n\n"+p;result.setText(all);if(i<n)block(i+1,n,all,instructions)else{saveNovelToLibrary(novelTitle(title.text.toString()),all,adult.isChecked);busy(false,"ブロック生成完了")}}}
+ private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");call(base()+"\n\n以下の本文の直後から続きを書いてください。\n\n"+old.takeLast(14000)){p->result.setText(old+"\n\n"+p);saveNovelToLibrary(novelTitle(title.text.toString()),result.text.toString(),adult.isChecked);busy(false,"続きを生成しました")}}
  private fun call(p:String,done:(String)->Unit){busy(true,"生成中…");callAttempt(p,done,0,retries())}
  private fun callAttempt(p:String,done:(String)->Unit,attempt:Int,maxRetries:Int){
   val body=JSONObject().put("model",m()).put("max_tokens",limit()).put("messages",JSONArray().put(JSONObject().put("role","user").put("content",p)))
@@ -83,22 +85,28 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun loadLibrary():JSONArray=runCatching{JSONArray(libraryPrefs().getString("novels","[]"))}.getOrDefault(JSONArray())
  private fun saveNovelToLibrary(t:String,b:String,r18:Boolean){
   if(b.isBlank())return
-  val old=loadLibrary();val out=JSONArray();out.put(JSONObject().put("id",System.currentTimeMillis()).put("savedAt",System.currentTimeMillis()).put("title",t).put("body",b).put("r18",r18))
+  val old=loadLibrary();val out=JSONArray();out.put(JSONObject().put("id",System.currentTimeMillis()).put("savedAt",System.currentTimeMillis()).put("title",novelTitle(t)).put("body",b).put("r18",r18))
   for(i in 0 until minOf(old.length(),199))out.put(old.getJSONObject(i))
   libraryPrefs().edit().putString("novels",out.toString()).apply()
+ }
+ private fun replaceUntitledLibraryNovels(){
+  val old=loadLibrary();val out=JSONArray();var changed=0
+  for(i in 0 until old.length()){val n=old.getJSONObject(i);val current=n.optString("title","").trim();if(current.isBlank()||current=="無題"||current=="タイトル未設定"){n.put("title",defaultNovelTitle);changed++};out.put(n)}
+  libraryPrefs().edit().putString("novels",out.toString()).apply();toast(changed.toString()+"件のタイトルを「"+defaultNovelTitle+"」に置き換えました");renderLibrary()
  }
  private fun deleteLibraryNovel(id:Long){val old=loadLibrary();val out=JSONArray();for(i in 0 until old.length()){val n=old.getJSONObject(i);if(n.optLong("id")!=id)out.put(n)};libraryPrefs().edit().putString("novels",out.toString()).apply();renderLibrary()}
  private fun renderLibrary(){
   libraryContainer.removeAllViews();val a=loadLibrary()
+  libraryContainer.addView(Button(this).apply{text="無題タイトルを置き換える";isAllCaps=false;setOnClickListener{replaceUntitledLibraryNovels()}})
   if(a.length()==0){libraryContainer.addView(TextView(this).apply{text="まだ生成した小説はありません。";setPadding(8,24,8,24)});return}
-  for(i in 0 until a.length()){val n=a.getJSONObject(i);libraryContainer.addView(Button(this).apply{text=n.optString("title","無題");isAllCaps=false;setOnClickListener{renderNovelDetail(n)}})}
+  for(i in 0 until a.length()){val n=a.getJSONObject(i);libraryContainer.addView(Button(this).apply{text=novelTitle(n.optString("title",""));isAllCaps=false;setOnClickListener{renderNovelDetail(n)}})}
  }
  private fun renderNovelDetail(n:JSONObject){
   libraryContainer.removeAllViews()
   libraryContainer.addView(Button(this).apply{text="← 一覧へ戻る";setOnClickListener{renderLibrary()}})
-  libraryContainer.addView(TextView(this).apply{text=n.optString("title","無題");textSize=20f;setPadding(8,20,8,12)})
+  libraryContainer.addView(TextView(this).apply{text=novelTitle(n.optString("title",""));textSize=20f;setPadding(8,20,8,12)})
   libraryContainer.addView(EditText(this).apply{text=n.optString("body");textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);enableTextEditing(this)})
-  libraryContainer.addView(Button(this).apply{text="Lexis投稿";setOnClickListener{loginUploadNovel(n.optString("title","無題"),n.optString("body"),n.optBoolean("r18",false))}})
+  libraryContainer.addView(Button(this).apply{text="Lexis投稿";setOnClickListener{loginUploadNovel(novelTitle(n.optString("title","")),n.optString("body"),n.optBoolean("r18",false))}})
   libraryContainer.addView(Button(this).apply{text="ダウンロード";setOnClickListener{downloadNovel=n;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,n.optString("title","novel").replace(Regex("[\\/:*?\"<>|]"),"_")+".txt")},9001)}})
   libraryContainer.addView(Button(this).apply{text="削除";setOnClickListener{android.app.AlertDialog.Builder(this@NovelGeneratorActivity).setMessage("この小説を削除しますか？").setNegativeButton("キャンセル",null).setPositiveButton("削除"){_,_->deleteLibraryNovel(n.optLong("id"))}.show()}})
  }
