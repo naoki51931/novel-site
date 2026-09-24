@@ -84,7 +84,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
   android.os.Handler(mainLooper).postDelayed({callAttempt(p,done,attempt+1,maxRetries)},minOf(5000L,500L+attempt*250L))
  }
  private fun showGenerator(){generationPanel.visibility=View.VISIBLE;libraryPanel.visibility=View.GONE}
- private fun showLibrary(){generationPanel.visibility=View.GONE;libraryPanel.visibility=View.VISIBLE;migrateLibraryToPersistentFiles();renderLibrary()}
+ private fun showLibrary(){generationPanel.visibility=View.GONE;libraryPanel.visibility=View.VISIBLE;migrateLibraryToPersistentFiles();restoreLibraryFromPersistentFiles();renderLibrary()}
  private fun libraryPrefs()=getSharedPreferences("lexis_novel_library",MODE_PRIVATE)
  private fun loadLibrary():JSONArray=runCatching{JSONArray(libraryPrefs().getString("novels","[]"))}.getOrDefault(JSONArray())
  private fun persistNovelFile(id:Long,t:String,b:String){
@@ -94,6 +94,30 @@ class NovelGeneratorActivity:AppCompatActivity(){
   }
  }
  private fun migrateLibraryToPersistentFiles(){val a=loadLibrary();for(i in 0 until a.length()){val n=a.optJSONObject(i)?:continue;if(!n.optBoolean("persistentSaved",false)){persistNovelFile(n.optLong("id"),n.optString("title",""),n.optString("body",""));n.put("persistentSaved",true)}};libraryPrefs().edit().putString("novels",a.toString()).apply()}
+ private fun restoreLibraryFromPersistentFiles(){
+  if(android.os.Build.VERSION.SDK_INT<29)return
+  val old=loadLibrary();val out=JSONArray();val known=mutableSetOf<Long>()
+  for(i in 0 until old.length()){val n=old.optJSONObject(i)?:continue;out.put(n);known.add(n.optLong("id"))}
+  val projection=arrayOf(MediaStore.MediaColumns._ID,MediaStore.MediaColumns.DISPLAY_NAME,MediaStore.MediaColumns.DATE_MODIFIED)
+  val selection=MediaStore.MediaColumns.RELATIVE_PATH+"=?"
+  val args=arrayOf(Environment.DIRECTORY_DOCUMENTS+"/Lexis/小説/")
+  runCatching{
+   contentResolver.query(MediaStore.Files.getContentUri("external"),projection,selection,args,MediaStore.MediaColumns.DATE_MODIFIED+" DESC")?.use{c->
+    val idCol=c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID);val nameCol=c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME);val dateCol=c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+    while(c.moveToNext()){
+     val mediaId=c.getLong(idCol);val name=c.getString(nameCol)?:"";if(!name.endsWith(".txt",true))continue
+     val fileId=Regex("""_(\d+)\.txt$""",RegexOption.IGNORE_CASE).find(name)?.groupValues?.getOrNull(1)?.toLongOrNull()?:mediaId
+     if(known.contains(fileId))continue
+     val uri=android.content.ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"),mediaId)
+     val raw=contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use{it.readText()}.orEmpty();if(raw.isBlank())continue
+     val split=raw.indexOf("\n\n");val restoredTitle=novelTitle(if(split>=0)raw.substring(0,split) else name.substringBeforeLast(".txt").replace(Regex("""_\d+$"""),""));val restoredBody=if(split>=0)raw.substring(split+2) else raw
+     if(restoredBody.isBlank())continue
+     out.put(JSONObject().put("id",fileId).put("savedAt",c.getLong(dateCol)*1000L).put("title",restoredTitle).put("body",restoredBody).put("r18",false).put("persistentSaved",true).put("restored",true));known.add(fileId)
+    }
+   }
+  }
+  libraryPrefs().edit().putString("novels",out.toString()).apply()
+ }
  private fun saveNovelToLibrary(t:String,b:String,r18:Boolean){
   if(b.isBlank())return
   val old=loadLibrary();val out=JSONArray();val id=System.currentTimeMillis();persistNovelFile(id,t,b);out.put(JSONObject().put("id",id).put("savedAt",id).put("title",novelTitle(t)).put("body",b).put("r18",r18).put("persistentSaved",true))
