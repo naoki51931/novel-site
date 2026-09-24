@@ -347,7 +347,28 @@ ipcMain.handle("draft:save-local", async (_event, payload) => {
 ipcMain.handle("draft:list-local", async () => store.get("drafts", []));
 
 ipcMain.handle("library:list", async () => {
-  const novels = store.get("novelLibrary", []);
+  let novels = store.get("novelLibrary", []);
+  const known = new Set(novels.map(n => String(n.id)));
+  try {
+    const dir = await ensurePersistentNovelDir();
+    const files = (await fs.readdir(dir)).filter(name => name.toLowerCase().endsWith(".txt"));
+    for (const name of files) {
+      const m = name.match(/_(\d+)\.txt$/i);
+      const id = m ? Number(m[1]) : 0;
+      const restoreId = id || Date.now() + novels.length;
+      if (known.has(String(restoreId))) continue;
+      const raw = await fs.readFile(path.join(dir, name), "utf8");
+      const split = raw.indexOf("\n\n");
+      const title = normalizeNovelTitle(split >= 0 ? raw.slice(0, split) : name.replace(/_\d+\.txt$/i, "").replace(/\.txt$/i, ""));
+      const body = split >= 0 ? raw.slice(split + 2) : raw;
+      if (!body.trim()) continue;
+      novels.push({ id: restoreId, savedAt: new Date(id || Date.now()).toISOString(), title, body, r18: false, restored: true });
+      known.add(String(restoreId));
+    }
+    novels.sort((a,b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+    novels = novels.slice(0, 200);
+    store.set("novelLibrary", novels);
+  } catch {}
   for (const n of novels) { try { await writePersistentNovel(n); } catch {} }
   return novels;
 });
