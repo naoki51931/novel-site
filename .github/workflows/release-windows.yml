@@ -1,6 +1,11 @@
 name: Build and Release Lexis Windows
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release-windows.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -43,7 +48,7 @@ jobs:
       - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lexis-Windows-v${{ inputs.version }}
+          name: Lexis-Windows-v${{ inputs.version || '0.1.1' }}
           path: Lexis-Novel-Desktop-Setup.exe
           if-no-files-found: error
 
@@ -51,7 +56,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ inputs.version || '0.1.1' }}
         run: |
           $tag = "windows-v$env:VERSION"
           gh release view $tag *> $null
@@ -60,3 +65,5 @@ jobs:
           } else {
             gh release create $tag Lexis-Novel-Desktop-Setup.exe --title "Lexis Windows v$env:VERSION" --notes "Lexis Windows desktop app v$env:VERSION"
           }
+
+# build-trigger: 2026-09-24 windows-v0.1.1
