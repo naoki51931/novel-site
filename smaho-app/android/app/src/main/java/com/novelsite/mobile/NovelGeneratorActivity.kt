@@ -115,7 +115,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
   libraryContainer.removeAllViews()
   libraryContainer.addView(Button(this).apply{text="← 一覧へ戻る";setOnClickListener{renderLibrary()}})
   libraryContainer.addView(TextView(this).apply{text=novelTitle(n.optString("title",""));textSize=20f;setPadding(8,20,8,12)})
-  libraryContainer.addView(EditText(this).apply{text=n.optString("body");textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);enableTextEditing(this)})
+  libraryContainer.addView(EditText(this).apply{setText(n.optString("body"));textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);enableTextEditing(this)})
   libraryContainer.addView(Button(this).apply{text="Lexis投稿";setOnClickListener{loginUploadNovel(novelTitle(n.optString("title","")),n.optString("body"),n.optBoolean("r18",false))}})
   libraryContainer.addView(Button(this).apply{text="ダウンロード";setOnClickListener{downloadNovel=n;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,n.optString("title","novel").replace(Regex("[\\/:*?\"<>|]"),"_")+".txt")},9001)}})
   libraryContainer.addView(Button(this).apply{text="削除";setOnClickListener{android.app.AlertDialog.Builder(this@NovelGeneratorActivity).setMessage("この小説を削除しますか？").setNegativeButton("キャンセル",null).setPositiveButton("削除"){_,_->deleteLibraryNovel(n.optLong("id"))}.show()}})
