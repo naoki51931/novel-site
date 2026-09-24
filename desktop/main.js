@@ -177,7 +177,8 @@ async function openRouterJson(input, prompt, maxTokens) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const r = await openRouterJsonOnce(input, prompt, maxTokens);
-      if (!String(r.raw || "").trim()) throw new Error("AIから空の応答が返りました。");
+      const normalized = String(r.raw ?? "").trim();
+      if (!normalized || /^null$/i.test(normalized)) throw new Error("AIから空またはnullの応答が返りました。");
       return r;
     } catch (e) {
       lastError = e;
@@ -262,14 +263,24 @@ ipcMain.handle("novel:generate-blocks", async (_event, input) => {
       (i < count - 1 ? "\nこのブロックだけで物語を完結させず、次へ自然につながる余地を残してください。" : "\n最終ブロックとして必要なら物語を着地させてください。") +
       "\nJSON形式 {\"title\":\"タイトル\",\"body\":\"このブロックの本文\"} のみ返してください。";
 
-    const r = await openRouterJson(input, prompt, input.blockMaxTokens || input.maxTokens);
-    let parsed = { title: title || "タイトル未設定", body: r.raw };
-    try {
-      const cleaned = r.raw.replace(/^\x60\x60\x60(?:json)?/i, "").replace(/\x60\x60\x60$/, "").trim();
-      parsed = JSON.parse(cleaned);
-    } catch {}
-    if (!title && parsed.title) title = String(parsed.title);
-    const blockBody = String(parsed.body || parsed.content || parsed.story || r.raw).trim();
+    let r;
+    let parsed;
+    let blockBody = "";
+    const blockRetries = Math.max(0, Math.min(100, Number(input.retryCount ?? 20)));
+    for (let blockAttempt = 0; blockAttempt <= blockRetries; blockAttempt++) {
+      r = await openRouterJson(input, prompt, input.blockMaxTokens || input.maxTokens);
+      parsed = { title: title || "タイトル未設定", body: r.raw };
+      try {
+        const cleaned = r.raw.replace(/^\x60\x60\x60(?:json)?/i, "").replace(/\x60\x60\x60$/, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch {}
+      const candidate = parsed?.body ?? parsed?.content ?? parsed?.story ?? r.raw;
+      blockBody = candidate == null ? "" : String(candidate).trim();
+      if (blockBody && !/^null$/i.test(blockBody)) break;
+      if (blockAttempt >= blockRetries) throw new Error("ブロック本文がnullまたは空のまま再試行上限に達しました。");
+      await new Promise(resolve => setTimeout(resolve, Math.min(5000, 500 + blockAttempt * 250)));
+    }
+    if (!title && parsed?.title) title = String(parsed.title);
     blocks.push({ index: i + 1, plan, body: blockBody });
     fullBody += (fullBody ? "\n\n" : "") + blockBody;
     totalTokens += Number(r.data?.usage?.total_tokens || 0);
