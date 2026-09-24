@@ -1,6 +1,9 @@
 package com.novelsite.mobile
 import android.content.Intent
 import android.os.Bundle
+import android.os.Environment
+import android.content.ContentValues
+import android.provider.MediaStore
 import android.view.View
 import android.view.MotionEvent
 import android.text.method.ScrollingMovementMethod
@@ -80,12 +83,19 @@ class NovelGeneratorActivity:AppCompatActivity(){
   android.os.Handler(mainLooper).postDelayed({callAttempt(p,done,attempt+1,maxRetries)},minOf(5000L,500L+attempt*250L))
  }
  private fun showGenerator(){generationPanel.visibility=View.VISIBLE;libraryPanel.visibility=View.GONE}
- private fun showLibrary(){generationPanel.visibility=View.GONE;libraryPanel.visibility=View.VISIBLE;renderLibrary()}
+ private fun showLibrary(){generationPanel.visibility=View.GONE;libraryPanel.visibility=View.VISIBLE;migrateLibraryToPersistentFiles();renderLibrary()}
  private fun libraryPrefs()=getSharedPreferences("lexis_novel_library",MODE_PRIVATE)
  private fun loadLibrary():JSONArray=runCatching{JSONArray(libraryPrefs().getString("novels","[]"))}.getOrDefault(JSONArray())
+ private fun persistNovelFile(id:Long,t:String,b:String){
+  if(android.os.Build.VERSION.SDK_INT>=29){
+   val values=ContentValues().apply{put(MediaStore.MediaColumns.DISPLAY_NAME,novelTitle(t).replace(Regex("[\\/:*?\"<>|]"),"_")+"_"+id+".txt");put(MediaStore.MediaColumns.MIME_TYPE,"text/plain");put(MediaStore.MediaColumns.RELATIVE_PATH,Environment.DIRECTORY_DOCUMENTS+"/Lexis/小説")}
+   runCatching{contentResolver.insert(MediaStore.Files.getContentUri("external"),values)?.let{uri->contentResolver.openOutputStream(uri,"w")?.bufferedWriter(Charsets.UTF_8)?.use{w->w.write(novelTitle(t));w.write("\n\n");w.write(b)}}}
+  }
+ }
+ private fun migrateLibraryToPersistentFiles(){val a=loadLibrary();for(i in 0 until a.length()){val n=a.optJSONObject(i)?:continue;if(!n.optBoolean("persistentSaved",false)){persistNovelFile(n.optLong("id"),n.optString("title",""),n.optString("body",""));n.put("persistentSaved",true)}};libraryPrefs().edit().putString("novels",a.toString()).apply()}
  private fun saveNovelToLibrary(t:String,b:String,r18:Boolean){
   if(b.isBlank())return
-  val old=loadLibrary();val out=JSONArray();out.put(JSONObject().put("id",System.currentTimeMillis()).put("savedAt",System.currentTimeMillis()).put("title",novelTitle(t)).put("body",b).put("r18",r18))
+  val old=loadLibrary();val out=JSONArray();val id=System.currentTimeMillis();persistNovelFile(id,t,b);out.put(JSONObject().put("id",id).put("savedAt",id).put("title",novelTitle(t)).put("body",b).put("r18",r18).put("persistentSaved",true))
   for(i in 0 until minOf(old.length(),199))out.put(old.getJSONObject(i))
   libraryPrefs().edit().putString("novels",out.toString()).apply()
  }
