@@ -1,7 +1,7 @@
 <!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lexis Novel Desktop</title><link rel="stylesheet" href="./styles.css"></head><body>
 <div class="actions" style="padding:12px 16px"><button id="navGenerate" class="primary">生成</button><button id="navLibrary">小説一覧</button></div>
 <div id="generatorView"><main class="layout"><section class="panel"><h1>Lexis Novel Desktop</h1><p class="muted">OpenRouter対応 Windows 小説制作アプリ</p><div class="actions"><button id="updateApp">アップデート</button><button id="uninstallApp">アンインストール</button></div>
-<label>OpenRouter APIキー<span class="muted">OpenRouterでAIモデルを利用するためのキーです。</span><input id="apiKey" type="password" placeholder="sk-or-v1-..."></label>
+<label>OpenRouter APIキー<span class="muted">OpenRouterでAIモデルを利用するためのキーです。 <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">OpenRouterでAPIキーを取得・管理</a></span><input id="apiKey" type="password" placeholder="sk-or-v1-..."></label>
 <div class="row"><label class="grow">モデル<span class="muted">小説生成に使うAIモデルを指定します。迷った場合は openrouter/auto のままで使えます。</span><input id="model" value="openrouter/auto"></label><button id="loadModels">モデル取得</button></div><select id="modelList"><option value="">取得したモデルから選択</option></select>
 <div class="grid2"><label>タイトルのイメージ<span class="muted">希望するタイトルやキーワードを入力します。</span><input id="titleHint"></label><label>ジャンル<span class="muted">例：SF、恋愛、ファンタジー、ミステリー。</span><input id="genre"></label></div>
 <label>登場人物・設定<span class="muted">人物名・性格・関係・世界観などを書きます。</span><textarea id="characters" rows="6"></textarea></label><label>雰囲気<span class="muted">例：明るい、シリアス、叙情的、テンポ重視。</span><input id="tone"></label>
