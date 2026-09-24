@@ -34,7 +34,7 @@ jobs:
         working-directory: desktop
         shell: pwsh
         env:
-          VERSION: ${{ inputs.version || '0.1.5' }}
+          VERSION: ${{ inputs.version || '0.1.6' }}
         run: npm version $env:VERSION --no-git-tag-version
 
       - name: Install dependencies
@@ -55,7 +55,7 @@ jobs:
       - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lexis-Windows-v${{ inputs.version || '0.1.5' }}
+          name: Lexis-Windows-v${{ inputs.version || '0.1.6' }}
           path: Lexis-Novel-Desktop-Setup.exe
           if-no-files-found: error
 
@@ -63,7 +63,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '0.1.5' }}
+          VERSION: ${{ inputs.version || '0.1.6' }}
         run: |
           $tag = "windows-v$env:VERSION"
           gh release view $tag *> $null
@@ -73,4 +73,4 @@ jobs:
             gh release create $tag Lexis-Novel-Desktop-Setup.exe --title "Lexis Windows v$env:VERSION" --notes "Lexis Windows desktop app v$env:VERSION"
           }
 
-# build-trigger: 2026-09-25 windows-v0.1.5-templates
+# build-trigger: 2026-09-25 windows-v0.1.6-version-sync
