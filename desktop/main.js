@@ -8,6 +8,12 @@ const { autoUpdater } = require("electron-updater");
 const store = new Store({ name: "settings" });
 const DEFAULT_NOVEL_TITLE = "Lexis生成小説";
 function normalizeNovelTitle(value) { const t = String(value || "").trim(); return (!t || /^(無題|タイトル未設定)$/.test(t)) ? DEFAULT_NOVEL_TITLE : t; }
+function cleanBlockMetaText(value) {
+  return String(value || "")
+    .replace(/^\s*[（(【\[]?\s*第?\s*[0-9０-９一二三四五六七八九十百]+\s*ブロック\s*(?:へ|に)?\s*(?:続く|続きます|つづく|つづきます)\s*[）)】\]]?\s*[。.!！]?\s*$/gmi, "")
+    .replace(/^\s*[（(【\[]?\s*(?:次|次の)\s*ブロック\s*(?:へ|に)?\s*(?:続く|続きます|つづく|つづきます)\s*[）)】\]]?\s*[。.!！]?\s*$/gmi, "")
+    .replace(/\n{3,}/g, "\n\n").trim();
+}
 function safeFileName(value) { return normalizeNovelTitle(value).replace(/[\\/:*?"<>|]/g, "_").slice(0, 100); }
 function persistentNovelDir() { return path.join(app.getPath("documents"), "Lexis", "小説"); }
 async function ensurePersistentNovelDir() { const dir = persistentNovelDir(); await fs.mkdir(dir, { recursive: true }); return dir; }
@@ -292,7 +298,7 @@ ipcMain.handle("novel:generate-blocks", async (_event, input) => {
       "\n\n# ブロック生成\n全" + count + "ブロック中の第" + (i + 1) + "ブロックを書いてください。" +
       (plan ? "\nこのブロックの展開案: " + plan : "") +
       (context ? "\n\n# 直前までの本文\n" + context : "") +
-      "\n\n前ブロックと矛盾させず、同じ場面や説明を不必要に繰り返さないでください。" +
+      "\n\n前ブロックと矛盾させず、同じ場面や説明を不必要に繰り返さないでください。本文中に「第○ブロックへ続く」「次のブロックへ続く」など、ブロック構成を読者に示すメタ文章は絶対に書かないでください。" +
       (i < count - 1 ? "\nこのブロックだけで物語を完結させず、次へ自然につながる余地を残してください。" : "\n最終ブロックとして必要なら物語を着地させてください。") +
       "\nJSON形式 {\"title\":\"タイトル\",\"body\":\"このブロックの本文\"} のみ返してください。";
 
@@ -309,7 +315,7 @@ ipcMain.handle("novel:generate-blocks", async (_event, input) => {
       } catch {}
       const candidate = parsed?.body ?? parsed?.content ?? parsed?.story ?? r.raw;
       blockBody = candidate == null ? "" : String(candidate).trim();
-      if (blockBody && !/^null$/i.test(blockBody)) break;
+      if (blockBody && !/^null$/i.test(blockBody)) { blockBody = cleanBlockMetaText(blockBody); if (blockBody) break; }
       if (blockAttempt >= blockRetries) throw new Error("ブロック本文がnullまたは空のまま再試行上限に達しました。");
       await new Promise(resolve => setTimeout(resolve, Math.min(5000, 500 + blockAttempt * 250)));
     }
