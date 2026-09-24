@@ -22,7 +22,10 @@ import java.util.concurrent.TimeUnit
 
 class NovelGeneratorActivity:AppCompatActivity(){
  private val defaultNovelTitle="Lexis生成小説"
- private fun novelTitle(v:String):String{val t=v.trim();return if(t.isBlank()||t=="無題"||t=="タイトル未設定")defaultNovelTitle else t}
+ private fun novelTitle(v:String):String{val t=v.trim();return if(t.isBlank()||t=="無題"||t=="タイトル未設定"||t==defaultNovelTitle)defaultNovelTitle else t}
+ private fun needsAiTitle(v:String)=v.trim().let{it.isBlank()||it=="無題"||it=="タイトル未設定"||it==defaultNovelTitle}
+ private fun aiTitle(body:String,done:(String)->Unit){val excerpt=body.trim().take(12000);if(excerpt.isBlank())return done(defaultNovelTitle);call("次の小説本文に最もふさわしい日本語タイトルを1つだけ考えてください。タイトルだけを出力し、説明・引用符・括弧・『タイトル：』は付けないでください。\n\n"+excerpt){raw->val t=raw.lineSequence().firstOrNull{it.isNotBlank()}.orEmpty().trim().removePrefix("タイトル:").removePrefix("タイトル：").trim().trim('"','「','」','『','』');done(if(t.isBlank())defaultNovelTitle else t.take(100))}}
+ private fun saveGeneratedNovel(body:String,r18:Boolean,done:()->Unit){val current=title.text.toString();if(!needsAiTitle(current)){saveNovelToLibrary(current,body,r18);done();return};busy(true,"タイトルを考えています…");aiTitle(body){t->title.setText(t);saveNovelToLibrary(t,body,r18);done()}}
  private fun cleanBlockMetaText(v:String)=v.lines().filterNot{line->line.trim().matches(Regex("""^[（(【\[]?\s*(?:第?\s*[0-9０-９一二三四五六七八九十百]+|次|次の)\s*ブロック\s*(?:へ|に)?\s*(?:続く|続きます|つづく|つづきます)\s*[）)】\]]?\s*[。.!！]?$"""))}.joinToString("\n").trim()
  private val client=OkHttpClient.Builder().connectTimeout(30,TimeUnit.SECONDS).readTimeout(180,TimeUnit.SECONDS).build()
  private lateinit var key:EditText; private lateinit var model:Spinner; private lateinit var title:EditText; private lateinit var genre:EditText
@@ -99,9 +102,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
   val pos=items.indexOf(saved);if(pos>=0)model.setSelection(pos)
  }
  private fun loadModels(){if(k().isBlank())return toast("APIキーを入力してください");busy(true,"モデル取得中…");val q=Request.Builder().url("https://openrouter.ai/api/v1/models").header("Authorization","Bearer "+k()).build();client.newCall(q).enqueue(object:Callback{override fun onFailure(c:Call,e:IOException)=err(e.message?:"通信エラー");override fun onResponse(c:Call,r:Response){r.use{if(!it.isSuccessful)return err("モデル取得失敗 HTTP "+it.code);val a=JSONObject(it.body?.string().orEmpty()).optJSONArray("data")?:JSONArray();val x=(0 until a.length()).mapNotNull{i->a.optJSONObject(i)?.optString("id")?.takeIf{v->v.isNotBlank()}}.sorted();runOnUiThread{val items=x.ifEmpty{listOf("openrouter/auto")};prefs.edit().putString("model_cache",JSONArray(items).toString()).apply();setModels(items);busy(false,x.size.toString()+"モデル取得")}}}})}
- private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");if(!multi){call(base()){result.setText(it);saveNovelToLibrary(novelTitle(title.text.toString()),it,adult.isChecked);busy(false,"生成完了")};return};val filled=blockPrompts();val n=maxOf((blocks.text.toString().toIntOrNull()?:filled.size).coerceIn(2,12),filled.size.coerceAtMost(12));result.setText("");block(1,n,"",filled)}
- private fun block(i:Int,n:Int,old:String,instructions:List<String>){busy(true,i.toString()+" / "+n+" ブロック生成中…");val context=if(old.isBlank())"" else "\n\nここまでの本文:\n"+old.takeLast(12000);val specific=instructions.getOrNull(i-1).orEmpty();val direction=if(specific.isBlank())"" else "\nこのブロック固有の指示: "+specific;call(base()+"\n\n全"+n+"ブロック中の第"+i+"ブロックを書いてください。前後を自然につないでください。本文中に「第○ブロックへ続く」「次のブロックへ続く」など、ブロック構成を読者に示すメタ文章は絶対に書かないでください。"+direction+context){p->val cleaned=cleanBlockMetaText(p);val all=if(old.isBlank())cleaned else old+"\n\n"+cleaned;result.setText(all);if(i<n)block(i+1,n,all,instructions)else{saveNovelToLibrary(novelTitle(title.text.toString()),all,adult.isChecked);busy(false,"ブロック生成完了")}}}
- private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");call(base()+"\n\n以下の本文の直後から続きを書いてください。\n\n"+old.takeLast(14000)){p->result.setText(old+"\n\n"+p);saveNovelToLibrary(novelTitle(title.text.toString()),result.text.toString(),adult.isChecked);busy(false,"続きを生成しました")}}
+ private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");if(!multi){call(base()){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了")}};return};val filled=blockPrompts();val n=maxOf((blocks.text.toString().toIntOrNull()?:filled.size).coerceIn(2,12),filled.size.coerceAtMost(12));result.setText("");block(1,n,"",filled)}
+ private fun block(i:Int,n:Int,old:String,instructions:List<String>){busy(true,i.toString()+" / "+n+" ブロック生成中…");val context=if(old.isBlank())"" else "\n\nここまでの本文:\n"+old.takeLast(12000);val specific=instructions.getOrNull(i-1).orEmpty();val direction=if(specific.isBlank())"" else "\nこのブロック固有の指示: "+specific;call(base()+"\n\n全"+n+"ブロック中の第"+i+"ブロックを書いてください。前後を自然につないでください。本文中に「第○ブロックへ続く」「次のブロックへ続く」など、ブロック構成を読者に示すメタ文章は絶対に書かないでください。"+direction+context){p->val cleaned=cleanBlockMetaText(p);val all=if(old.isBlank())cleaned else old+"\n\n"+cleaned;result.setText(all);if(i<n)block(i+1,n,all,instructions)else{saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了")}}}}
+ private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");call(base()+"\n\n以下の本文の直後から続きを書いてください。\n\n"+old.takeLast(14000)){p->result.setText(old+"\n\n"+p);saveGeneratedNovel(result.text.toString(),adult.isChecked){busy(false,"続きを生成しました")}}}
  private fun call(p:String,done:(String)->Unit){busy(true,"生成中…");callAttempt(p,done,0,retries())}
  private fun callAttempt(p:String,done:(String)->Unit,attempt:Int,maxRetries:Int){
   val body=JSONObject().put("model",m()).put("max_tokens",limit()).put("messages",JSONArray().put(JSONObject().put("role","user").put("content",p)))
@@ -179,9 +182,15 @@ class NovelGeneratorActivity:AppCompatActivity(){
   libraryPrefs().edit().putString("novels",out.toString()).apply()
  }
  private fun replaceUntitledLibraryNovels(){
-  val old=loadLibrary();val out=JSONArray();var changed=0
-  for(i in 0 until old.length()){val n=old.getJSONObject(i);val current=n.optString("title","").trim();if(current.isBlank()||current=="無題"||current=="タイトル未設定"){n.put("title",defaultNovelTitle);changed++};out.put(n)}
-  libraryPrefs().edit().putString("novels",out.toString()).apply();toast(changed.toString()+"件のタイトルを「"+defaultNovelTitle+"」に置き換えました");renderLibrary()
+  val a=loadLibrary();val targets=(0 until a.length()).filter{i->needsAiTitle(a.optJSONObject(i)?.optString("title","").orEmpty())}
+  if(targets.isEmpty())return toast("置き換える無題タイトルはありません")
+  if(k().isBlank())return toast("OpenRouter APIキーを入力してください")
+  fun next(pos:Int,changed:Int){
+   if(pos>=targets.size){libraryPrefs().edit().putString("novels",a.toString()).apply();toast(changed.toString()+"件のタイトルをAIで付け直しました");renderLibrary();busy(false,"タイトル付け完了");return}
+   val i=targets[pos];val n=a.optJSONObject(i)?:return next(pos+1,changed);busy(true,"タイトルを考えています "+(pos+1)+" / "+targets.size)
+   aiTitle(n.optString("body","")){t->n.put("title",t);n.put("savedAt",System.currentTimeMillis());persistNovelFile(n.optLong("id"),t,n.optString("body",""));next(pos+1,changed+1)}
+  }
+  next(0,0)
  }
  private fun updateLibraryNovel(id:Long,t:String,b:String){
   if(b.isBlank())return toast("本文がありません")
