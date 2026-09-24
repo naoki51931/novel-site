@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Menu, Notification } = require("electron");
 const path = require("path");
 const fs = require("fs/promises");
 const StoreModule = require("electron-store");
@@ -7,6 +7,7 @@ const { autoUpdater } = require("electron-updater");
 
 const store = new Store({ name: "settings" });
 const DEFAULT_NOVEL_TITLE = "Lexis生成小説";
+function notifyGenerated(title) { try { if (Notification.isSupported()) new Notification({ title: "Lexis 小説生成完了", body: String(title || DEFAULT_NOVEL_TITLE) + " の生成が完了しました。" }).show(); } catch {} }
 function normalizeNovelTitle(value) { const t = String(value || "").trim(); return (!t || /^(無題|タイトル未設定)$/.test(t)) ? DEFAULT_NOVEL_TITLE : t; }
 function cleanBlockMetaText(value) {
   return String(value || "")
@@ -183,12 +184,9 @@ ipcMain.handle("novel:generate", async (_event, input) => {
     parsed = { title: "タイトル未設定", body: raw };
   }
 
-  return {
-    title: String(parsed.title || parsed.generated_title || "タイトル未設定"),
-    body: String(parsed.body || parsed.content || parsed.story || raw),
-    model: data.model || model,
-    usage: data.usage || null
-  };
+  const result = { title: String(parsed.title || parsed.generated_title || "タイトル未設定"), body: String(parsed.body || parsed.content || parsed.story || raw), model: data.model || model, usage: data.usage || null };
+  notifyGenerated(result.title);
+  return result;
 });
 
 
@@ -297,6 +295,7 @@ ipcMain.handle("novel:continue", async (_event, input) => {
   } catch {}
   const result = { title: input.title || "続き", body, model: r.model, usage: r.data.usage || null };
   remember(result, input, "continue");
+  notifyGenerated(result.title);
   return result;
 });
 
@@ -344,6 +343,7 @@ ipcMain.handle("novel:generate-blocks", async (_event, input) => {
 
   const result = { title: title || "タイトル未設定", body: fullBody, blocks, model: input.model, usage: totalTokens ? { total_tokens: totalTokens } : null };
   remember(result, input, "blocks");
+  notifyGenerated(result.title);
   return result;
 });
 
@@ -354,8 +354,7 @@ ipcMain.handle("draft:save-local", async (_event, payload) => {
     savedAt: new Date().toISOString(),
     title: String(payload.title || "タイトル未設定"),
     body: String(payload.body || ""),
-    r18: !!payload.r18,
-    bookmarked: payload.bookmarked != null ? !!payload.bookmarked : !!novels.find(x => String(x.id) === String(id))?.bookmarked
+    r18: !!payload.r18
   };
   const next = [item, ...drafts.filter((x) => x.id !== item.id)].slice(0, 100);
   store.set("drafts", next);
@@ -400,7 +399,8 @@ ipcMain.handle("library:save", async (_event, payload) => {
     savedAt: new Date().toISOString(),
     title: normalizeNovelTitle(payload.title),
     body,
-    r18: !!payload.r18
+    r18: !!payload.r18,
+    bookmarked: payload.bookmarked != null ? !!payload.bookmarked : !!novels.find(x => String(x.id) === String(id))?.bookmarked
   };
   store.set("novelLibrary", [item, ...novels.filter(x => x.id !== id)].slice(0, 200));
   item.filePath = await writePersistentNovel(item);
