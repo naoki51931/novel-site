@@ -50,7 +50,7 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '1.0.0' }}
+          VERSION: ${{ inputs.version || '1.0.7' }}
         run: |
           TAG="android-v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -59,4 +59,4 @@ jobs:
             gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android APK"
           fi
 
-# build-trigger: 2026-09-24 android-null-retry
+# build-trigger: 2026-09-24 android-v1.0.7
