@@ -105,6 +105,12 @@ class NovelGeneratorActivity:AppCompatActivity(){
   for(i in 0 until old.length()){val n=old.getJSONObject(i);val current=n.optString("title","").trim();if(current.isBlank()||current=="無題"||current=="タイトル未設定"){n.put("title",defaultNovelTitle);changed++};out.put(n)}
   libraryPrefs().edit().putString("novels",out.toString()).apply();toast(changed.toString()+"件のタイトルを「"+defaultNovelTitle+"」に置き換えました");renderLibrary()
  }
+ private fun updateLibraryNovel(id:Long,t:String,b:String){
+  if(b.isBlank())return toast("本文がありません")
+  val old=loadLibrary();val out=JSONArray()
+  for(i in 0 until old.length()){val n=old.getJSONObject(i);if(n.optLong("id")==id){n.put("title",novelTitle(t));n.put("body",b);n.put("savedAt",System.currentTimeMillis());persistNovelFile(id,novelTitle(t),b)};out.put(n)}
+  libraryPrefs().edit().putString("novels",out.toString()).apply()
+ }
  private fun deleteLibraryNovel(id:Long){val old=loadLibrary();val out=JSONArray();for(i in 0 until old.length()){val n=old.getJSONObject(i);if(n.optLong("id")!=id)out.put(n)};libraryPrefs().edit().putString("novels",out.toString()).apply();renderLibrary()}
  private fun renderLibrary(){
   libraryContainer.removeAllViews();val a=loadLibrary()
@@ -115,10 +121,19 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun renderNovelDetail(n:JSONObject){
   libraryContainer.removeAllViews()
   libraryContainer.addView(Button(this).apply{text="← 一覧へ戻る";setOnClickListener{renderLibrary()}})
-  libraryContainer.addView(TextView(this).apply{text=novelTitle(n.optString("title",""));textSize=20f;setPadding(8,20,8,12)})
-  libraryContainer.addView(EditText(this).apply{setText(n.optString("body"));textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);enableTextEditing(this)})
-  libraryContainer.addView(Button(this).apply{text="Lexis投稿";setOnClickListener{loginUploadNovel(novelTitle(n.optString("title","")),n.optString("body"),n.optBoolean("r18",false))}})
-  libraryContainer.addView(Button(this).apply{text="ダウンロード";setOnClickListener{downloadNovel=n;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,n.optString("title","novel").replace(Regex("[\\/:*?\"<>|]"),"_")+".txt")},9001)}})
+  val titleEdit=EditText(this).apply{setText(novelTitle(n.optString("title","")));textSize=20f;isEnabled=false;enableTextEditing(this)}
+  val bodyEdit=EditText(this).apply{setText(n.optString("body"));textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);isEnabled=false;enableTextEditing(this)}
+  libraryContainer.addView(titleEdit);libraryContainer.addView(bodyEdit)
+  val edit=Button(this).apply{text="編集"}
+  val save=Button(this).apply{text="編集を保存";visibility=View.GONE}
+  val cancel=Button(this).apply{text="キャンセル";visibility=View.GONE}
+  fun editing(on:Boolean){titleEdit.isEnabled=on;bodyEdit.isEnabled=on;edit.visibility=if(on)View.GONE else View.VISIBLE;save.visibility=if(on)View.VISIBLE else View.GONE;cancel.visibility=if(on)View.VISIBLE else View.GONE}
+  edit.setOnClickListener{editing(true);bodyEdit.requestFocus()}
+  cancel.setOnClickListener{titleEdit.setText(novelTitle(n.optString("title","")));bodyEdit.setText(n.optString("body"));editing(false)}
+  save.setOnClickListener{val nt=novelTitle(titleEdit.text.toString());val nb=bodyEdit.text.toString();if(nb.isBlank())return@setOnClickListener toast("本文がありません");updateLibraryNovel(n.optLong("id"),nt,nb);n.put("title",nt);n.put("body",nb);toast("編集内容を保存しました");editing(false)}
+  libraryContainer.addView(edit);libraryContainer.addView(save);libraryContainer.addView(cancel)
+  libraryContainer.addView(Button(this).apply{text="Lexis投稿";setOnClickListener{loginUploadNovel(novelTitle(titleEdit.text.toString()),bodyEdit.text.toString(),n.optBoolean("r18",false))}})
+  libraryContainer.addView(Button(this).apply{text="ダウンロード";setOnClickListener{downloadNovel=JSONObject(n.toString()).put("title",novelTitle(titleEdit.text.toString())).put("body",bodyEdit.text.toString());startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,novelTitle(titleEdit.text.toString()).replace(Regex("[\\/:*?\"<>|]"),"_")+".txt")},9001)}})
   libraryContainer.addView(Button(this).apply{text="削除";setOnClickListener{android.app.AlertDialog.Builder(this@NovelGeneratorActivity).setMessage("この小説を削除しますか？").setNegativeButton("キャンセル",null).setPositiveButton("削除"){_,_->deleteLibraryNovel(n.optLong("id"))}.show()}})
  }
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==9001&&resultCode==RESULT_OK){val n=downloadNovel?:return;val uri=data?.data?:return;runCatching{contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use{w->w.write(n.optString("title"));w.write("\n\n");w.write(n.optString("body"))}}.onSuccess{toast("ダウンロードしました")}.onFailure{toast("保存に失敗しました")};downloadNovel=null}}
