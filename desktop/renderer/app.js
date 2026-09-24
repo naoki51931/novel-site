@@ -36,6 +36,7 @@ async function loadLibrary(){
  novels.forEach(n=>{const b=document.createElement("button");b.className="library-item";b.style.display="block";b.style.width="100%";b.style.margin="8px 0";b.style.textAlign="left";b.textContent=(n.title||"タイトル未設定")+"　"+new Date(n.savedAt).toLocaleString();b.onclick=()=>openLibraryNovel(n);$("libraryList").appendChild(b);});
 }
 function openLibraryNovel(n){selectedLibraryNovel=n;$("libraryList").style.display="none";$("libraryDetail").style.display="block";$("libraryTitle").textContent=n.title||"タイトル未設定";$("libraryBody").value=n.body||"";$("libraryStatus").textContent="";}
+$("replaceUntitledTitles").onclick=async()=>{const r=await window.lexis.replaceUntitledLibraryNovels("Lexis生成小説");$("libraryStatus").textContent=r.changed+"件のタイトルを「"+r.title+"」に置き換えました。";await loadLibrary();};
 $("navGenerate").onclick=()=>{$("generatorView").style.display="block";$("libraryView").style.display="none";};
 $("navLibrary").onclick=async()=>{$("generatorView").style.display="none";$("libraryView").style.display="block";$("libraryDetail").style.display="none";$("libraryList").style.display="block";await loadLibrary();};
 $("libraryBack").onclick=()=>{$("libraryDetail").style.display="none";$("libraryList").style.display="block";selectedLibraryNovel=null;};
