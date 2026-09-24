@@ -188,7 +188,14 @@ class NovelGeneratorActivity:AppCompatActivity(){
   fun next(pos:Int,changed:Int){
    if(pos>=targets.size){libraryPrefs().edit().putString("novels",a.toString()).apply();toast(changed.toString()+"件のタイトルをAIで付け直しました");renderLibrary();busy(false,"タイトル付け完了");return}
    val i=targets[pos];val n=a.optJSONObject(i)?:return next(pos+1,changed);busy(true,"タイトルを考えています "+(pos+1)+" / "+targets.size)
-   aiTitle(n.optString("body","")){t->n.put("title",t);n.put("savedAt",System.currentTimeMillis());persistNovelFile(n.optLong("id"),t,n.optString("body",""));next(pos+1,changed+1)}
+   aiTitle(n.optString("body","")){t->
+    n.put("title",t);n.put("savedAt",System.currentTimeMillis())
+    // 1件ごとに即時保存する。途中で通信失敗・画面終了が起きても、それまでの変更を失わない。
+    libraryPrefs().edit().putString("novels",a.toString()).apply()
+    persistNovelFile(n.optLong("id"),t,n.optString("body",""))
+    renderLibrary()
+    next(pos+1,changed+1)
+   }
   }
   next(0,0)
  }
