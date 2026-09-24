@@ -6,6 +6,8 @@ const Store = StoreModule.default || StoreModule;
 const { autoUpdater } = require("electron-updater");
 
 const store = new Store({ name: "settings" });
+const DEFAULT_NOVEL_TITLE = "Lexis生成小説";
+function normalizeNovelTitle(value) { const t = String(value || "").trim(); return (!t || /^(無題|タイトル未設定)$/.test(t)) ? DEFAULT_NOVEL_TITLE : t; }
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -338,12 +340,24 @@ ipcMain.handle("library:save", async (_event, payload) => {
   const item = {
     id,
     savedAt: new Date().toISOString(),
-    title: String(payload.title || "タイトル未設定"),
+    title: normalizeNovelTitle(payload.title),
     body,
     r18: !!payload.r18
   };
   store.set("novelLibrary", [item, ...novels.filter(x => x.id !== id)].slice(0, 200));
   return item;
+});
+ipcMain.handle("library:replace-untitled", async (_event, replacement) => {
+  const nextTitle = String(replacement || "").trim() || DEFAULT_NOVEL_TITLE;
+  const novels = store.get("novelLibrary", []);
+  let changed = 0;
+  const next = novels.map(n => {
+    const current = String(n.title || "").trim();
+    if (!current || /^(無題|タイトル未設定)$/.test(current)) { changed++; return { ...n, title: nextTitle }; }
+    return n;
+  });
+  store.set("novelLibrary", next);
+  return { ok: true, changed, title: nextTitle };
 });
 ipcMain.handle("library:delete", async (_event, id) => {
   const novels = store.get("novelLibrary", []);
