@@ -45,5 +45,7 @@
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false
     }
-  }
+  },
+  "author": "なぎねこスタジオ",
+  "description": "なぎねこスタジオ開発のLexis小説制作アプリ"
 }
