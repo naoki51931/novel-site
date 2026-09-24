@@ -63,6 +63,13 @@ function createWindow() {
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
+async function writePersistentApiKey(apiKey) {
+  const dir = await ensurePersistentNovelDir();
+  await fs.writeFile(path.join(dir, "apikey.txt"), String(apiKey || "").trim(), "utf8");
+}
+async function readPersistentApiKey() {
+  try { return String(await fs.readFile(path.join(await ensurePersistentNovelDir(), "apikey.txt"), "utf8")).trim(); } catch { return ""; }
+}
 function getStoredApiKey() {
   const encrypted = store.get("openrouterApiKey");
   if (!encrypted || !safeStorage.isEncryptionAvailable()) return "";
@@ -115,13 +122,20 @@ function buildPrompt(input) {
   ].join("\n");
 }
 
-ipcMain.handle("settings:get", async () => ({
-  apiKey: getStoredApiKey(),
-  model: store.get("model", "openrouter/auto")
-}));
+ipcMain.handle("settings:get", async () => {
+  let apiKey = getStoredApiKey();
+  if (!apiKey) {
+    apiKey = await readPersistentApiKey();
+    if (apiKey) setStoredApiKey(apiKey);
+  }
+  return { apiKey,
+  model: store.get("model", "openrouter/auto") };
+});
 
 ipcMain.handle("settings:save", async (_event, settings) => {
-  setStoredApiKey(String(settings.apiKey || "").trim());
+  const apiKey = String(settings.apiKey || "").trim();
+  setStoredApiKey(apiKey);
+  await writePersistentApiKey(apiKey);
   store.set("model", String(settings.model || "openrouter/auto").trim());
   return { ok: true };
 });
