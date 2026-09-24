@@ -6,7 +6,7 @@ function input(){return{apiKey:$("apiKey").value,model:$("model").value,titleHin
 function show(r){$("resultTitle").value=r.title||"";$("resultBody").value=r.body||"";$("meta").textContent=(r.model||"")+(r.usage?.total_tokens?" / "+r.usage.total_tokens+" tokens":"");$("blocks").innerHTML=(r.blocks||[]).map(b=>"<details><summary>ブロック "+b.index+(b.plan?" — "+b.plan:"")+"</summary><pre></pre></details>").join("");[...$("blocks").querySelectorAll("pre")].forEach((p,i)=>p.textContent=r.blocks[i].body);}
 async function busy(fn,msg){$("status").textContent=msg;try{const r=await fn();$("status").textContent="完了";return r}catch(e){$("status").textContent=e.message||String(e);throw e}}
 async function refresh(){const h=await window.lexis.getHistory();$("history").innerHTML='<option value="">履歴を読み込み</option>'+h.map((x,i)=>'<option value="'+i+'">'+new Date(x.createdAt).toLocaleString()+" "+x.title+"</option>").join("");$("history")._data=h;const t=await window.lexis.getTemplates();$("templates").innerHTML='<option value="">テンプレートを読み込み</option>'+t.map((x,i)=>'<option value="'+i+'">'+(x.name||"テンプレート")+"</option>").join("");$("templates")._data=t;}
-function renderModelList(ms){renderModelList(ms)}
+function renderModelList(ms){$("modelList").innerHTML='<option value="">取得したモデルから選択</option>'+ms.map(m=>'<option value="'+m.id+'">'+m.id+"</option>").join("")}
 window.lexis.getSettings().then(s=>{$("apiKey").value=s.apiKey||"";$("model").value=s.model||"openrouter/auto";$("r18").checked=!!s.r18;renderModelList(s.models||[]);});setBlockPlans();$("addBlockPlan").onclick=()=>addBlockPlan();refresh();
 async function savePersistentChoices(){await window.lexis.saveSettings({apiKey:$("apiKey").value,model:$("model").value,r18:$("r18").checked})}
 $("saveSettings").onclick=()=>busy(()=>savePersistentChoices(),"保存中...");
@@ -21,7 +21,7 @@ $("saveNovel").onclick=()=>busy(()=>window.lexis.saveNovel({title:$("resultTitle
 $("saveTemplate").onclick=async()=>{const name=prompt("テンプレート名","小説設定");if(!name)return;await busy(()=>window.lexis.saveTemplate({...input(),apiKey:undefined,body:undefined,title:undefined,name}),"テンプレート保存中...");refresh();};
 $("refreshHistory").onclick=refresh;
 $("history").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x)show(x)};
-$("templates").onchange=e=>{const x=e.target._data?.[+e.target.value];if(!x)return;["model","titleHint","genre","characters","tone","length","maxTokens","blockCount","blockMaxTokens","retryCount"].forEach(k=>{if(x[k]!=null&&$(k))$(k).value=x[k]});$("r18").checked=!!x.r18;setBlockPlans(x.blockPlans||[]);};
+$("templates").onchange=e=>{const x=e.target._data?.[+e.target.value];if(!x)return;["model","titleHint","genre","characters","tone","length","maxTokens","blockCount","blockMaxTokens","retryCount"].forEach(k=>{if(x[k]!=null&&$(k))$(k).value=x[k]});$("r18").checked=!!x.r18;setBlockPlans(x.blockPlans||[]);savePersistentChoices();};
 async function refreshDrafts(){const d=await window.lexis.listDraftsLocal();$("drafts").innerHTML='<option value="">オフライン保存から読み込み</option>'+d.map((x,i)=>'<option value="'+i+'">'+new Date(x.savedAt).toLocaleString()+" "+x.title+"</option>").join("");$("drafts")._data=d;}
 $("saveLocal").onclick=async()=>{await busy(()=>window.lexis.saveDraftLocal({title:$("resultTitle").value,body:$("resultBody").value,r18:$("r18").checked}),"オフライン保存中...");refreshDrafts();};
 $("drafts").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x){$("resultTitle").value=x.title||"";$("resultBody").value=x.body||"";$("r18").checked=!!x.r18;}};
