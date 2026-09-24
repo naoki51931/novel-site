@@ -129,7 +129,7 @@ ipcMain.handle("settings:get", async () => {
     if (apiKey) setStoredApiKey(apiKey);
   }
   return { apiKey,
-  model: store.get("model", "openrouter/auto") };
+  model: store.get("model", "openrouter/auto"), r18: !!store.get("r18", false), models: store.get("modelCache", []) };
 });
 
 ipcMain.handle("settings:save", async (_event, settings) => {
@@ -137,6 +137,7 @@ ipcMain.handle("settings:save", async (_event, settings) => {
   setStoredApiKey(apiKey);
   await writePersistentApiKey(apiKey);
   store.set("model", String(settings.model || "openrouter/auto").trim());
+  store.set("r18", !!settings.r18);
   return { ok: true };
 });
 
@@ -266,7 +267,9 @@ ipcMain.handle("models:list", async (_event, input) => {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error((data.error && data.error.message) || "モデル一覧を取得できませんでした。");
-  return (data.data || []).map((m) => ({ id: m.id, name: m.name || m.id })).sort((a,b) => a.id.localeCompare(b.id));
+  const models = (data.data || []).map((m) => ({ id: m.id, name: m.name || m.id })).sort((a,b) => a.id.localeCompare(b.id));
+  store.set("modelCache", models);
+  return models;
 });
 
 ipcMain.handle("history:get", async () => store.get("history", []));
@@ -365,7 +368,7 @@ ipcMain.handle("library:list", async () => {
   const known = new Set(novels.map(n => String(n.id)));
   try {
     const dir = await ensurePersistentNovelDir();
-    const files = (await fs.readdir(dir)).filter(name => name.toLowerCase().endsWith(".txt"));
+    const files = (await fs.readdir(dir)).filter(name => name.toLowerCase().endsWith(".txt") && name.toLowerCase() !== "apikey.txt");
     for (const name of files) {
       const m = name.match(/_(\d+)\.txt$/i);
       const id = m ? Number(m[1]) : 0;
