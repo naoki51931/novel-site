@@ -11,8 +11,8 @@ android {
         applicationId = "com.novelsite.mobile"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 13
+        versionName = "1.0.13"
         fun configValue(key: String): String {
             val env = (System.getenv(key) ?: "").trim()
             if (env.isNotBlank()) return env
