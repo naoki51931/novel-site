@@ -354,7 +354,8 @@ ipcMain.handle("draft:save-local", async (_event, payload) => {
     savedAt: new Date().toISOString(),
     title: String(payload.title || "タイトル未設定"),
     body: String(payload.body || ""),
-    r18: !!payload.r18
+    r18: !!payload.r18,
+    bookmarked: payload.bookmarked != null ? !!payload.bookmarked : !!novels.find(x => String(x.id) === String(id))?.bookmarked
   };
   const next = [item, ...drafts.filter((x) => x.id !== item.id)].slice(0, 100);
   store.set("drafts", next);
