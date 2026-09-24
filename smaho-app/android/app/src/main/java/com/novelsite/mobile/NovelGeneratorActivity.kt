@@ -205,17 +205,23 @@ class NovelGeneratorActivity:AppCompatActivity(){
   for(i in 0 until old.length()){val n=old.getJSONObject(i);if(n.optLong("id")==id){n.put("title",novelTitle(t));n.put("body",b);n.put("savedAt",System.currentTimeMillis());persistNovelFile(id,novelTitle(t),b)};out.put(n)}
   libraryPrefs().edit().putString("novels",out.toString()).apply()
  }
+ private fun setLibraryBookmark(id:Long,on:Boolean){
+  val a=loadLibrary();for(i in 0 until a.length()){val n=a.optJSONObject(i)?:continue;if(n.optLong("id")==id){n.put("bookmarked",on);break}}
+  libraryPrefs().edit().putString("novels",a.toString()).apply()
+ }
  private fun deleteLibraryNovel(id:Long){val old=loadLibrary();val out=JSONArray();for(i in 0 until old.length()){val n=old.getJSONObject(i);if(n.optLong("id")!=id)out.put(n)};libraryPrefs().edit().putString("novels",out.toString()).apply();renderLibrary()}
  private fun renderLibrary(){
   libraryContainer.removeAllViews();val a=loadLibrary()
   libraryContainer.addView(Button(this).apply{text="小説フォルダから読み込む";isAllCaps=false;setOnClickListener{startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply{addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)},9002)}})
   libraryContainer.addView(Button(this).apply{text="無題タイトルを置き換える";isAllCaps=false;setOnClickListener{replaceUntitledLibraryNovels()}})
   if(a.length()==0){libraryContainer.addView(TextView(this).apply{text="まだ生成した小説はありません。";setPadding(8,24,8,24)});return}
-  for(i in 0 until a.length()){val n=a.getJSONObject(i);libraryContainer.addView(Button(this).apply{text=novelTitle(n.optString("title",""));isAllCaps=false;setOnClickListener{renderNovelDetail(n)}})}
+  for(i in 0 until a.length()){val n=a.getJSONObject(i);val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};val star=Button(this).apply{text=if(n.optBoolean("bookmarked",false))"★" else "☆";textSize=22f;isAllCaps=false;setOnClickListener{val on=!n.optBoolean("bookmarked",false);n.put("bookmarked",on);setLibraryBookmark(n.optLong("id"),on);text=if(on)"★" else "☆";toast(if(on)"ブックマークしました" else "ブックマークを解除しました")}};val item=Button(this).apply{text=novelTitle(n.optString("title",""));isAllCaps=false;layoutParams=LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f);setOnClickListener{renderNovelDetail(n)}};row.addView(star);row.addView(item);libraryContainer.addView(row)}
  }
  private fun renderNovelDetail(n:JSONObject){
   libraryContainer.removeAllViews()
   libraryContainer.addView(Button(this).apply{text="← 一覧へ戻る";setOnClickListener{renderLibrary()}})
+  val bookmark=Button(this).apply{text=if(n.optBoolean("bookmarked",false))"★ ブックマーク済み" else "☆ ブックマーク";isAllCaps=false;setOnClickListener{val on=!n.optBoolean("bookmarked",false);n.put("bookmarked",on);setLibraryBookmark(n.optLong("id"),on);text=if(on)"★ ブックマーク済み" else "☆ ブックマーク";toast(if(on)"ブックマークしました" else "ブックマークを解除しました")}}
+  libraryContainer.addView(bookmark)
   val titleEdit=EditText(this).apply{setText(novelTitle(n.optString("title","")));textSize=20f;isEnabled=false;enableTextEditing(this)}
   val bodyEdit=EditText(this).apply{setText(n.optString("body"));textSize=16f;gravity=android.view.Gravity.TOP or android.view.Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;setPadding(12,12,12,20);isEnabled=false;enableTextEditing(this)}
   libraryContainer.addView(titleEdit);libraryContainer.addView(bodyEdit)
