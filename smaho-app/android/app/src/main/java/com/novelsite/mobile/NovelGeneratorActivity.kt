@@ -9,6 +9,7 @@ import android.view.MotionEvent
 import android.text.method.ScrollingMovementMethod
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.documentfile.provider.DocumentFile
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import okhttp3.*
@@ -152,6 +153,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun deleteLibraryNovel(id:Long){val old=loadLibrary();val out=JSONArray();for(i in 0 until old.length()){val n=old.getJSONObject(i);if(n.optLong("id")!=id)out.put(n)};libraryPrefs().edit().putString("novels",out.toString()).apply();renderLibrary()}
  private fun renderLibrary(){
   libraryContainer.removeAllViews();val a=loadLibrary()
+  libraryContainer.addView(Button(this).apply{text="小説フォルダから読み込む";isAllCaps=false;setOnClickListener{startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply{addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)},9002)}})
   libraryContainer.addView(Button(this).apply{text="無題タイトルを置き換える";isAllCaps=false;setOnClickListener{replaceUntitledLibraryNovels()}})
   if(a.length()==0){libraryContainer.addView(TextView(this).apply{text="まだ生成した小説はありません。";setPadding(8,24,8,24)});return}
   for(i in 0 until a.length()){val n=a.getJSONObject(i);libraryContainer.addView(Button(this).apply{text=novelTitle(n.optString("title",""));isAllCaps=false;setOnClickListener{renderNovelDetail(n)}})}
@@ -174,7 +176,26 @@ class NovelGeneratorActivity:AppCompatActivity(){
   libraryContainer.addView(Button(this).apply{text="ダウンロード";setOnClickListener{downloadNovel=JSONObject(n.toString()).put("title",novelTitle(titleEdit.text.toString())).put("body",bodyEdit.text.toString());startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,novelTitle(titleEdit.text.toString()).replace(Regex("[\\/:*?\"<>|]"),"_")+".txt")},9001)}})
   libraryContainer.addView(Button(this).apply{text="削除";setOnClickListener{android.app.AlertDialog.Builder(this@NovelGeneratorActivity).setMessage("この小説を削除しますか？").setNegativeButton("キャンセル",null).setPositiveButton("削除"){_,_->deleteLibraryNovel(n.optLong("id"))}.show()}})
  }
- override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==9001&&resultCode==RESULT_OK){val n=downloadNovel?:return;val uri=data?.data?:return;runCatching{contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use{w->w.write(n.optString("title"));w.write("\n\n");w.write(n.optString("body"))}}.onSuccess{toast("ダウンロードしました")}.onFailure{toast("保存に失敗しました")};downloadNovel=null}}
+ private fun importNovelFolder(uri:android.net.Uri){
+  runCatching{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}
+  val dir=DocumentFile.fromTreeUri(this,uri)?:return toast("フォルダを開けませんでした")
+  val old=loadLibrary();val out=JSONArray();val known=mutableSetOf<Long>()
+  for(i in 0 until old.length()){val n=old.optJSONObject(i)?:continue;out.put(n);known.add(n.optLong("id"))}
+  var imported=0
+  dir.listFiles().filter{it.isFile&&it.name?.endsWith(".txt",true)==true&&it.name!="apikey.txt"}.forEach{file->
+   val name=file.name.orEmpty();val raw=runCatching{contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use{it.readText()}.orEmpty()}.getOrDefault("");if(raw.isBlank())return@forEach
+   val id=Regex("""_(\d+)\.txt$""",RegexOption.IGNORE_CASE).find(name)?.groupValues?.getOrNull(1)?.toLongOrNull()?:kotlin.math.abs(file.uri.toString().hashCode().toLong())
+   if(known.contains(id))return@forEach
+   val split=raw.indexOf("\n\n");val t=novelTitle(if(split>=0)raw.substring(0,split) else name.substringBeforeLast(".txt").replace(Regex("""_\d+$"""),""));val b=if(split>=0)raw.substring(split+2) else raw;if(b.isBlank())return@forEach
+   out.put(JSONObject().put("id",id).put("savedAt",file.lastModified()).put("title",t).put("body",b).put("r18",false).put("persistentSaved",true).put("restored",true));known.add(id);imported++
+  }
+  libraryPrefs().edit().putString("novels",out.toString()).apply();toast(imported.toString()+"件の小説を読み込みました");renderLibrary()
+ }
+ override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
+  super.onActivityResult(requestCode,resultCode,data)
+  if(requestCode==9002&&resultCode==RESULT_OK){data?.data?.let{importNovelFolder(it)};return}
+  if(requestCode==9001&&resultCode==RESULT_OK){val n=downloadNovel?:return;val uri=data?.data?:return;runCatching{contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use{w->w.write(n.optString("title"));w.write("\n\n");w.write(n.optString("body"))}}.onSuccess{toast("ダウンロードしました")}.onFailure{toast("保存に失敗しました")};downloadNovel=null}
+ }
  private fun saveDraft(){val x=result.text.toString();if(x.isBlank())return toast("本文がありません");getSharedPreferences("lexis_drafts",MODE_PRIVATE).edit().putString("draft_"+System.currentTimeMillis(),JSONObject().put("title",title.text.toString()).put("body",x).toString()).apply();toast("端末に保存しました")}
  private fun share(){val x=result.text.toString();if(x.isBlank())return toast("本文がありません");startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply{type="text/plain";putExtra(Intent.EXTRA_SUBJECT,title.text.toString());putExtra(Intent.EXTRA_TEXT,x)},"小説を共有"))}
  private fun loginUpload(){loginUploadNovel(title.text.toString().ifBlank{"無題"},result.text.toString(),adult.isChecked)}
