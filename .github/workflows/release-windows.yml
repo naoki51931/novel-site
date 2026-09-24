@@ -30,6 +30,13 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Sync internal Windows version
+        working-directory: desktop
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version || '0.1.5' }}
+        run: npm version $env:VERSION --no-git-tag-version
+
       - name: Install dependencies
         working-directory: desktop
         run: npm install
