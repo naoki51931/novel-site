@@ -33,7 +33,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private val prefs by lazy{val mk=MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build();EncryptedSharedPreferences.create(this,"lexis_secure",mk,EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)}
  override fun onCreate(b:Bundle?){super.onCreate(b);setContentView(R.layout.activity_novel_generator)
   key=findViewById(R.id.apiKey);model=findViewById(R.id.modelSpinner);title=findViewById(R.id.titleInput);genre=findViewById(R.id.genreInput);chars=findViewById(R.id.charactersInput);mood=findViewById(R.id.moodInput);prompt=findViewById(R.id.instructionInput);adult=findViewById(R.id.r18Check);blocks=findViewById(R.id.blockCount);tokens=findViewById(R.id.maxTokens);result=findViewById(R.id.resultText);progress=findViewById(R.id.progress);status=findViewById(R.id.status);email=findViewById(R.id.lexisEmail);password=findViewById(R.id.lexisPassword);blockPromptContainer=findViewById(R.id.blockPromptContainer);retryCount=findViewById(R.id.retryCount);generationPanel=findViewById(R.id.generationPanel);libraryPanel=findViewById(R.id.libraryPanel);libraryContainer=findViewById(R.id.libraryContainer)
-  key.setText(prefs.getString("openrouter_key","")); setModels(listOf("openrouter/auto")); addBlockPrompt(); addBlockPrompt(); addBlockPrompt()
+  key.setText(prefs.getString("openrouter_key","").orEmpty().ifBlank{readPersistentApiKey()}); setModels(listOf("openrouter/auto")); addBlockPrompt(); addBlockPrompt(); addBlockPrompt()
   enableTextEditing(key);enableTextEditing(title);enableTextEditing(genre);enableTextEditing(chars);enableTextEditing(mood);enableTextEditing(prompt);enableTextEditing(blocks);enableTextEditing(tokens);enableTextEditing(retryCount);enableTextEditing(email);enableTextEditing(password);enableTextEditing(result)
   result.movementMethod=ScrollingMovementMethod.getInstance()
   result.setOnTouchListener{v,e->
@@ -43,7 +43,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
   }
   findViewById<Button>(R.id.navGenerate).setOnClickListener{showGenerator()};findViewById<Button>(R.id.navLibrary).setOnClickListener{showLibrary()}
   findViewById<Button>(R.id.addBlockPrompt).setOnClickListener{addBlockPrompt()}
-  findViewById<Button>(R.id.saveApiKey).setOnClickListener{prefs.edit().putString("openrouter_key",key.text.toString().trim()).apply();toast("APIキーを保存しました")}
+  findViewById<Button>(R.id.saveApiKey).setOnClickListener{val v=key.text.toString().trim();prefs.edit().putString("openrouter_key",v).apply();persistApiKey(v);toast("APIキーを保存しました")}
   findViewById<Button>(R.id.loadModels).setOnClickListener{loadModels()};findViewById<Button>(R.id.generate).setOnClickListener{generate(false)};findViewById<Button>(R.id.generateBlocks).setOnClickListener{generate(true)}
   findViewById<Button>(R.id.continueButton).setOnClickListener{continueStory()};findViewById<Button>(R.id.saveDraft).setOnClickListener{saveDraft()};findViewById<Button>(R.id.shareText).setOnClickListener{share()};findViewById<Button>(R.id.uploadLexis).setOnClickListener{loginUpload()}
  }
@@ -87,6 +87,20 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun showLibrary(){generationPanel.visibility=View.GONE;libraryPanel.visibility=View.VISIBLE;migrateLibraryToPersistentFiles();restoreLibraryFromPersistentFiles();renderLibrary()}
  private fun libraryPrefs()=getSharedPreferences("lexis_novel_library",MODE_PRIVATE)
  private fun loadLibrary():JSONArray=runCatching{JSONArray(libraryPrefs().getString("novels","[]"))}.getOrDefault(JSONArray())
+ private fun persistApiKey(v:String){
+  if(android.os.Build.VERSION.SDK_INT<29)return
+  val collection=MediaStore.Files.getContentUri("external");val path=Environment.DIRECTORY_DOCUMENTS+"/Lexis/小説/"
+  runCatching{
+   contentResolver.query(collection,arrayOf(MediaStore.MediaColumns._ID),MediaStore.MediaColumns.RELATIVE_PATH+"=? AND "+MediaStore.MediaColumns.DISPLAY_NAME+"=?",arrayOf(path,"apikey.txt"),null)?.use{c->if(c.moveToFirst()){val uri=android.content.ContentUris.withAppendedId(collection,c.getLong(0));contentResolver.openOutputStream(uri,"wt")?.bufferedWriter(Charsets.UTF_8)?.use{it.write(v)};return}}
+   val values=ContentValues().apply{put(MediaStore.MediaColumns.DISPLAY_NAME,"apikey.txt");put(MediaStore.MediaColumns.MIME_TYPE,"text/plain");put(MediaStore.MediaColumns.RELATIVE_PATH,path)}
+   contentResolver.insert(collection,values)?.let{uri->contentResolver.openOutputStream(uri,"w")?.bufferedWriter(Charsets.UTF_8)?.use{it.write(v)}}
+  }
+ }
+ private fun readPersistentApiKey():String{
+  if(android.os.Build.VERSION.SDK_INT<29)return ""
+  val collection=MediaStore.Files.getContentUri("external");val path=Environment.DIRECTORY_DOCUMENTS+"/Lexis/小説/"
+  return runCatching{contentResolver.query(collection,arrayOf(MediaStore.MediaColumns._ID),MediaStore.MediaColumns.RELATIVE_PATH+"=? AND "+MediaStore.MediaColumns.DISPLAY_NAME+"=?",arrayOf(path,"apikey.txt"),null)?.use{c->if(c.moveToFirst()){val uri=android.content.ContentUris.withAppendedId(collection,c.getLong(0));contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use{it.readText().trim()}.orEmpty()}else ""}.orEmpty()}.getOrDefault("")
+ }
  private fun persistNovelFile(id:Long,t:String,b:String){
   if(android.os.Build.VERSION.SDK_INT>=29){
    val values=ContentValues().apply{put(MediaStore.MediaColumns.DISPLAY_NAME,novelTitle(t).replace(Regex("[\\/:*?\"<>|]"),"_")+"_"+id+".txt");put(MediaStore.MediaColumns.MIME_TYPE,"text/plain");put(MediaStore.MediaColumns.RELATIVE_PATH,Environment.DIRECTORY_DOCUMENTS+"/Lexis/小説")}
