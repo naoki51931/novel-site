@@ -193,6 +193,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun importNovelFolder(uri:android.net.Uri){
   runCatching{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}
   val dir=DocumentFile.fromTreeUri(this,uri)?:return toast("フォルダを開けませんでした")
+  val apiFile=dir.listFiles().firstOrNull{it.isFile&&it.name.equals("apikey.txt",ignoreCase=true)}
+  val restoredApiKey=apiFile?.let{file->runCatching{contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use{it.readText().trim()}.orEmpty()}.getOrDefault("")}.orEmpty()
+  if(restoredApiKey.isNotBlank()){key.setText(restoredApiKey);prefs.edit().putString("openrouter_key",restoredApiKey).apply()}
   val old=loadLibrary();val out=JSONArray();val known=mutableSetOf<Long>()
   for(i in 0 until old.length()){val n=old.optJSONObject(i)?:continue;out.put(n);known.add(n.optLong("id"))}
   var imported=0
@@ -203,7 +206,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
    val split=raw.indexOf("\n\n");val t=novelTitle(if(split>=0)raw.substring(0,split) else name.substringBeforeLast(".txt").replace(Regex("""_\d+$"""),""));val b=if(split>=0)raw.substring(split+2) else raw;if(b.isBlank())return@forEach
    out.put(JSONObject().put("id",id).put("savedAt",file.lastModified()).put("title",t).put("body",b).put("r18",false).put("persistentSaved",true).put("restored",true));known.add(id);imported++
   }
-  libraryPrefs().edit().putString("novels",out.toString()).apply();toast(imported.toString()+"件の小説を読み込みました");renderLibrary()
+  libraryPrefs().edit().putString("novels",out.toString()).apply()
+  val keyMessage=if(restoredApiKey.isNotBlank())" / APIキーも復元しました" else " / apikey.txt は見つかりませんでした"
+  toast(imported.toString()+"件の小説を読み込みました"+keyMessage);renderLibrary()
  }
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
   super.onActivityResult(requestCode,resultCode,data)
