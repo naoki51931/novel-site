@@ -59,4 +59,4 @@ jobs:
             gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android APK"
           fi
 
-# build-trigger: 2026-09-24 null-retry
+# build-trigger: 2026-09-26 multilingual-build
