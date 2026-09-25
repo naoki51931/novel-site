@@ -1,6 +1,11 @@
 name: Build Lexis Windows
 
 on:
+  push:
+    branches:
+      - feature/windows-openrouter-novel-app
+    paths:
+      - ".github/workflows/release-windows.yml"
   workflow_dispatch:
 
 permissions:
@@ -38,3 +43,5 @@ jobs:
             desktop/dist/*.exe
             desktop/dist/latest.yml
           if-no-files-found: error
+
+# build-trigger: 2026-09-26 multilingual-build
