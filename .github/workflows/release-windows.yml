@@ -1,15 +1,13 @@
-name: Build Lexis Windows
+name: Build and Release Lexis Windows
 
 on:
   push:
-    branches:
-      - feature/windows-openrouter-novel-app
-    paths:
-      - ".github/workflows/release-windows.yml"
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -35,13 +33,22 @@ jobs:
         working-directory: desktop
         run: npm run dist -- --publish never
 
-      - name: Upload Windows installer
+      - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: Lexis-Windows
           path: |
             desktop/dist/*.exe
             desktop/dist/latest.yml
+            desktop/dist/*.blockmap
           if-no-files-found: error
 
-# build-trigger: 2026-09-26 multilingual-build
+      - name: Publish GitHub release for auto updater
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/dist/*.exe
+            desktop/dist/latest.yml
+            desktop/dist/*.blockmap
+          generate_release_notes: true
