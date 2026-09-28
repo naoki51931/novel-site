@@ -1,8 +1,8 @@
 {
   "name": "lexis-desktop-novel",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
-  "main": "main.js",
+  "main": "persistent-main.js",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win"
@@ -19,6 +19,7 @@
     "appId": "com.lexis.novel.desktop",
     "productName": "Lexis Novel Desktop",
     "files": [
+      "persistent-main.js",
       "main.js",
       "preload.js",
       "renderer/**/*",
@@ -40,7 +41,7 @@
     ],
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false
