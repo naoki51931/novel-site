@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (example: 1.0.0)"
+        description: "Release version"
         required: true
-        default: "1.0.0"
+        default: "1.0.19"
 
 permissions:
   contents: write
@@ -40,23 +40,40 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
-      - name: Build APK
-        run: ./gradlew assembleDebug
+      - name: Restore Android signing keystore
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.LEXIS_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          echo "$KEYSTORE_B64" | base64 --decode > lexis-release.jks
+
+      - name: Build signed release APK
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version || '1.0.19' }}
+          LEXIS_KEYSTORE_PATH: lexis-release.jks
+          LEXIS_KEYSTORE_PASSWORD: ${{ secrets.LEXIS_ANDROID_KEYSTORE_PASSWORD }}
+          LEXIS_KEY_ALIAS: ${{ secrets.LEXIS_ANDROID_KEY_ALIAS }}
+          LEXIS_KEY_PASSWORD: ${{ secrets.LEXIS_ANDROID_KEY_PASSWORD }}
+        run: |
+          CODE=$(echo "$VERSION" | awk -F. '{print ($1*10000)+($2*100)+$3}')
+          export LEXIS_VERSION_NAME="$VERSION"
+          export LEXIS_VERSION_CODE="$CODE"
+          ./gradlew clean assembleRelease
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ../../Lexis-Android.apk
+        run: cp app/build/outputs/apk/release/app-release.apk ../../Lexis-Android.apk
 
       - name: Create GitHub Release and upload APK
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '1.0.0' }}
+          VERSION: ${{ inputs.version || '1.0.19' }}
         run: |
           TAG="android-v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" Lexis-Android.apk --clobber
           else
-            gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android APK"
+            gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android signed release APK"
           fi
-
-# build-trigger: 2026-09-26 multilingual-build
