@@ -3,5 +3,8 @@
         <item name="android:statusBarColor">@android:color/black</item>
         <item name="android:navigationBarColor">@android:color/black</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <!-- 小説閲覧画面では本文欄を無効化しているため、標準では文字が灰色になる。
+             無効状態でも通常の文字濃度を保ち、黒文字として読みやすく表示する。 -->
+        <item name="android:disabledAlpha">1.0</item>
     </style>
 </resources>
