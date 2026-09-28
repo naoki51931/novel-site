@@ -77,3 +77,5 @@ jobs:
           else
             gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android signed release APK"
           fi
+
+# build-trigger: 2026-09-28 signed-v1.0.19
