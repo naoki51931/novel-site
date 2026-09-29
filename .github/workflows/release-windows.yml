@@ -2,8 +2,11 @@ name: Build and Release Lexis Windows
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - feature/windows-openrouter-novel-app
+    paths:
+      - "desktop/**"
+      - ".github/workflows/release-windows.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,24 +32,34 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Build Windows installer
+      - name: Read Windows app version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=windows-v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build Windows installer and updater metadata
         working-directory: desktop
         run: npm run dist -- --publish never
 
-      - name: Upload Windows installer artifact
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lexis-Windows
+          name: Lexis-Windows-${{ steps.version.outputs.version }}
           path: |
             desktop/dist/*.exe
             desktop/dist/latest.yml
             desktop/dist/*.blockmap
           if-no-files-found: error
 
-      - name: Publish GitHub release for auto updater
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish Windows-only GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Lexis Windows v${{ steps.version.outputs.version }}
+          target_commitish: feature/windows-openrouter-novel-app
           files: |
             desktop/dist/*.exe
             desktop/dist/latest.yml
