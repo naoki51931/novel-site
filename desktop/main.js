@@ -476,12 +476,34 @@ ipcMain.handle("lexis:upload", async (_event, payload) => {
   return { ok: true, novelId: novel.id, url: "https://shosetsu-toukou-site.org/novels/" + novel.id };
 });
 
+async function latestWindowsRelease() {
+  const response = await fetch("https://api.github.com/repos/naoki51931/novel-site/releases?per_page=30", {
+    headers: { "Accept": "application/vnd.github+json", "User-Agent": "Lexis-Novel-Desktop/" + app.getVersion() }
+  });
+  if (!response.ok) throw new Error("Windows版の更新情報を取得できませんでした: " + response.status);
+  const releases = await response.json();
+  const release = releases.find(r =>
+    !r.draft && !r.prerelease &&
+    /^windows-v\d+\.\d+\.\d+(?:[-+].*)?$/i.test(String(r.tag_name || "")) &&
+    Array.isArray(r.assets) &&
+    r.assets.some(a => a.name === "latest.yml")
+  );
+  if (!release) throw new Error("Windows版の更新情報 (latest.yml) があるリリースが見つかりません。");
+  return release;
+}
+
 ipcMain.handle("app:update", async () => {
   if (!app.isPackaged) throw new Error("自動アップデートはインストール版で利用できます。");
+  const release = await latestWindowsRelease();
+  const tag = String(release.tag_name);
+  autoUpdater.setFeedURL({
+    provider: "generic",
+    url: "https://github.com/naoki51931/novel-site/releases/download/" + encodeURIComponent(tag)
+  });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   const result = await autoUpdater.checkForUpdatesAndNotify();
-  return { ok: true, version: result?.updateInfo?.version || null };
+  return { ok: true, version: result?.updateInfo?.version || null, tag };
 });
 
 autoUpdater.on("update-downloaded", async () => {
