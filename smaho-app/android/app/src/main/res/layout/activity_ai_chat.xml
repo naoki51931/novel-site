@@ -1,33 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:fillViewport="true">
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AIチャット" android:textSize="28sp" android:textStyle="bold"/>
-        <EditText android:id="@+id/chatCharacter" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="メインキャラクター名"/>
-        <EditText android:id="@+id/chatPersonality" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="96dp" android:maxHeight="220dp" android:gravity="top|start" android:scrollbars="vertical" android:overScrollMode="always" android:inputType="textMultiLine|textCapSentences" android:hint="メインの性格・設定"/>
-        <EditText android:id="@+id/chatAnimeTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="作品名（任意・同名キャラ判別用）"/>
-        <Button android:id="@+id/chatAugmentMain" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="メイン設定を自動取得"/>
-        <EditText android:id="@+id/chatSubcharacters" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="110dp" android:maxHeight="260dp" android:gravity="top|start" android:scrollbars="vertical" android:overScrollMode="always" android:inputType="textMultiLine|textCapSentences" android:hint="サブキャラ（1行1人）：名前 | 性格・設定&#10;同じ名前を複数行に書いて同一人物の分身も作れます"/>
-        <Button android:id="@+id/chatAugmentSubs" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="サブキャラ設定を一括自動取得"/>
-        <Spinner android:id="@+id/chatModel" android:layout_width="match_parent" android:layout_height="wrap_content"/>
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-            <CheckBox android:id="@+id/chatAdult" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="成人向け"/>
-            <Spinner android:id="@+id/chatStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
-        </LinearLayout>
-        <LinearLayout android:id="@+id/chatMessages" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="160dp" android:orientation="vertical"/>
-        <TextView android:id="@+id/chatStatus" android:layout_width="match_parent" android:layout_height="wrap_content"/>
-        <EditText android:id="@+id/chatInput" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="80dp" android:maxHeight="180dp" android:gravity="top|start" android:scrollbars="vertical" android:inputType="textMultiLine|textCapSentences" android:hint="キャラクターたちに話しかける"/>
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-            <Button android:id="@+id/chatSay" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="セリフ送信"/>
-            <Button android:id="@+id/chatDo" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="行動送信"/>
-            <Button android:id="@+id/chatAuto" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="自動続行"/>
-        </LinearLayout>
-        <Button android:id="@+id/chatClear" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="履歴をクリア"/>
-    </LinearLayout>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true">
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AIチャット" android:textSize="28sp" android:textStyle="bold"/>
+<EditText android:id="@+id/chatCharacter" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="メインキャラクター名"/>
+<EditText android:id="@+id/chatPersonality" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="96dp" android:maxHeight="220dp" android:gravity="top|start" android:scrollbars="vertical" android:overScrollMode="always" android:inputType="textMultiLine|textCapSentences" android:hint="メインの性格・設定"/>
+<EditText android:id="@+id/chatAnimeTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="作品名（任意・同名キャラ判別用）"/>
+<Button android:id="@+id/chatAugmentMain" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="メイン設定を自動取得"/>
+<EditText android:id="@+id/chatSubcharacters" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="110dp" android:maxHeight="260dp" android:gravity="top|start" android:scrollbars="vertical" android:overScrollMode="always" android:inputType="textMultiLine|textCapSentences" android:hint="サブキャラ（1行1人）：名前 | 性格・設定&#10;同じ名前を複数行に書いて同一人物の分身も作れます"/>
+<Button android:id="@+id/chatAugmentSubs" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="サブキャラ設定を一括自動取得"/>
+<Spinner android:id="@+id/chatModel" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+<CheckBox android:id="@+id/chatAdult" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="成人向け"/>
+<Spinner android:id="@+id/chatStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+</LinearLayout>
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="返答の長さ" android:textStyle="bold" android:paddingTop="6dp"/>
+<Spinner android:id="@+id/chatLength" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<LinearLayout android:id="@+id/chatMessages" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="160dp" android:orientation="vertical"/>
+<TextView android:id="@+id/chatStatus" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<EditText android:id="@+id/chatInput" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="80dp" android:maxHeight="180dp" android:gravity="top|start" android:scrollbars="vertical" android:inputType="textMultiLine|textCapSentences" android:hint="キャラクターたちに話しかける"/>
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+<Button android:id="@+id/chatSay" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="セリフ送信"/>
+<Button android:id="@+id/chatDo" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="行動送信"/>
+<Button android:id="@+id/chatAuto" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="自動続行"/>
+</LinearLayout>
+<Button android:id="@+id/chatClear" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="履歴をクリア"/>
+</LinearLayout>
 </ScrollView>
