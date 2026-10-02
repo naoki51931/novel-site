@@ -19,16 +19,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Install dependencies
         working-directory: desktop
         run: npm install --no-audit --no-fund
-
       - name: Read Windows app version
         id: version
         shell: pwsh
@@ -36,11 +33,9 @@ jobs:
           $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=windows-v$version" >> $env:GITHUB_OUTPUT
-
       - name: Build Windows installer and updater metadata
         working-directory: desktop
         run: npm run dist -- --publish never
-
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -50,9 +45,7 @@ jobs:
             desktop/dist/latest.yml
             desktop/dist/*.blockmap
           if-no-files-found: error
-
-      - name: Publish Windows-only GitHub release
-        if: github.ref == 'refs/heads/feature/windows-openrouter-novel-app' || github.event_name == 'workflow_dispatch'
+      - name: Publish Windows GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
