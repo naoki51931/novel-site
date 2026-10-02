@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/windows-openrouter-novel-app
+      - feature/native-ai-consultation-room
     paths:
       - "smaho-app/android/**"
       - ".github/workflows/release-android.yml"
@@ -64,7 +65,15 @@ jobs:
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk ../../Lexis-Android.apk
 
+      - name: Upload APK build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lexis-Android-${{ github.sha }}
+          path: Lexis-Android.apk
+          if-no-files-found: error
+
       - name: Create GitHub Release and upload APK
+        if: github.ref == 'refs/heads/feature/windows-openrouter-novel-app' || github.event_name == 'workflow_dispatch'
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
