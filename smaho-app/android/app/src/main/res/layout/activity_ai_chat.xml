@@ -3,6 +3,9 @@
 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AIチャット" android:textSize="28sp" android:textStyle="bold"/>
 <EditText android:id="@+id/chatCharacter" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="メインキャラクター名"/>
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="キャラ設定テンプレート" android:textStyle="bold" android:paddingTop="6dp"/>
+<Spinner android:id="@+id/chatTemplate" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<Button android:id="@+id/chatApplyTemplate" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="テンプレートを設定欄に反映"/>
 <EditText android:id="@+id/chatPersonality" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="96dp" android:maxHeight="220dp" android:gravity="top|start" android:scrollbars="vertical" android:overScrollMode="always" android:inputType="textMultiLine|textCapSentences" android:hint="メインの性格・設定"/>
 <EditText android:id="@+id/chatAnimeTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="作品名（任意・同名キャラ判別用）"/>
 <Button android:id="@+id/chatAugmentMain" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="メイン設定を自動取得"/>
