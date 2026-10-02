@@ -3,6 +3,13 @@
 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AIチャット" android:textSize="28sp" android:textStyle="bold"/>
 <EditText android:id="@+id/chatCharacter" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="メインキャラクター名"/>
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="保存したキャラ設定" android:textStyle="bold" android:paddingTop="6dp"/>
+<Spinner android:id="@+id/chatSavedCharacter" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+<Button android:id="@+id/chatSaveCharacter" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="キャラ設定を保存"/>
+<Button android:id="@+id/chatLoadCharacter" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="読み込み"/>
+<Button android:id="@+id/chatDeleteCharacter" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="削除"/>
+</LinearLayout>
 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="キャラ設定テンプレート" android:textStyle="bold" android:paddingTop="6dp"/>
 <Spinner android:id="@+id/chatTemplate" android:layout_width="match_parent" android:layout_height="wrap_content"/>
 <Button android:id="@+id/chatApplyTemplate" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="テンプレートを設定欄に反映"/>
