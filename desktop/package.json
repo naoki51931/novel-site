@@ -1,6 +1,6 @@
 {
   "name": "lexis-desktop-novel",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "main": "persistent-main.js",
   "scripts": {
@@ -27,18 +27,10 @@
       "../frontend/public/favicon-512x512.png"
     ],
     "win": {
-      "target": [
-        "nsis"
-      ],
+      "target": ["nsis"],
       "icon": "../frontend/public/favicon-512x512.png"
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "naoki51931",
-        "repo": "novel-site"
-      }
-    ],
+    "publish": [{"provider":"github","owner":"naoki51931","repo":"novel-site"}],
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": false,
