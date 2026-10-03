@@ -1,0 +1,1 @@
+const{contextBridge,ipcRenderer}=require("electron");contextBridge.exposeInMainWorld("lexisConsult",{settings:()=>ipcRenderer.invoke("settings:get"),list:()=>ipcRenderer.invoke("consultation:list"),create:()=>ipcRenderer.invoke("consultation:create"),send:p=>ipcRenderer.invoke("consultation:send",p)});

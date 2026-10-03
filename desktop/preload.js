@@ -21,3 +21,4 @@ contextBridge.exposeInMainWorld("lexis", {
   deleteLibraryNovel: (id) => ipcRenderer.invoke("library:delete", id),
   replaceUntitledLibraryNovels: (title) => ipcRenderer.invoke("library:replace-untitled", title)
 });
+window.addEventListener("DOMContentLoaded",()=>{if(location.pathname.endsWith("index.html")){const bar=document.querySelector("body > .actions");if(bar&&!document.getElementById("navConsultation")){const b=document.createElement("button");b.id="navConsultation";b.textContent="AI相談室";b.addEventListener("click",()=>{location.href="./consultation.html"});bar.appendChild(b)}}});

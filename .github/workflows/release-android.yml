@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/windows-openrouter-novel-app
+      - feature/native-ai-consultation-room
     paths:
       - "smaho-app/android/**"
       - ".github/workflows/release-android.yml"
@@ -12,7 +13,7 @@ on:
       version:
         description: "Release version"
         required: true
-        default: "1.0.19"
+        default: "1.0.20"
 
 permissions:
   contents: write
@@ -26,18 +27,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
-
       - name: Restore Android signing keystore
         shell: bash
         env:
@@ -46,11 +44,10 @@ jobs:
           test -n "$KEYSTORE_B64" || { echo "LEXIS_ANDROID_KEYSTORE_BASE64 is missing"; exit 1; }
           printf '%s' "$KEYSTORE_B64" | base64 --decode > app/lexis-release.jks
           test -s app/lexis-release.jks
-
       - name: Build signed release APK
         shell: bash
         env:
-          VERSION: ${{ inputs.version || '1.0.19' }}
+          VERSION: ${{ inputs.version || '1.0.20' }}
           LEXIS_KEYSTORE_PATH: lexis-release.jks
           LEXIS_KEYSTORE_PASSWORD: ${{ secrets.LEXIS_ANDROID_KEYSTORE_PASSWORD }}
           LEXIS_KEY_ALIAS: ${{ secrets.LEXIS_ANDROID_KEY_ALIAS }}
@@ -60,19 +57,23 @@ jobs:
           export LEXIS_VERSION_NAME="$VERSION"
           export LEXIS_VERSION_CODE="$CODE"
           gradle clean assembleRelease --no-daemon
-
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk ../../Lexis-Android.apk
-
+      - name: Upload APK build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lexis-Android-${{ github.sha }}
+          path: Lexis-Android.apk
+          if-no-files-found: error
       - name: Create GitHub Release and upload APK
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '1.0.19' }}
+          VERSION: ${{ inputs.version || '1.0.20' }}
         run: |
           TAG="android-v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" Lexis-Android.apk --clobber
           else
-            gh release create "$TAG" Lexis-Android.apk --title "Lexis Android v${VERSION}" --notes "Lexis Android signed release APK"
+            gh release create "$TAG" Lexis-Android.apk --target "$GITHUB_SHA" --title "Lexis Android v${VERSION}" --notes "Lexis Android signed release APK"
           fi
