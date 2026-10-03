@@ -18,7 +18,7 @@
 <Button android:id="@+id/chatAugmentMain" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="メイン設定を自動取得"/>
 <EditText android:id="@+id/chatSubcharacters" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="110dp" android:maxHeight="260dp" android:gravity="top|start" android:scrollbars="vertical" android:overScrollMode="always" android:inputType="textMultiLine|textCapSentences" android:hint="サブキャラ（1行1人）：名前 | 性格・設定&#10;同じ名前を複数行に書いて同一人物の分身も作れます"/>
 <Button android:id="@+id/chatAugmentSubs" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="サブキャラ設定を一括自動取得"/>
-<Spinner android:id="@+id/chatModel" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<com.novelsite.mobile.PersistedModelSpinner android:id="@+id/chatModel" android:layout_width="match_parent" android:layout_height="wrap_content"/>
 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
 <CheckBox android:id="@+id/chatAdult" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="成人向け"/>
 <Spinner android:id="@+id/chatStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
