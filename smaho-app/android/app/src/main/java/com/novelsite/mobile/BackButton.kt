@@ -3,6 +3,7 @@ package com.novelsite.mobile
 import android.app.Activity
 import android.content.Context
 import android.util.AttributeSet
+import androidx.activity.ComponentActivity
 import androidx.appcompat.widget.AppCompatButton
 
 class BackButton @JvmOverloads constructor(
@@ -12,8 +13,12 @@ class BackButton @JvmOverloads constructor(
 ) : AppCompatButton(context, attrs, defStyleAttr) {
     init {
         setOnClickListener {
-            (context as? Activity)?.onBackPressedDispatcher?.onBackPressed()
-                ?: (context as? Activity)?.finish()
+            val activity = context as? Activity ?: return@setOnClickListener
+            if (activity is ComponentActivity) {
+                activity.onBackPressedDispatcher.onBackPressed()
+            } else {
+                activity.finish()
+            }
         }
     }
 }
