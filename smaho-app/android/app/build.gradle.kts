@@ -11,8 +11,8 @@ android {
         applicationId = "com.novelsite.mobile"
         minSdk = 24
         targetSdk = 34
-        versionCode = (System.getenv("LEXIS_VERSION_CODE") ?: "13").toInt()
-        versionName = System.getenv("LEXIS_VERSION_NAME") ?: "1.0.13"
+        versionCode = (System.getenv("LEXIS_VERSION_CODE") ?: "10021").toInt()
+        versionName = System.getenv("LEXIS_VERSION_NAME") ?: "1.0.21"
         fun configValue(key: String): String {
             val env = (System.getenv(key) ?: "").trim()
             if (env.isNotBlank()) return env
