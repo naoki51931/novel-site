@@ -30,6 +30,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
     .setNeutralButton("すべて削除"){_,_->selectedImages=emptyList();status.text="添付画像をすべて削除しました"}
     .setNegativeButton("閉じる",null).show()
  
+ }
  private val imagePicker=registerForActivityResult(ActivityResultContracts.GetMultipleContents()){ images ->
    selectedImages=images.take(NativeImageAttachments.MAX_IMAGES)
    if(::status.isInitialized)status.text="添付画像: ${selectedImages.size}/20枚"
