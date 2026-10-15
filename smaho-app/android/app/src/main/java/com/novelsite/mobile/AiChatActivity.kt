@@ -1,6 +1,7 @@
 package com.novelsite.mobile
 
 import android.net.Uri
+import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Bundle
 import android.view.MotionEvent
 import android.widget.*
@@ -17,6 +18,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class AiChatActivity : AppCompatActivity() {
+    private var selectedImages: List<Uri> = emptyList()
+    private val imagePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { images ->
+        selectedImages = images.take(NativeImageAttachments.MAX_IMAGES)
+        if (::status.isInitialized) status.text = "添付画像: ${selectedImages.size}/20枚"
+    }
     private val client = OkHttpClient.Builder().readTimeout(180, TimeUnit.SECONDS).build()
     private lateinit var character: EditText
     private lateinit var personality: EditText
@@ -44,6 +50,11 @@ class AiChatActivity : AppCompatActivity() {
         model=findViewById(R.id.chatModel); adult=findViewById(R.id.chatAdult); style=findViewById(R.id.chatStyle); length=findViewById(R.id.chatLength); template=findViewById(R.id.chatTemplate); savedCharacter=findViewById(R.id.chatSavedCharacter)
         messages=findViewById(R.id.chatMessages); input=findViewById(R.id.chatInput); status=findViewById(R.id.chatStatus)
         character.setText(prefs.getString("character", "")); personality.setText(plainSetting(prefs.getString("personality", "").orEmpty())); subcharacters.setText(prefs.getString("subcharacters", "")); animeTitle.setText(prefs.getString("anime_title", "")); adult.isChecked=prefs.getBoolean("adult", false)
+        val attach = Button(this).apply {
+            text = "画像を添付（最大20枚）"
+            setOnClickListener { imagePicker.launch("image/*") }
+        }
+        (input.parent as android.view.ViewGroup).let { it.addView(attach, it.indexOfChild(input)) }
         enableInnerScroll(personality); enableInnerScroll(subcharacters); enableInnerScroll(input)
         style.adapter=ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("通常","日常会話","くだけた会話")); style.setSelection(prefs.getInt("style",0).coerceIn(0,2))
         length.adapter=ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("短文","普通","長文")); length.setSelection(prefs.getInt("length",1).coerceIn(0,2))
@@ -92,5 +103,5 @@ class AiChatActivity : AppCompatActivity() {
     private fun lengthPrompt():String=when(length.selectedItemPosition){0->"返答は短文。原則1〜3文。";2->"返答は長文。情景、表情、仕草、心理、会話の流れを丁寧に描写し、原則600〜1500文字程度。";else->"返答は普通の長さ。原則200〜600文字程度。"}
     private fun maxTokens():Int=when(length.selectedItemPosition){0->350;2->2200;else->1000}
     private fun system():String{val st=style.selectedItemPosition;return "ロールプレイ会話をする。${castPrompt()} ${lengthPrompt()} 説明役ではなく登場人物本人として自然な日本語で返答する。"+(if(st==1)"日常的で自然な口語を使う。" else if(st==2)"難語を避け、くだけた口語を使う。" else "")+(if(adult.isChecked)"利用者は18歳以上。成人同士の合意と安全を尊重した成人向け会話を許容する。未成年や非合意の性的内容は扱わない。" else "")}
-    private fun send(mode:String,auto:Boolean){val text=if(auto)"会話の流れに沿って登場キャラクター側から自然に続きを返してください。" else input.text.toString().trim();if(text.isBlank())return;val key=secure.getString("openrouter_key","").orEmpty();if(key.isBlank()){status.text="小説生成画面でOpenRouter APIキーを保存してください。";return};saveSettings();val h=history();if(!auto){h.put(JSONObject().put("role","user").put("mode",mode).put("content",text));prefs.edit().putString("history",h.toString()).apply();input.setText("");render()};val msgs=JSONArray().put(JSONObject().put("role","system").put("content",system()));for(i in 0 until h.length()){val m=h.optJSONObject(i)?:continue;msgs.put(JSONObject().put("role",m.optString("role")).put("content",if(m.optString("mode")=="do")"[行動] ${m.optString("content")}" else m.optString("content")))};if(auto)msgs.put(JSONObject().put("role","user").put("content",text));val body=JSONObject().put("model",model.selectedItem?.toString()?:"openrouter/auto").put("messages",msgs).put("max_tokens",maxTokens()).toString().toRequestBody("application/json".toMediaType());status.text="生成中…";client.newCall(Request.Builder().url("https://openrouter.ai/api/v1/chat/completions").header("Authorization","Bearer $key").header("Content-Type","application/json").post(body).build()).enqueue(object:Callback{override fun onFailure(c:Call,e:IOException)=runOnUiThread{status.text="通信エラー: ${e.message}"};override fun onResponse(c:Call,r:Response){val d=runCatching{JSONObject(r.body?.string().orEmpty())}.getOrNull();val reply=d?.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty().trim();runOnUiThread{if(!r.isSuccessful||reply.isBlank()){status.text=d?.optJSONObject("error")?.optString("message")?.ifBlank{"AIから返信を取得できませんでした"}?:"AIから返信を取得できませんでした";return@runOnUiThread};val latest=history();latest.put(JSONObject().put("role","assistant").put("mode","say").put("content",reply));prefs.edit().putString("history",latest.toString()).apply();status.text="";render()}}})}
+    private fun send(mode:String,auto:Boolean){val text=if(auto)"会話の流れに沿って登場キャラクター側から自然に続きを返してください。" else input.text.toString().trim();if(text.isBlank())return;val key=secure.getString("openrouter_key","").orEmpty();if(key.isBlank()){status.text="小説生成画面でOpenRouter APIキーを保存してください。";return};saveSettings();val h=history();if(!auto){h.put(JSONObject().put("role","user").put("mode",mode).put("content",text));prefs.edit().putString("history",h.toString()).apply();input.setText("");render()};val attached = try { if (!auto && selectedImages.isNotEmpty()) NativeImageAttachments.content(this, selectedImages, text) else null } catch (e: Exception) { status.text = e.message ?: "画像を読み込めません"; return };val msgs=JSONArray().put(JSONObject().put("role","system").put("content",system()));for(i in 0 until h.length()){val m=h.optJSONObject(i)?:continue;msgs.put(JSONObject().put("role",m.optString("role")).put("content",if(attached != null && i == h.length()-1 && m.optString("role")=="user") attached else if(m.optString("mode")=="do")"[行動] ${m.optString("content")}" else m.optString("content")))};if(auto)msgs.put(JSONObject().put("role","user").put("content",text));val body=JSONObject().put("model",model.selectedItem?.toString()?:"openrouter/auto").put("messages",msgs).put("max_tokens",maxTokens()).toString().toRequestBody("application/json".toMediaType());if(attached != null) selectedImages = emptyList();status.text="生成中…";client.newCall(Request.Builder().url("https://openrouter.ai/api/v1/chat/completions").header("Authorization","Bearer $key").header("Content-Type","application/json").post(body).build()).enqueue(object:Callback{override fun onFailure(c:Call,e:IOException)=runOnUiThread{status.text="通信エラー: ${e.message}"};override fun onResponse(c:Call,r:Response){val d=runCatching{JSONObject(r.body?.string().orEmpty())}.getOrNull();val reply=d?.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty().trim();runOnUiThread{if(!r.isSuccessful||reply.isBlank()){status.text=d?.optJSONObject("error")?.optString("message")?.ifBlank{"AIから返信を取得できませんでした"}?:"AIから返信を取得できませんでした";return@runOnUiThread};val latest=history();latest.put(JSONObject().put("role","assistant").put("mode","say").put("content",reply));prefs.edit().putString("history",latest.toString()).apply();status.text="";render()}}})}
 }
