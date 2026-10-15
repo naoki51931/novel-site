@@ -32,6 +32,15 @@
     </FrameLayout>
 
     <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <Button android:id="@+id/openNovelGenerator" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:text="AI小説" />
+        <com.novelsite.mobile.AiChatButton android:id="@+id/openAiChatNative" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:text="AIチャット" />
+        <com.novelsite.mobile.ConsultationButton android:id="@+id/openConsultation" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:text="AI相談室" />
+    </LinearLayout>
+
+    <LinearLayout
         android:id="@+id/bottomNav"
         android:layout_width="match_parent"
         android:layout_height="62dp"
