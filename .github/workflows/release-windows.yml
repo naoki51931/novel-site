@@ -32,6 +32,16 @@ jobs:
           $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=windows-v$version" >> $env:GITHUB_OUTPUT
+      - name: Set up Python for Windows icon generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate 256px Windows ICO from Lexis PNG
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check Pillow
+          New-Item -ItemType Directory -Force desktop/build | Out-Null
+          python -c "from PIL import Image; im = Image.open('frontend/public/favicon-512x512.png').convert('RGBA'); assert im.width >= 256 and im.height >= 256, 'Source icon too small'; im.save('desktop/build/lexis.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
       - name: Build Windows installer and updater metadata
         working-directory: desktop
         run: npm run dist -- --publish never
