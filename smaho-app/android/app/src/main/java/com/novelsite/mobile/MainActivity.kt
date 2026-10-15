@@ -287,7 +287,17 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
-                filePickerLauncher.launch("*/*")
+                // AI小説・AI相談室・AIチャットの複数画像添付に対応。
+                // WebViewのaccept属性を尊重し、画像入力では画像だけを選べるようにする。
+                val accepts = fileChooserParams?.acceptTypes.orEmpty()
+                    .flatMap { it.split(",") }
+                    .map { it.trim().lowercase() }
+                    .filter { it.isNotBlank() }
+                val imageOnly = accepts.isNotEmpty() && accepts.all {
+                    it == "image/*" || it.startsWith("image/") ||
+                        it in setOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif")
+                }
+                filePickerLauncher.launch(if (imageOnly) "image/*" else "*/*")
                 return true
             }
         }
