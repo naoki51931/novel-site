@@ -28,7 +28,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "../frontend/public/favicon-512x512.png"
+      "icon": "build/lexis.ico"
     }
   }
 }
