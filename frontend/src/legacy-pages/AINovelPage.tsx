@@ -589,6 +589,7 @@ export default function AINovelPage() {
   const [titleHint, setTitleHint] = useState("");
   const [genre, setGenre] = useState("");
   const [characters, setCharacters] = useState("");
+  const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [tone, setTone] = useState("");
   const [length, setLength] = useState("medium");
   const [model, setModel] = useState(DEFAULT_AI_NOVEL_MODEL);
@@ -3348,6 +3349,19 @@ export default function AINovelPage() {
     }
 
     try {
+      if (referenceImageFiles.length > 0) {
+        const imagesForm = new FormData();
+        referenceImageFiles.forEach((file) => imagesForm.append("files", file));
+        const imageResponse = await fetch("/api/ai/novels/images/describe", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: imagesForm,
+        });
+        const imageData = await imageResponse.json().catch(() => ({}));
+        if (!imageResponse.ok) throw new Error(imageData?.detail || "画像認識に失敗しました。");
+        const descriptions = Array.isArray(imageData.descriptions) ? imageData.descriptions : [];
+        requestBody.characters = [characters, "【添付画像の内容】", ...descriptions.map((d: string, i: number) => `${i + 1}枚目: ${d}`)].filter(Boolean).join("\\n");
+      }
       const res = await fetchWithTimeout(
         endpoint,
         {
@@ -4905,6 +4919,23 @@ export default function AINovelPage() {
             }
             style={{ width: "100%", padding: "0.5rem", resize: "vertical" }}
           />
+          <div style={{ marginTop: "0.5rem" }}>
+            <label>参考画像（最大20枚）
+              <input type="file" accept="image/*" multiple
+                onChange={(e: any) => {
+                  const incoming = Array.from(e.target.files || []) as File[];
+                  setReferenceImageFiles((prev) => [...prev, ...incoming].slice(0, 20));
+                  e.target.value = "";
+                }} />
+            </label>
+            <span>{referenceImageFiles.length}/20枚</span>
+            {referenceImageFiles.length > 0 && (
+              <button type="button" onClick={() => setReferenceImageFiles([])}>画像をすべて解除</button>
+            )}
+            {referenceImageFiles.map((file, index) => (
+              <div key={index}>{file.name} <button type="button" onClick={() => setReferenceImageFiles((prev) => prev.filter((_, i) => i !== index))}>削除</button></div>
+            ))}
+          </div>
           <div style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
             {t({ ja: "現在の文字数", en: "Current chars" })}: {countChars(characters)}
           </div>
