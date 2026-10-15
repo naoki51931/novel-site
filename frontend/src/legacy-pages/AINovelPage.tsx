@@ -3360,7 +3360,7 @@ export default function AINovelPage() {
         const imageData = await imageResponse.json().catch(() => ({}));
         if (!imageResponse.ok) throw new Error(imageData?.detail || "画像認識に失敗しました。");
         const descriptions = Array.isArray(imageData.descriptions) ? imageData.descriptions : [];
-        requestBody.characters = [characters, "【添付画像の内容】", ...descriptions.map((d: string, i: number) => `${i + 1}枚目: ${d}`)].filter(Boolean).join("\\n");
+        requestBody.characters = [characters, "【添付画像の内容】", ...descriptions.map((d: string, i: number) => `${i + 1}枚目: ${d}`)].filter(Boolean).join("\n");
       }
       const res = await fetchWithTimeout(
         endpoint,
