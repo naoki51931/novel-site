@@ -19,6 +19,14 @@ import java.util.concurrent.TimeUnit
 
 class AiChatActivity : AppCompatActivity() {
     private var selectedImages: List<Uri> = emptyList()
+    private fun showImageRemoval(){
+        if(selectedImages.isEmpty()){status.text="削除する添付画像はありません";return}
+        val choices=selectedImages.mapIndexed{index,uri->"画像 ${index+1}: ${uri.lastPathSegment?.takeLast(35)?: "選択済み"}"}.toTypedArray()
+        android.app.AlertDialog.Builder(this).setTitle("削除する画像を選択")
+            .setItems(choices){_,index->selectedImages=selectedImages.filterIndexed{i,_->i!=index};status.text="添付画像: ${selectedImages.size}/20枚"}
+            .setNeutralButton("すべて削除"){_,_->selectedImages=emptyList();status.text="添付画像をすべて削除しました"}
+            .setNegativeButton("閉じる",null).show()
+    
     private val imagePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { images ->
         selectedImages = images.take(NativeImageAttachments.MAX_IMAGES)
         if (::status.isInitialized) status.text = "添付画像: ${selectedImages.size}/20枚"
@@ -54,7 +62,8 @@ class AiChatActivity : AppCompatActivity() {
             text = "画像を添付（最大20枚）"
             setOnClickListener { imagePicker.launch("image/*") }
         }
-        (input.parent as android.view.ViewGroup).let { it.addView(attach, it.indexOfChild(input)) }
+        val remove=Button(this).apply{text="添付画像を削除";setOnClickListener{showImageRemoval()}}
+        (input.parent as android.view.ViewGroup).let { it.addView(attach, it.indexOfChild(input));it.addView(remove,it.indexOfChild(attach)+1) }
         enableInnerScroll(personality); enableInnerScroll(subcharacters); enableInnerScroll(input)
         style.adapter=ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("通常","日常会話","くだけた会話")); style.setSelection(prefs.getInt("style",0).coerceIn(0,2))
         length.adapter=ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("短文","普通","長文")); length.setSelection(prefs.getInt("length",1).coerceIn(0,2))
