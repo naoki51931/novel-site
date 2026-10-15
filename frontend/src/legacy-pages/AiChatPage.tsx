@@ -5748,6 +5748,21 @@ export default function AiChatPage() {
           </button>
         )}
         {chatImageFiles.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", width: "100%" }}>
+            {chatImageFiles.map((file: File, index: number) => (
+              <div key={index} style={{ border: "1px solid var(--border-color, #ccc)", padding: 6, borderRadius: 8 }}>
+                <span style={{ fontSize: "0.8rem" }}>{file.name || `貼り付け画像 ${index + 1}`}</span>
+                <button
+                  type="button"
+                  aria-label={`画像 ${index + 1} を削除`}
+                  onClick={() => setChatImageFiles((files: File[]) => files.filter((_: File, i: number) => i !== index))}
+                  style={{ marginLeft: 6 }}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {chatImageFiles.length > 0 && (
           <span style={{ fontSize: "0.82rem", color: "#5f6675" }}>
             {t({ ja: "選択中", en: "Selected" })}: {chatImageFiles.length}
           </span>
