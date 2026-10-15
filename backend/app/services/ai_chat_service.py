@@ -2280,8 +2280,8 @@ async def upload_ai_chat_message_images_service(*, character_id, request, files,
         raise legacy.HTTPException(status_code=404, detail="キャラが見つかりません。")
     if not files:
         raise legacy.HTTPException(status_code=400, detail="画像ファイルを指定してください。")
-    if len(files) > 8:
-        raise legacy.HTTPException(status_code=400, detail="一度にアップロードできる画像は最大8枚です。")
+    if len(files) > 20:
+        raise legacy.HTTPException(status_code=400, detail="一度にアップロードできる画像は最大20枚です。")
 
     ext_map = {
         "image/jpeg": ".jpg",
