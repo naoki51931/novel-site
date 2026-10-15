@@ -5727,8 +5727,9 @@ export default function AiChatPage() {
           multiple
           disabled={loading || chatImageUploading}
           onChange={(e: any) => {
-            const files = Array.from(e.target.files || []);
-            setChatImageFiles(files);
+            const files = Array.from(e.target.files || []).filter((file: any) => file.type.startsWith("image/"));
+            setChatImageFiles((previous: any[]) => [...previous, ...files]);
+            e.target.value = "";
           }}
         />
         <button
@@ -5742,6 +5743,11 @@ export default function AiChatPage() {
             : t({ ja: "画像を貼る", en: "Attach images" })}
         </button>
         {chatImageFiles.length > 0 && (
+          <button type="button" className="btn btn-border" onClick={() => setChatImageFiles([])}>
+            {t({ ja: "画像選択をクリア", en: "Clear selected images" })}
+          </button>
+        )}
+        {chatImageFiles.length > 0 && (
           <span style={{ fontSize: "0.82rem", color: "#5f6675" }}>
             {t({ ja: "選択中", en: "Selected" })}: {chatImageFiles.length}
           </span>
@@ -5753,6 +5759,16 @@ export default function AiChatPage() {
           className="ai-chat-message-input"
           value={input}
           onChange={(e: any) => setInput(e.target.value)}
+          onPaste={(e: any) => {
+            const images = Array.from(e.clipboardData?.items || [])
+              .filter((item: any) => item.kind === "file" && item.type.startsWith("image/"))
+              .map((item: any) => item.getAsFile())
+              .filter(Boolean);
+            if (images.length) {
+              e.preventDefault();
+              setChatImageFiles((previous: any[]) => [...previous, ...images]);
+            }
+          }}
           onKeyDown={(e: any) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
