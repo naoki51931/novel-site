@@ -5,13 +5,9 @@ on:
     branches:
       - main
     paths:
+      - "desktop/**"
       - ".github/workflows/release-windows.yml"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version (example: 0.1.0)"
-        required: true
-        default: "0.1.0"
 
 permissions:
   contents: write
@@ -20,57 +16,70 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout Windows implementation branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: feature/windows-openrouter-novel-app
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      - name: Sync internal Windows version
-        working-directory: desktop
-        shell: pwsh
-        env:
-          VERSION: ${{ inputs.version || '0.1.9' }}
-        run: npm version $env:VERSION --no-git-tag-version
-
       - name: Install dependencies
         working-directory: desktop
-        run: npm install
-
-      - name: Build Windows installer
-        working-directory: desktop
-        run: npm run dist -- --publish never
-
-      - name: Find and rename installer
+        run: npm install --no-audit --no-fund
+      - name: Read Windows app version
+        id: version
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "desktop/dist/*.exe" | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
-          if (-not $exe) { throw "Windows installer was not generated." }
-          Copy-Item $exe.FullName "Lexis-Novel-Desktop-Setup.exe"
-
-      - name: Upload Actions artifact
+          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=windows-v$version" >> $env:GITHUB_OUTPUT
+      - name: Build Windows installer and updater metadata
+        working-directory: desktop
+        run: npm run dist -- --publish never
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lexis-Windows-v${{ inputs.version || '0.1.9' }}
-          path: Lexis-Novel-Desktop-Setup.exe
+          name: Lexis-Windows-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/latest.yml
+            desktop/dist/*.blockmap
           if-no-files-found: error
-
-      - name: Create or update GitHub Release
+      - name: Check whether Windows release already exists
+        id: release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '0.1.9' }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $tag = "windows-v$env:VERSION"
-          gh release view $tag *> $null
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag Lexis-Novel-Desktop-Setup.exe --clobber
+            "exists=true" >> $env:GITHUB_OUTPUT
           } else {
-            gh release create $tag Lexis-Novel-Desktop-Setup.exe --title "Lexis Windows v$env:VERSION" --notes "Lexis Windows desktop app v$env:VERSION"
+            "exists=false" >> $env:GITHUB_OUTPUT
           }
-
-# build-trigger: 2026-09-25 windows-v0.1.9-openrouter-key-link
+          exit 0
+      - name: Create Windows GitHub release
+        if: steps.release.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create $env:TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "Lexis Windows v$env:VERSION" `
+            --generate-notes `
+            desktop/dist/*.exe desktop/dist/latest.yml desktop/dist/*.blockmap
+      - name: Replace assets on existing Windows release
+        if: steps.release.outputs.exists == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release upload $env:TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber `
+            desktop/dist/*.exe desktop/dist/latest.yml desktop/dist/*.blockmap
