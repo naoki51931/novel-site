@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/lexis_icon"
@@ -19,6 +22,10 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <service android:name=".NovelGenerationService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <activity android:name=".AiChatActivity" android:exported="false" />
+        <activity android:name=".ConsultationActivity" android:exported="false" />
+        <activity android:name=".NovelGeneratorActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
