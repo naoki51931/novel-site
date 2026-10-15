@@ -1779,6 +1779,10 @@ export default function AiChatPage() {
       return;
     }
 
+    if (chatImageFiles.length > 20) {
+      setError("画像は最大20枚まで添付できます。");
+      return;
+    }
     setChatImageUploading(true);
     setError("");
     try {
@@ -5728,7 +5732,8 @@ export default function AiChatPage() {
           disabled={loading || chatImageUploading}
           onChange={(e: any) => {
             const files = Array.from(e.target.files || []);
-            setChatImageFiles(files);
+            setChatImageFiles(files.slice(0, 20));
+            if (files.length > 20) setError("画像は最大20枚まで添付できます。");
           }}
         />
         <button
@@ -5743,7 +5748,7 @@ export default function AiChatPage() {
         </button>
         {chatImageFiles.length > 0 && (
           <span style={{ fontSize: "0.82rem", color: "#5f6675" }}>
-            {t({ ja: "選択中", en: "Selected" })}: {chatImageFiles.length}
+            {t({ ja: "選択中", en: "Selected" })}: {chatImageFiles.length}/20
           </span>
         )}
       </div>
