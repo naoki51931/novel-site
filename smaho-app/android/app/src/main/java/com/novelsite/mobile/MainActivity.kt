@@ -287,7 +287,16 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
-                filePickerLauncher.launch("*/*")
+                // WebView内のAIチャット等の画像入力で、Androidの複数画像選択を利用する。
+                val accepts = fileChooserParams?.acceptTypes.orEmpty()
+                    .flatMap { it.split(",") }
+                    .map { it.trim().lowercase() }
+                    .filter { it.isNotBlank() }
+                val imageOnly = accepts.isNotEmpty() && accepts.all {
+                    it == "image/*" || it.startsWith("image/") ||
+                        it in setOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif")
+                }
+                filePickerLauncher.launch(if (imageOnly) "image/*" else "*/*")
                 return true
             }
         }
