@@ -87,9 +87,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun addBlockPrompt(){val e=EditText(this).apply{hint="第${blockPromptContainer.childCount+1}ブロックの内容";minLines=2;gravity=android.view.Gravity.TOP;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;enableTextEditing(this)};blockPromptContainer.addView(e);blocks.setText(blockPromptContainer.childCount.toString())}
  private fun removeBlockPrompt(){if(blockPromptContainer.childCount<=2){toast("ブロックは最低2つ必要です");return};blockPromptContainer.removeViewAt(blockPromptContainer.childCount-1);blocks.setText(blockPromptContainer.childCount.toString())}
  private fun blockPrompts()=(0 until blockPromptContainer.childCount).mapNotNull{(blockPromptContainer.getChildAt(it) as? EditText)?.text?.toString()?.trim()};private fun k()=key.text.toString().trim();private fun m()=model.selectedItem?.toString()?.trim().orEmpty().ifBlank{"openrouter/auto"};private fun base(extra:String="")="""小説本文だけを出力してください。メタ説明は禁止。タイトル:${title.text}\nジャンル:${genre.text}\n登場人物:${chars.text}\n雰囲気:${mood.text}\n指示:${prompt.text}\n${if(adult.isChecked)"R18。登場人物は全員18歳以上の成人で、性的関係は明確な合意があるもののみ。" else ""}\n$extra"""
- private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");notifyGenerationStarted();if(!multi){busy(true,"生成中...");call(base()){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了");notifyGenerationFinished(title.text.toString())}}}else{val plans=blockPrompts();val count=maxOf(2,blocks.text.toString().toIntOrNull()?:plans.size.coerceAtLeast(3));val out=mutableListOf<String>();fun next(i:Int){if(i>=count){val all=out.joinToString("\n\n");result.setText(all);saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了");notifyGenerationFinished(title.text.toString())};return};busy(true,"ブロック ${i+1}/$count 生成中...");val plan=plans.getOrNull(i).orEmpty();val prev=out.takeLast(2).joinToString("\n\n");call(base("全$count ブロック中の第${i+1}ブロック。今回の展開:$plan\n直前までの本文:$prev\nこのブロックの本文のみを書き、末尾に『第○ブロックへ続く』『次のブロックへ続く』等の進行管理文は絶対に出力しない。")){out+=cleanBlockMetaText(it);result.setText(out.joinToString("\n\n"));next(i+1)}};next(0)}}
+ private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");notifyGenerationStarted();if(!multi){busy(true,"生成中...");call(base()){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了");notifyGenerationFinished(title.text.toString())}}}else{val plans=blockPrompts();val count=maxOf(2,blocks.text.toString().toIntOrNull()?:plans.size.coerceAtLeast(3));val out=mutableListOf<String>();fun next(i:Int){if(i>=count){val all=out.joinToString("\n\n");if(all.isBlank()){busy(false,"全ブロックが拒否されました。内容を変更してください");return};result.setText(all);saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了");notifyGenerationFinished(title.text.toString())};return};busy(true,"ブロック ${i+1}/$count 生成中...");val plan=plans.getOrNull(i).orEmpty();val prev=out.takeLast(2).joinToString("\n\n");call(base("全$count ブロック中の第${i+1}ブロック。今回の展開:$plan\n直前までの本文:$prev\nこのブロックの本文のみを書き、末尾に『第○ブロックへ続く』『次のブロックへ続く』等の進行管理文は絶対に出力しない。"),onError={error->if(error.contains("PROHIBITED_CONTENT")||error.contains("403")){status.text="第${i+1}ブロックは拒否されました。次のブロックへ進みます";next(i+1)}else{status.text="第${i+1}ブロックで停止: $error"}}){out+=cleanBlockMetaText(it);result.setText(out.joinToString("\n\n"));next(i+1)}};next(0)}}
  private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");notifyGenerationStarted();call(base("以下の本文から自然に続きを書いてください:\n"+old.takeLast(10000))){result.setText(old+"\n\n"+it);saveGeneratedNovel(result.text.toString(),adult.isChecked){busy(false,"続きを生成しました");notifyGenerationFinished(title.text.toString())}}}
- private fun call(p:String,done:(String)->Unit){
+ private fun call(p:String,onError:((String)->Unit)?=null,done:(String)->Unit){
    val epoch=++requestEpoch
    activeCall?.cancel()
    busy(true,"AI応答待ち...")
@@ -113,7 +113,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
        override fun onFailure(c:Call,e:IOException){
          if(epoch!=requestEpoch)return
          if(n<maxRetry){runOnUiThread{if(epoch==requestEpoch){status.text="通信エラー: ${e.message}（再試行 ${n+1}/$maxRetry）";attempt(n+1)}}}
-         else runOnUiThread{if(epoch==requestEpoch)busy(false,"通信失敗: ${e.message}")}
+         else runOnUiThread{if(epoch==requestEpoch){val message="通信失敗: ${e.message}";busy(false,message);onError?.invoke(message)}}
        }
        override fun onResponse(c:Call,r:Response){
          r.use{
@@ -124,7 +124,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
              runOnUiThread{if(epoch==requestEpoch){
                status.text=message
                if(n<maxRetry && r.code in 500..599)attempt(n+1)
-               else busy(false,message)
+               else {busy(false,message);onError?.invoke(message)}
              }}
              return
            }
@@ -136,7 +136,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
              if(value.isBlank()){
                val message="AIの応答が空です: "+raw.take(350)
                status.text=message
-               if(n<maxRetry)attempt(n+1) else busy(false,message)
+               if(n<maxRetry)attempt(n+1) else {busy(false,message);onError?.invoke(message)}
              }else{activeCall=null;done(value)}
            }}
          }
