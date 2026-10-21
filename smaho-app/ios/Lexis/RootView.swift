@@ -107,7 +107,7 @@ struct RootView: View {
                     }
                 }
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .navigationBarTrailing) {
                         Button("閉じる") { page = nil }
                     }
                 }
