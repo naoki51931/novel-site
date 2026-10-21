@@ -13,6 +13,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Environment
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
@@ -51,6 +53,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nativeLauncherButtons: LinearLayout
     private lateinit var offlineLauncher: LinearLayout
     private var siteUnavailable = false
+    private var offlineMode = false
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val reconnectTask = object : Runnable {
+        override fun run() {
+            if (!offlineMode || isFinishing || isDestroyed) return
+            // Check the site while the native launcher remains visible.
+            webView.loadUrl(SITE_URL)
+        }
+    }
+    private fun scheduleReconnect() {
+        reconnectHandler.removeCallbacks(reconnectTask)
+        if (offlineMode) reconnectHandler.postDelayed(reconnectTask, 20_000L)
+    }
     private lateinit var navHome: TextView
     private lateinit var navSearch: TextView
     private lateinit var navAiChat: TextView
@@ -153,6 +168,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showOfflineLauncher(show: Boolean) {
+        offlineMode = show
+        if (!show) reconnectHandler.removeCallbacks(reconnectTask)
         offlineLauncher.visibility = if (show) View.VISIBLE else View.GONE
         swipeRefresh.visibility = if (show) View.GONE else View.VISIBLE
         nativeLauncherButtons.visibility = if (show) View.GONE else View.VISIBLE
@@ -303,6 +320,7 @@ class MainActivity : AppCompatActivity() {
                 if (request?.isForMainFrame == true) {
                     siteUnavailable = true
                     showOfflineLauncher(true)
+                    scheduleReconnect()
                 }
                 super.onReceivedError(view, request, error)
             }
@@ -311,6 +329,7 @@ class MainActivity : AppCompatActivity() {
                 if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 500) {
                     siteUnavailable = true
                     showOfflineLauncher(true)
+                    scheduleReconnect()
                 }
                 super.onReceivedHttpError(view, request, errorResponse)
             }
@@ -318,6 +337,7 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 swipeRefresh.isRefreshing = false
                 if (!siteUnavailable) showOfflineLauncher(false)
+                else scheduleReconnect()
                 syncBottomNavByUrl(url)
                 focusSearchIfNeeded(url)
                 super.onPageFinished(view, url)
@@ -327,7 +347,7 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 progressBar.progress = newProgress
-                progressBar.visibility = if (newProgress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
+                progressBar.visibility = if (!offlineMode && newProgress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
                 super.onProgressChanged(view, newProgress)
             }
 
@@ -536,6 +556,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        reconnectHandler.removeCallbacks(reconnectTask)
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         super.onDestroy()
