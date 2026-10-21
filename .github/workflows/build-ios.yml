@@ -1,0 +1,68 @@
+name: Build Lexis iOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "smaho-app/ios/**"
+      - ".github/workflows/build-ios.yml"
+  pull_request:
+    paths:
+      - "smaho-app/ios/**"
+      - ".github/workflows/build-ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-build:
+    name: Compile iPhone app (simulator)
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: smaho-app/ios
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build iOS simulator app without signing
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Lexis.xcodeproj \
+            -scheme Lexis \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/LexisDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package simulator .app
+        run: |
+          APP="$RUNNER_TEMP/LexisDerivedData/Build/Products/Release-iphonesimulator/Lexis.app"
+          test -d "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/Lexis-iOS-Simulator.zip"
+
+      - name: Upload simulator build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lexis-iOS-Simulator-${{ github.run_number }}
+          path: ${{ runner.temp }}/Lexis-iOS-Simulator.zip
+          if-no-files-found: error
+
+      - name: Explain installation limitations
+        run: |
+          echo "Simulator .app builds are not installable on physical iPhones." >> "$GITHUB_STEP_SUMMARY"
+          echo "Physical device distribution requires Apple signing, provisioning and a signed IPA." >> "$GITHUB_STEP_SUMMARY"
