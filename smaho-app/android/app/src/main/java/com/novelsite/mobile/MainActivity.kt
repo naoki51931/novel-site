@@ -64,7 +64,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun scheduleReconnect() {
         reconnectHandler.removeCallbacks(reconnectTask)
-        if (offlineMode) reconnectHandler.postDelayed(reconnectTask, 20_000L)
+        if (offlineMode) reconnectHandler.postDelayed(reconnectTask, 10 * 60 * 1000L)
     }
     private lateinit var navHome: TextView
     private lateinit var navSearch: TextView
