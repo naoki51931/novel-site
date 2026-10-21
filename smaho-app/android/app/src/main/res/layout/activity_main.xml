@@ -30,14 +30,6 @@
             android:padding="24dp"
             android:background="#F5F6FA"
             android:visibility="gone">
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="サイトに接続できません"
-                android:textColor="#222222"
-                android:textSize="20sp"
-                android:gravity="center"
-                android:layout_marginBottom="24dp" />
             <Button
                 android:id="@+id/offlineNovelGenerator"
                 android:layout_width="match_parent"
