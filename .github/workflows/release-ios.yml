@@ -1,0 +1,70 @@
+name: Release Lexis iOS (unsigned IPA)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "smaho-app/ios/**"
+      - ".github/workflows/release-ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-unsigned-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 50
+    defaults:
+      run:
+        working-directory: smaho-app/ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build for physical iPhone architecture (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Lexis.xcodeproj \
+            -scheme Lexis \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/LexisDeviceDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/LexisDeviceDerivedData/Build/Products/Release-iphoneos/Lexis.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/ios-ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/ios-ipa/Payload/Lexis.app"
+          (cd "$RUNNER_TEMP/ios-ipa" && zip -qr "$GITHUB_WORKSPACE/Lexis-iOS-unsigned.ipa" Payload)
+          test -s "$GITHUB_WORKSPACE/Lexis-iOS-unsigned.ipa"
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lexis-iOS-unsigned
+          path: Lexis-iOS-unsigned.ipa
+          if-no-files-found: error
+      - name: Publish unsigned IPA to GitHub Release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ios-v0.1.0-unsigned
+        run: |
+          set -euo pipefail
+          NOTES="UNSIGNED DEVELOPMENT BUILD ONLY. This IPA cannot be installed directly on an iPhone. It requires a compatible signing/provisioning workflow (such as Sideloadly), and successful installation is not guaranteed. Not App Store or TestFlight release. No physical-device testing performed."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" Lexis-iOS-unsigned.ipa --clobber
+          else
+            gh release create "$TAG" Lexis-iOS-unsigned.ipa --target "$GITHUB_SHA" --title "Lexis iOS v0.1.0 (unsigned)" --notes "$NOTES" --prerelease
+          fi
