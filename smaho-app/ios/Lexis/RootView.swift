@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import UIKit
 
 @MainActor
 final class WebsiteState: ObservableObject {
@@ -20,6 +21,10 @@ final class WebsiteState: ObservableObject {
     }
 
     func didStart() { loadingFailed = false }
+    func navigate(_ path: String) {
+        guard let url = URL(string: path, relativeTo: LexisConfig.site)?.absoluteURL else { return }
+        webView.load(URLRequest(url: url))
+    }
     func didFail() { loadingFailed = true; connected = false }
     func didFinish(_ url: URL?) {
         guard !loadingFailed, let host = url?.host?.lowercased(),
@@ -42,6 +47,34 @@ struct SiteWebView: UIViewRepresentable {
         let state: WebsiteState
         init(state: WebsiteState) { self.state = state }
 
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+            if url.scheme == "novelsite" {
+                let route = "/" + [url.host, url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "/")
+                let query = url.query.map { "?" + $0 } ?? ""
+                Task { @MainActor in state.navigate(route + query) }
+                decisionHandler(.cancel)
+                return
+            }
+            if let scheme = url.scheme?.lowercased(),
+               scheme == "mailto" || scheme == "tel" {
+                UIApplication.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            if let host = url.host?.lowercased(), !LexisConfig.allowedHosts.contains(host),
+               ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                UIApplication.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             Task { @MainActor in state.didStart() }
         }
@@ -82,9 +115,12 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            SiteWebView(state: website)
-                .opacity(website.connected ? 1 : 0)
-                .allowsHitTesting(website.connected)
+            VStack(spacing: 0) {
+                SiteWebView(state: website)
+                if website.connected { websiteNavigation }
+            }
+            .opacity(website.connected ? 1 : 0)
+            .allowsHitTesting(website.connected)
 
             if !website.connected {
                 VStack(spacing: 24) {
@@ -127,6 +163,25 @@ struct RootView: View {
         guard force || Date().timeIntervalSince(lastCheck) >= LexisConfig.retryInterval else { return }
         lastCheck = Date()
         website.begin()
+    }
+
+    private var websiteNavigation: some View {
+        HStack(spacing: 0) {
+            navButton("ホーム", path: "/")
+            navButton("検索", path: "/?mobile_search=1")
+            navButton("AIチャット", path: "/ai_chat")
+            navButton("新着", path: "/?feed=new")
+            navButton("通知", path: "/notifications")
+            navButton("マイページ", path: "/mypage")
+        }
+        .padding(.vertical, 6)
+        .background(Color(uiColor: .secondarySystemBackground))
+    }
+
+    private func navButton(_ name: String, path: String) -> some View {
+        Button(name) { website.navigate(path) }
+            .font(.system(size: 11))
+            .frame(maxWidth: .infinity, minHeight: 44)
     }
 
     private func launchButton(_ title: String, page target: NativePage) -> some View {
