@@ -13,6 +13,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Environment
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
@@ -24,6 +26,10 @@ import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
+import android.view.View
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -44,6 +50,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var progressBar: ProgressBar
     private lateinit var bottomNav: LinearLayout
+    private lateinit var nativeLauncherButtons: LinearLayout
+    private lateinit var offlineLauncher: LinearLayout
+    private var siteUnavailable = false
+    private var offlineMode = false
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val reconnectTask = object : Runnable {
+        override fun run() {
+            if (!offlineMode || isFinishing || isDestroyed) return
+            // Check the site while the native launcher remains visible.
+            webView.loadUrl(SITE_URL)
+        }
+    }
+    private fun scheduleReconnect() {
+        reconnectHandler.removeCallbacks(reconnectTask)
+        if (offlineMode) reconnectHandler.postDelayed(reconnectTask, 10 * 60 * 1000L)
+    }
     private lateinit var navHome: TextView
     private lateinit var navSearch: TextView
     private lateinit var navAiChat: TextView
@@ -106,6 +128,8 @@ class MainActivity : AppCompatActivity() {
         swipeRefresh = findViewById(R.id.swipeRefresh)
         progressBar = findViewById(R.id.progressBar)
         bottomNav = findViewById(R.id.bottomNav)
+        nativeLauncherButtons = findViewById(R.id.nativeLauncherButtons)
+        offlineLauncher = findViewById(R.id.offlineLauncher)
         navHome = findViewById(R.id.navHome)
         navSearch = findViewById(R.id.navSearch)
         navAiChat = findViewById(R.id.navAiChat)
@@ -123,6 +147,15 @@ class MainActivity : AppCompatActivity() {
         setupDownloadBehavior()
         setupPullToRefresh()
         setupBottomNav()
+        findViewById<Button>(R.id.offlineNovelGenerator).setOnClickListener {
+            startActivity(Intent(this, NovelGeneratorActivity::class.java))
+        }
+        findViewById<Button>(R.id.offlineAiChat).setOnClickListener {
+            startActivity(Intent(this, AiChatActivity::class.java))
+        }
+        findViewById<Button>(R.id.offlineConsultation).setOnClickListener {
+            startActivity(Intent(this, ConsultationActivity::class.java))
+        }
         findViewById<android.widget.Button>(R.id.openNovelGenerator).setOnClickListener {
             startActivity(Intent(this, NovelGeneratorActivity::class.java))
         }
@@ -132,6 +165,16 @@ class MainActivity : AppCompatActivity() {
         } else {
             webView.restoreState(savedInstanceState)
         }
+    }
+
+    private fun showOfflineLauncher(show: Boolean) {
+        offlineMode = show
+        if (!show) reconnectHandler.removeCallbacks(reconnectTask)
+        offlineLauncher.visibility = if (show) View.VISIBLE else View.GONE
+        swipeRefresh.visibility = if (show) View.GONE else View.VISIBLE
+        nativeLauncherButtons.visibility = if (show) View.GONE else View.VISIBLE
+        bottomNav.visibility = if (show) View.GONE else View.VISIBLE
+        if (show) progressBar.visibility = View.GONE
     }
 
     private fun setupPullToRefresh() {
@@ -268,8 +311,33 @@ class MainActivity : AppCompatActivity() {
                 return handleCustomUri(uri)
             }
 
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                siteUnavailable = false
+                super.onPageStarted(view, url, favicon)
+            }
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                if (request?.isForMainFrame == true) {
+                    siteUnavailable = true
+                    showOfflineLauncher(true)
+                    scheduleReconnect()
+                }
+                super.onReceivedError(view, request, error)
+            }
+
+            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
+                if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 500) {
+                    siteUnavailable = true
+                    showOfflineLauncher(true)
+                    scheduleReconnect()
+                }
+                super.onReceivedHttpError(view, request, errorResponse)
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 swipeRefresh.isRefreshing = false
+                if (!siteUnavailable) showOfflineLauncher(false)
+                else scheduleReconnect()
                 syncBottomNavByUrl(url)
                 focusSearchIfNeeded(url)
                 super.onPageFinished(view, url)
@@ -279,7 +347,7 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 progressBar.progress = newProgress
-                progressBar.visibility = if (newProgress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
+                progressBar.visibility = if (!offlineMode && newProgress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
                 super.onProgressChanged(view, newProgress)
             }
 
@@ -488,6 +556,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        reconnectHandler.removeCallbacks(reconnectTask)
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         super.onDestroy()

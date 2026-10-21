@@ -21,6 +21,33 @@
                 android:layout_height="match_parent" />
         </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
+        <LinearLayout
+            android:id="@+id/offlineLauncher"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="24dp"
+            android:background="#F5F6FA"
+            android:visibility="gone">
+            <Button
+                android:id="@+id/offlineNovelGenerator"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="AI小説作成" />
+            <Button
+                android:id="@+id/offlineAiChat"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="AIチャット" />
+            <Button
+                android:id="@+id/offlineConsultation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="AI相談室" />
+
+        </LinearLayout>
+
         <ProgressBar
             android:id="@+id/progressBar"
             style="?android:attr/progressBarStyleHorizontal"
@@ -32,6 +59,7 @@
     </FrameLayout>
 
     <LinearLayout
+        android:id="@+id/nativeLauncherButtons"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
