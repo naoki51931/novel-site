@@ -141,10 +141,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.offlineConsultation).setOnClickListener {
             startActivity(Intent(this, ConsultationActivity::class.java))
         }
-        findViewById<Button>(R.id.offlineRetry).setOnClickListener {
-            // Keep the offline launcher visible until the site has loaded successfully.
-            webView.loadUrl(SITE_URL)
-        }
         findViewById<android.widget.Button>(R.id.openNovelGenerator).setOnClickListener {
             startActivity(Intent(this, NovelGeneratorActivity::class.java))
         }
