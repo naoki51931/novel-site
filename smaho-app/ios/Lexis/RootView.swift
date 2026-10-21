@@ -101,9 +101,9 @@ struct RootView: View {
             NavigationStack {
                 Group {
                     switch selection {
-                    case .novel: NovelGeneratorView()
-                    case .chat: ConversationView(mode: .chat)
-                    case .consultation: ConversationView(mode: .consultation)
+                    case .novel: ParityNovelView()
+                    case .chat: ParityChatView()
+                    case .consultation: ParityConsultationView()
                     }
                 }
                 .toolbar {
