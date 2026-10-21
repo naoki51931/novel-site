@@ -53,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nativeLauncherButtons: LinearLayout
     private lateinit var offlineLauncher: LinearLayout
     private var siteUnavailable = false
-    private var offlineMode = false
+    private var offlineMode = true
     private val reconnectHandler = Handler(Looper.getMainLooper())
     private val reconnectTask = object : Runnable {
         override fun run() {
@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
         MobilePushRegistrar.ensureFirebaseApp(this)
 
+        showOfflineLauncher(true)
         setupWebView()
         clearWebViewCacheForFreshAssets()
         setupDownloadBehavior()
@@ -336,8 +337,11 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 swipeRefresh.isRefreshing = false
-                if (!siteUnavailable) showOfflineLauncher(false)
-                else scheduleReconnect()
+                val siteLoaded = url?.let { loaded ->
+                    runCatching { Uri.parse(loaded).host?.lowercase() in INTERNAL_HOSTS }.getOrDefault(false)
+                } == true
+                if (!siteUnavailable && siteLoaded) showOfflineLauncher(false)
+                else if (siteUnavailable) scheduleReconnect()
                 syncBottomNavByUrl(url)
                 focusSearchIfNeeded(url)
                 super.onPageFinished(view, url)
