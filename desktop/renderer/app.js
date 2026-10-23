@@ -24,3 +24,19 @@ refreshDrafts();
 
 $("updateApp").onclick=()=>busy(()=>window.lexis.updateApp(),"最新版のダウンロードページを開いています...");
 $("uninstallApp").onclick=async()=>{if(!confirm("Lexis Novel Desktopをアンインストールしますか？\nオフライン保存や設定も不要なら、アンインストール後にアプリデータを手動削除できます。"))return;await busy(()=>window.lexis.uninstallApp(),"アンインストーラーを起動しています...");};
+
+// X does not support pre-attaching TXT files via its compose URL.
+// Download the UTF-8 file and open the compose screen with a short introduction.
+$("shareXTxt").onclick=()=>{
+  const title=$("resultTitle").value.trim()||"無題の小説";
+  const body=$("resultBody").value.trim();
+  if(!body){$("status").textContent="共有する小説の本文を入力してください。";return;}
+  const fileName=(title.replace(/[\\/:*?"<>|\\x00-\\x1f]/g,"_").slice(0,70)||"novel")+".txt";
+  const blob=new Blob([title+"\\n\\n"+body],{type:"text/plain;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download=fileName;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const message=title+" — 小説を執筆しました。 #小説 #Lexis";
+  window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(message),"_blank","noopener,noreferrer");
+  $("status").textContent="TXTを保存しました。Xへのファイル添付は必要に応じて手動で行ってください。";
+};
