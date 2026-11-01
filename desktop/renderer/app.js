@@ -15,7 +15,18 @@ $("saveTemplate").onclick=async()=>{const name=prompt("テンプレート名","�
 $("refreshHistory").onclick=refresh;
 $("history").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x)show(x)};
 $("templates").onchange=e=>{const x=e.target._data?.[+e.target.value];if(!x)return;["model","titleHint","genre","characters","tone","length","maxTokens","blockCount","blockMaxTokens"].forEach(k=>{if(x[k]!=null&&$(k))$(k).value=x[k]});$("r18").checked=!!x.r18;$("blockPlans").value=(x.blockPlans||[]).join("\n");};
-async function refreshDrafts(){const d=await window.lexis.listDraftsLocal();$("drafts").innerHTML='<option value="">オフライン保存から読み込み</option>'+d.map((x,i)=>'<option value="'+i+'">'+new Date(x.savedAt).toLocaleString()+" "+x.title+"</option>").join("");$("drafts")._data=d;}
+function renderDraftSearch(){
+  const query=$("novelSearch").value.trim().toLocaleLowerCase();
+  const all=$("drafts")._all||[];
+  const matched=all.filter(x=>!query||(x.title||"").toLocaleLowerCase().includes(query)||(x.body||"").toLocaleLowerCase().includes(query));
+  const select=$("drafts");
+  select.replaceChildren(new Option("オフライン保存から読み込み",""));
+  matched.forEach((x,i)=>select.add(new Option(new Date(x.savedAt).toLocaleString()+" "+(x.title||"タイトル未設定"),String(i))));
+  select._data=matched;
+  $("novelSearchCount").textContent=matched.length+"件 / "+all.length+"件";
+}
+async function refreshDrafts(){const d=await window.lexis.listDraftsLocal();$("drafts")._all=d;renderDraftSearch();}
+$("novelSearch").addEventListener("input",renderDraftSearch);
 $("saveLocal").onclick=async()=>{await busy(()=>window.lexis.saveDraftLocal({title:$("resultTitle").value,body:$("resultBody").value,r18:$("r18").checked}),"オフライン保存中...");refreshDrafts();};
 $("drafts").onchange=e=>{const x=e.target._data?.[+e.target.value];if(x){$("resultTitle").value=x.title||"";$("resultBody").value=x.body||"";$("r18").checked=!!x.r18;}};
 $("lexisLogin").onclick=()=>busy(()=>window.lexis.lexisLogin({username:$("lexisUsername").value,password:$("lexisPassword").value}),"Lexisログイン中...");
