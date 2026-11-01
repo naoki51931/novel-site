@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Menu } = require("electron");
 const path = require("path");
 const fs = require("fs/promises");
 const StoreModule = require("electron-store");
@@ -19,6 +19,21 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true
     }
+  });
+  // Provide native edit actions for the novel title/body text controls.
+  win.webContents.on("context-menu", (_event, params) => {
+    if (!params.isEditable || params.inputFieldType === "password") return;
+    const menu = Menu.buildFromTemplate([
+      { label: "元に戻す", role: "undo", enabled: params.editFlags.canUndo },
+      { label: "やり直す", role: "redo", enabled: params.editFlags.canRedo },
+      { type: "separator" },
+      { label: "切り取り", role: "cut", enabled: params.editFlags.canCut },
+      { label: "コピー", role: "copy", enabled: params.editFlags.canCopy },
+      { label: "貼り付け", role: "paste", enabled: params.editFlags.canPaste },
+      { type: "separator" },
+      { label: "すべてを選択", role: "selectAll" }
+    ]);
+    menu.popup({ window: win });
   });
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
