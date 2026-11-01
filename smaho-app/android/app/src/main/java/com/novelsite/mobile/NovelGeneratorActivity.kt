@@ -63,7 +63,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun aiTitle(body:String,done:(String)->Unit){val excerpt=body.trim().take(12000);if(excerpt.isBlank())return done(defaultNovelTitle);call("次の小説本文に最もふさわしい日本語タイトルを1つだけ考えてください。タイトルだけを出力し、説明・引用符・括弧・『タイトル：』は付けないでください。\n\n"+excerpt){raw->val t=raw.lineSequence().firstOrNull{it.isNotBlank()}.orEmpty().trim().removePrefix("タイトル:").removePrefix("タイトル：").trim().trim('"','「','」','『','』');done(if(t.isBlank())defaultNovelTitle else t.take(100))}}
  private fun saveGeneratedNovel(body:String,r18:Boolean,done:()->Unit){val current=title.text.toString();if(!needsAiTitle(current)){saveNovelToLibrary(current,body,r18);done();return};busy(true,"タイトルを考えています…");aiTitle(body){t->title.setText(t);saveNovelToLibrary(t,body,r18);done()}}
  private fun cleanBlockMetaText(v:String)=v.lines().filterNot{line->line.trim().matches(Regex("""^[（(【\[]?\s*(?:第?\s*[0-9０-９一二三四五六七八九十百]+|次|次の)\s*ブロック\s*(?:へ|に)?\s*(?:続く|続きます|つづく|つづきます)\s*[）)】\]]?\s*[。.!！]?$"""))}.joinToString("\n").trim()
- private val client=OkHttpClient.Builder().connectTimeout(30,TimeUnit.SECONDS).readTimeout(180,TimeUnit.SECONDS).build()
+ private val client=OkHttpClient.Builder().connectTimeout(30,TimeUnit.SECONDS).readTimeout(600,TimeUnit.SECONDS).build()
  private lateinit var key:EditText;private lateinit var model:Spinner;private lateinit var title:EditText;private lateinit var genre:EditText;private lateinit var chars:EditText;private lateinit var mood:EditText;private lateinit var prompt:EditText;private lateinit var adult:CheckBox;private lateinit var blocks:EditText;private lateinit var tokens:EditText;private lateinit var result:EditText;private lateinit var progress:ProgressBar;private lateinit var status:TextView;private lateinit var email:EditText;private lateinit var password:EditText;private lateinit var blockPromptContainer:LinearLayout;private lateinit var retryCount:EditText;private lateinit var generationPanel:LinearLayout;private lateinit var libraryPanel:LinearLayout;private lateinit var libraryContainer:LinearLayout;private lateinit var templateName:EditText;private lateinit var templateSpinner:Spinner
  private var downloadNovel:JSONObject?=null
  private val prefs by lazy{val mk=MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build();EncryptedSharedPreferences.create(this,"lexis_secure",mk,EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)}
@@ -92,9 +92,9 @@ class NovelGeneratorActivity:AppCompatActivity(){
  private fun addBlockPrompt(){val e=EditText(this).apply{hint="第${blockPromptContainer.childCount+1}ブロックの内容";minLines=2;gravity=android.view.Gravity.TOP;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;enableTextEditing(this)};blockPromptContainer.addView(e);blocks.setText(blockPromptContainer.childCount.toString())}
  private fun removeBlockPrompt(){if(blockPromptContainer.childCount<=2){toast("ブロックは最低2つ必要です");return};blockPromptContainer.removeViewAt(blockPromptContainer.childCount-1);blocks.setText(blockPromptContainer.childCount.toString())}
  private fun blockPrompts()=(0 until blockPromptContainer.childCount).mapNotNull{(blockPromptContainer.getChildAt(it) as? EditText)?.text?.toString()?.trim()};private fun k()=key.text.toString().trim();private fun m()=model.selectedItem?.toString()?.trim().orEmpty().ifBlank{"openrouter/auto"};private fun base(extra:String="")="""小説本文だけを出力してください。メタ説明は禁止。タイトル:${title.text}\nジャンル:${genre.text}\n登場人物:${chars.text}\n雰囲気:${mood.text}\n指示:${prompt.text}\n${if(adult.isChecked)"R18。登場人物は全員18歳以上の成人で、性的関係は明確な合意があるもののみ。" else ""}\n$extra"""
- private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");notifyGenerationStarted();if(!multi){busy(true,"生成中...");call(base()){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了");notifyGenerationFinished(title.text.toString())}}}else{val plans=blockPrompts();val count=maxOf(2,blocks.text.toString().toIntOrNull()?:plans.size.coerceAtLeast(3));val out=mutableListOf<String>();fun next(i:Int){if(i>=count){val all=out.joinToString("\n\n");if(all.isBlank()){busy(false,"全ブロックが拒否されました。内容を変更してください");return};result.setText(all);saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了");notifyGenerationFinished(title.text.toString())};return};busy(true,"ブロック ${i+1}/$count 生成中...");val plan=plans.getOrNull(i).orEmpty();val prev=out.takeLast(2).joinToString("\n\n");call(base("全$count ブロック中の第${i+1}ブロック。今回の展開:$plan\n直前までの本文:$prev\nこのブロックの本文のみを書き、末尾に『第○ブロックへ続く』『次のブロックへ続く』等の進行管理文は絶対に出力しない。"),onError={error->if(error.contains("PROHIBITED_CONTENT")||error.contains("403")){status.text="第${i+1}ブロックは拒否されました。次のブロックへ進みます";next(i+1)}else{status.text="第${i+1}ブロックで停止: $error"}}){out+=cleanBlockMetaText(it);result.setText(out.joinToString("\n\n"));next(i+1)}};next(0)}}
- private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");notifyGenerationStarted();call(base("以下の本文から自然に続きを書いてください:\n"+old.takeLast(10000))){result.setText(old+"\n\n"+it);saveGeneratedNovel(result.text.toString(),adult.isChecked){busy(false,"続きを生成しました");notifyGenerationFinished(title.text.toString())}}}
- private fun call(p:String,onError:((String)->Unit)?=null,done:(String)->Unit){
+ private fun generate(multi:Boolean){if(k().isBlank())return toast("APIキーを入力してください");if(prompt.text.isBlank())return toast("生成指示を入力してください");notifyGenerationStarted();if(!multi){busy(true,"生成中...");call(base(),onPartial={result.setText(it)}){result.setText(it);saveGeneratedNovel(it,adult.isChecked){busy(false,"生成完了");notifyGenerationFinished(title.text.toString())}}}else{val plans=blockPrompts();val count=maxOf(2,blocks.text.toString().toIntOrNull()?:plans.size.coerceAtLeast(3));val out=mutableListOf<String>();fun next(i:Int){if(i>=count){val all=out.joinToString("\n\n");if(all.isBlank()){busy(false,"全ブロックが拒否されました。内容を変更してください");return};result.setText(all);saveGeneratedNovel(all,adult.isChecked){busy(false,"ブロック生成完了");notifyGenerationFinished(title.text.toString())};return};busy(true,"ブロック ${i+1}/$count 生成中...");val plan=plans.getOrNull(i).orEmpty();val prev=out.takeLast(2).joinToString("\n\n");call(base("全$count ブロック中の第${i+1}ブロック。今回の展開:$plan\n直前までの本文:$prev\nこのブロックの本文のみを書き、末尾に『第○ブロックへ続く』『次のブロックへ続く』等の進行管理文は絶対に出力しない。"),onError={error->if(error.contains("PROHIBITED_CONTENT")||error.contains("403")){status.text="第${i+1}ブロックは拒否されました。次のブロックへ進みます";next(i+1)}else{status.text="第${i+1}ブロックで停止: $error"}},onPartial={partial->result.setText((out+cleanBlockMetaText(partial)).joinToString("\n\n"))}){out+=cleanBlockMetaText(it);result.setText(out.joinToString("\n\n"));next(i+1)}};next(0)}}
+ private fun continueStory(){val old=result.text.toString();if(old.isBlank())return toast("本文がありません");notifyGenerationStarted();call(base("以下の本文から自然に続きを書いてください:\n"+old.takeLast(10000)),onPartial={result.setText(old+"\n\n"+it)}){result.setText(old+"\n\n"+it);saveGeneratedNovel(result.text.toString(),adult.isChecked){busy(false,"続きを生成しました");notifyGenerationFinished(title.text.toString())}}}
+ private fun call(p:String,onError:((String)->Unit)?=null,onPartial:((String)->Unit)?=null,done:(String)->Unit){
    val epoch=++requestEpoch
    activeCall?.cancel()
    busy(true,"AI応答待ち...")
@@ -104,6 +104,7 @@ class NovelGeneratorActivity:AppCompatActivity(){
    val body=JSONObject().put("model",m())
      .put("messages",JSONArray().put(JSONObject().put("role","user").put("content",parts?:p)))
      .put("max_tokens",tokens.text.toString().toIntOrNull()?:2000)
+     .put("stream",true)
      .toString().toRequestBody("application/json".toMediaType())
    val req=Request.Builder().url("https://openrouter.ai/api/v1/chat/completions")
      .header("Authorization","Bearer ${k()}")
@@ -123,26 +124,54 @@ class NovelGeneratorActivity:AppCompatActivity(){
        override fun onResponse(c:Call,r:Response){
          r.use{
            if(epoch!=requestEpoch)return
-           val raw=r.body?.string().orEmpty()
            if(!r.isSuccessful){
+             val raw=r.body?.string().orEmpty()
              val message=apiError(raw,r.code)
              runOnUiThread{if(epoch==requestEpoch){
-               status.text=message
                if(n<maxRetry && r.code in 500..599)attempt(n+1)
                else {busy(false,message);onError?.invoke(message)}
              }}
              return
            }
-           val parsed=runCatching{JSONObject(raw)}.getOrNull()
-           val answer=parsed?.optJSONArray("choices")?.optJSONObject(0)
-             ?.optJSONObject("message")?.optString("content").orEmpty().trim()
-           val value=if(answer.equals("null",true))"" else answer
+           val accumulated=StringBuilder()
+           var streamFinished=false
+           var streamError:String?=null
+           try{
+             val reader=r.body?.charStream()?.buffered()
+             if(reader==null)throw IOException("応答本文がありません")
+             reader.use{input->
+               while(true){
+                 if(epoch!=requestEpoch)return
+                 val line=input.readLine()?:break
+                 if(!line.startsWith("data:"))continue
+                 val data=line.removePrefix("data:").trim()
+                 if(data=="[DONE]"){streamFinished=true;break}
+                 val event=runCatching{JSONObject(data)}.getOrNull()?:continue
+                 val error=event.optJSONObject("error")
+                 if(error!=null){streamError=error.optString("message","AIストリームエラー");break}
+                 val delta=event.optJSONArray("choices")?.optJSONObject(0)
+                   ?.optJSONObject("delta")?.optString("content").orEmpty()
+                 if(delta.isNotEmpty()){
+                   accumulated.append(delta)
+                   val snapshot=accumulated.toString()
+                   runOnUiThread{if(epoch==requestEpoch){onPartial?.invoke(snapshot);status.text="生成中… ${snapshot.length}文字受信"}}
+                 }
+               }
+             }
+           }catch(e:IOException){streamError=e.message?:"通信が切断されました"}
+           val value=accumulated.toString()
            runOnUiThread{if(epoch==requestEpoch){
-             if(value.isBlank()){
-               val message="AIの応答が空です: "+raw.take(350)
-               status.text=message
-               if(n<maxRetry)attempt(n+1) else {busy(false,message);onError?.invoke(message)}
-             }else{activeCall=null;done(value)}
+             activeCall=null
+             if(value.isNotBlank()){
+               done(value)
+               if(!streamFinished)status.text="途中までの本文を保持しました（通信終了: ${streamError?:"ストリーム中断"}）"
+             }else if(n<maxRetry){
+               status.text="応答を受信できませんでした（再試行 ${n+1}/$maxRetry）"
+               attempt(n+1)
+             }else{
+               val message=streamError?:"AIから本文を受信できませんでした"
+               busy(false,message);onError?.invoke(message)
+             }
            }}
          }
        }
