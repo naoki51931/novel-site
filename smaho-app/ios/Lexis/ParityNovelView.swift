@@ -227,10 +227,17 @@ struct ParityLibraryView: View {
     @Binding var novels: [IOSNovel]
     let persist: () -> Void
     @State private var selected: UUID?
+    @State private var searchText = ""
+
+    private var matchingIDs: Set<UUID> {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return Set(novels.map(\.id)) }
+        return Set(novels.filter { $0.title.localizedStandardContains(query) || $0.body.localizedStandardContains(query) }.map(\.id))
+    }
 
     var body: some View {
         List {
-            ForEach($novels) { $novel in
+            ForEach($novels.filter { matchingIDs.contains($0.wrappedValue.id) }) { $novel in
                 HStack {
                     Button { novel.bookmarked.toggle(); persist() } label: {
                         Image(systemName: novel.bookmarked ? "star.fill" : "star")
@@ -247,10 +254,12 @@ struct ParityLibraryView: View {
                 }
             }
             .onDelete { offsets in
-                novels.remove(atOffsets: offsets)
+                let ids = novels.filter { matchingIDs.contains($0.id) }.enumerated().filter { offsets.contains($0.offset) }.map { $0.element.id }
+                novels.removeAll { ids.contains($0.id) }
                 persist()
             }
         }
+        .searchable(text: $searchText, prompt: "タイトル・本文を検索")
         .navigationTitle("小説一覧")
     }
 }
