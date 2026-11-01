@@ -44,3 +44,5 @@ refreshDrafts();
 
 $("updateApp").onclick=()=>busy(()=>window.lexis.updateApp(),"最新版のダウンロードページを開いています...");
 $("uninstallApp").onclick=async()=>{if(!confirm("Lexis Novel Desktopをアンインストールしますか？\nオフライン保存や設定も不要なら、アンインストール後にアプリデータを手動削除できます。"))return;await busy(()=>window.lexis.uninstallApp(),"アンインストーラーを起動しています...");};
+
+$("shareXTxt").onclick=async()=>{const r=await busy(()=>window.lexis.shareXTxt({title:$("resultTitle").value,body:$("resultBody").value}),"TXTを保存してXを開いています...");$("status").textContent=r.canceled?"共有をキャンセルしました":"TXTを保存してXを開きました。Xへのファイル添付は手動で行ってください。";};
