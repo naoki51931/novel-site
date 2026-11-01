@@ -353,6 +353,22 @@ ipcMain.handle("lexis:upload", async (_event, payload) => {
   return { ok: true, novelId: novel.id, url: "https://shosetsu-toukou-site.org/novels/" + novel.id };
 });
 
+ipcMain.handle("novel:share-x-txt", async (_event, payload) => {
+  const title = String(payload.title || "無題の小説").trim() || "無題の小説";
+  const body = String(payload.body || "").trim();
+  if (!body) throw new Error("共有する小説の本文を入力してください。");
+  const result = await dialog.showSaveDialog({
+    title: "Xで共有する小説のTXTを保存",
+    defaultPath: title.replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").slice(0, 70) + ".txt",
+    filters: [{ name: "Text", extensions: ["txt"] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.writeFile(result.filePath, title + "\n\n" + body, "utf8");
+  const message = title.slice(0, 90) + " — 小説を執筆しました。 #小説 #Lexis";
+  await require("electron").shell.openExternal("https://twitter.com/intent/tweet?text=" + encodeURIComponent(message));
+  return { canceled: false, filePath: result.filePath };
+});
+
 ipcMain.handle("app:update", async () => {
   await require("electron").shell.openExternal("https://github.com/naoki51931/novel-site/releases/latest");
   return { ok: true };
