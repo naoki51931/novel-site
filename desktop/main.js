@@ -128,12 +128,14 @@ ipcMain.handle("novel:generate", async (_event, input) => {
     parsed = { title: "タイトル未設定", body: raw };
   }
 
-  return {
+  const result = {
     title: String(parsed.title || parsed.generated_title || "タイトル未設定"),
     body: String(parsed.body || parsed.content || parsed.story || raw),
     model: data.model || model,
     usage: data.usage || null
   };
+  remember(result, input, "generate");
+  return result;
 });
 
 
@@ -197,7 +199,18 @@ ipcMain.handle("history:get", async () => store.get("history", []));
 ipcMain.handle("templates:get", async () => store.get("templates", []));
 ipcMain.handle("templates:save", async (_event, template) => {
   const templates = store.get("templates", []);
-  const item = { ...template, id: Date.now(), createdAt: new Date().toISOString() };
+  const item = {
+    id: Date.now(), createdAt: new Date().toISOString(),
+    name: String(template.name || "小説設定").trim() || "小説設定",
+    model: String(template.model || "openrouter/auto"),
+    titleHint: String(template.titleHint || ""), genre: String(template.genre || ""),
+    characters: String(template.characters || ""), tone: String(template.tone || ""),
+    length: String(template.length || "medium"), r18: !!template.r18,
+    maxTokens: Number(template.maxTokens || 4096),
+    blockCount: Number(template.blockCount || 4),
+    blockMaxTokens: Number(template.blockMaxTokens || 2000),
+    blockPlans: Array.isArray(template.blockPlans) ? template.blockPlans.map(String) : []
+  };
   templates.unshift(item);
   store.set("templates", templates.slice(0, 30));
   return item;
@@ -217,7 +230,7 @@ ipcMain.handle("novel:continue", async (_event, input) => {
     body = String(parsed.body || parsed.content || parsed.story || r.raw);
   } catch {}
   const result = { title: input.title || "続き", body, model: r.model, usage: r.data.usage || null };
-  remember(result, input, "continue");
+  remember({ ...result, body: previous + (previous ? "\n\n" : "") + body }, input, "continue");
   return result;
 });
 
