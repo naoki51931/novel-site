@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld("lexis", {
   uploadToLexis: (payload) => ipcRenderer.invoke("lexis:upload", payload),
   updateApp: () => ipcRenderer.invoke("app:update"),
   uninstallApp: () => ipcRenderer.invoke("app:uninstall"),
-  saveNovel: (payload) => ipcRenderer.invoke("novel:save", payload)
+  saveNovel: (payload) => ipcRenderer.invoke("novel:save", payload),
+  shareXTxt: (payload) => ipcRenderer.invoke("novel:share-x-txt", payload)
 });
